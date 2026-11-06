@@ -8,6 +8,7 @@ use gpui::{
     rgb,
 };
 use gpui::{DispatchPhase, canvas, linear_color_stop, linear_gradient};
+use vorkspace_ui::radius;
 use vorkspace_ui::theme::*;
 
 pub(crate) struct Picked(pub u32);
@@ -150,7 +151,7 @@ impl gpui::Render for ColorPicker {
             .debug_selector(|| "bot-custom-color-picker".into())
             .relative()
             .mt_2()
-            .rounded_lg()
+            .rounded(px(radius::CONTAINER))
             .border_1()
             .border_color(content(0.1))
             .bg(content(0.05))
@@ -190,18 +191,20 @@ impl gpui::Render for ColorPicker {
                     .relative()
                     .h(px(112.))
                     .w_full()
-                    .rounded_md()
+                    .rounded(px(radius::CONTROL))
                     .bg(linear_gradient(
                         90.,
                         linear_color_stop(gpui::white(), 0.),
                         linear_color_stop(rgb(hue), 1.),
                     ))
                     .child(self.sv.probe())
-                    .child(div().absolute().inset_0().rounded_md().bg(linear_gradient(
-                        180.,
-                        linear_color_stop(gpui::transparent_black(), 0.),
-                        linear_color_stop(gpui::black(), 1.),
-                    )))
+                    .child(div().absolute().inset_0().rounded(px(radius::CONTROL)).bg(
+                        linear_gradient(
+                            180.,
+                            linear_color_stop(gpui::transparent_black(), 0.),
+                            linear_color_stop(gpui::black(), 1.),
+                        ),
+                    ))
                     .child(
                         knob()
                             .left(gpui::relative(self.hsv.s))
@@ -285,7 +288,7 @@ impl gpui::Render for ColorPicker {
                         div()
                             .size(px(28.))
                             .flex_shrink_0()
-                            .rounded_md()
+                            .rounded(px(radius::CONTROL))
                             .border_1()
                             .border_color(content(0.1))
                             .bg(rgb(color)),
@@ -296,7 +299,7 @@ impl gpui::Render for ColorPicker {
                             .min_w_0()
                             .px_2()
                             .py_1()
-                            .rounded_md()
+                            .rounded(px(radius::CONTROL))
                             .border_1()
                             .border_color(content(0.1))
                             .bg(content(0.05))

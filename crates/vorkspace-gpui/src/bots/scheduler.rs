@@ -2,6 +2,7 @@ use super::panels::button;
 use super::*;
 use vorkspace_core::bot::habits::{Run, Schedule};
 use vorkspace_core::time::now_ms;
+use vorkspace_ui::radius;
 
 #[derive(Default)]
 pub(super) struct HabitUi {
@@ -133,7 +134,7 @@ fn habit_field(field: Entity<Input>) -> gpui::Div {
     div()
         .px_2()
         .py_1()
-        .rounded_md()
+        .rounded(px(radius::CONTROL))
         .hover(|s| s.bg(content(0.05)))
         .w_full()
         .min_w_0()
@@ -199,6 +200,33 @@ impl Bots {
             || habit.run_requested
             || habit.enabled && habit.next_run_at <= now_ms()
     }
+    pub(super) fn habits_settings(&self, bot: &Bot, cx: &mut Context<Self>) -> AnyElement {
+        div()
+            .size_full()
+            .min_h_0()
+            .flex()
+            .flex_col()
+            .child(
+                Self::settings_page_header("Habits").child(
+                    button("bot-new-habit", "New habit")
+                        .debug_selector(|| "bot-new-habit".into())
+                        .on_click(cx.listener(|this, _, _, cx| {
+                            this.route = Some(Route::NewHabit);
+                            this.clear_habit_fields();
+                            cx.notify();
+                        })),
+                ),
+            )
+            .child(
+                div()
+                    .flex_1()
+                    .min_h_0()
+                    .px_3()
+                    .pb_3()
+                    .child(self.habits_list(bot, cx)),
+            )
+            .into_any_element()
+    }
     pub(super) fn habits_list(&self, bot: &Bot, cx: &mut Context<Self>) -> AnyElement {
         let groups = grouped_habits(&self.habits, now_ms(), |h| self.habit_running_since(h));
         div().id("bot-habits-list").debug_selector(|| "bot-habits-list".into())
@@ -236,7 +264,7 @@ impl Bots {
             .w_full()
             .min_w_0()
             .flex_shrink_0()
-            .rounded_md()
+            .rounded(px(radius::CONTROL))
             .flex()
             .items_center()
             .hover(|s| s.bg(content(0.05)))
@@ -259,7 +287,7 @@ impl Bots {
                             .flex()
                             .items_center()
                             .justify_center()
-                            .rounded_md()
+                            .rounded(px(radius::CONTROL))
                             .bg(content(0.06))
                             .child(if since.is_some() {
                                 div()
@@ -572,7 +600,7 @@ impl Bots {
             .w_full()
             .min_w_0()
             .flex_shrink_0()
-            .rounded_md()
+            .rounded(px(radius::CONTROL))
             .when(expanded && detail, |d| d.bg(content(0.05)))
             .child(
                 div()
@@ -870,7 +898,7 @@ impl Bots {
             .max_w_full()
             .flex_shrink_0()
             .px_2()
-            .rounded_md()
+            .rounded(px(radius::CONTROL))
             .bg(content(0.1))
             .hover(|s| s.bg(content(0.14)))
             .flex()

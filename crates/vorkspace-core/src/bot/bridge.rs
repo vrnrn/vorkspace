@@ -28,14 +28,22 @@ sessions.draft {sessionId,prompt,project?}
 sessions.stop {sessionId,project?}
 sessions.archive {sessionId,project?}
 sessions.delete {sessionId,project?}
+workspace.list {project?}
+workspace.open {kind,sessionId?,noteId?,provider?,itemKey?,bot?,document?,path?,placement?,targetPaneId?,project?}
+workspace.focus {paneId,project?}
+workspace.close {paneId,confirmRunning?,expectedProcess?,project?}
+workspace.move {paneId?,tabId?,targetPaneId,edge,project?}
+workspace.detach {paneId,index?,project?}
+workspace.reorder {tabId,index,project?}
+workspace.resize {tabId,sashPath,index,ratio,project?}
 worktrees.list {project?}
 worktrees.create {branch,base?,existing?,project?}
 worktrees.remove {path,project?}
 folders.list {project?}
 folders.move {sessionId,folderId?,newFolderName?,project?}
-notes.list {limit?,offset?}
-notes.read {id}
-notes.write {id?,title,body,tags?}
+notes.list {project?,limit?,offset?}
+notes.read {id?,noteId?,project?}
+notes.write {id?,noteId?,title,body,tags?,project?}
 todos.list {project?}
 todos.add {title,description?,attachments?,dependencies?,status?,github?,project?}
 todos.update {id,title?,description?,attachments?,dependencies?,status?,before?,project?}
@@ -82,6 +90,7 @@ fn help() -> String {
         "vorkspace app access\nUsage: vorkspace-gpui app ACTION --json '{{...}}' [--request-id ID]\nPass --input FILE or --input - to read a JSON object instead.\nActions:\n{ACTIONS}\n\
          Peer replies arrive in the sender's conversation after the recipient finishes. End your turn to allow queued replies to run.\n\
          worktrees.list reports dirty, merged, unpublishedCommits, sessions and removable for each worktree. worktrees.remove refuses uncommitted or unique work, ignored files tools can't regenerate, open terminals and unarchived sessions. A merged branch goes with it.\n\
+         Workspace pane IDs from workspace.list are valid only in the caller's project. Open kinds: session, notes, note, connector, item, bot, botDocument, terminal, search, todos, automations, channels, file. Split with placement right/down and targetPaneId; move one pane with paneId or an entire tab layout with tabId, plus targetPaneId and edge left/right/top/bottom. Reorder a standalone tab with tabId and index. Resize uses a listed sashPath/index and normalized ratio. Closing a running terminal first returns a confirmation-required error; repeat with a new request ID, confirmRunning:true and the listed expectedProcess. Notes list returns both legacy numeric id and native string noteId; use either for notes.read/write, but use noteId to target an exact native note.\n\
          To-do statuses are todo, inProgress, inReview and done. Bots use an assigned project board; include project when several are assigned. Local to-dos always work. A GitHub project also shows its issues; add with github:true or publish a local item explicitly. An uncertain GitHub create is never retried automatically: reconcile first, then retry only after checking GitHub and setting confirmNoIssue:true.\n\
          Minions are persistent team members. Reuse bots.send/bots.read and team-only channels for work; users cannot message Minions. minions.spawn is compatibility hire plus an initial peer task.\n\
          {COMMAND_NOTES}\n"
@@ -348,9 +357,13 @@ mod capability_tests {
         for line in ACTIONS.lines() {
             let (action, _) = line.split_once(' ').unwrap();
             assert!(seen.insert(action), "{action} is duplicated");
+            let schema = super::super::api::validate(action, &json!({}));
             assert!(
-                super::super::api::validate(action, &json!({})).is_ok(),
-                "{action}"
+                schema
+                    .as_ref()
+                    .err()
+                    .is_none_or(|error| !error.starts_with("Unknown app action")),
+                "{action}: {schema:?}"
             );
             assert!(help.lines().any(|candidate| candidate == line), "{action}");
             assert!(bot.lines().any(|candidate| candidate == line), "{action}");

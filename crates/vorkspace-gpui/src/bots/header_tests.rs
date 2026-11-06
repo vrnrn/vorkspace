@@ -26,7 +26,7 @@ fn bot_header_updates_from_chat_status_and_preserves_composer_and_layout(cx: &mu
     });
     cx.run_until_parked();
     let manager = window
-        .update(cx, |shell, _, cx| {
+        .update(cx, |shell, window, cx| {
             let manager = shell.bot_manager();
             manager.update(cx, |bots, cx| {
                 bots.roster.bots.push(Bot {
@@ -35,8 +35,7 @@ fn bot_header_updates_from_chat_status_and_preserves_composer_and_layout(cx: &mu
                     session_id: Some(session),
                     ..Default::default()
                 });
-                bots.active = Some("header-fixture".into());
-                bots.ensure_chat("header-fixture", cx);
+                bots.open("header-fixture", window, cx);
                 cx.notify();
             });
             cx.notify();

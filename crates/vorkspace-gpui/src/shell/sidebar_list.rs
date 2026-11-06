@@ -1,5 +1,6 @@
 //! Only construct and lay out sidebar cards near the viewport.
 use super::*;
+use vorkspace_ui::radius;
 
 use gpui::{ListAlignment, ListState, list};
 use std::cell::{Cell, RefCell};
@@ -537,9 +538,9 @@ impl Shell {
                     .w_full()
                     .h(px(32.))
                     .px_2()
-                    .rounded_md()
+                    .rounded(px(radius::CONTROL))
                     .relative()
-                    .child(self.liquid.row("search", self.app_search.is_some()))
+                    .when(self.app_search.is_some(), |d| d.bg(content(0.1)))
                     .text_color(content(
                         if self.app_search.is_some() || self.sidebar_hover == Some("Search") {
                             1.
@@ -548,7 +549,8 @@ impl Shell {
                         },
                     ))
                     .font_weight(FontWeight::MEDIUM)
-                    .hover(|s| s.text_color(content(1.)))
+                    .hover(|s| s.bg(content(0.08)).text_color(content(1.)))
+                    .focus(|s| s.bg(content(0.1)).text_color(content(1.)))
                     .on_hover(cx.listener(|this, hovered, _, cx| {
                         this.sidebar_hover = if *hovered { Some("Search") } else { None };
                         this.sidebar_frame.update(cx, |_, cx| cx.notify());
@@ -564,7 +566,7 @@ impl Shell {
                             .text_color(content(0.35))
                             .group_hover("rail-search", |s| s.text_color(content(0.7))),
                     )
-                    .child(div().flex_1().min_w_0().h(px(20.)).child("Search")),
+                    .child(div().flex_1().min_w_0().child("Search")),
             )
             .children(
                 self.visible_sidebar_navigation(cx)
@@ -591,7 +593,7 @@ impl Shell {
                             .group("rail-action")
                             .h(px(32.))
                             .px_2()
-                            .rounded_md()
+                            .rounded(px(radius::CONTROL))
                             .flex()
                             .items_center()
                             .gap_2()
@@ -603,8 +605,8 @@ impl Shell {
                                 0.5
                             }))
                             .relative()
-                            .child(self.liquid.row(label, selected))
-                            .hover(|s| s.text_color(content(1.)))
+                            .when(selected, |d| d.bg(content(0.1)))
+                            .hover(|s| s.bg(content(0.08)).text_color(content(1.)))
                             .child(icon(glyph, 16.).text_color(content(if selected {
                                 0.7
                             } else {

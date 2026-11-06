@@ -1,41 +1,45 @@
 //! Pane admission, splitting, focus movement, drag placement and sash resizing.
 use super::*;
+use vorkspace_core::files::path_key;
+
+// A proposed detached review does not have a layout ID yet.
+const REVIEW_PLACEMENT_PLACEHOLDER: i64 = i64::MIN;
+const SPLIT_PROJECT_MISMATCH: &str = "Choose a pane in this layout's project before splitting.";
 
 impl Shell {
     /// A click anywhere in a pane focuses it (PaneTree's onFocus).
     pub(super) fn focus_pane(&mut self, id: i64, window: &mut Window, cx: &mut Context<Self>) {
-        if self.workspace.review_owners.contains_key(&id) {
-            self.open_file_pane(id, window, cx);
-            return;
+        if self.workspace.active != Some(id) {
+            self.open(id, window, cx);
         }
-        if self.workspace.active == Some(id) {
-            return;
-        }
-        self.navigation_revision += 1;
-        self.history.record(id);
-        self.workspace.open(id);
-        if let Some(view) = self.sessions.get(&id) {
-            self.workspace.project = view.read(cx).summary.cwd.clone();
-            self.workspace
-                .project_focus
-                .insert(self.workspace.project.clone(), id);
-            view.update(cx, |v, cx| v.load(cx));
-            self.record_worktree_session(id, cx);
-        }
-        if !self.review_focused {
-            self.focus_active(window, cx);
-        }
-        self.persist(cx);
-        cx.notify();
     }
     /// Close one pane of a split tab; the tab's only pane closes the tab.
     pub(super) fn close_pane(&mut self, id: i64, window: &mut Window, cx: &mut Context<Self>) {
+        if self.confirm_terminal_pane_close(id, window, cx) {
+            return;
+        }
+        self.close_pane_confirmed(id, window, cx);
+    }
+    pub(super) fn close_pane_confirmed(
+        &mut self,
+        id: i64,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if !self.prepare_app_pane_close(id, cx) {
+            return;
+        }
         let active = self.workspace.active;
         let before = self.active_leaves();
         if !self.workspace.close_pane(id) {
-            self.close(id, window, cx);
+            if self.tab_can_close(id, cx)
+                && let Some(tab) = self.workspace.tab_of(id)
+            {
+                self.close_title_tabs_confirmed(&[TitleTab::Workspace(tab)], None, window, cx);
+            }
             return;
         }
+        self.release_app_pane(id, cx);
         self.history
             .prune(&self.workspace.open_sessions(), self.workspace.active);
         self.navigation_revision += 1;
@@ -47,11 +51,12 @@ impl Shell {
             }
         } else {
             self.persist(cx);
+            self.sync_right_panel(cx);
             cx.notify();
         }
     }
     pub(super) fn pane_available_width(&self) -> f32 {
-        let sidebar = if self.workspace.sidebar_visible {
+        let sidebar = if self.workspace.sidebar_visible && self.has_session_panes() {
             self.workspace.right_panel_width
         } else {
             0.
@@ -60,7 +65,12 @@ impl Shell {
             .workspace
             .docks
             .get(&self.workspace.project)
-            .filter(|dock| dock.open && !dock.side.vertical())
+            .filter(|dock| {
+                dock.open
+                    && !dock.side.vertical()
+                    && self.settings.is_none()
+                    && self.workspace.active_tab().is_some()
+            })
             .map_or(0., |dock| dock.size);
         let expected =
             (self.viewport_width - self.classic_rail_width() - self.right_drawn - sidebar - dock)
@@ -74,7 +84,7 @@ impl Shell {
     /// needs its room and restores it when it fits again.
     pub(super) fn pane_admission_width(&self) -> f32 {
         self.pane_available_width()
-            + if self.workspace.sidebar_visible {
+            + if self.workspace.sidebar_visible && self.has_session_panes() {
                 self.workspace.right_panel_width
             } else {
                 0.
@@ -82,7 +92,8 @@ impl Shell {
     }
 
     pub(super) fn pane_layout_allowed(&self, before: &PaneNode, after: &PaneNode) -> bool {
-        let session = |id: i64| id >= 0 && !self.workspace.review_owners.contains_key(&id);
+        let session =
+            |id| id != REVIEW_PLACEMENT_PLACEHOLDER && self.workspace.counts_toward_pane_limit(id);
         let old_stack = before.max_session_stack(session);
         let new_stack = after.max_session_stack(session);
         let stack_ok = new_stack <= MAX_SESSION_STACK
@@ -126,7 +137,7 @@ impl Shell {
             {
                 before.place_pane(owner, target, edge)
             }
-            DragSource::Review(_) => before.place_pane(i64::MIN, target, edge),
+            DragSource::Review(_) => before.place_pane(REVIEW_PLACEMENT_PLACEHOLDER, target, edge),
             DragSource::Pane(owner)
                 if self
                     .workspace
@@ -134,8 +145,12 @@ impl Shell {
                     .get(&owner)
                     .is_some_and(|r| !r.chat_hidden) =>
             {
-                let base = before.replace_leaf(owner, i64::MIN);
-                let target = if target == owner { i64::MIN } else { target };
+                let base = before.replace_leaf(owner, REVIEW_PLACEMENT_PLACEHOLDER);
+                let target = if target == owner {
+                    REVIEW_PLACEMENT_PLACEHOLDER
+                } else {
+                    target
+                };
                 base.place_pane(owner, target, edge)
             }
             _ => before.place_pane(id, target, edge),
@@ -170,14 +185,21 @@ impl Shell {
     /// cmd-d / shift-cmd-d: a new session beside the focused pane, with the
     /// focused session's provider.
     pub(super) fn split_session(&mut self, dir: SplitDir, cx: &mut Context<Self>) {
-        if self.app_view_open() || self.workspace.active.is_none() {
+        let Some(focused) = self.workspace.active else {
             return;
-        }
-        let focused = self.workspace.active.unwrap();
+        };
         let Some(tab) = self.workspace.tab_of(focused) else {
             return;
         };
         let before = self.workspace.layout(tab);
+        let Some((project, path)) = self.pane_execution_scope(focused, cx) else {
+            return;
+        };
+        if !self.split_project_fits(&before, project, cx) {
+            self.error = Some(SPLIT_PROJECT_MISMATCH.into());
+            cx.notify();
+            return;
+        }
         if !self.split_allowed(&before, focused, dir, i64::MAX) {
             self.reject_pane_placement(cx);
             return;
@@ -186,17 +208,23 @@ impl Shell {
             .workspace
             .active
             .and_then(|id| self.sessions.get(&id))
-            .map_or(Kind::Codex, |s| Kind::from_id(&s.read(cx).summary.provider));
+            .map_or_else(
+                || self.default_kind(),
+                |s| Kind::from_id(&s.read(cx).summary.provider),
+            );
         let navigation_revision = self.navigation_revision;
-        let target = self.workspace.active;
+        let target = Some(focused);
         let store = self.store.clone();
-        let cwd = self.workspace.project.clone();
-        let worktree = target.and_then(|id| {
-            let path = self.session_working_copy(id, cx);
-            (path != cwd).then(|| crate::git_tools::worktree_switcher::WorktreeFocus {
+        let cwd = project.to_owned();
+        let worktree = (path_key(path) != path_key(project)).then(|| {
+            crate::git_tools::worktree_switcher::WorktreeFocus {
                 path: path.into(),
-                branch: self.worktree_focus.get(&cwd).and_then(|f| f.branch.clone()),
-            })
+                branch: self
+                    .worktree_focus
+                    .get(project)
+                    .filter(|focus| path_key(&focus.path) == path_key(path))
+                    .and_then(|focus| focus.branch.clone()),
+            }
         });
         let worktree_cwd = worktree.as_ref().map(|f| f.path.clone());
         let work = cx.background_executor().spawn(async move {
@@ -231,6 +259,15 @@ impl Shell {
         })
         .detach();
     }
+
+    fn split_project_fits(&self, layout: &PaneNode, project: &str, cx: &App) -> bool {
+        let project = path_key(project);
+        layout.leaf_ids().into_iter().all(|id| {
+            self.pane_layout_anchor(id, cx)
+                .is_none_or(|(owner, _)| path_key(owner) == project)
+        })
+    }
+
     pub(super) fn finish_split_creation(
         &mut self,
         summary: Session,
@@ -241,6 +278,7 @@ impl Shell {
     ) {
         let (target, navigation_revision, dir) = request;
         let id = summary.id;
+        let project = summary.cwd.clone();
         self.add(summary, cx);
         self.seed_worktree(id, worktree, cx);
         self.order.retain(|s| *s != id);
@@ -263,18 +301,36 @@ impl Shell {
             return;
         };
         let layout = self.workspace.layout(tab);
-        if !self.split_allowed(&layout, target, dir, id) {
+        let compatible = self.split_project_fits(&layout, &project, cx);
+        let fits = self.split_allowed(&layout, target, dir, id);
+        let before = if compatible && fits {
+            let before = self.active_leaves();
+            self.workspace.split(id, dir);
+            Some(before)
+        } else {
             self.workspace.open(id);
-            self.activate_session(id, window, cx);
-            self.reject_pane_placement(cx);
-            return;
+            None
+        };
+        // A standalone terminal can be reached from another project's rail.
+        // Its new session makes the resulting layout project-bound.
+        if path_key(&project) != path_key(&self.workspace.project) {
+            if let Some(tab) = self.workspace.tab_of(id) {
+                self.workspace.tab_workspaces.remove(&tab);
+            }
+            self.restore_app_layout_scope(id, cx);
         }
-        let before = self.active_leaves();
-        self.workspace.split(id, dir);
-        self.fit_active_pane_width();
-        self.begin_pane_motion(before);
-        self.fit_sidebar(cx);
+        if let Some(before) = before {
+            self.fit_active_pane_width();
+            self.begin_pane_motion(before);
+            self.fit_sidebar(cx);
+        }
         self.activate_session(id, window, cx);
+        if !compatible {
+            self.error = Some(SPLIT_PROJECT_MISMATCH.into());
+            cx.notify();
+        } else if !fits {
+            self.reject_pane_placement(cx);
+        }
     }
     pub(super) fn focus_neighbor(
         &mut self,
@@ -363,9 +419,6 @@ impl Shell {
     }
     /// The pane under a point and the edge it would take, in the active tab.
     pub(super) fn pane_hit(&self, position: Point<Pixels>) -> Option<(i64, Edge)> {
-        if self.app_view_open() {
-            return None;
-        }
         if self
             .pane_viewport
             .get()
@@ -536,7 +589,7 @@ impl Shell {
                 };
                 if let Some(to) = insert {
                     self.workspace.detach(id, self.workspace.tabs.len());
-                    self.reorder_title_tab(&TitleTab::Session(id), to, cx);
+                    self.reorder_title_tab(&TitleTab::Workspace(id), to, cx);
                     self.pane_motion = None;
                 } else if let Some((target, edge)) = over {
                     self.workspace.place(id, target, edge);
@@ -551,7 +604,7 @@ impl Shell {
                     .and_then(|next| self.workspace.tabs.iter().position(|id| *id == next))
                     .unwrap_or(self.workspace.tabs.len());
                 self.workspace.detach(id, session_index);
-                self.reorder_title_tab(&TitleTab::Session(id), to, cx);
+                self.reorder_title_tab(&TitleTab::Workspace(id), to, cx);
                 self.pane_motion = None;
             }
             (DragSource::Tab(tab), Some((target, edge)), _) => {

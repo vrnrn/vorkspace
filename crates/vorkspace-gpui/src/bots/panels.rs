@@ -1,3 +1,4 @@
+use vorkspace_ui::radius;
 mod overview;
 mod settings_modal;
 use super::*;
@@ -6,38 +7,25 @@ use crate::{
     popover::{MenuAction, MenuItem, MenuStyle, Side},
     project_settings::{BackgroundDialog, Event as BackgroundEvent},
 };
-use gpui::{AnyView, Div, FontWeight};
+use gpui::{Div, FontWeight};
 use vorkspace_core::project_appearance::{
     ProjectAppearance, TEXTURE_PALETTES, default_foreground_color,
 };
-#[derive(Clone, Copy, PartialEq)]
-pub(crate) enum OverviewTab {
-    Sessions,
-    Habits,
-    Documents,
-    Changes,
-    Todos,
-}
 #[derive(Clone, Copy, PartialEq)]
 pub(super) enum SettingsSection {
     General,
     Soul,
     Memory,
+    Habits,
 }
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) enum Route {
-    Review,
-    Session(i64),
-    Document(String),
     Habit(String),
     NewHabit,
 }
 impl Route {
     pub(super) fn key(&self) -> String {
         match self {
-            Self::Review => "review".into(),
-            Self::Session(id) => format!("session:{id}"),
-            Self::Document(id) => format!("document:{id}"),
             Self::Habit(id) => format!("habit:{id}"),
             Self::NewHabit => "new-habit".into(),
         }
@@ -146,7 +134,7 @@ fn heading(title: &str, description: Option<&str>) -> Div {
 }
 fn card() -> Div {
     div()
-        .rounded_xl()
+        .rounded(px(radius::SURFACE))
         .border_1()
         .border_color(content(0.04))
         .overflow_hidden()
@@ -177,21 +165,9 @@ fn empty_state(glyph: &'static str, message: &str) -> AnyElement {
         )
         .into_any_element()
 }
-fn empty(message: &str) -> AnyElement {
-    div()
-        .px_5()
-        .py_8()
-        .text_size(px(12.))
-        .line_height(px(20.))
-        .text_color(content(0.45))
-        .child(message.to_string())
-        .into_any_element()
-}
 struct LookChanged {
     bot: Bot,
 }
-/// Enter in the name field: BotMenu commits the name and closes.
-struct LookSubmitted;
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum EditingColor {
     Background,
@@ -199,8 +175,6 @@ enum EditingColor {
 }
 struct LookEditor {
     bot: Bot,
-    name: Entity<Input>,
-    settings: bool,
     shape_open: bool,
     dragging_grid: bool,
     grid_bounds: AnchorSlot,
@@ -210,43 +184,24 @@ struct LookEditor {
     _events: Vec<Subscription>,
 }
 impl EventEmitter<LookChanged> for LookEditor {}
-impl EventEmitter<LookSubmitted> for LookEditor {}
 impl LookEditor {
     fn new(bot: Bot, cx: &mut Context<Self>) -> Self {
-        let name = cx.new(|cx| {
-            let mut f = Input::field("Bot name", bot.label(), content(0.45), cx);
-            f.set_text(bot.name.clone(), cx);
-            f
-        });
         let custom = cx.new(|cx| crate::color_picker::ColorPicker::new(bot.color, cx));
-        let events = vec![
-            cx.subscribe(
-                &custom,
-                |this, _, event: &crate::color_picker::Picked, cx| {
-                    match this.editing_color.unwrap_or(EditingColor::Background) {
-                        EditingColor::Background => this.bot.color = event.0,
-                        EditingColor::Foreground => this.bot.fg_color = Some(event.0),
-                    }
-                    cx.emit(LookChanged {
-                        bot: this.bot.clone(),
-                    });
-                    cx.notify();
-                },
-            ),
-            cx.subscribe(&name, |this, input, _: &input::Changed, cx| {
-                this.bot.name = input.read(cx).content.chars().take(40).collect();
+        let events = vec![cx.subscribe(
+            &custom,
+            |this, _, event: &crate::color_picker::Picked, cx| {
+                match this.editing_color.unwrap_or(EditingColor::Background) {
+                    EditingColor::Background => this.bot.color = event.0,
+                    EditingColor::Foreground => this.bot.fg_color = Some(event.0),
+                }
                 cx.emit(LookChanged {
                     bot: this.bot.clone(),
                 });
-            }),
-            cx.subscribe(&name, |_, _, _: &input::Submitted, cx| {
-                cx.emit(LookSubmitted)
-            }),
-        ];
+                cx.notify();
+            },
+        )];
         Self {
             bot,
-            name,
-            settings: false,
             shape_open: false,
             dragging_grid: false,
             grid_bounds: AnchorSlot::default(),
@@ -337,7 +292,7 @@ impl LookEditor {
                             .aria_expanded(self.shape_open)
                             .h(px(26.))
                             .px_2p5()
-                            .rounded_md()
+                            .rounded(px(radius::CONTROL))
                             .border_1()
                             .border_color(content(0.14))
                             .bg(content(0.05))
@@ -363,7 +318,7 @@ impl LookEditor {
                         .role(Role::ListBox)
                         .aria_label("Badge shape")
                         .p_1()
-                        .rounded_md()
+                        .rounded(px(radius::CONTROL))
                         .border_1()
                         .border_color(content(0.12))
                         .bg(content(0.06))
@@ -383,7 +338,7 @@ impl LookEditor {
                                     .aria_selected(selected)
                                     .h(px(26.))
                                     .px_2()
-                                    .rounded(px(4.))
+                                    .rounded(px(radius::SMALL))
                                     .flex()
                                     .items_center()
                                     .justify_between()
@@ -489,7 +444,7 @@ impl LookEditor {
                                                 .role(Role::Button)
                                                 .aria_label("Randomize texture seed")
                                                 .size(px(22.))
-                                                .rounded_md()
+                                                .rounded(px(radius::CONTROL))
                                                 .border_1()
                                                 .border_color(content(0.14))
                                                 .bg(content(0.06))
@@ -600,7 +555,7 @@ impl LookEditor {
                             .flex_1()
                             .h(px(24.))
                             .px_2()
-                            .rounded_md()
+                            .rounded(px(radius::CONTROL))
                             .border_1()
                             .border_color(if bg_active {
                                 accent_color()
@@ -635,7 +590,7 @@ impl LookEditor {
                                 .flex_1()
                                 .h(px(24.))
                                 .px_2()
-                                .rounded_md()
+                                .rounded(px(radius::CONTROL))
                                 .border_1()
                                 .border_color(if fg_active {
                                     accent_color()
@@ -668,7 +623,7 @@ impl LookEditor {
                                 .h(px(24.))
                                 .w(px(28.))
                                 .flex_shrink_0()
-                                .rounded_md()
+                                .rounded(px(radius::CONTROL))
                                 .border_1()
                                 .border_color(content(0.15))
                                 .bg(content(0.05))
@@ -705,155 +660,7 @@ impl LookEditor {
 }
 impl gpui::Render for LookEditor {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        if self.settings {
-            return self.settings_controls(cx);
-        }
-        const COLOR_NAMES: [&str; 9] = [
-            "Blue", "Coral", "Yellow", "Green", "Pink", "Purple", "Teal", "Orange", "Indigo",
-        ];
-        const FACE_LABELS: [(&str, &str); 5] = [
-            ("pills", "3D Pills"),
-            ("dots", "Round Dots"),
-            ("visor", "Visor"),
-            ("carets", "Happy ^ ^"),
-            ("wink", "Wink"),
-        ];
-        let current_face = self.bot.face_style();
-        let textured = self.bot.textured;
-        let swatch = |id: gpui::ElementId, label: SharedString, ring: bool, dot: AnyElement| {
-            div()
-                .id(id)
-                .role(Role::Button)
-                .aria_label(label)
-                .aria_selected(ring)
-                .flex_1()
-                .min_w_0()
-                .flex()
-                .justify_center()
-                .child(
-                    div()
-                        .size(px(22.))
-                        .rounded_full()
-                        .flex()
-                        .items_center()
-                        .justify_center()
-                        .when(ring, |d| d.border_2().border_color(content(0.8)))
-                        .child(dot),
-                )
-        };
-        div()
-            .debug_selector(|| "bot-look-editor".into())
-            .w_full()
-            .flex()
-            .flex_col()
-            .gap_2()
-            .pb_2()
-            .child(
-                div()
-                    .debug_selector(|| "bot-options-name".into())
-                    .px_2p5()
-                    .py_1p5()
-                    .rounded_lg()
-                    .border_1()
-                    .border_color(content(0.1))
-                    .bg(content(0.05))
-                    .text_size(px(13.))
-                    .child(self.name.clone()),
-            )
-            // Face Style Row (5 curved 3D faces)
-            .child(
-                div()
-                    .id("bot-mascot-options")
-                    .role(Role::RadioGroup)
-                    .aria_label("Face style")
-                    .px_1()
-                    .flex()
-                    .gap(px(2.))
-                    .children(
-                        FACE_LABELS
-                            .iter()
-                            .enumerate()
-                            .map(|(ix, (face_id, label))| {
-                                let selected = current_face == *face_id;
-                                let mut preview_bot = self.bot.clone();
-                                preview_bot.mascot = (*face_id).into();
-                                div()
-                                    .id(("bot-mascot", ix))
-                                    .debug_selector(move || format!("bot-mascot-{ix}"))
-                                    .role(Role::RadioButton)
-                                    .aria_label(*label)
-                                    .aria_selected(selected)
-                                    .flex_1()
-                                    .min_w_0()
-                                    .h(px(32.))
-                                    .rounded_md()
-                                    .flex()
-                                    .items_center()
-                                    .justify_center()
-                                    .when(selected, |d| {
-                                        d.bg(content(0.1)).border_1().border_color(content(0.2))
-                                    })
-                                    .when(!selected, |d| d.hover(|s| s.bg(content(0.06))))
-                                    .child(avatar::bot_avatar(&preview_bot, "idle", 20., !selected))
-                                    .on_click(cx.listener(move |this, _, _, cx| {
-                                        this.bot.mascot = (*face_id).into();
-                                        cx.emit(LookChanged {
-                                            bot: this.bot.clone(),
-                                        });
-                                        cx.notify();
-                                    }))
-                            }),
-                    ),
-            )
-            // Shape Dropdown
-            .child(self.shape_section("bot", cx))
-            // Texture Toggle + Seed Die + Grid Scale Slider
-            .child(self.texture_and_grid_section("bot", cx))
-            // Background & Foreground Color Buttons
-            .child(self.color_buttons_section("bot", cx))
-            // Preset Color Swatches (9 circular swatches, no custom picker button)
-            .child(
-                div()
-                    .id("bot-color-options")
-                    .role(Role::Group)
-                    .aria_label("Color")
-                    .child(div().px_1().flex().justify_between().gap(px(2.)).children(
-                        bot::COLORS_BOT.into_iter().enumerate().map(|(ix, color)| {
-                            let pair_fg = TEXTURE_PALETTES
-                                .get(ix)
-                                .map(|p| p.2)
-                                .unwrap_or_else(|| default_foreground_color(color));
-                            swatch(
-                                ("bot-color", ix).into(),
-                                COLOR_NAMES[ix].into(),
-                                self.bot.color == color,
-                                avatar::color_swatch_circle(
-                                    color,
-                                    textured.then_some(pair_fg),
-                                    16.,
-                                ),
-                            )
-                            .debug_selector(move || format!("bot-color-{ix}"))
-                            .on_click(cx.listener(
-                                move |this, _, _, cx| {
-                                    this.bot.color = color;
-                                    if this.bot.textured {
-                                        this.bot.fg_color = Some(pair_fg);
-                                    }
-                                    this.editing_color = None;
-                                    cx.emit(LookChanged {
-                                        bot: this.bot.clone(),
-                                    });
-                                    cx.notify();
-                                },
-                            ))
-                        }),
-                    ))
-                    .when(self.editing_color.is_some(), |d| {
-                        d.child(div().px_1().pt_2().child(self.custom.clone()))
-                    }),
-            )
-            .into_any_element()
+        self.settings_controls(cx)
     }
 }
 impl LookEditor {
@@ -899,13 +706,14 @@ impl LookEditor {
                                 preview_bot.mascot = (*face_id).into();
                                 div()
                                     .id(("settings-mascot", ix))
+                                    .debug_selector(move || format!("bot-mascot-{ix}"))
                                     .role(Role::RadioButton)
                                     .aria_label(*label)
                                     .aria_selected(selected)
                                     .h(px(44.))
                                     .flex_1()
                                     .min_w_0()
-                                    .rounded_lg()
+                                    .rounded(px(radius::CONTROL))
                                     .flex()
                                     .items_center()
                                     .justify_center()
@@ -949,6 +757,7 @@ impl LookEditor {
                                 let selected = self.bot.color == color;
                                 div()
                                     .id(("settings-color", index))
+                                    .debug_selector(move || format!("bot-color-{index}"))
                                     .role(Role::Button)
                                     .aria_label(COLOR_NAMES[index])
                                     .aria_selected(selected)
@@ -984,25 +793,20 @@ impl LookEditor {
     }
 }
 impl Bots {
-    pub(super) fn team_rail(
-        &self,
-        parent: &Bot,
-        liquid: &crate::liquid::Liquid,
-        cx: &mut Context<Self>,
-    ) -> AnyElement {
+    pub(super) fn team_rail(&self, parent: &Bot, cx: &mut Context<Self>) -> AnyElement {
         let members = self.team_members(&parent.id);
         let retired = members.iter().filter(|m| m.is_retired()).count();
         let expanded = self.retired_teams.contains(&parent.id);
         let rows = members
             .iter()
             .filter(|m| !m.is_retired())
-            .map(|m| self.minion_rail_row(parent, m, liquid, cx))
+            .map(|m| self.minion_rail_row(parent, m, cx))
             .collect::<Vec<_>>();
         let history = if expanded {
             members
                 .iter()
                 .filter(|m| m.is_retired())
-                .map(|m| self.minion_rail_row(parent, m, liquid, cx))
+                .map(|m| self.minion_rail_row(parent, m, cx))
                 .collect::<Vec<_>>()
         } else {
             Vec::new()
@@ -1054,13 +858,7 @@ impl Bots {
             .children(history)
             .into_any_element()
     }
-    fn minion_rail_row(
-        &self,
-        parent: &Bot,
-        member: &Bot,
-        liquid: &crate::liquid::Liquid,
-        cx: &mut Context<Self>,
-    ) -> AnyElement {
+    fn minion_rail_row(&self, parent: &Bot, member: &Bot, cx: &mut Context<Self>) -> AnyElement {
         let id = member.id.clone();
         let active = self.active.as_ref() == Some(&id);
         let status = self.member_status(&id, cx);
@@ -1100,7 +898,9 @@ impl Bots {
         .pr_2()
         .gap_2()
         .relative()
-        .child(liquid.row(format!("bot:{id}"), active))
+        .rounded(px(radius::CONTROL))
+        .when(active, |d| d.bg(content(0.1)))
+        .hover(|s| s.bg(content(0.08)))
         .child(avatar::minion_avatar(parent, &id, status, 16., false))
         .child(
             div()
@@ -1137,11 +937,7 @@ impl Bots {
         let Some(bot) = self.settings_bot(id).cloned() else {
             return;
         };
-        let editor = cx.new(|cx| {
-            let mut editor = LookEditor::new(bot, cx);
-            editor.settings = true;
-            editor
-        });
+        let editor = cx.new(|cx| LookEditor::new(bot, cx));
         let focus = editor.read(cx).focus.clone();
         let changed = cx.subscribe(&editor, |this, _, event: &LookChanged, cx| {
             this.edit_settings_bot(
@@ -1161,16 +957,32 @@ impl Bots {
         let menu = cx.new(|cx| {
             Menu::new(
                 "Mascot and color",
-                vec![MenuItem::Custom(editor.into(), focus)],
+                vec![
+                    MenuItem::Custom(editor.into(), focus),
+                    MenuItem::Separator,
+                    MenuAction::new("background", "Background image")
+                        .icon("image-add")
+                        .into(),
+                ],
                 window,
                 cx,
             )
             .width(280.)
         });
-        let closed = cx.subscribe(&menu, |this, _, _: &MenuEvent, cx| {
-            this.picker = None;
-            cx.notify();
-        });
+        let target = id.to_string();
+        let closed = cx.subscribe_in(
+            &menu,
+            window,
+            move |this, _, event: &MenuEvent, window, cx| {
+                this.picker = None;
+                if let MenuEvent::Picked(action, _) = event
+                    && action.as_ref() == "background"
+                {
+                    this.open_background(&target, window, cx);
+                }
+                cx.notify();
+            },
+        );
         let anchor = Anchor::Slot(self.settings_anchor.clone());
         self.picker = Some(OpenPicker {
             menu,
@@ -1360,7 +1172,7 @@ mod minion_ui_tests {
             assert!(bots.session_user_read_only(active.id));
             assert!(bots.session_user_read_only(retired.id));
             assert!(bots.hidden_session(active.id) && bots.hidden_session(retired.id));
-            let _ = bots.rail(None, &crate::liquid::Liquid::default(), cx);
+            let _ = bots.rail(None, cx);
             assert_eq!(bots.rail_ids, vec!["team-parent"]);
         });
         window

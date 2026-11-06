@@ -1,8 +1,6 @@
 use super::*;
 use crate::{bots::Bots, shell::tests::window};
 use gpui::{Focusable, TestAppContext, WindowHandle};
-use std::time::Duration;
-use vorkspace_ui::clock::Instant;
 
 fn pane_has_left_border(window: WindowHandle<Shell>, visual: &mut gpui::VisualTestContext) -> bool {
     let pane = visual.debug_bounds("main-pane-frame").unwrap();
@@ -42,7 +40,7 @@ fn mixed_window(cx: &mut TestAppContext) -> (WindowHandle<Shell>, Entity<Bots>, 
 }
 
 #[gpui::test]
-fn the_sidebar_sits_beside_the_rail_by_default_or_switches_right(cx: &mut TestAppContext) {
+fn the_sidebar_stays_left_even_with_a_legacy_right_side_preference(cx: &mut TestAppContext) {
     vorkspace_ui::clock::use_test_clock(cx);
     let (window, _, session) = window(cx);
     let visual = &mut gpui::VisualTestContext::from_window(window.into(), cx);
@@ -52,7 +50,6 @@ fn the_sidebar_sits_beside_the_rail_by_default_or_switches_right(cx: &mut TestAp
             shell.open(session, w, cx);
             shell.set_sidebar_visible(true, cx);
             // The sidebar sits beside the rail by default.
-            shell.workspace.preferences.sidebar_right = false;
             shell.invalidate_chrome(cx);
             cx.notify();
         })
@@ -73,10 +70,12 @@ fn the_sidebar_sits_beside_the_rail_by_default_or_switches_right(cx: &mut TestAp
     // Its separator faces the pane.
     let sash = visual.debug_bounds("sidebar-resize").unwrap();
     assert!((sash.center().x - sidebar.right()).abs() <= px(2.5));
-    // Switched to the right, it follows the pane.
+    // A legacy preference cannot move the sidebar to the right.
     window
         .update(visual, |shell, _, cx| {
-            shell.workspace.preferences.sidebar_right = true;
+            let mut saved = serde_json::to_value(&shell.workspace.preferences).unwrap();
+            saved["sidebar_right"] = serde_json::json!(true);
+            shell.workspace.preferences = serde_json::from_value(saved).unwrap();
             shell.invalidate_chrome(cx);
             cx.notify();
         })
@@ -84,13 +83,12 @@ fn the_sidebar_sits_beside_the_rail_by_default_or_switches_right(cx: &mut TestAp
     visual.run_until_parked();
     let pane = visual.debug_bounds("main-pane-frame").unwrap();
     let sidebar = visual.debug_bounds("sidebar-frame").unwrap();
-    assert_eq!(pane.left(), rail.right());
-    assert_eq!(sidebar.left(), pane.right());
-    assert!(!pane_has_left_border(window, visual));
+    assert_eq!(sidebar.left(), rail.right());
+    assert_eq!(pane.left(), sidebar.right());
+    assert!(pane_has_left_border(window, visual));
     // The rail owns the divider again once the left sidebar closes.
     window
         .update(visual, |shell, _, cx| {
-            shell.workspace.preferences.sidebar_right = false;
             shell.set_sidebar_visible(false, cx);
             shell.invalidate_chrome(cx);
             cx.notify();
@@ -115,54 +113,51 @@ fn sidebar_project_switcher_clears_navigation_across_rail_modes(cx: &mut TestApp
         })
         .unwrap();
     vorkspace_ui::clock::settle_animations(window, visual);
-    for right in [false, true] {
-        for mode in ["expanded", "compact", "hidden", "expanded"] {
-            window
-                .update(visual, |shell, _, cx| {
-                    shell.workspace.preferences.sidebar_right = right;
-                    shell.workspace.project_rail_open = mode == "expanded";
-                    if mode != "expanded" {
-                        shell.workspace.preferences.collapsed_project_rail = mode.into();
-                    }
-                    shell.invalidate_chrome(cx);
-                    cx.notify();
-                })
-                .unwrap();
-            visual.run_until_parked();
-            let navigation = visual.debug_bounds("titlebar-navigation").unwrap();
-            let sidebar = visual.debug_bounds("sidebar-frame").unwrap();
-            let header = visual.debug_bounds("classic-workspace-header").unwrap();
-            if navigation.right() > sidebar.left() {
-                assert!(
-                    header.top() >= navigation.bottom(),
-                    "{mode}, right={right}: {header:?} overlaps {navigation:?}"
-                );
-            } else {
-                assert_eq!(header.top(), sidebar.top(), "{mode}, right={right}");
-            }
-            // Click the leading edge that used to sit beneath navigation.
-            let project = visual.debug_bounds("sidebar-project-button").unwrap();
-            visual.simulate_click(
-                gpui::point(project.left() + px(12.), project.center().y),
-                Default::default(),
+    for mode in ["expanded", "compact", "hidden", "expanded"] {
+        window
+            .update(visual, |shell, _, cx| {
+                shell.workspace.project_rail_open = mode == "expanded";
+                if mode != "expanded" {
+                    shell.workspace.preferences.collapsed_project_rail = mode.into();
+                }
+                shell.invalidate_chrome(cx);
+                cx.notify();
+            })
+            .unwrap();
+        visual.run_until_parked();
+        let navigation = visual.debug_bounds("titlebar-navigation").unwrap();
+        let sidebar = visual.debug_bounds("sidebar-frame").unwrap();
+        let header = visual.debug_bounds("classic-workspace-header").unwrap();
+        if navigation.right() > sidebar.left() {
+            assert!(
+                header.top() >= navigation.bottom(),
+                "{mode}: {header:?} overlaps {navigation:?}"
             );
-            visual.run_until_parked();
-            window
-                .update(visual, |shell, _, cx| {
-                    assert!(
-                        shell.menu_open(&super::super::MenuTarget::Header),
-                        "{mode}, right={right}: the project switcher remains clickable"
-                    );
-                    shell.close_menu(cx);
-                })
-                .unwrap();
-            visual.run_until_parked();
+        } else {
+            assert_eq!(header.top(), sidebar.top(), "{mode}");
         }
+        // Click the leading edge that used to sit beneath navigation.
+        let project = visual.debug_bounds("sidebar-project-button").unwrap();
+        visual.simulate_click(
+            gpui::point(project.left() + px(12.), project.center().y),
+            Default::default(),
+        );
+        visual.run_until_parked();
+        window
+            .update(visual, |shell, _, cx| {
+                assert!(
+                    shell.menu_open(&super::super::MenuTarget::Header),
+                    "{mode}: the project switcher remains clickable"
+                );
+                shell.close_menu(cx);
+            })
+            .unwrap();
+        visual.run_until_parked();
     }
 }
 
 #[gpui::test]
-fn the_active_tab_is_the_selected_pill_of_the_tab_strip(cx: &mut TestAppContext) {
+fn the_active_tab_has_a_separate_rounded_highlight(cx: &mut TestAppContext) {
     vorkspace_ui::clock::use_test_clock(cx);
     let (window, _, session) = window(cx);
     let visual = &mut gpui::VisualTestContext::from_window(window.into(), cx);
@@ -170,19 +165,23 @@ fn the_active_tab_is_the_selected_pill_of_the_tab_strip(cx: &mut TestAppContext)
         .update(visual, |shell, w, cx| shell.open(session, w, cx))
         .unwrap();
     visual.run_until_parked();
-    window
-        .update(visual, |shell, _, _| {
-            let id = shell.workspace.active_tab().unwrap();
-            assert_eq!(
-                shell.tab_liquid.selected().as_deref(),
-                Some(format!("tab:{id}").as_str())
-            );
-        })
+    let selector = format!("title-tab-plate-{session}");
+    assert!(crate::shell::tests::rounded_highlight(
+        window, &selector, 0.1, visual
+    ));
+    let plate = visual
+        .debug_bounds(Box::leak(selector.into_boxed_str()))
         .unwrap();
+    let strip = visual.debug_bounds("title-tab-strip").unwrap();
+    assert!(plate.top() > strip.top());
+    assert!(
+        plate.bottom() < strip.bottom(),
+        "the plate stays above the divider"
+    );
 }
 
 #[gpui::test]
-fn expanded_pages_have_no_title_bar_but_settings_keeps_its_header_over_them(
+fn connector_pages_keep_title_tabs_and_settings_keeps_its_header_over_them(
     cx: &mut TestAppContext,
 ) {
     vorkspace_ui::clock::use_test_clock(cx);
@@ -194,7 +193,7 @@ fn expanded_pages_have_no_title_bar_but_settings_keeps_its_header_over_them(
         })
         .unwrap();
     visual.run_until_parked();
-    assert!(visual.debug_bounds("title-tab-strip").is_none());
+    assert!(visual.debug_bounds("title-tab-strip").is_some());
     assert!(visual.debug_bounds("settings-header").is_none());
     window
         .update(visual, |shell, w, cx| {
@@ -212,7 +211,6 @@ fn search_header_clears_navigation_and_keeps_its_query_across_rail_modes(cx: &mu
     let input = window
         .update(cx, |shell, w, cx| {
             w.activate_window();
-            shell.workspace.preferences.sidebar_right = false;
             shell.open_app_search(w, cx);
             let input = shell
                 .app_search
@@ -250,12 +248,11 @@ fn search_header_clears_navigation_and_keeps_its_query_across_rail_modes(cx: &mu
             pane.left(),
             "{mode}: the rail owns the divider when no left sidebar is drawn"
         );
-        if navigation.right() > pane.left() {
-            assert!(header.top() >= navigation.bottom(), "{mode}: {header:?}");
-        } else {
-            assert_eq!(header.top(), pane.top(), "{mode}");
-        }
-        assert!(visual.debug_bounds("title-tab-strip").is_none(), "{mode}");
+        // Search is a workspace tab, so its input stays beneath the same
+        // title row in every rail mode, clear of the navigation controls.
+        assert_eq!(header.top(), pane.top() + px(TITLE_BAR_HEIGHT), "{mode}");
+        assert!(header.top() >= navigation.bottom(), "{mode}: {header:?}");
+        assert!(visual.debug_bounds("title-tab-strip").is_some(), "{mode}");
         // This query point lies under the overhanging buttons without clearance.
         visual.simulate_click(
             gpui::point(header.left() + px(48.), header.center().y),
@@ -278,11 +275,7 @@ fn channels_after_bot_details_keep_a_plain_header_and_full_tab_width(cx: &mut Te
     let visual = &mut gpui::VisualTestContext::from_window(window.into(), cx);
     visual.simulate_resize(gpui::size(px(1600.), px(1000.)));
     visual.run_until_parked();
-    let toggle = visual.debug_bounds("toggle-right-panel").unwrap();
-    visual.simulate_click(toggle.center(), Default::default());
-    visual.run_until_parked();
-    assert!(visual.debug_bounds("bot-overview-panel").is_some());
-    assert!(visual.debug_bounds("bot-overview-tabs").is_some());
+    assert!(visual.debug_bounds("bot-island").is_some());
 
     let channels = visual.debug_bounds("classic-add-channel").unwrap();
     visual.simulate_click(channels.center(), Default::default());
@@ -293,10 +286,6 @@ fn channels_after_bot_details_keep_a_plain_header_and_full_tab_width(cx: &mut Te
     assert!(visual.debug_bounds("toggle-right-panel").is_none());
     window
         .update(visual, |shell, window, cx| {
-            assert!(
-                shell.workspace.right_panel_open,
-                "the Bot's remembered preference is retained"
-            );
             assert_eq!(shell.right_drawn, 0.);
             assert_eq!(shell.corner_room(cx), 42.);
             assert_eq!(
@@ -334,7 +323,7 @@ fn hidden_workspace_panes_do_not_leave_a_resize_hitbox_over_global_surfaces(
     visual.run_until_parked();
     window
         .update(visual, |shell, _, _| {
-            assert_eq!(shell.workspace.right_panel_width, width - 20.)
+            assert_eq!(shell.workspace.right_panel_width, width + 20.)
         })
         .unwrap();
 
@@ -372,7 +361,7 @@ fn hidden_workspace_panes_do_not_leave_a_resize_hitbox_over_global_surfaces(
             .update(visual, |shell, _, _| {
                 (
                     gpui::point(
-                        px(shell.viewport_width - shell.workspace.right_panel_width + 0.5),
+                        px(shell.classic_rail_width() + shell.workspace.right_panel_width - 0.5),
                         px(500.),
                     ),
                     shell.workspace.right_panel_width,
@@ -449,154 +438,7 @@ fn original_workspace_tabs_fit_sidebar_widths_and_keep_their_actions(cx: &mut Te
     }
 }
 #[gpui::test]
-fn bot_and_session_sidebars_share_width_while_retaining_their_own_visibility(
-    cx: &mut TestAppContext,
-) {
-    use crate::workspace::SidebarTab;
-    vorkspace_ui::clock::use_test_clock(cx);
-    let (window, manager, bot, session) = mixed_window(cx);
-    let visual = &mut gpui::VisualTestContext::from_window(window.into(), cx);
-    visual.simulate_resize(gpui::size(px(1600.), px(1000.)));
-    visual.run_until_parked();
-    vorkspace_ui::clock::settle_animations(window, visual);
-    assert!(visual.debug_bounds("right-panel-frame").is_none());
-    let toggle = visual.debug_bounds("toggle-right-panel").unwrap();
-    visual.simulate_click(toggle.center(), Default::default());
-    visual.run_until_parked();
-    vorkspace_ui::clock::settle_animations(window, visual);
-    assert!(visual.debug_bounds("bot-overview-panel").is_some());
-    let frame = visual.debug_bounds("right-panel-frame").unwrap();
-    let bounds = visual.debug_bounds("right-panel-resize").unwrap();
-    assert_eq!(bounds.size.width, px(6.));
-    assert!((bounds.center().x - frame.left() - px(0.5)).abs() <= px(0.5));
-    for x in [bounds.left() + px(0.5), bounds.right() - px(0.5)] {
-        let point = gpui::point(x, bounds.center().y);
-        visual.simulate_mouse_down(point, MouseButton::Left, Default::default());
-        window
-            .update(visual, |shell, _, _| assert!(shell.right_resize.is_some()))
-            .unwrap();
-        visual.simulate_mouse_up(point, MouseButton::Left, Default::default());
-        visual.run_until_parked();
-        vorkspace_ui::clock::settle_animations(window, visual);
-    }
-    let handle = visual.debug_bounds("right-panel-resize").unwrap().center();
-    let end = handle - gpui::point(px(30.), px(0.));
-    visual.simulate_mouse_down(handle, MouseButton::Left, Default::default());
-    visual.simulate_mouse_move(end, MouseButton::Left, Default::default());
-    visual.simulate_mouse_up(end, MouseButton::Left, Default::default());
-    visual.run_until_parked();
-    vorkspace_ui::clock::settle_animations(window, visual);
-    let expanded = window
-        .update(visual, |shell, _, _| shell.workspace.right_panel_width)
-        .unwrap();
-    let handle = visual.debug_bounds("right-panel-resize").unwrap().center();
-    let end = handle + gpui::point(px(30.), px(0.));
-    visual.simulate_mouse_down(handle, MouseButton::Left, Default::default());
-    visual.simulate_mouse_move(end, MouseButton::Left, Default::default());
-    window
-        .update(visual, |shell, _, _| {
-            assert_eq!(shell.workspace.right_panel_width, expanded - 30.)
-        })
-        .unwrap();
-    visual.simulate_mouse_up(
-        end + gpui::point(px(20.), px(0.)),
-        MouseButton::Left,
-        Default::default(),
-    );
-    visual.run_until_parked();
-    vorkspace_ui::clock::settle_animations(window, visual);
-    let width = window
-        .update(visual, |shell, w, cx| {
-            assert!(shell.right_resize.is_none());
-            vorkspace_ui::clock::use_test_clock(cx);
-            let width = shell.workspace.right_panel_width;
-            shell.open(session, w, cx);
-            shell.select_classic_sidebar(SidebarTab::Files, w, cx);
-            width
-        })
-        .unwrap();
-    visual.run_until_parked();
-    vorkspace_ui::clock::settle_animations(window, visual);
-    assert!(visual.debug_bounds("right-panel-frame").is_none());
-    assert!(visual.debug_bounds("bot-overview-panel").is_none());
-    let sidebar = visual.debug_bounds("sidebar-frame").unwrap();
-    let explorer = visual.debug_bounds("explorer-header").unwrap();
-    assert_eq!(sidebar.size.width, px(width));
-    assert_eq!(sidebar.right(), px(1600.));
-    assert!(explorer.left() >= sidebar.left() && explorer.right() <= sidebar.right());
-    let handle = visual.debug_bounds("sidebar-resize").unwrap().center();
-    let end = handle - gpui::point(px(40.), px(0.));
-    visual.simulate_mouse_down(handle, MouseButton::Left, Default::default());
-    visual.simulate_mouse_move(end, MouseButton::Left, Default::default());
-    visual.simulate_mouse_up(end, MouseButton::Left, Default::default());
-    visual.run_until_parked();
-    vorkspace_ui::clock::settle_animations(window, visual);
-    let width = width + 40.;
-    let session_sidebar = visual.debug_bounds("sidebar-frame").unwrap();
-    assert_eq!(session_sidebar.size.width, px(width));
-    window
-        .update(visual, |_, w, cx| {
-            manager.update(cx, |manager, cx| manager.open(&bot, w, cx))
-        })
-        .unwrap();
-    visual.run_until_parked();
-    vorkspace_ui::clock::settle_animations(window, visual);
-    for _ in 0..3 {
-        assert_eq!(
-            visual.debug_bounds("right-panel-frame").unwrap(),
-            session_sidebar
-        );
-        visual
-            .update_window(window.into(), |_, w, cx| w.simulate_next_frame(cx))
-            .unwrap();
-    }
-    vorkspace_ui::clock::use_test_clock(cx);
-    // One sidebar fits at this size. Counting the hidden session sidebar
-    // alongside Bot details must not change its visibility preference.
-    visual.simulate_resize(gpui::size(px(1050.), px(1000.)));
-    window
-        .update(visual, |shell, w, cx| {
-            assert!(shell.workspace.sidebar_visible);
-            shell.open(session, w, cx);
-        })
-        .unwrap();
-    visual.run_until_parked();
-    vorkspace_ui::clock::settle_animations(window, visual);
-    let session_sidebar = visual.debug_bounds("sidebar-frame").unwrap();
-    assert_eq!(session_sidebar.size.width, px(width));
-    window
-        .update(visual, |_, w, cx| {
-            manager.update(cx, |manager, cx| manager.open(&bot, w, cx));
-        })
-        .unwrap();
-    visual.run_until_parked();
-    vorkspace_ui::clock::settle_animations(window, visual);
-    assert_eq!(
-        visual.debug_bounds("right-panel-frame").unwrap(),
-        session_sidebar
-    );
-    let toggle = visual.debug_bounds("toggle-right-panel").unwrap();
-    visual.simulate_click(toggle.center(), Default::default());
-    visual.run_until_parked();
-    vorkspace_ui::clock::settle_animations(window, visual);
-    assert!(visual.debug_bounds("right-panel-frame").is_none());
-    window
-        .update(visual, |shell, _, _| {
-            assert_eq!(shell.workspace.sidebar_tab(), SidebarTab::Files);
-            assert_eq!(shell.workspace.right_panel_width, width);
-            let saved = vorkspace_runtime::runtime::locked(&shell.store)
-                .unwrap()
-                .ui_state()
-                .unwrap()
-                .unwrap();
-            let saved: crate::workspace::Workspace = serde_json::from_str(&saved).unwrap();
-            assert_eq!(saved.right_panel_width, width);
-            assert!(!saved.right_panel_open);
-        })
-        .unwrap();
-}
-#[gpui::test]
-fn session_sidebar_peeks_from_the_right_and_never_over_a_bot(cx: &mut TestAppContext) {
+fn collapsed_sidebar_stays_closed_when_hovering_the_rail(cx: &mut TestAppContext) {
     vorkspace_ui::clock::use_test_clock(cx);
     let (window, manager, bot, session) = mixed_window(cx);
     let visual = &mut gpui::VisualTestContext::from_window(window.into(), cx);
@@ -604,114 +446,41 @@ fn session_sidebar_peeks_from_the_right_and_never_over_a_bot(cx: &mut TestAppCon
     window
         .update(visual, |shell, window, cx| {
             shell.open(session, window, cx);
+            shell.workspace.project_rail_open = false;
+            shell.workspace.preferences.collapsed_project_rail = "compact".into();
             shell.set_sidebar_visible(false, cx);
+            shell.invalidate_chrome(cx);
         })
         .unwrap();
     visual.run_until_parked();
     vorkspace_ui::clock::settle_animations(window, visual);
-    window
-        .update(visual, |shell, _, cx| shell.set_peek(true, cx))
-        .unwrap();
-    vorkspace_ui::clock::settle_animations(window, visual);
-    let peek = visual.debug_bounds("sidebar-peek").unwrap();
-    assert_eq!(peek.right(), px(1594.));
-    assert_eq!(peek.size.width, px(crate::right_panel::WIDTH_DEFAULT));
+    let rail = visual.debug_bounds("classic-project-rail").unwrap();
+    let positions = [
+        visual
+            .debug_bounds("classic-compact-tab-sessions")
+            .unwrap()
+            .center(),
+        visual.debug_bounds("toggle-sidebar").unwrap().center(),
+        gpui::point(rail.right() + px(2.), px(300.)),
+    ];
+    for position in positions {
+        visual.simulate_mouse_move(position, None, Default::default());
+        visual.run_until_parked();
+        vorkspace_ui::clock::settle_animations(window, visual);
+        assert!(visual.debug_bounds("sidebar-peek").is_none());
+        assert!(visual.debug_bounds("sidebar-frame").is_none());
+    }
     window
         .update(visual, |_, window, cx| {
             manager.update(cx, |manager, cx| manager.open(&bot, window, cx));
         })
         .unwrap();
     visual.run_until_parked();
-    assert!(visual.debug_bounds("sidebar-peek").is_none());
-}
-#[gpui::test]
-fn switching_bots_keeps_the_same_details_spring_and_clipped_contents(cx: &mut TestAppContext) {
-    let (window, manager, bot, _) = mixed_window(cx);
-    let other = window
-        .update(cx, |_, window, cx| {
-            manager.update(cx, |manager, cx| {
-                manager.create_named(Vec::new(), window, cx);
-                manager.dismiss_settings(window, cx);
-                manager.active.clone().unwrap()
-            })
-        })
-        .unwrap();
-    vorkspace_ui::clock::use_test_clock(cx);
-    window
-        .update(cx, |shell, w, cx| shell.toggle_right_panel(w, cx))
-        .unwrap();
-    for ms in [35, 70, 110] {
-        window
-            .update(cx, |shell, w, cx| {
-                let slide = shell.right_slide.as_ref().unwrap();
-                slide.freeze_elapsed(Duration::from_millis(ms));
-                let now = Instant::now();
-                let before = slide.at(now);
-                let next = if manager.read(cx).active.as_deref() == Some(bot.as_str()) {
-                    &other
-                } else {
-                    &bot
-                };
-                manager.update(cx, |manager, cx| manager.open(next, w, cx));
-                assert_eq!(
-                    shell.right_slide.as_ref().unwrap().at(now),
-                    before,
-                    "tab switches preserve the spring's position and velocity"
-                );
-                assert!(shell.workspace.right_panel_open);
-                cx.notify();
-            })
-            .unwrap();
-        cx.update_window(window.into(), |_, w, cx| {
-            w.simulate_next_frame(cx);
-            w.draw(cx).clear(cx);
-        })
-        .unwrap();
-        let visual = &mut gpui::VisualTestContext::from_window(window.into(), cx);
-        let frame = visual.debug_bounds("right-panel-frame").unwrap();
-        let content = visual.debug_bounds("right-panel-content").unwrap();
-        let width = window
-            .update(visual, |shell, _, _| shell.workspace.right_panel_width)
-            .unwrap();
-        assert!(frame.size.width > px(0.) && frame.size.width < px(width));
-        assert_eq!(content.size.width, px(width - 1.));
+    for position in positions {
+        visual.simulate_mouse_move(position, None, Default::default());
+        visual.run_until_parked();
+        vorkspace_ui::clock::settle_animations(window, visual);
+        assert!(visual.debug_bounds("sidebar-peek").is_none());
+        assert!(visual.debug_bounds("sidebar-frame").is_none());
     }
-    window
-        .update(cx, |shell, w, cx| {
-            shell.toggle_right_panel(w, cx);
-            assert!(!shell.workspace.right_panel_open);
-            assert_eq!(shell.right_slide.as_ref().unwrap().to, 0.);
-            shell
-                .right_slide
-                .as_ref()
-                .unwrap()
-                .elapsed(Duration::from_millis(45));
-            manager.update(cx, |manager, cx| manager.open(&other, w, cx));
-            shell.toggle_right_panel(w, cx);
-            assert!(shell.workspace.right_panel_open);
-            assert_eq!(
-                shell.right_slide.as_ref().unwrap().to,
-                shell.workspace.right_panel_width
-            );
-            manager.update(cx, |m, cx| m.open(&bot, w, cx));
-            shell
-                .right_slide
-                .as_ref()
-                .unwrap()
-                .elapsed(Duration::from_secs(1));
-            cx.notify();
-        })
-        .unwrap();
-    cx.run_until_parked();
-    window
-        .update(cx, |shell, _, _| assert!(shell.right_slide.is_none()))
-        .unwrap();
-    let visual = &mut gpui::VisualTestContext::from_window(window.into(), cx);
-    assert_eq!(
-        visual.debug_bounds("right-panel-frame").unwrap().size.width,
-        px(window
-            .update(visual, |shell, _, _| shell.workspace.right_panel_width)
-            .unwrap())
-    );
-    assert!(visual.debug_bounds("bot-overview-panel").is_some());
 }

@@ -16,6 +16,7 @@ use vorkspace_core::project_appearance::{
     Background, BotAnimState, COLORS, Effect, ProjectAppearance, Scope, TEXTURE_PALETTES,
     default_foreground_color, import_image,
 };
+use vorkspace_ui::radius;
 use vorkspace_ui::theme::*;
 
 pub(crate) enum Event {
@@ -83,7 +84,7 @@ fn button(
         .items_center()
         .justify_center()
         .gap_1p5()
-        .rounded_md()
+        .rounded(px(radius::CONTROL))
         .border_1()
         .border_color(content(0.1))
         .text_size(px(12.))
@@ -277,7 +278,7 @@ impl Render for AppearanceControls {
                     .flex()
                     .items_center()
                     .px_2p5()
-                    .rounded_lg()
+                    .rounded(px(radius::CONTROL))
                     .border_1()
                     .border_color(content(0.1))
                     .bg(content(0.05))
@@ -297,7 +298,7 @@ impl Render for AppearanceControls {
                             .aria_label("Choose project logo")
                             .size(px(36.))
                             .flex_shrink_0()
-                            .rounded_lg()
+                            .rounded(px(radius::CONTROL))
                             .border_1()
                             .border_color(content(0.1))
                             .bg(content(0.05))
@@ -404,7 +405,7 @@ impl Render for AppearanceControls {
                                                 .role(Role::Button)
                                                 .aria_label("Randomize texture seed")
                                                 .size(px(22.))
-                                                .rounded_md()
+                                                .rounded(px(radius::CONTROL))
                                                 .border_1()
                                                 .border_color(content(0.14))
                                                 .bg(content(0.06))
@@ -503,7 +504,7 @@ impl Render for AppearanceControls {
                                     .flex_1()
                                     .h(px(24.))
                                     .px_2()
-                                    .rounded_md()
+                                    .rounded(px(radius::CONTROL))
                                     .border_1()
                                     .border_color(if bg_active {
                                         accent_color()
@@ -541,7 +542,7 @@ impl Render for AppearanceControls {
                                         .flex_1()
                                         .h(px(24.))
                                         .px_2()
-                                        .rounded_md()
+                                        .rounded(px(radius::CONTROL))
                                         .border_1()
                                         .border_color(if fg_active {
                                             accent_color()
@@ -577,7 +578,7 @@ impl Render for AppearanceControls {
                                         .h(px(24.))
                                         .w(px(28.))
                                         .flex_shrink_0()
-                                        .rounded_md()
+                                        .rounded(px(radius::CONTROL))
                                         .border_1()
                                         .border_color(content(0.15))
                                         .bg(content(0.05))
@@ -862,7 +863,7 @@ impl BackgroundDialog {
                             .h(px(32.))
                             .flex_shrink_0()
                             .px_2()
-                            .rounded_md()
+                            .rounded(px(radius::CONTROL))
                             .flex()
                             .items_center()
                             .gap_2()
@@ -1094,7 +1095,7 @@ impl BackgroundDialog {
                     .h(px(36.))
                     .flex_shrink_0()
                     .px(px(10.))
-                    .rounded_md()
+                    .rounded(px(radius::CONTROL))
                     .border_1()
                     .border_color(content(0.1))
                     .flex()
@@ -1153,7 +1154,7 @@ impl BackgroundDialog {
                     .items_center()
                     .gap(px(2.))
                     .p(px(2.))
-                    .rounded_md()
+                    .rounded(px(radius::CONTROL))
                     .border_1()
                     .border_color(content(0.1))
                     .role(Role::RadioGroup)
@@ -1176,7 +1177,7 @@ impl BackgroundDialog {
                                     .items_center()
                                     .justify_center()
                                     .px(px(6.))
-                                    .rounded(px(5.))
+                                    .rounded(px(radius::CONTROL - 2. - 1.))
                                     .text_size(px(12.))
                                     .line_height(px(18.))
                                     .text_color(content(if self.background.scope == scope {
@@ -1228,7 +1229,7 @@ impl Render for BackgroundDialog {
             .child(div().id("background-dialog-body").debug_selector(||"background-dialog-body".into())
                 .min_h_0().overflow_y_scroll().flex().flex_col().gap_5().p_4()
                 .child(div().flex_shrink_0().flex().flex_col()
-                    .child(div().debug_selector(||"background-dialog-preview".into()).h(px(162.)).flex_shrink_0().overflow_hidden().rounded(px(12.)).border_1().border_color(content(0.1))
+                    .child(div().debug_selector(||"background-dialog-preview".into()).h(px(162.)).flex_shrink_0().overflow_hidden().rounded(px(radius::SURFACE)).border_1().border_color(content(0.1))
                         .bg(if self.background.effect==Effect::GradientBlur {rgb(0x171717).into()} else {content(0.05)})
                         .child(div().relative().h(px(160.)).child(self.preview.clone()).when(!has_image,|d|d.flex().items_center().justify_center().child(div().text_size(px(12.)).text_color(content(0.4)).child("No background selected")))))
                     .child(button("choose-project-background",if self.busy{"Saving image…"}else if has_image{"Change image"}else{"Choose image"})

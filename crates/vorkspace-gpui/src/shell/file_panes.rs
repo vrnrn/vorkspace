@@ -56,14 +56,7 @@ impl Shell {
             return Some(id);
         }
         let review = self.reviews.remove(&id)?;
-        let pane = self
-            .workspace
-            .review_owners
-            .keys()
-            .copied()
-            .min()
-            .unwrap_or(0)
-            - 1;
+        let pane = self.workspace.fresh_pane_id()?;
         self.workspace.review_owners.insert(pane, id);
         self.workspace.reviews.remove(&id);
         self.reviews.insert(pane, review.clone());
@@ -81,7 +74,9 @@ impl Shell {
     }
 
     pub(super) fn open_file_pane(&mut self, id: i64, window: &mut Window, cx: &mut Context<Self>) {
-        let owner = self.workspace.session_for_pane(id);
+        let Some(owner) = self.workspace.session_for_pane(id) else {
+            return;
+        };
         if self.deleting.contains(&owner) {
             return;
         }
@@ -105,7 +100,7 @@ impl Shell {
         if let Some(review) = self.review_for(id, cx) {
             review.update(cx, |r, cx| r.focus_active(window, cx));
         }
-        self.remember_title_tab(TitleTab::Session(self.workspace.tab_of(id).unwrap()));
+        self.remember_title_tab(TitleTab::Workspace(self.workspace.tab_of(id).unwrap()));
         self.reveal_active_tab(cx);
         self.persist(cx);
         cx.notify();

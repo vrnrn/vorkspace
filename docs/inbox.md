@@ -15,10 +15,13 @@ state, and default Bot choices remain available when it is enabled again.
 Disabling a source does not log out of GitHub CLI or delete credentials.
 
 Enabled connectors each have a sidebar button in expanded and compact layouts.
-Clicking a button opens that provider's page in the main pane. Like Search, Notes,
-and Automations, connector pages are sidebar pages: they hide the title strip
-and are not saved as tabs. Authentication does not determine availability.
-Each page remains pinned to its provider, including setup and failure states.
+Clicking a button opens that provider's library tab. Authentication does not
+determine availability. Each library remains pinned to its provider, including
+setup and failure states. Use Open in tab, Command-click, or middle-click an item
+to keep its details in a separate workspace tab. Each item pane retains its own
+selection, scroll and comment draft as shared connector snapshots refresh. Item
+panes can tile beside sessions, notes and other resources using the workspace's
+existing split controls. Closing one item does not change another item's state.
 
 The sidebar options menu has separate visibility switches and drag grips for
 workspace shortcuts. Hiding a shortcut leaves its page state, connection and

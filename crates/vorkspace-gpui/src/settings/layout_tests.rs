@@ -587,7 +587,6 @@ fn native_settings_captures() {
     struct Fixture {
         view: Entity<SettingsView>,
         nav: bool,
-        liquid: crate::liquid::Liquid,
         _observe: Subscription,
     }
     impl Render for Fixture {
@@ -602,7 +601,6 @@ fn native_settings_captures() {
                         &self.view.read(cx).visible_sections(),
                         |_, _, _| {},
                         |_, _| {},
-                        &self.liquid,
                     )))
                 })
                 .child(div().min_w_0().flex_1().h_full().child(self.view.clone()))
@@ -687,7 +685,6 @@ fn native_settings_captures() {
                             _observe: cx.observe(&view, |_, _, cx| cx.notify()),
                             view,
                             nav: show_nav,
-                            liquid: Default::default(),
                         })
                     })
                     .unwrap();

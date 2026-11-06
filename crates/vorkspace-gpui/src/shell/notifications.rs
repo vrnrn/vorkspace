@@ -432,15 +432,8 @@ impl Shell {
     }
 
     fn notice_session_visible(&self, id: i64, cx: &App) -> bool {
-        if self.app_view_open() || self.settings.is_some() || self.app_search.is_some() {
+        if self.settings.is_some() {
             return false;
-        }
-        if self.bot_active(cx) {
-            return self
-                .bots
-                .as_ref()
-                .and_then(|m| m.read(cx).active_notification_session(cx))
-                == Some(id);
         }
         self.workspace.active_tab().is_some_and(|tab| {
             self.workspace
@@ -448,8 +441,23 @@ impl Shell {
                 .leaf_ids()
                 .into_iter()
                 .any(|pane| {
-                    self.workspace.session_for_pane(pane) == id
+                    if self.workspace.session_for_pane(pane) == Some(id)
                         && !self.workspace.review_owners.contains_key(&pane)
+                    {
+                        return true;
+                    }
+                    let Some(crate::workspace::AppPane::Bot(bot)) = self
+                        .workspace
+                        .app_panes
+                        .get(&pane)
+                        .map(|pane| &pane.content)
+                    else {
+                        return false;
+                    };
+                    self.workspace.preferences.bots
+                        && self.bots.as_ref().is_some_and(|manager| {
+                            manager.read(cx).pane_notification_session(bot, cx) == Some(id)
+                        })
                 })
         })
     }
@@ -497,7 +505,12 @@ impl Shell {
                 inbox_ask: false,
                 orchestration_worker: self.orchestration_worker(id),
                 conversation_focused: self.window_active
-                    && (self.workspace.active == Some(id) || bot_visible)
+                    && (self
+                        .workspace
+                        .active
+                        .and_then(|pane| self.workspace.session_for_pane(pane))
+                        == Some(id)
+                        || bot_visible)
                     && self.notice_session_visible(id, cx)
                     && chat.composer_focused(window, cx),
             });
@@ -1181,8 +1194,7 @@ impl Shell {
         }
     }
 
-    /// The pane host positions the returned card at top/right 12px, clipped to
-    /// the exact session surface, so split chats and Bot sessions stay scoped.
+    /// The pane host places the card inside the corresponding chat surface.
     pub(super) fn linked_notice(
         &mut self,
         id: i64,

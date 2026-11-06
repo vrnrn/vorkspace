@@ -2,6 +2,7 @@ use crate::input::{self, Input};
 use crate::settings::{SettingsEvent, SettingsView, widgets::secondary_button};
 use gpui::{AnyElement, Context, Entity, SharedString, div, prelude::*, px};
 use vorkspace_core::inbox::JiraFilter;
+use vorkspace_ui::radius;
 use vorkspace_ui::theme::*;
 
 #[derive(Default)]
@@ -181,7 +182,7 @@ impl SettingsView {
             .on_click(cx.listener(|this, _, _, cx| this.apply_jira_jql(cx)))
             .into_any_element();
             rows.push(div().id("jira-query-row").debug_selector(||"settings-jira-query".into()).px(px(20.)).py(px(12.)).flex().flex_col().gap(px(10.)).text_size(px(12.)).child("JQL query")
-                .child(div().h(px(36.)).px_2().border_1().border_color(content(0.15)).rounded_md().flex().items_center().child(query))
+                .child(div().h(px(36.)).px_2().border_1().border_color(content(0.15)).rounded(px(radius::CONTROL)).flex().items_center().child(query))
                 .child(div().text_color(content(0.5)).child("JQL controls which tickets are fetched. Project selections and Assigned to me do not apply. Jira status, time, and search filters still narrow the results."))
                 .child(apply).child(div().text_color(content(0.5)).child(if applied {"JQL query applied."}else{"Apply to check and save your query."}))
                 .when_some(self.inbox.error.clone(),|d,error|d.child(div().text_color(gpui::rgb(0xef4444)).child(error))).into_any_element());

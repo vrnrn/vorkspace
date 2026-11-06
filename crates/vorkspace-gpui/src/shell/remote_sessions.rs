@@ -118,8 +118,8 @@ impl Shell {
                         // A transient disconnect retains the last host index.
                         // The active conversation exposes the error and Retry.
                         if let Some(id) = this.workspace.active
-                            && let Some(view) =
-                                this.sessions.get(&this.workspace.session_for_pane(id))
+                            && let Some(owner) = this.workspace.session_for_pane(id)
+                            && let Some(view) = this.sessions.get(&owner)
                         {
                             view.update(cx, |view, cx| view.remote_connection_error(&error, cx));
                         }

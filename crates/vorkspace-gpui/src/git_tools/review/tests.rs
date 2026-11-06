@@ -255,6 +255,55 @@ fn reopening_diffs_reuses_views_and_only_reads_changed_files(cx: &mut gpui::Test
 }
 
 #[gpui::test]
+fn cached_diff_comments_are_acknowledged_by_the_current_review(cx: &mut gpui::TestAppContext) {
+    let repo = Repo::new();
+    let cwd = repo.cwd();
+    let state = ReviewState {
+        tabs: vec![ReviewTab::Changes {
+            cwd: cwd.clone(),
+            path: None,
+            staged: Some(false),
+        }],
+        ..Default::default()
+    };
+    let window = cx.update(|cx| {
+        cx.open_window(Default::default(), |_, cx| {
+            let git = cx.new(|cx| ProjectGit::new(cwd, cx));
+            cx.new(|cx| ReviewPane::new(git, state.clone(), cx))
+        })
+        .unwrap()
+    });
+    window
+        .update(cx, |pane, _, cx| pane.set_visible(true, cx))
+        .unwrap();
+    cx.run_until_parked();
+    let (next, view, _events) = window
+        .update(cx, |previous, w, cx| {
+            let view = previous.active_diff_for_test();
+            previous.cache_closed(cx);
+            let next = cx.new(|cx| ReviewPane::new(previous.git.clone(), state, cx));
+            assert_eq!(next.read(cx).active_diff_for_test(), view);
+            let events = cx.subscribe(&next, |_, next, event: &ReviewEvent, cx| {
+                if let ReviewEvent::Comment(comment) = event {
+                    assert!(comment.is_current(cx));
+                    assert!(comment.text().contains("Use the new owner"));
+                    next.update(cx, |next, cx| next.complete_comment(comment, Ok(()), cx));
+                }
+            });
+            let draft = view.update(cx, |view, cx| view.open_comment_for_test(w, cx));
+            draft.update(cx, |draft, cx| {
+                draft.set_text("Use the new owner".into(), cx);
+                cx.emit(crate::input::Submitted);
+            });
+            (next, view, events)
+        })
+        .unwrap();
+    cx.run_until_parked();
+    view.read_with(cx, |view, _| assert!(!view.has_comment_draft()));
+    next.read_with(cx, |next, _| assert!(!next.closed));
+}
+
+#[gpui::test]
 fn closed_diff_cache_is_scoped_and_bounded(cx: &mut gpui::TestAppContext) {
     let git = cx.new(|cx| ProjectGit::new("~".into(), cx));
     let pane = cx.new(|cx| ReviewPane::new(git.clone(), Default::default(), cx));
@@ -268,7 +317,7 @@ fn closed_diff_cache_is_scoped_and_bounded(cx: &mut gpui::TestAppContext) {
         for i in 0..=MAX_CACHED_SOURCES {
             let mut source = pane.source(tab(i.to_string()), cx);
             source.files = Some(Vec::new());
-            git.update(cx, |git, _| review_cache(git).remember(&source));
+            git.update(cx, |git, cx| review_cache(git).remember(&source, cx));
         }
         git.update(cx, |git, _| {
             assert_eq!(review_cache(git).sources.len(), MAX_CACHED_SOURCES);
@@ -313,8 +362,8 @@ fn closed_diff_cache_is_scoped_and_bounded(cx: &mut gpui::TestAppContext) {
                 error: None,
             }),
         );
-        git.update(cx, |git, _| {
-            review_cache(git).remember(&source);
+        git.update(cx, |git, cx| {
+            review_cache(git).remember(&source, cx);
             assert!(review_cache(git).take(&source.tab).is_none());
         });
     });

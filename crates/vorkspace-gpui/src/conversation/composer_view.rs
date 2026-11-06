@@ -1,5 +1,6 @@
 //! Rendering the composer and its tool row.
 use super::*;
+use vorkspace_ui::radius;
 
 impl Conversation {
     /// `Session: Stop` on Escape: cancels a running turn.
@@ -94,14 +95,14 @@ impl Conversation {
             .children(if self.is_remote() { None } else { self.usage_notice(false, cx) })
             .child(self.message_queue(window, cx))
             .children(if self.is_remote() { None } else { self.auth_notice(cx) })
-            .when(self.settings.worktree_removed,|d|d.child(div().mb_2().p_3().rounded_lg().border_1().border_color(content(0.1)).flex().items_center().gap_3().text_size(px(12.)).child(div().flex_1().child("Worktree deleted. Select a branch or worktree to continue this conversation.")).child(tool_pill("reattach-worktree","Select worktree").child("Select worktree").on_click(cx.listener(|this,_,window,cx|this.open_git(GitMode::Worktree,window,cx))))))
+            .when(self.settings.worktree_removed,|d|d.child(div().mb_2().p_3().rounded(px(radius::CONTAINER)).border_1().border_color(content(0.1)).flex().items_center().gap_3().text_size(px(12.)).child(div().flex_1().child("Worktree deleted. Select a branch or worktree to continue this conversation.")).child(tool_pill("reattach-worktree","Select worktree").child("Select worktree").on_click(cx.listener(|this,_,window,cx|this.open_git(GitMode::Worktree,window,cx))))))
             .when_some(self.settings.handoff.clone(), |d, handoff| {
                 d.child(
                     div()
                         .mb(px(6.))
                         .px(px(12.))
                         .py(px(8.))
-                        .rounded(px(10.))
+                        .rounded(px(radius::CONTAINER))
                         .bg(content(0.05))
                         .flex()
                         .items_center()
@@ -156,7 +157,6 @@ impl Conversation {
     /// The composer box shared by sessions and Bots: its field, with send
     /// beside it, on the frosted composer surface.
     pub(crate) fn composer_box(&mut self, window: &Window, cx: &mut Context<Self>) -> AnyElement {
-        const RADIUS: f32 = 8.;
         let blur = composer_blur();
         let fill = composer_fill();
         let bot = self.settings.bot.is_some();
@@ -177,7 +177,7 @@ impl Conversation {
                 }
             }))
             .relative()
-            .rounded(px(RADIUS))
+            .rounded(px(radius::CONTAINER))
             .border_1()
             .border_color(composer_border(
                 self.input.focus_handle(cx).contains_focused(window, cx),
@@ -196,7 +196,8 @@ impl Conversation {
                 canvas(
                     |_, _, _| {},
                     move |bounds, _, window, _| {
-                        let surface = gpui::fill(bounds, fill).corner_radii(px(RADIUS - 1.));
+                        let surface =
+                            gpui::fill(bounds, fill).corner_radii(px(radius::CONTAINER - 1.));
                         let surface = if blur > 0. {
                             surface.border_color(gpui_apple::metal_renderer::backdrop_blur_marker(
                                 blur * window.scale_factor(),
@@ -235,7 +236,7 @@ impl Conversation {
                     )
                     .child(self.action(has_value, cx)),
             )
-            .children(self.attachment_drop_overlay(RADIUS))
+            .children(self.attachment_drop_overlay(radius::CONTAINER))
             .into_any_element()
     }
 
@@ -738,7 +739,7 @@ impl Conversation {
             .cursor(CursorStyle::Arrow)
             .flex_shrink_0()
             .size(px(26.))
-            .rounded_md()
+            .rounded(px(radius::CONTROL))
             .flex()
             .items_center()
             .justify_center()

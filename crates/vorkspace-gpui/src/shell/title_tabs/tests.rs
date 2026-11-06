@@ -76,7 +76,7 @@ fn connector_native_navigation_capture() {
         .unwrap();
 }
 #[gpui::test]
-fn command_w_closes_tabless_pages_and_restores_conversation(cx: &mut TestAppContext) {
+fn command_w_closes_workspace_pages_and_restores_conversation(cx: &mut TestAppContext) {
     cx.update(|cx| {
         bind_keys(cx);
         crate::input::bind(cx);
@@ -123,16 +123,20 @@ fn command_w_closes_tabless_pages_and_restores_conversation(cx: &mut TestAppCont
         cx.run_until_parked();
         window
             .update(cx, |shell, _, cx| {
-                assert!(shell.tabless_page(cx), "{page:?}");
-                assert!(!shell.workspace.title_order.contains(&page));
+                let opened = shell.active_title_tab(cx).unwrap();
+                assert!(matches!(opened, TitleTab::Workspace(id) if id != session));
+                assert!(shell.workspace.title_order.contains(&opened));
+                assert!(shell.visible_tabs(cx).contains(&opened));
             })
             .unwrap();
         cx.simulate_keystrokes(window.into(), "cmd-w");
         cx.run_until_parked();
         window
             .update(cx, |shell, w, cx| {
-                assert!(!shell.tabless_page(cx), "{page:?} must close");
-                assert_eq!(shell.active_title_tab(cx), Some(TitleTab::Session(session)));
+                assert_eq!(
+                    shell.active_title_tab(cx),
+                    Some(TitleTab::Workspace(session))
+                );
                 assert_eq!(shell.workspace.title_order, strip);
                 assert_eq!(shell.sessions[&session], chat);
                 let chat = chat.read(cx);
@@ -148,15 +152,16 @@ fn command_w_closes_tabless_pages_and_restores_conversation(cx: &mut TestAppCont
 }
 
 #[gpui::test]
-fn search_opened_from_a_connector_restores_visible_conversation_focus(cx: &mut TestAppContext) {
+fn search_opened_from_a_connector_returns_to_that_connector(cx: &mut TestAppContext) {
     cx.update(|cx| {
         bind_keys(cx);
         crate::input::bind(cx);
     });
-    let (window, _, session) = window(cx);
-    window
+    let (window, _, _) = window(cx);
+    let connector = window
         .update(cx, |shell, w, cx| {
-            shell.open_connector(Connector::Github, w, cx)
+            shell.open_connector(Connector::Github, w, cx);
+            shell.active_title_tab(cx).unwrap()
         })
         .unwrap();
     cx.run_until_parked();
@@ -168,12 +173,10 @@ fn search_opened_from_a_connector_restores_visible_conversation_focus(cx: &mut T
     cx.run_until_parked();
     window
         .update(cx, |shell, w, cx| {
-            assert!(!shell.tabless_page(cx));
-            assert_eq!(shell.workspace.active, Some(session));
+            assert_eq!(shell.active_title_tab(cx), Some(connector.clone()));
+            assert_eq!(shell.workspace.active, connector.session());
             assert!(
-                shell.sessions[&session]
-                    .read(cx)
-                    .input
+                shell.connector_pages[&Connector::Github]
                     .focus_handle(cx)
                     .is_focused(w)
             );
@@ -241,15 +244,15 @@ fn command_w_parks_bot_work_and_draft_and_restores_conversation(cx: &mut TestApp
         })
         .unwrap();
     cx.run_until_parked();
-    let (bot, chat) = window
+    let (bot_tab, chat) = window
         .update(cx, |shell, _, cx| {
             let manager = shell.bot_manager();
             let bots = manager.read(cx);
-            let id = bots.active.clone().unwrap();
+            let bot_tab = shell.active_title_tab(cx).unwrap();
             let chat = bots.chat().unwrap();
             assert_eq!(
                 shell.visible_tabs(cx),
-                [TitleTab::Session(session), shell.bot_tab(id.clone())]
+                [TitleTab::Workspace(session), bot_tab.clone()]
             );
             chat.update(cx, |chat, cx| {
                 chat.busy = true;
@@ -257,7 +260,7 @@ fn command_w_parks_bot_work_and_draft_and_restores_conversation(cx: &mut TestApp
                     input.set_text("unsent bot draft".into(), cx)
                 });
             });
-            (id, chat)
+            (bot_tab, chat)
         })
         .unwrap();
     cx.simulate_keystrokes(window.into(), "cmd-w");
@@ -265,13 +268,11 @@ fn command_w_parks_bot_work_and_draft_and_restores_conversation(cx: &mut TestApp
     window
         .update(cx, |shell, w, cx| {
             assert!(!shell.bot_active(cx));
-            assert!(
-                !shell
-                    .workspace
-                    .title_order
-                    .contains(&shell.bot_tab(bot.clone()))
+            assert!(!shell.workspace.title_order.contains(&bot_tab));
+            assert_eq!(
+                shell.active_title_tab(cx),
+                Some(TitleTab::Workspace(session))
             );
-            assert_eq!(shell.active_title_tab(cx), Some(TitleTab::Session(session)));
             assert!(
                 shell.sessions[&session]
                     .read(cx)
@@ -281,13 +282,14 @@ fn command_w_parks_bot_work_and_draft_and_restores_conversation(cx: &mut TestApp
             );
             assert!(chat.read(cx).busy);
             assert_eq!(chat.read(cx).input.read(cx).content, "unsent bot draft");
-            shell.open_title_tab(&shell.bot_tab(bot), w, cx);
+            shell.open_title_tab(&bot_tab, w, cx);
         })
         .unwrap();
     cx.run_until_parked();
     window
         .update(cx, |shell, _, cx| {
             assert_eq!(shell.bot_manager().read(cx).chat(), Some(chat.clone()));
+            assert_eq!(shell.active_title_tab(cx), Some(bot_tab));
             assert_eq!(
                 shell.visible_tabs(cx).len(),
                 2,
@@ -341,7 +343,7 @@ fn bot_tabs_restore_order_selection_and_project_scope(cx: &mut TestAppContext) {
         .update(cx, |shell, w, cx| {
             assert_eq!(
                 shell.visible_tabs(cx),
-                [bot.clone(), TitleTab::Session(session)]
+                [bot.clone(), TitleTab::Workspace(session)]
             );
             assert_eq!(shell.active_title_tab(cx), Some(bot.clone()));
             let chat = shell.bot_manager().read(cx).chat().unwrap();
@@ -353,7 +355,7 @@ fn bot_tabs_restore_order_selection_and_project_scope(cx: &mut TestAppContext) {
             shell.select_project("/work/vorkspace".into(), w, cx);
             assert_eq!(
                 shell.visible_tabs(cx),
-                [bot.clone(), TitleTab::Session(session)]
+                [bot.clone(), TitleTab::Workspace(session)]
             );
             shell.open_title_tab(&bot, w, cx);
         })
@@ -362,7 +364,7 @@ fn bot_tabs_restore_order_selection_and_project_scope(cx: &mut TestAppContext) {
     reopened
         .update(cx, |shell, _, cx| {
             assert_eq!(shell.active_title_tab(cx), Some(bot.clone()));
-            assert_eq!(shell.visible_tabs(cx), [bot, TitleTab::Session(session)]);
+            assert_eq!(shell.visible_tabs(cx), [bot, TitleTab::Workspace(session)]);
         })
         .unwrap();
 }
@@ -383,7 +385,7 @@ fn rapid_new_tabs_follow_request_order(cx: &mut TestAppContext) {
         .update(cx, |shell, _, cx| {
             let tabs = shell.visible_tabs(cx);
             assert_eq!(tabs.len(), 5);
-            assert_eq!(tabs[0], TitleTab::Session(first));
+            assert_eq!(tabs[0], TitleTab::Workspace(first));
             for (tab, provider) in tabs[1..].iter().zip(providers) {
                 assert_eq!(
                     shell.sessions[&tab.session().unwrap()]
@@ -413,7 +415,7 @@ fn project_round_trip_restores_the_selected_bot(cx: &mut TestAppContext) {
     let selected = window
         .update(cx, |shell, window, cx| {
             let selected = shell.active_title_tab(cx).unwrap();
-            assert!(matches!(selected, TitleTab::Bot { .. }));
+            assert!(matches!(selected, TitleTab::Workspace(_)));
             shell.select_project("/work/another-project".into(), window, cx);
             selected
         })
@@ -450,7 +452,7 @@ fn deleting_a_bot_prunes_its_saved_tabs(cx: &mut TestAppContext) {
     let selected = window
         .update(cx, |shell, _, cx| {
             let selected = shell.active_title_tab(cx).unwrap();
-            assert!(matches!(selected, TitleTab::Bot { .. }));
+            assert!(matches!(selected, TitleTab::Workspace(_)));
             selected
         })
         .unwrap();

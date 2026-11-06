@@ -2,6 +2,7 @@
 use super::*;
 use crate::workspace::TitleTab;
 use vorkspace_core::files::path_key;
+use vorkspace_ui::radius;
 
 impl Shell {
     /// Bot and terminal tabs share their controls and geometry. The Bot
@@ -33,7 +34,6 @@ impl Shell {
         let tab = tab.clone();
         let active = self.active_title_tab(cx).as_ref() == Some(&tab);
         let close_identity = format!("close-{identity}");
-        let pill = format!("tool:{identity}");
         let close_label = format!("Close {label}");
         let close_tab = tab.clone();
         let drag_tab = tab.clone();
@@ -59,14 +59,15 @@ impl Shell {
                 .child(
                     title_tab_plate(active, false)
                         .relative()
-                        .child(self.tab_liquid.row(pill, active))
                         .text_color(content(if active { 1. } else { 0.5 }))
                         .w_full()
                         .min_w_0()
                         .when(close && width >= TAB_CLOSE_MIN_WIDTH, |d| d.pr_7())
                         .when(width < 30., |d| d.px(px(((width - 14.) / 2.).max(0.))))
                         .gap(px(6.))
-                        .group_hover("simple-title-tab", |s| s.text_color(content(1.)))
+                        .group_hover("simple-title-tab", |s| {
+                            s.bg(title_tab_fill(active, true)).text_color(content(1.))
+                        })
                         .child(mark)
                         .child(
                             div()
@@ -86,9 +87,9 @@ impl Shell {
                             .aria_label(close_label)
                             .absolute()
                             .right_1()
-                            .top(px(10. + TAB_LABEL_DROP))
+                            .top(px(10.))
                             .size(px(20.))
-                            .rounded_sm()
+                            .rounded(px(radius::SMALL))
                             .flex()
                             .items_center()
                             .justify_center()
@@ -141,14 +142,14 @@ impl Shell {
         )
     }
 
-    /// The workspace keys a tab by one of its sessions. Replacing that session
+    /// The workspace keys a tab by one of its panes. Replacing that pane
     /// changes the key, but the same slot and selected width stay on screen.
     pub(super) fn replace_title_tab_key(&mut self, from: i64, to: i64) {
         if from == to {
             return;
         }
-        let previous = TitleTab::Session(from);
-        let next = TitleTab::Session(to);
+        let previous = TitleTab::Workspace(from);
+        let next = TitleTab::Workspace(to);
         self.title_tab_motion.replace_key(&previous, next.clone());
         for selected in [
             &mut self.title_tab_selection.0,
@@ -198,18 +199,20 @@ impl Shell {
             .iter()
             .filter(|tab| match tab {
                 TitleTab::Terminal { .. } => true,
-                TitleTab::Session(tab) => {
-                    self.workspace.tabs.contains(tab) && {
-                        let id = self.workspace.tab_focus(*tab);
-                        self.session_summaries
-                            .contains_key(&self.workspace.session_for_pane(id))
-                            && self
-                                .session_metadata(self.workspace.session_for_pane(id), cx)
-                                .summary
-                                .cwd
-                                == self.workspace.project
-                            && self.in_worktree_scope(id, cx)
-                    }
+                TitleTab::Workspace(tab) => {
+                    self.workspace.tabs.contains(tab)
+                        && self
+                            .workspace
+                            .layout(*tab)
+                            .leaf_ids()
+                            .iter()
+                            .all(|id| self.pane_in_scope(*id, cx))
+                        && self.workspace.layout(*tab).leaf_ids().iter().any(|id| {
+                            self.workspace
+                                .app_panes
+                                .get(id)
+                                .is_none_or(|pane| self.app_pane_available(&pane.content, cx))
+                        })
                 }
                 TitleTab::Bot {
                     id,
@@ -229,16 +232,28 @@ impl Shell {
             .cloned()
             .collect()
     }
-
-    pub(super) fn prune_deleted_bot_tabs(&mut self, cx: &App) -> bool {
+    pub(super) fn prune_deleted_bot_tabs(&mut self, cx: &mut Context<Self>) -> bool {
         let Some(bots) = self.bots.as_ref().map(|bots| bots.read(cx)) else {
             return false;
         };
-        // An unavailable roster is not an empty roster. Visibility preferences
-        // also do not delete a Bot or its saved tabs.
+        // Unavailable and disabled rosters are not deletions.
         if !bots.roster_loaded {
             return false;
         }
+        let missing = self
+            .workspace
+            .app_panes
+            .iter()
+            .filter_map(|(&pane, state)| match &state.content {
+                crate::workspace::AppPane::Bot(id)
+                | crate::workspace::AppPane::BotDocument { bot: id, .. }
+                    if bots.roster.get(id).is_none() =>
+                {
+                    Some(pane)
+                }
+                _ => None,
+            })
+            .collect::<Vec<_>>();
         let keep = |tab: &TitleTab| !matches!(tab, TitleTab::Bot { id, .. } if bots.roster.get(id).is_none());
         let before = (
             self.workspace.title_order.len(),
@@ -246,54 +261,42 @@ impl Shell {
         );
         self.workspace.title_order.retain(&keep);
         self.workspace.scope_focus.retain(|_, tab| keep(tab));
-        before
-            != (
-                self.workspace.title_order.len(),
-                self.workspace.scope_focus.len(),
-            )
+        let changed = !missing.is_empty()
+            || before
+                != (
+                    self.workspace.title_order.len(),
+                    self.workspace.scope_focus.len(),
+                );
+        for pane in missing {
+            // Remove only this leaf; unrelated sessions and drafts in the same
+            // tab retain their layout and ownership.
+            if !self.workspace.close_pane(pane) {
+                self.workspace.close(pane);
+            }
+            self.release_app_pane(pane, cx);
+            self.workspace.app_panes.remove(&pane);
+        }
+        if changed {
+            self.update_chat_visibility(cx);
+            self.invalidate_chrome(cx);
+        }
+        changed
     }
-    pub(super) fn active_title_tab(&self, cx: &App) -> Option<TitleTab> {
-        if let Some(active) = self.active_terminal_tab {
-            return self
-                .workspace
-                .title_order
-                .iter()
-                .find(|tab| matches!(tab, TitleTab::Terminal { id, .. } if *id == active))
-                .cloned();
-        }
-        if let Some(view) = self.active_app_view {
-            return Some(TitleTab::App(view));
-        }
-        if self.app_search.is_some() {
-            return Some(TitleTab::Search);
-        }
-        self.bots
-            .as_ref()
-            .and_then(|m| m.read(cx).active.clone())
-            .map(|id| self.bot_tab(id))
-            .or_else(|| self.workspace.active_tab().map(TitleTab::Session))
+
+    pub(super) fn active_title_tab(&self, _cx: &App) -> Option<TitleTab> {
+        self.workspace.active_tab().map(TitleTab::Workspace)
     }
 
     /// The active tab follows live focus; other tabs keep their last displayed
     /// pane instead of borrowing the currently selected tab's preview focus.
     pub(super) fn tab_review_focused(&self, tab: i64, cx: &App) -> bool {
-        if self.active_title_tab(cx) == Some(TitleTab::Session(tab)) {
+        if self.active_title_tab(cx) == Some(TitleTab::Workspace(tab)) {
             self.review_focused
         } else {
             self.pane_ticks
                 .get(&tab)
                 .is_some_and(|tick| tick.shown == (self.workspace.tab_focus(tab), true))
         }
-    }
-
-    /// Sidebar pages fill the pane without a tab strip.
-    pub(super) fn tabless_page(&self, cx: &App) -> bool {
-        self.active_app_view.is_some()
-            || self.app_search.is_some()
-            || self
-                .bots
-                .as_ref()
-                .is_some_and(|m| m.read(cx).classic_channels_open())
     }
 
     pub(super) fn remember_title_tab(&mut self, tab: TitleTab) {
@@ -303,7 +306,21 @@ impl Shell {
         if !self.workspace.title_order.contains(&tab) {
             self.workspace.title_order.push(tab.clone());
         }
-        self.workspace.scope_focus.insert(self.tab_scope(), tab);
+        if !self.is_standalone_channels_tab(&tab) {
+            self.workspace.scope_focus.insert(self.tab_scope(), tab);
+        }
+    }
+
+    /// The Channels browser has its own tab. Clicking a project resumes its
+    /// workspace unless Channels are tiled into that workspace's layout.
+    pub(super) fn is_standalone_channels_tab(&self, tab: &TitleTab) -> bool {
+        tab.session().is_some_and(|id| {
+            self.workspace
+                .app_panes
+                .get(&id)
+                .is_some_and(|pane| pane.content == crate::workspace::AppPane::Channels)
+                && !self.workspace.layout(id).is_split()
+        })
     }
 
     pub(super) fn bot_opened(&mut self, id: String, cx: &mut Context<Self>) {
@@ -323,7 +340,8 @@ impl Shell {
         self.leave_app_search(cx);
         self.close_preview(cx);
         self.review_focused = false;
-        self.remember_title_tab(self.bot_tab(id));
+        self.admit_app_pane(crate::workspace::AppPane::Bot(id));
+        self.update_chat_visibility(cx);
         self.reveal_active_tab(cx);
         self.persist(cx);
         cx.notify();
@@ -347,7 +365,7 @@ impl Shell {
                 app_views::AppView::Automations => self.open_automations(window, cx),
                 app_views::AppView::Todos => self.open_todos(window, cx),
             },
-            TitleTab::Session(id) => {
+            TitleTab::Workspace(id) => {
                 let focus = self.workspace.tab_focus(*id);
                 let review_focused = self.tab_review_focused(*id, cx);
                 self.open(focus, window, cx);
@@ -372,7 +390,9 @@ impl Shell {
         cx: &mut Context<Self>,
     ) -> bool {
         let tab = self.workspace.scope_focus.get(&self.tab_scope()).cloned();
-        if let Some(tab) = tab.filter(|tab| self.visible_tabs(cx).contains(tab)) {
+        if let Some(tab) = tab.filter(|tab| {
+            !self.is_standalone_channels_tab(tab) && self.visible_tabs(cx).contains(tab)
+        }) {
             if matches!(tab, TitleTab::Bot { .. }) {
                 self.workspace.active = None;
             }
@@ -445,6 +465,15 @@ impl Shell {
         if closing.is_empty() {
             return;
         }
+        for tab in &closing {
+            if let TitleTab::Workspace(id) = tab {
+                for pane in self.workspace.layout(*id).leaf_ids() {
+                    if !self.prepare_app_pane_close(pane, cx) {
+                        return;
+                    }
+                }
+            }
+        }
         let active = self.active_title_tab(cx);
         let replace = active.as_ref().is_some_and(|tab| closing.contains(tab));
         let next = if replace {
@@ -484,9 +513,11 @@ impl Shell {
             }
             if *tab == TitleTab::Search {
                 self.leave_app_search(cx);
-                self.saved_search = None;
             }
-            if let TitleTab::Session(id) = tab {
+            if let TitleTab::Workspace(id) = tab {
+                for pane in self.workspace.layout(*id).leaf_ids() {
+                    self.release_app_pane(pane, cx);
+                }
                 self.workspace.close(*id);
             }
         }
@@ -497,6 +528,8 @@ impl Shell {
             .scope_focus
             .retain(|_, tab| !closing.contains(tab));
         if replace {
+            self.leave_app_views(cx);
+            self.leave_app_search(cx);
             if let Some(bots) = self.bots.clone() {
                 bots.update(cx, |m, cx| m.close(cx));
             }

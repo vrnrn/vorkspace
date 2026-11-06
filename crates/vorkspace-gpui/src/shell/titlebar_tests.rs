@@ -74,7 +74,7 @@ fn assert_titlebar(
         "{percent}% fullscreen={fullscreen}: forward={forward:?} nav={nav:?}"
     );
     assert!(visual.debug_bounds("toggle-project-rail").is_none());
-    // Sidebar pages (Search, app views, Channels) have no tab strip.
+    // Every workspace destination shares the title strip.
     if visual.debug_bounds("title-tab-strip").is_some() {
         let tabs = platform_bounds(window, visual, "title-tab-strip");
         assert!(
@@ -89,7 +89,7 @@ fn assert_titlebar(
                     .visible_tabs(cx)
                     .into_iter()
                     .map(|tab| match tab {
-                        TitleTab::Session(id) => format!("title-tab-{id}"),
+                        TitleTab::Workspace(id) => format!("title-tab-{id}"),
                         TitleTab::Terminal { id, .. } => format!("terminal-title-tab-{id}"),
                         TitleTab::Bot { id, .. } => format!("bot-title-tab-{id}"),
                         TitleTab::Search | TitleTab::App(_) => {
@@ -287,7 +287,7 @@ fn titlebar_bot_and_app_views_keep_the_same_zoomed_navigation(cx: &mut TestAppCo
                     })
                     .unwrap();
                 settle(visual);
-                assert_eq!(visual.debug_bounds("title-tab-strip").is_some(), bot_view);
+                assert!(visual.debug_bounds("title-tab-strip").is_some());
                 assert_titlebar(window, visual, percent, false);
             }
         }

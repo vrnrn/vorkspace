@@ -163,3 +163,32 @@ fn narrow_navigation_retains_filter_and_editor(cx: &mut TestAppContext) {
         .unwrap();
     visual.update(|_, _| configure(&Default::default(), false, true));
 }
+
+#[gpui::test]
+fn automation_gallery_uses_narrow_tile_width_in_wide_window(cx: &mut TestAppContext) {
+    let service = Service::open(std::path::Path::new(":memory:")).unwrap();
+    let window = cx.update(|cx| {
+        cx.open_window(Default::default(), |_, cx| {
+            cx.new(|cx| Automations::new(Arc::new(Mutex::new(service)), "/tmp".into(), vec![], cx))
+        })
+        .unwrap()
+    });
+    let visual = &mut VisualTestContext::from_window(window.into(), cx);
+    visual.run_until_parked();
+    visual.simulate_resize(size(px(1100.), px(700.)));
+    window
+        .update(visual, |view, _, cx| view.set_pane_width(420., cx))
+        .unwrap();
+    visual.refresh().unwrap();
+    assert!(visual.debug_bounds("automation-sidebar").is_some());
+    click(visual, "automation-new");
+    assert!(visual.debug_bounds("automation-sidebar").is_none());
+    assert!(visual.debug_bounds("automation-back").is_some());
+
+    window
+        .update(visual, |view, _, cx| view.set_pane_width(1000., cx))
+        .unwrap();
+    visual.refresh().unwrap();
+    assert!(visual.debug_bounds("automation-sidebar").is_some());
+    assert!(visual.debug_bounds("automation-back").is_none());
+}

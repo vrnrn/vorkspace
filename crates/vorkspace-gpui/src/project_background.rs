@@ -14,6 +14,7 @@ use std::{
 };
 use vorkspace_core::project_appearance::background_texture;
 use vorkspace_core::project_appearance::{Background, Effect, read_image};
+use vorkspace_ui::radius;
 
 #[derive(Clone, PartialEq, Eq, Hash)]
 struct Key {
@@ -163,13 +164,13 @@ impl ProjectBackground {
 // review panes and terminal docks retain their straight interior boundaries.
 fn corners(bounds: Bounds<Pixels>, preview: bool, card: Option<Bounds<Pixels>>) -> Corners<Pixels> {
     if preview {
-        return Corners::all(px(11.));
+        return Corners::all(px(radius::SURFACE - 1.));
     }
     let Some(card) = card else {
         return Corners::default();
     };
     let near = |a: Pixels, b: Pixels| (a - b).abs() <= px(2.);
-    let radius = px(9.)
+    let radius = px(radius::SURFACE - 1.)
         .min(bounds.size.width / 2.)
         .min(bounds.size.height / 2.);
     let left = near(bounds.left(), card.left());

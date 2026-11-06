@@ -1,3 +1,4 @@
+use vorkspace_ui::radius;
 // Project terminal dock, tab actions and resize interactions.
 use super::*;
 use crate::{
@@ -461,7 +462,7 @@ impl Shell {
                                             .gap(px(6.))
                                             .px_2()
                                             .pr(px(28.))
-                                            .rounded_md()
+                                            .rounded(px(radius::CONTROL))
                                             .text_size(px(13.))
                                             .map(|d| {
                                                 if active {
@@ -506,7 +507,7 @@ impl Shell {
                                             .right_1()
                                             .top(px(8.))
                                             .size(px(20.))
-                                            .rounded(px(4.))
+                                            .rounded(px(radius::SMALL))
                                             .flex()
                                             .items_center()
                                             .justify_center()
@@ -577,7 +578,7 @@ impl Shell {
                                                             .items_center()
                                                             .gap(px(6.))
                                                             .px_2()
-                                                            .rounded_md()
+                                                            .rounded(px(radius::CONTROL))
                                                             .text_size(px(13.))
                                                             .text_color(content(0.5))
                                                             .child(
@@ -737,15 +738,9 @@ impl Shell {
     /// Terminal: New (cmd-`): another terminal in the project's dock, which
     /// opens if it was hidden.
     pub(super) fn new_terminal(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if self.active_terminal_tab.is_some() {
-            self.close_app_view(window, cx);
-        }
         if self.workspace.project.starts_with("remote://") {
             self.error = Some("Terminals are not available on remote projects.".into());
             cx.notify();
-            return;
-        }
-        if self.app_view_open() {
             return;
         }
         let project = self.workspace.project.clone();
@@ -773,9 +768,6 @@ impl Shell {
     }
     /// Terminal: Toggle (cmd-j).
     pub(super) fn toggle_terminal(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if self.active_terminal_tab.is_some() {
-            self.close_app_view(window, cx);
-        }
         if self.workspace.project.starts_with("remote://") {
             self.error = Some("Terminals are not available on remote projects.".into());
             cx.notify();
@@ -945,8 +937,9 @@ impl Shell {
         let project = self.workspace.project.clone();
         // Other projects' docks stop polling for their foreground commands.
         // A hidden dock keeps polling for the footer's running-terminal chip.
+        let workspace_visible = self.settings.is_none() && self.workspace.active_tab().is_some();
         for (path, live) in &self.terminals {
-            let shown = *path == project && !self.app_view_open();
+            let shown = *path == project && workspace_visible;
             for terminal in live {
                 terminal.update(cx, |t, _| t.visible = shown);
             }
@@ -967,7 +960,7 @@ impl Shell {
             }
             None => None,
         };
-        let shown = (dock.open || progress.is_some()) && !self.app_view_open();
+        let shown = (dock.open || progress.is_some()) && workspace_visible;
         if !shown {
             return body;
         }

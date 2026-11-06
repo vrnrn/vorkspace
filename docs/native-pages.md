@@ -4,7 +4,7 @@ Notes, Automations, the GitHub/GitLab/Jira Inbox, Todos and Search use the compa
 
 ## Sizing and hierarchy
 
-Dimensions are logical pixels and follow the app's UI scale. Pages inherit the app font and palette.
+Dimensions are logical pixels and follow the app's UI scale. Pages inherit the app font, palette and `vorkspace_ui::radius` corner scale. Buttons and fields use `CONTROL`, code/editor containers use `CONTAINER`, cards and panes use `SURFACE`, and dialogs use `MODAL`.
 
 | Element | Size |
 | --- | --- |
@@ -18,8 +18,8 @@ Dimensions are logical pixels and follow the app's UI scale. Pages inherit the a
 | Flowing Markdown prose | 14 px text, 24 px line height |
 | List width | 280 px default; resizable lists clamp to 240–420 px |
 | Detail content | At most 1024 px wide, centered |
-| Detail padding | 24 px; 16 px in narrow windows |
-| Control and card corners | 6 px and 8 px |
+| Detail padding | 24 px; 16 px in narrow pages or panes |
+| Control, inset content and card corners | 6 px, 8 px and 12 px |
 
 Use gaps from 4, 8, 12, 16 and 24 px according to the hierarchy. Rows grow for their content; a fixed toolbar height does not constrain document titles or long Todo text.
 
@@ -37,9 +37,15 @@ Settings uses Providers as the layout reference. Navigation groups appear in **A
 
 ## Layout and continuity
 
-Side-by-side lists and documents use `detail_pane` for the document's left edge, with the workspace's 12 px top and bottom corners. The list does not draw a second straight divider over that curve. In single-column layouts, the workspace frame supplies the outside corners.
+Pages and individual resources participate in the workspace tab strip and split layout. Separate note and connector item tabs keep independent editors and reading positions; reopening the same item focuses its existing pane. Pinned resource tabs omit the library list. Reopening a resource already tiled beside a project-bound pane restores that layout’s project and working copy before configuring the view. Authenticated workspace commands validate every sibling before reopening a layout. Standalone Search rebuilds its file index when the working copy changes, retains its query and scope, and opens file results against the directory that produced them.
 
-Below a 900 px window viewport, Notes, Inbox and Automations show either the list or the selected detail. Back returns to the list while retaining the selection, draft and reading position. Resizing and unchanged recording refreshes do not replace the document or reset its scroll owner. Background capture updates leave a narrow window’s list open. Selecting Preview or Source while the recording attachment loads changes presentation without canceling the document load; separate load and presentation generations prevent stale loads and unwanted summary navigation. Direct and queued loads retain newer explicit tab choices over default or saved draft sections. The pending note identity and explicit tab stay together through discard, deletion, any required draft save, and queued loading. Repeated refreshes reuse that request; a failed discard or deletion can save retained edits before opening the selected attachment. Automation gallery cards become one column. Todos stacks its status columns. Search retains the same scopes and results, truncating long paths within the available width.
+Bot session and document lists open workspace panes from a rounded floating island within the Bot pane. The island collapses before it would compress the normal chat column: its breakpoint is the shared 832 px transcript/composer column plus the 316 px island lane, currently 1,148 logical pixels of Bot pane width. A top-right button or the Bot face opens the collapsed island. The compact overlay closes when a resource opens, on Escape, or when dismissed outside it. The island header shows the conversation owner's status and a settings icon. Its compact Sessions list shows up to five working or approval-waiting sessions, ordered by most recent activity; when none are active, it shows the three most recently updated. Documents show the three most recently updated. A section's chevron expands it to the pane's bottom, hides the other section, and makes the full list scrollable; the bottom chevron restores the compact view. The island uses pane opacity plus 20 percentage points, capped at 100%. Habits live in Bot settings. Bot appearance is edited only during creation or through the pencil on the settings avatar; the sidebar menu links to settings.
+
+Project navigation stays on the left, and the collapsed rail and navigation strip use the same shell background. Workspace tools open by clicking their rail icons; hovering over an icon or the rail edge never opens a sidebar preview. All content panes use the existing split limits and keyboard navigation.
+
+Side-by-side lists and documents use `detail_pane` for the document's left edge, with the workspace's 12 px top and bottom corners. The list does not draw a second straight divider over that curve. In single-column layouts, the workspace frame supplies the outside corners. Resizable note and connector lists highlight the detail pane’s curved border while hovered or dragged. Their wider drag target stays transparent.
+
+Notes, Inbox and Automations use each pane’s allocated width for their 900 px single-column breakpoint, or the window viewport when shown standalone. Back returns to the list while retaining the selection, draft and reading position. Resizing and unchanged recording refreshes do not replace the document or reset its scroll owner. Background capture updates leave a narrow page’s list open. Selecting Preview or Source while the recording attachment loads changes presentation without canceling the document load; separate load and presentation generations prevent stale loads and unwanted summary navigation. Direct and queued loads retain newer explicit tab choices over default or saved draft sections. The pending note identity and explicit tab stay together through discard, deletion, any required draft save, and queued loading. Repeated refreshes reuse that request; a failed discard or deletion can save retained edits before opening the selected attachment. Automation gallery cards become one column. To-do columns wrap to the actual tile width, while sidebar boards stack vertically. Search retains the same scopes and results, truncating long paths within the available width.
 
 ## Documents
 

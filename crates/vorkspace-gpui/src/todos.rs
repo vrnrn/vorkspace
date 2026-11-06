@@ -124,7 +124,6 @@ pub(crate) struct TodoBoardView {
     board: Option<TodoBoard>,
     items: Vec<TodoItem>,
     published_receipts: HashMap<String, service::IssueIdentity>,
-    loaded: bool,
     /// Guards against an older load landing after a newer one.
     generation: u64,
     /// The last load's failure.
@@ -205,7 +204,6 @@ impl TodoBoardView {
             board: None,
             items: Vec::new(),
             published_receipts: HashMap::new(),
-            loaded: false,
             generation: 0,
             error: None,
             github_notice: None,
@@ -236,15 +234,6 @@ impl TodoBoardView {
         self.board.as_ref()
     }
 
-    pub(crate) fn open_count(&self) -> Option<usize> {
-        self.loaded.then(|| {
-            self.items
-                .iter()
-                .filter(|item| item.status != TodoStatus::Done)
-                .count()
-        })
-    }
-
     #[cfg(test)]
     pub(crate) fn items(&self) -> &[TodoItem] {
         &self.items
@@ -264,7 +253,6 @@ impl TodoBoardView {
         self.board = board;
         self.items.clear();
         self.published_receipts.clear();
-        self.loaded = false;
         self.error = None;
         self.github_notice = None;
         self.github_repo = None;
@@ -307,7 +295,6 @@ impl TodoBoardView {
     }
 
     fn install_snapshot(&mut self, snapshot: service::BoardSnapshot) {
-        self.loaded = true;
         self.items = snapshot.items;
         self.published_receipts = snapshot.published_receipts;
         self.error = snapshot.github_error;

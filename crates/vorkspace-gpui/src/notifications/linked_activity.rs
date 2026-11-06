@@ -124,6 +124,7 @@ impl Render for LinkedActivity {
             .child(
                 div()
                     .id("dismiss-linked-activity")
+                    .debug_selector(move || format!("dismiss-linked-activity-{session}"))
                     .role(Role::Button)
                     .aria_label(format!("Dismiss updates for {kind} {number}"))
                     .cursor_pointer()
@@ -361,6 +362,7 @@ impl Render for LinkedActivity {
         );
         super::surface::glass_frame()
             .id("linked-work-item-update-notice")
+            .debug_selector(move || format!("linked-work-item-update-notice-{session}"))
             .role(Role::Status)
             .aria_label(format!("New activity on {kind} {number}"))
             .w(px(320.))

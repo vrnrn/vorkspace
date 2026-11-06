@@ -26,7 +26,7 @@ fn removing_partial_live_source_keeps_saved_global_search_hits(cx: &mut TestAppC
         view.remote.push(
             search::message_hit(&session, 50, "user", "needle saved", "needle", false).unwrap(),
         );
-        view.remove_live_session(session.id, cx);
+        view.update_session(session.clone(), None, cx);
         assert!(!view.live.contains_key(&session.id));
         assert!(view.local.is_empty());
         assert!(view.hits.iter().any(|hit| hit.target
@@ -40,6 +40,39 @@ fn removing_partial_live_source_keeps_saved_global_search_hits(cx: &mut TestAppC
                 row: 0
             }));
     });
+}
+
+#[gpui::test]
+fn deleting_a_session_retires_its_inflight_saved_search(cx: &mut TestAppContext) {
+    let store = Store::open(std::path::Path::new(":memory:")).unwrap();
+    let session = store.create("codex", "/project").unwrap();
+    let view = cx.new(|cx| {
+        SearchView::new(
+            "/project".into(),
+            Arc::new(Mutex::new(store)),
+            Sources {
+                summaries: vec![session.clone()],
+                ..Default::default()
+            },
+            cx,
+        )
+    });
+    view.update(cx, |view, cx| {
+        view.restore_draft(("needle".into(), Scope::Conversations), cx);
+    });
+    view.update(cx, |view, cx| {
+        view.start(cx);
+        let previous = view.cancel.clone();
+        locked(&view.store).unwrap().delete(session.id).unwrap();
+        view.forget_session(session.id, cx);
+        assert!(previous.load(Ordering::Acquire));
+        assert!(!view.cancel.load(Ordering::Acquire));
+        assert_eq!(view.draft(cx), ("needle".into(), Scope::Conversations));
+    });
+    cx.run_until_parked();
+    cx.executor().advance_clock(Duration::from_millis(200));
+    cx.run_until_parked();
+    assert!(view.read_with(cx, |view, _| view.hits.is_empty()));
 }
 
 struct TempDir(std::path::PathBuf);

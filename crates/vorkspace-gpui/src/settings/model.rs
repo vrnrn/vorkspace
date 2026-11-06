@@ -335,12 +335,6 @@ pub(crate) const INDEX: &[(&str, Section, &str, &str)] = &[
         "motion open close resize transition",
     ),
     (
-        "sidebar-right",
-        Section::General,
-        "Switch sidebar to right side",
-        "sessions explorer changes position side right left layout",
-    ),
-    (
         "theme",
         Section::Appearance,
         "Theme",

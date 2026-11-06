@@ -35,7 +35,14 @@ impl Shell {
             cx.notify();
             return;
         }
-        self.prepare_app_view(window, cx);
+        self.prepare_app_view(
+            self.app_pane_id(&crate::workspace::AppPane::Terminal {
+                id,
+                cwd: cwd.clone(),
+            }),
+            window,
+            cx,
+        );
         self.leave_app_views(cx);
         let terminal = self
             .terminal_tabs
@@ -48,7 +55,7 @@ impl Shell {
             .clone();
         terminal.update(cx, |terminal, _| terminal.visible = true);
         self.active_terminal_tab = Some(id);
-        self.remember_title_tab(TitleTab::Terminal { id, cwd });
+        self.admit_app_pane(crate::workspace::AppPane::Terminal { id, cwd });
         self.reveal_active_tab(cx);
         self.update_chat_visibility(cx);
         self.sync_right_panel(cx);
@@ -56,6 +63,64 @@ impl Shell {
         self.focus_app_view(window, cx);
         self.persist(cx);
         cx.notify();
+    }
+
+    fn terminal_ids_for_tab(&self, tab: &TitleTab) -> Vec<(u64, String)> {
+        match tab {
+            TitleTab::Terminal { id, cwd } => vec![(*id, cwd.clone())],
+            TitleTab::Workspace(id) => self
+                .workspace
+                .layout(*id)
+                .leaf_ids()
+                .iter()
+                .filter_map(|pane| match &self.workspace.app_panes.get(pane)?.content {
+                    crate::workspace::AppPane::Terminal { id, cwd } => Some((*id, cwd.clone())),
+                    _ => None,
+                })
+                .collect(),
+            _ => Vec::new(),
+        }
+    }
+    pub(super) fn confirm_terminal_pane_close(
+        &mut self,
+        pane: i64,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        let Some(crate::workspace::AppPane::Terminal { id, .. }) =
+            self.workspace.app_panes.get(&pane).map(|p| &p.content)
+        else {
+            return false;
+        };
+        let id = *id;
+        let Some(terminal) = self.terminal_tabs.get(&id) else {
+            return false;
+        };
+        let Some(process) = terminal.read(cx).foreground_process() else {
+            return false;
+        };
+        let owner = terminal.downgrade();
+        let answer = window.prompt(
+            gpui::PromptLevel::Warning,
+            &format!("This terminal is still running {process}. Close it anyway?"),
+            None,
+            &["Close", "Cancel"],
+            cx,
+        );
+        cx.spawn_in(window, async move |this, cx| {
+            if matches!(answer.await, Ok(0)) {
+                let _ = this.update_in(cx, |this, window, cx| {
+                    if this.workspace.tab_of(pane).is_some()
+                        && owner.upgrade().as_ref() == this.terminal_tabs.get(&id)
+                        && this.terminal_tabs.contains_key(&id)
+                    {
+                        this.close_pane_confirmed(pane, window, cx);
+                    }
+                });
+            }
+        })
+        .detach();
+        true
     }
 
     /// Batch closes use the same warning as dock closes. Capture weak entities
@@ -68,19 +133,28 @@ impl Shell {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> bool {
-        let terminals: Vec<_> = tabs
+        let snapshots: Vec<_> = tabs
+            .iter()
+            .map(|tab| (tab.clone(), self.terminal_ids_for_tab(tab)))
+            .collect();
+        let layouts: Vec<_> = tabs
             .iter()
             .filter_map(|tab| {
-                let TitleTab::Terminal { id, cwd } = tab else {
-                    return None;
-                };
+                tab.session()
+                    .map(|id| (id, self.workspace.layout(id).leaf_ids()))
+            })
+            .collect();
+        let terminals: Vec<_> = snapshots
+            .iter()
+            .flat_map(|(_, ids)| ids.iter())
+            .map(|(id, cwd)| {
                 let terminal = self.terminal_tabs.get(id);
-                Some((
+                (
                     *id,
                     cwd.clone(),
                     terminal.map(Entity::downgrade),
                     terminal.and_then(|terminal| terminal.read(cx).foreground_process()),
-                ))
+                )
             })
             .collect();
         let running: Vec<_> = terminals
@@ -111,18 +185,31 @@ impl Shell {
                     let closing: Vec<_> = tabs
                         .into_iter()
                         .filter(|tab| {
-                            let TitleTab::Terminal { id, .. } = tab else {
-                                return true;
-                            };
-                            terminals
+                            if let Some(id) = tab.session()
+                                && !layouts.iter().any(|(original, leaves)| {
+                                    *original == id
+                                        && *leaves == this.workspace.layout(id).leaf_ids()
+                                })
+                            {
+                                return false;
+                            }
+                            snapshots
                                 .iter()
-                                .find(|(expected_id, _, _, _)| expected_id == id)
-                                .is_some_and(|(_, _, expected, _)| match expected {
-                                    Some(expected) => {
-                                        expected.upgrade().as_ref() == this.terminal_tabs.get(id)
-                                            && this.terminal_tabs.contains_key(id)
-                                    }
-                                    None => !this.terminal_tabs.contains_key(id),
+                                .find(|(original, _)| original == tab)
+                                .is_some_and(|(_, ids)| {
+                                    ids.iter().all(|(id, _)| {
+                                        terminals
+                                            .iter()
+                                            .find(|(expected_id, _, _, _)| expected_id == id)
+                                            .is_some_and(|(_, _, expected, _)| match expected {
+                                                Some(expected) => {
+                                                    expected.upgrade().as_ref()
+                                                        == this.terminal_tabs.get(id)
+                                                        && this.terminal_tabs.contains_key(id)
+                                                }
+                                                None => !this.terminal_tabs.contains_key(id),
+                                            })
+                                    })
                                 })
                         })
                         .collect();

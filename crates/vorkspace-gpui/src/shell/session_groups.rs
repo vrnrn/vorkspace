@@ -873,6 +873,7 @@ impl Shell {
         self.session_marks.remove(&id);
         self.tab_marks.remove(&id);
         self.order.retain(|s| *s != id);
+        self.forget_search_session(id, cx);
         self.busy_sessions.remove(&id);
         self.unseen_finished.remove(&id);
         self.selected_sessions.remove(&id);
@@ -982,6 +983,8 @@ impl Shell {
                             session.update(cx, |s, cx| {
                                 s.rename(name.clone(), cx);
                             });
+                        } else {
+                            self.sync_search_session(id, cx);
                         }
                         self.store_write("rename the session", cx, move |s| s.title(id, &name));
                     }

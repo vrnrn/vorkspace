@@ -66,6 +66,31 @@ impl Page {
             .is_some_and(|id| self.document.as_ref().is_some_and(|doc| doc.id() == id))
     }
 
+    pub(crate) fn has_pending_note_edit(&self, note_id: &str) -> bool {
+        let Some(id) = self.note_ids.get(note_id) else {
+            return false;
+        };
+        self.drafts.pending_for(id)
+            || self.preparing.as_deref() == Some(id.as_str())
+            || self
+                .document
+                .as_ref()
+                .is_some_and(|doc| doc.id() == id.as_str() && (doc.dirty() || self.saving))
+    }
+
+    /// Supersede the current note when its Notes pane has no selection. Use
+    /// the normal note transition so a dirty recording is saved before its
+    /// edit lease is released, including when a save is already in flight.
+    pub(crate) fn clear_note(&mut self, cx: &mut Context<Self>) {
+        if self.document.is_none() && self.pending_note.is_none() {
+            return;
+        }
+        let detached = format!("detached-notes-{}", uuid::Uuid::new_v4().simple());
+        self.show_note(&detached, None, cx);
+        // This inert destination is never exposed as a note or recording.
+        self.note_ids.remove(&detached);
+    }
+
     pub(super) fn resume_note_selection(&mut self, cx: &mut Context<Self>) {
         if !self.enabled || self.deleting || self.discarding || self.saving {
             return;
@@ -137,6 +162,31 @@ impl Page {
     pub(crate) fn flush_note(&mut self, cx: &mut Context<Self>) {
         if self.document.as_ref().is_some_and(Document::dirty) {
             self.save(cx);
+        }
+    }
+
+    /// A note pane may close while capture continues in the app-wide owner.
+    /// Keep the pane only while its local edit or checkpoint still needs it.
+    pub(crate) fn prepare_note_close(&mut self, cx: &mut Context<Self>) -> bool {
+        self.flush_note(cx);
+        if self.saving || self.document.as_ref().is_some_and(Document::dirty) {
+            return false;
+        }
+        if !self.drafts.has_pending() {
+            return true;
+        }
+        match self.meetings.clone() {
+            Ok(meetings) => match self.drafts.flush(&meetings) {
+                Ok(()) => true,
+                Err(error) => {
+                    self.fail(error, cx);
+                    false
+                }
+            },
+            Err(error) => {
+                self.fail(error, cx);
+                false
+            }
         }
     }
 

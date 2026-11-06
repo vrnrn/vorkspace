@@ -375,6 +375,7 @@ impl Bots {
         let root = self.root.clone();
         let target = bot.id.clone();
         let project = if action.starts_with("sessions.")
+            || action.starts_with("workspace.")
             || action.starts_with("folders.")
             || action.starts_with("worktrees.")
         {
@@ -390,6 +391,41 @@ impl Bots {
         };
         let hidden = self.roster.hidden_sessions.clone();
         let source = self.calling_view(call.session, cx);
+        if action.starts_with("workspace.") {
+            let owner = self.owner.clone();
+            let manager = cx.entity().downgrade();
+            let handle = window.window_handle();
+            let app: &mut App = cx;
+            app.defer(move |cx| {
+                let result = handle
+                    .update(cx, |_, window, cx| {
+                        owner.workspace_action(call.session, &project, &action, &input, window, cx)
+                    })
+                    .map_err(|error| error.to_string())
+                    .and_then(|result| result.map_err(|error| error.to_string()))
+                    .and_then(|result| result);
+                let _ = manager.update(cx, |manager, cx| manager.finish_call(call, result, cx));
+            });
+            return;
+        }
+        if action.starts_with("notes.") {
+            let owner = self.owner.clone();
+            let manager = cx.entity().downgrade();
+            let handle = window.window_handle();
+            let projects = bot.projects.clone();
+            let app: &mut App = cx;
+            app.defer(move |cx| {
+                let result = handle
+                    .update(cx, |_, window, cx| {
+                        owner.notes_action(call.session, &projects, &action, &input, window, cx)
+                    })
+                    .map_err(|error| error.to_string())
+                    .and_then(|result| result.map_err(|error| error.to_string()))
+                    .and_then(|result| result);
+                let _ = manager.update(cx, |manager, cx| manager.finish_call(call, result, cx));
+            });
+            return;
+        }
         let result=match action.as_str(){
             "models.list"=>Ok(json!(Kind::ALL.into_iter().map(|kind|json!({"harness":kind.id(),"name":kind.label(),"models":self.chats.values().find(|v|{let v=v.read(cx);let profile=source.as_ref().filter(|s|s.read(cx).summary.provider==kind.id()).map(|s|s.read(cx).settings.account.clone()).unwrap_or_else(||crate::accounts::get(cx).map(|center|center.read(cx).selected(kind,&project)).unwrap_or_default());v.summary.provider==kind.id()&&v.settings.account.id==profile.id}).map(|v|v.read(cx).settings_models()).unwrap_or_default()})).collect::<Vec<_>>())),
             "sessions.start"=>{
@@ -568,7 +604,7 @@ impl Bots {
                 if !["document","html","markdown"].contains(&kind){Err("Use document or html".into())}else{match text(&input,"title",512).and_then(|title|Ok((title,text(&input,"body",512*1024)?))){Err(e)=>Err(e),Ok((title,body))=>{
                     let id=input.get("id").and_then(Value::as_str).map(str::to_owned).unwrap_or_else(bot::new_id);let now=now_ms();let document=Document{id:id.clone(),kind:kind.into(),title,summary:input.get("summary").and_then(Value::as_str).unwrap_or_default().chars().take(4000).collect(),body,created_at:bot.documents.iter().find(|d|d.id==id).map(|d|d.created_at).unwrap_or(now),updated_at:now};
                     if let Some(m)=self.roster.get_mut(&bot.id){if let Some(old)=m.documents.iter_mut().find(|d|d.id==id){*old=document.clone();}else{m.documents.push(document.clone());}}
-                    self.documents.remove(&id);self.html_documents.remove(&id);self.hold_card(call.session,&bot.id,json!({"id":bot::new_id(),"type":"document","documentId":id,"title":document.title,"summary":document.summary}));self.save(cx);Ok(json!(document))
+                    self.hold_card(call.session,&bot.id,json!({"id":bot::new_id(),"type":"document","documentId":id,"title":document.title,"summary":document.summary}));self.save(cx);Ok(json!(document))
                 }}}
             }
             "todos.list"|"todos.add"|"todos.update"|"todos.remove"|"todos.publish"|"todos.reconcile"|"todos.retry"|"todos.reconcileEdit"|"todos.retryEdit"|"todos.discardEdit"|"todos.cancelPublish"=>{
@@ -591,8 +627,7 @@ impl Bots {
                     Ok((result,Effect::None))
                 },cx);return;
             }
-            "soul.read"|"soul.update"|"memory.read"|"memory.search"|"memory.add"|"memory.replace"|"memory.remove"|"habits.list"|"habits.add"|"habits.update"|"habits.run"|"habits.remove"|"notes.list"|"notes.read"|"notes.write"|"worktrees.list"|"worktrees.create"=>{
-                let caller=call.session;let projects=bot.projects.clone();
+            "soul.read"|"soul.update"|"memory.read"|"memory.search"|"memory.add"|"memory.replace"|"memory.remove"|"habits.list"|"habits.add"|"habits.update"|"habits.run"|"habits.remove"|"worktrees.list"|"worktrees.create"=>{
                 self.call_work(call,&actor.id,target.clone(),move|store|{
                     let value=match action.as_str(){
                         "soul.read"=>json!(files::read(&root,&target,None,"SOUL.md")?),
@@ -606,7 +641,6 @@ impl Bots {
 if let Some(instructions)=input.get("instructions").and_then(Value::as_str){if instructions.trim().is_empty()||instructions.len()>32000{return Err("Invalid habit instructions".into());}h.instructions=instructions.into();}
 if let Some(schedule)=input.get("schedule"){h.schedule=serde_json::from_value(schedule.clone()).map_err(|e|e.to_string())?;h.schedule.validate()?;h.next_run_at=h.schedule.next(now_ms())?;}
 if let Some(enabled)=input.get("enabled").and_then(Value::as_bool){h.enabled=enabled;if enabled{h.next_run_at=h.schedule.next(now_ms())?;}}}Ok(json!(h))})?},
-                        "notes.list"|"notes.read"|"notes.write"=>{let db=locked(&store)?;let notes=db.notes()?;let allowed=|n:&&vorkspace_core::response::Note|projects.iter().any(|p|vorkspace_core::files::path_key(p)==vorkspace_core::files::path_key(&n.source_cwd));match action.as_str(){"notes.list"=>json!(notes.iter().filter(allowed).skip(input.get("offset").and_then(Value::as_u64).unwrap_or(0) as usize).take(input.get("limit").and_then(Value::as_u64).unwrap_or(50).min(200) as usize).collect::<Vec<_>>()),"notes.read"=>{let id=id(&input,"id")? as u64;json!(notes.iter().filter(allowed).find(|n|n.id==id).ok_or("Note not found in assigned projects")?)},_=>{let id=input.get("id").and_then(Value::as_u64).unwrap_or_else(now_ms);if notes.iter().any(|n|n.id==id&&!projects.iter().any(|p|p==&n.source_cwd)){return Err("Note is outside assigned projects".into());}let cwd=notes.iter().find(|n|n.id==id).map(|n|n.source_cwd.clone()).or_else(||projects.first().cloned()).ok_or("Assign a project before writing notes")?;let note=vorkspace_core::response::Note{id,title:text(&input,"title",512)?,body:text(&input,"body",256*1024)?,tags:input.get("tags").and_then(Value::as_array).map(|tags|tags.iter().filter_map(Value::as_str).map(str::to_owned).collect()).or_else(||notes.iter().find(|n|n.id==id).map(|n|n.tags.clone())).unwrap_or_default(),source_session:caller,source_cwd:cwd};db.save_note(&note)?;json!(note)}}},
                         "worktrees.list"=>vorkspace_core::store::describe_worktrees(Path::new(&project),&store)?,
                         "worktrees.create"=>{let branch=text(&input,"branch",240)?;let tree=vorkspace_core::git::create_project_worktree(Path::new(&project),&branch,input.get("base").and_then(Value::as_str),flag(&input,"existing",false))?;json!({"path":tree.path,"branch":tree.branch})},
                         _=>unreachable!(),

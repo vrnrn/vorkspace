@@ -2,6 +2,7 @@
 //! and a session filter. App navigation and projects remain in the left rail.
 use super::*;
 use crate::{panel_kit::RightTab, workspace::SidebarTab};
+use vorkspace_ui::radius;
 
 impl Shell {
     pub(super) fn classic_tool_tab(&self) -> Option<RightTab> {
@@ -84,7 +85,7 @@ impl Shell {
                     .items_center()
                     .gap_1()
                     .h(px(28.))
-                    .rounded_md()
+                    .rounded(px(radius::CONTROL))
                     .hover(|s| s.bg(content(0.08)))
                     .text_size(px(13.))
                     .font_weight(FontWeight::SEMIBOLD)
@@ -157,11 +158,11 @@ impl Shell {
                     .flex_shrink_0()
                     .relative()
                     .flex()
-                    // Each tab's pill runs from its top down to the line.
-                    .items_end()
+                    .items_center()
                     .gap_px()
                     .px_2()
-                    .child(self.sidebar_tab_liquid.surface(None, false))
+                    .border_b_1()
+                    .border_color(crate::panel_kit::stroke())
                     .children(
                         tabs.into_iter()
                             .filter(|item| *item != SidebarTab::Todos || todos_enabled)
@@ -178,24 +179,23 @@ impl Shell {
                                     .aria_selected(selected)
                                     .focusable()
                                     .tab_stop(true)
-                                    .h(px(30.))
+                                    .h(px(28.))
                                     .flex_1()
                                     .min_w_0()
                                     .relative()
                                     .flex()
                                     .items_center()
                                     .justify_center()
-                                    .rounded_t_md()
+                                    .rounded(px(radius::CONTROL))
                                     .text_size(px(12.))
                                     .font_weight(FontWeight::MEDIUM)
                                     .text_color(content(if selected { 0.9 } else { 0.5 }))
-                                    .hover(|s| s.text_color(content(1.)))
-                                    .focus(|s| s.text_color(content(1.)))
-                                    .child(
-                                        self.sidebar_tab_liquid
-                                            .row(format!("sidebar-tab:{}", item.label()), selected),
-                                    )
+                                    .when(selected, |d| d.bg(content(0.1)))
+                                    .hover(|s| s.bg(content(0.08)).text_color(content(1.)))
+                                    .focus(|s| s.bg(content(0.1)).text_color(content(1.)))
                                     .child(item.label())
+                                    // Keep the cached sidebar's hover fill current,
+                                    // including clicks that arrive without a mouse move.
                                     .on_hover(cx.listener(|this, _, _, cx| {
                                         this.sidebar_frame.update(cx, |_, cx| cx.notify())
                                     }))
@@ -254,7 +254,7 @@ impl Shell {
                                     .tab_stop(true)
                                     .px_2()
                                     .py_1()
-                                    .rounded_md()
+                                    .rounded(px(radius::CONTROL))
                                     .text_size(px(11.))
                                     .when(tab == item, |d| d.bg(content(0.1)))
                                     .hover(|s| s.bg(content(0.08)))

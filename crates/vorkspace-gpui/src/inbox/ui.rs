@@ -2,12 +2,25 @@ use super::*;
 use crate::controls::page;
 use crate::popover::{Align, Anchor, popover};
 use gpui::{
-    AnyElement, ClipboardItem, CursorStyle, Div, FontWeight, Hsla, MouseButton, Pixels, Role,
-    SharedString, Stateful, Window, canvas, div, list, prelude::*, px, rgb,
+    AnyElement, ClipboardItem, Div, FontWeight, Hsla, MouseButton, Pixels, Role, SharedString,
+    Stateful, Window, canvas, div, list, prelude::*, px, rgb,
 };
+use vorkspace_ui::radius;
 
-fn detail_inset(window: &Window) -> Pixels {
-    page::detail_padding(page::narrow(window))
+impl Inbox {
+    fn effective_width(&self, window: &Window) -> f32 {
+        self.pane_width
+            .unwrap_or_else(|| f32::from(window.viewport_size().width))
+    }
+
+    fn is_narrow(&self, window: &Window) -> bool {
+        self.pane_width
+            .map_or_else(|| page::narrow(window), |width| width < 900.)
+    }
+
+    fn detail_inset(&self, window: &Window) -> Pixels {
+        page::detail_padding(self.is_narrow(window))
+    }
 }
 
 fn action(id: impl Into<SharedString>, label: impl Into<SharedString>) -> Stateful<Div> {
@@ -258,7 +271,7 @@ fn label_badge(label: &model::Label, compact: bool) -> Div {
         .filter(|_| label.color.trim().trim_start_matches('#').len() == 6);
     page::meta()
         .max_w(px(if compact { 80. } else { 200. }))
-        .rounded(px(page::CORNER))
+        .rounded(px(radius::CONTROL))
         .px(px(4.))
         .flex()
         .items_center()
@@ -398,6 +411,8 @@ impl Inbox {
                 };
                 let attention = attention_label(&item.attention_reason);
                 let row_id = format!("inbox-item-{key}");
+                let click_item = item.clone();
+                let middle_item = item.clone();
                 page::row(row_id.clone(), item.title.clone(), active)
                     .debug_selector(move || row_id.clone())
                     .role(Role::ListBoxOption)
@@ -469,14 +484,29 @@ impl Inbox {
                                     .map(|label| label_badge(label, true)),
                             ),
                     )
-                    .on_click(cx.listener(move |this, _, window, cx| {
-                        this.narrow_detail = true;
-                        this.select(key.clone(), cx);
-                        if page::narrow(window) {
-                            window.focus(&this.focus, cx);
-                            cx.notify();
-                        }
-                    }))
+                    .on_mouse_up(
+                        MouseButton::Middle,
+                        cx.listener(move |_, _, _, cx| {
+                            cx.stop_propagation();
+                            cx.emit(Event::OpenTab(Box::new(middle_item.clone())));
+                        }),
+                    )
+                    .on_click(
+                        cx.listener(move |this, event: &gpui::ClickEvent, window, cx| {
+                            let modifiers = event.modifiers();
+                            if modifiers.platform || modifiers.control {
+                                cx.emit(Event::OpenTab(Box::new(click_item.clone())));
+                                cx.stop_propagation();
+                                return;
+                            }
+                            this.narrow_detail = true;
+                            this.select(key.clone(), cx);
+                            if this.is_narrow(window) {
+                                window.focus(&this.focus, cx);
+                                cx.notify();
+                            }
+                        }),
+                    )
             })
             .collect::<Vec<_>>();
         div()
@@ -520,24 +550,19 @@ impl Inbox {
             )
             .when(!narrow, |d| {
                 d.child(
-                    div()
-                        .id("inbox-list-resize")
-                        .role(Role::Splitter)
-                        .aria_label("Resize connector list")
-                        .absolute()
-                        .right(px(-3.))
-                        .top_0()
-                        .bottom_0()
-                        .w(px(6.))
-                        .cursor(CursorStyle::ResizeLeftRight)
-                        .on_mouse_down(
-                            MouseButton::Left,
-                            cx.listener(|this, event: &gpui::MouseDownEvent, _, cx| {
-                                this.resize_start =
-                                    Some((f32::from(event.position.x), this.state.list_width));
-                                cx.stop_propagation();
-                            }),
-                        ),
+                    page::detail_resize_handle(
+                        "inbox-list-resize",
+                        "Resize connector list",
+                        self.resize_start.is_some(),
+                    )
+                    .on_mouse_down(
+                        MouseButton::Left,
+                        cx.listener(|this, event: &gpui::MouseDownEvent, _, cx| {
+                            this.resize_start =
+                                Some((f32::from(event.position.x), this.state.list_width));
+                            cx.stop_propagation();
+                        }),
+                    ),
                 )
             })
             .into_any_element()
@@ -567,8 +592,9 @@ impl Inbox {
 
 impl gpui::Render for Inbox {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let narrow = page::narrow(window);
-        let showing_detail = narrow && self.narrow_detail && self.item().is_some();
+        let narrow = self.is_narrow(window);
+        let pinned = self.pinned_item.is_some();
+        let showing_detail = pinned || (narrow && self.narrow_detail && self.item().is_some());
         if self.focus_comment && (!narrow || showing_detail) {
             self.focus_comment = false;
             window.focus(&self.comment.focus_handle(cx), cx);
@@ -597,7 +623,11 @@ impl gpui::Render for Inbox {
                         this.connections_open = false;
                         this.project_picker = false;
                         this.action_menu = false;
-                    } else if page::narrow(window) && this.narrow_detail && this.item().is_some() {
+                    } else if this.pinned_item.is_none()
+                        && this.is_narrow(window)
+                        && this.narrow_detail
+                        && this.item().is_some()
+                    {
                         this.back_to_list(window, cx);
                     } else {
                         cx.emit(Event::Close);
@@ -609,7 +639,7 @@ impl gpui::Render for Inbox {
             .on_mouse_move(
                 cx.listener(|this, event: &gpui::MouseMoveEvent, window, cx| {
                     if let Some((start, width)) = this.resize_start {
-                        let max = (f32::from(window.viewport_size().width) * 0.5)
+                        let max = (this.effective_width(window) * 0.5)
                             .clamp(page::LIST_MIN, page::LIST_MAX);
                         this.state.list_width = (width + f32::from(event.position.x) - start)
                             .clamp(page::LIST_MIN, max);
@@ -642,13 +672,13 @@ impl gpui::Render for Inbox {
                     .min_h_0()
                     .min_w_0()
                     .flex()
-                    .when(!narrow || !showing_detail, |d| {
+                    .when(!pinned && (!narrow || !showing_detail), |d| {
                         d.child(self.list_view(narrow, cx))
                     })
-                    .when(!narrow || showing_detail, |d| {
+                    .when(pinned || !narrow || showing_detail, |d| {
                         d.child(
-                            page::detail_pane(!narrow)
-                                .when(narrow, |d| {
+                            page::detail_pane(!narrow && !pinned)
+                                .when(narrow && !pinned, |d| {
                                     d.child(
                                         page::toolbar().child(
                                             icon_action(

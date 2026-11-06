@@ -1,5 +1,6 @@
 //! The original project rail is independent of the project's session/file pane.
 use super::*;
+use vorkspace_ui::radius;
 use vorkspace_ui::{session_mark::ProjectMark, theme::StatusColor};
 
 const COMPACT_WIDTH: f32 = 48.;
@@ -80,13 +81,20 @@ impl Shell {
     /// Channels occupy the same main surface as Bots, with the project rail
     /// still available. They do not invent a session or change its project.
     pub(crate) fn open_classic_channels(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if !self.app_pane_available(&crate::workspace::AppPane::Channels, cx) {
+            return;
+        }
+        self.prepare_app_view(
+            self.app_pane_id(&crate::workspace::AppPane::Channels),
+            window,
+            cx,
+        );
         self.leave_app_views(cx);
         self.leave_app_search(cx);
         self.close_preview(cx);
         self.navigation_revision += 1;
-        self.invalidate_chrome(cx);
-        self.focus_workspace(window, cx);
-        cx.notify();
+        self.admit_app_pane(crate::workspace::AppPane::Channels);
+        self.finish_app_pane_open(window, cx);
     }
 
     pub(super) fn hide_project_marks(&mut self, cx: &mut Context<Self>) {
@@ -139,8 +147,6 @@ impl Shell {
             .flex_shrink_0()
             .flex()
             .flex_col()
-            // The divider, and the hovered and selected rows' pills running
-            // into the pane (crate::liquid), below the native titlebar controls.
             .child({
                 // Around its neighbour's rounded corners (the pane, or a left
                 // sidebar). Beside the icon rail, navigation overhangs the
@@ -150,7 +156,7 @@ impl Shell {
                 } else {
                     self.rail_meets_title_rule().then_some(TITLE_BAR_HEIGHT)
                 };
-                self.liquid.surface(cap_top, true)
+                crate::panel_kit::rail_divider(cap_top)
             })
             .child(div().h(px(TITLE_BAR_HEIGHT)).flex_shrink_0())
             .child(crate::avatar::sidebar_cursor_tracker());
@@ -176,7 +182,6 @@ impl Shell {
                     move |window, cx| {
                         let _ = back.update(cx, |this, cx| this.close_settings(window, cx));
                     },
-                    &self.liquid,
                 ))
                 .child(div().mx_2().child(self.resources.clone()))
                 .into_any_element();
@@ -236,7 +241,6 @@ impl Shell {
                     .collect();
                 let id = id.to_owned();
                 let toggle = id.clone();
-                let pill = format!("group:{id}");
                 let rename =
                     self.rename_row(&session_groups::RenameTarget::ProjectGroup(id.clone()), cx);
                 let row = div()
@@ -252,12 +256,12 @@ impl Shell {
                     .flex()
                     .items_center()
                     .gap_2()
-                    .rounded_md()
+                    .rounded(px(radius::CONTROL))
                     .text_size(px(14.))
                     .text_color(content(0.65))
                     .relative()
-                    .child(self.liquid.row(pill, false))
-                    .hover(|s| s.text_color(content(1.)))
+                    .hover(|s| s.bg(content(0.08)).text_color(content(1.)))
+                    .focus(|s| s.bg(content(0.1)).text_color(content(1.)))
                     .child(icon(
                         if collapsed {
                             "chevron-right"
@@ -274,7 +278,7 @@ impl Shell {
                     .flex_shrink_0()
                     .mx_2()
                     .mb_1p5()
-                    .rounded_md()
+                    .rounded(px(radius::CONTROL))
                     .when(!collapsed, |d| d.bg(content(0.05)))
                     .child(rename.unwrap_or_else(|| row.into_any_element()));
                 if collapsed {
@@ -300,12 +304,11 @@ impl Shell {
             },
             cx,
         );
-        let liquid = self.liquid.clone();
         let bots = self.bots.clone().map(|bots| {
             bots.update(cx, |bots, cx| {
                 div()
-                    .child(bots.rail(None, &liquid, cx))
-                    .child(bots.classic_channels_rail(&liquid, cx))
+                    .child(bots.rail(None, cx))
+                    .child(bots.classic_channels_rail(cx))
                     .into_any_element()
             })
         });
@@ -339,13 +342,12 @@ impl Shell {
                     })
                     .child(
                         section_label("Projects").mx_2().child(
-                            icon_button_hover("classic-open-project", "Open project", "plus", 0.)
+                            icon_button("classic-open-project", "Open project", "plus")
                                 .debug_selector(|| "classic-open-project".into())
                                 .focusable()
                                 .tab_stop(true)
                                 .size(px(20.))
                                 .relative()
-                                .child(liquid.row("add:project", false))
                                 .on_click(cx.listener(|this, _, _, cx| this.open_project(cx))),
                         ),
                     )
@@ -472,12 +474,12 @@ impl Shell {
             .min_w_0()
             .flex_shrink_0()
             .px_2()
-            .rounded_md()
+            .rounded(px(radius::CONTROL))
             .flex()
             .items_center()
             .gap_2()
             .opacity(if selected { 1. } else { 0.65 })
-            .child(self.liquid.row(format!("project:{path}"), selected))
+            .when(selected, |d| d.bg(content(0.1)))
             .child(
                 div()
                     .size(px(16.))
@@ -487,8 +489,8 @@ impl Shell {
                     .justify_center()
                     .child(mark),
             )
-            .hover(|s| s.opacity(1.))
-            .focus(|s| s.opacity(1.))
+            .hover(|s| s.bg(content(0.08)).opacity(1.))
+            .focus(|s| s.bg(content(0.1)).opacity(1.))
             .child(
                 div()
                     .flex_1()
@@ -619,6 +621,7 @@ impl Shell {
                     .debug_selector(move || format!("project-session-{id}"))
                     .role(Role::Button)
                     .aria_label(self.session_metadata(id, cx).display_title())
+                    .group("project-session")
                     .relative()
                     .h(px(28.))
                     .pl(px(30.))
@@ -628,9 +631,12 @@ impl Shell {
                     .gap_2()
                     // Indented past the tree lines, as a child of the project.
                     .child(
-                        self.liquid
-                            .row(format!("session:{id}"), false)
-                            .left(px(24.)),
+                        div()
+                            .absolute()
+                            .inset_0()
+                            .left(px(24.))
+                            .rounded(px(radius::CONTROL))
+                            .group_hover("project-session", |s| s.bg(content(0.08))),
                     )
                     // The tree: a rail down from the project's mark, and a stub.
                     .child(
@@ -694,7 +700,7 @@ impl Shell {
                     .tab_stop(true)
                     .relative()
                     .h(px(20.))
-                    .rounded_md()
+                    .rounded(px(radius::CONTROL))
                     .flex()
                     .items_center()
                     .justify_center()
@@ -721,15 +727,15 @@ impl Shell {
                     .tab_stop(true)
                     .h(px(32.))
                     .px_2()
-                    .rounded_md()
+                    .rounded(px(radius::CONTROL))
                     .flex()
                     .items_center()
                     .gap_2()
                     .text_size(px(14.))
                     .text_color(content(0.5))
                     .relative()
-                    .child(self.liquid.row("settings-footer", false))
-                    .hover(|s| s.text_color(content(1.)))
+                    .hover(|s| s.bg(content(0.08)).text_color(content(1.)))
+                    .focus(|s| s.bg(content(0.1)).text_color(content(1.)))
                     .child(icon("settings", 16.))
                     .child(div().flex_1().child("Settings"))
                     .on_click(cx.listener(|this, _, window, cx| {
@@ -775,7 +781,7 @@ impl Shell {
                                 .focusable()
                                 .tab_stop(true)
                                 .size(px(32.))
-                                .rounded_md()
+                                .rounded(px(radius::CONTROL))
                                 .flex()
                                 .items_center()
                                 .justify_center()
@@ -831,7 +837,7 @@ impl Shell {
                         .focusable()
                         .tab_stop(true)
                         .size(px(32.))
-                        .rounded_md()
+                        .rounded(px(radius::CONTROL))
                         .flex()
                         .items_center()
                         .justify_center()
@@ -880,7 +886,7 @@ impl Shell {
                                 .tab_stop(true)
                                 .relative()
                                 .size(px(32.))
-                                .rounded_md()
+                                .rounded(px(radius::CONTROL))
                                 .flex()
                                 .items_center()
                                 .justify_center()
@@ -904,11 +910,6 @@ impl Shell {
                                 })
                                 .on_click(cx.listener(move |this, _, window, cx| {
                                     this.select_classic_sidebar(item, window, cx)
-                                }))
-                                .on_hover(cx.listener(move |this, hovered, _, cx| {
-                                    if current && !this.workspace.sidebar_visible {
-                                        this.hover_peek_toggle(*hovered, cx);
-                                    }
                                 }))
                         })),
                 )

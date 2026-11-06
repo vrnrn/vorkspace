@@ -3,6 +3,142 @@ use crate::shell::tests::window;
 use gpui::TestAppContext;
 
 #[gpui::test]
+fn splitting_reopened_notes_uses_the_selected_project_working_copy(cx: &mut TestAppContext) {
+    let (window, first, _) = window(cx);
+    let project = "/work/vorkspace";
+    let checkout = "/work/trees/vorkspace-copy";
+    let (notes, count) = window
+        .update(cx, |shell, w, cx| {
+            shell.open(first, w, cx);
+            let first_project = shell.workspace.project.clone();
+            let first_checkout = "/work/trees/other-copy";
+            for (owner, path) in [(first_project, first_checkout), (project.into(), checkout)] {
+                shell.worktree_focus.insert(
+                    owner,
+                    WorktreeFocus {
+                        path: path.into(),
+                        branch: None,
+                    },
+                );
+            }
+            shell.open_notes(w, cx);
+            let notes = shell.workspace.active.unwrap();
+            assert_eq!(shell.workspace.app_panes[&notes].worktree, first_checkout);
+            shell.select_project(project.into(), w, cx);
+            shell.open_notes(w, cx);
+            assert_eq!(shell.workspace.active, Some(notes));
+            assert_eq!(shell.working_copy(), checkout);
+            let count = locked(&shell.store).unwrap().sessions().unwrap().len();
+            shell.split_session(SplitDir::Right, cx);
+            (notes, count)
+        })
+        .unwrap();
+    cx.run_until_parked();
+    window
+        .update(cx, |shell, _, cx| {
+            let id = shell.workspace.active.unwrap();
+            let store = locked(&shell.store).unwrap();
+            let sessions = store.sessions().unwrap();
+            assert_eq!(sessions.len(), count + 1);
+            assert_eq!(
+                sessions
+                    .iter()
+                    .find(|session| session.id == id)
+                    .unwrap()
+                    .cwd,
+                project
+            );
+            assert_eq!(
+                store
+                    .agent_settings(id)
+                    .unwrap()
+                    .unwrap()
+                    .worktree_cwd
+                    .as_deref(),
+                Some(checkout)
+            );
+            assert_eq!(shell.session_working_copy(id, cx), checkout);
+            assert_eq!(shell.workspace.layout(notes).leaf_ids(), [notes, id]);
+            assert_eq!(shell.workspace.tab_workspaces[&notes], checkout);
+        })
+        .unwrap();
+}
+
+#[gpui::test]
+fn terminal_split_keeps_its_launch_scope_and_rejects_a_foreign_layout(cx: &mut TestAppContext) {
+    let (window, _, session) = window(cx);
+    let project = "/work/another-project";
+    let checkout = "/work/trees/other-copy";
+    let (terminal, count) = window
+        .update(cx, |shell, _, cx| {
+            // The saved descriptor supplies launch identity without starting a PTY.
+            let terminal = shell
+                .workspace
+                .app_pane(
+                    crate::workspace::AppPane::Terminal {
+                        id: 1,
+                        cwd: checkout.into(),
+                    },
+                    project.into(),
+                    checkout.into(),
+                )
+                .unwrap();
+            shell.workspace.place(terminal, session, Edge::Right);
+            let count = locked(&shell.store).unwrap().sessions().unwrap().len();
+            shell.split_session(SplitDir::Down, cx);
+            assert!(
+                shell
+                    .error
+                    .as_deref()
+                    .is_some_and(|error| error.contains("project"))
+            );
+            assert_eq!(
+                shell.workspace.layout(session).leaf_ids(),
+                [session, terminal]
+            );
+            shell.workspace.detach(terminal, shell.workspace.tabs.len());
+            shell.error = None;
+            shell.split_session(SplitDir::Right, cx);
+            (terminal, count)
+        })
+        .unwrap();
+    cx.run_until_parked();
+    window
+        .update(cx, |shell, _, cx| {
+            let id = shell.workspace.active.unwrap();
+            let store = locked(&shell.store).unwrap();
+            let sessions = store.sessions().unwrap();
+            assert_eq!(
+                sessions.len(),
+                count + 1,
+                "only the standalone split creates a session"
+            );
+            assert_eq!(
+                sessions
+                    .iter()
+                    .find(|session| session.id == id)
+                    .unwrap()
+                    .cwd,
+                project
+            );
+            assert_eq!(
+                store
+                    .agent_settings(id)
+                    .unwrap()
+                    .unwrap()
+                    .worktree_cwd
+                    .as_deref(),
+                Some(checkout)
+            );
+            assert_eq!(shell.workspace.project, project);
+            assert_eq!(shell.working_copy(), checkout);
+            assert_eq!(shell.session_working_copy(id, cx), checkout);
+            assert_eq!(shell.workspace.layout(terminal).leaf_ids(), [terminal, id]);
+        })
+        .unwrap();
+}
+
+#[gpui::test]
 fn header_settings_and_worktree_actions_open_focused_native_surfaces(cx: &mut TestAppContext) {
     cx.update(|cx| {
         input::bind(cx);
@@ -148,7 +284,7 @@ fn copies_keep_running_sessions_and_route_new_tabs_and_splits(cx: &mut TestAppCo
                 assert!(
                     shell
                         .visible_tabs(cx)
-                        .contains(&TitleTab::Session(feature_session)),
+                        .contains(&TitleTab::Workspace(feature_session)),
                     "opening a worktree chat keeps its tab in the current workspace"
                 );
                 assert!(shell
@@ -220,7 +356,7 @@ fn copies_keep_running_sessions_and_route_new_tabs_and_splits(cx: &mut TestAppCo
             assert!(
                 shell
                     .visible_tabs(cx)
-                    .contains(&TitleTab::Session(main_session))
+                    .contains(&TitleTab::Workspace(main_session))
             );
             assert_eq!(shell.terminal_cwd(cx), project);
             assert_eq!(

@@ -1,9 +1,10 @@
 //! The summary, diff and checks tabs of a work item.
 use super::*;
+use vorkspace_ui::radius;
 
 impl Inbox {
     pub(super) fn summary_body_width(&self, window: &Window) -> Pixels {
-        let inset = detail_inset(window);
+        let inset = self.detail_inset(window);
         (self.summary_width.get().min(px(page::DETAIL_MAX)) - inset - inset).max(px(1.))
     }
 
@@ -103,7 +104,7 @@ impl Inbox {
         let can_post = !self.posting && !self.comment.read(cx).content.trim().is_empty();
         let body = if ix == 0 {
             div()
-                .py(detail_inset(window))
+                .py(self.detail_inset(window))
                 .flex()
                 .flex_col()
                 .gap(px(16.))
@@ -143,7 +144,7 @@ impl Inbox {
                 .into_any_element()
         } else if ix + 1 == count {
             div()
-                .pb(detail_inset(window))
+                .pb(self.detail_inset(window))
                 .child(
                     div()
                         .w_full()
@@ -178,7 +179,7 @@ impl Inbox {
                         })
                         .child(
                             div()
-                                .rounded(px(page::CARD_CORNER))
+                                .rounded(px(radius::SURFACE))
                                 .border_1()
                                 .border_color(page::divider())
                                 .bg(content(0.05))
@@ -227,7 +228,7 @@ impl Inbox {
             .w_full()
             .max_w(px(page::DETAIL_MAX))
             .mx_auto()
-            .px(detail_inset(window))
+            .px(self.detail_inset(window))
             .child(body)
             .into_any_element()
     }

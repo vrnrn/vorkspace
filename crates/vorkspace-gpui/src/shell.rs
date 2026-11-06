@@ -8,7 +8,9 @@ mod right_panel_host;
 mod session_rows;
 mod tab_strip;
 mod titlebar;
+mod workspace_commands;
 pub(crate) use crate::bots::host_api::AppStart;
+mod app_panes;
 mod app_views;
 mod automation_runs;
 pub(crate) mod bots;
@@ -44,7 +46,6 @@ mod session_preview;
 mod settings;
 mod shortcuts;
 mod sidebar_list;
-mod sidebar_peek;
 pub(crate) mod status_menu;
 mod terminal_dock;
 mod terminal_tabs;
@@ -420,6 +421,10 @@ enum PaneMark {
     Session(String, Option<i64>),
     /// A file's name, or `None` for changes and commits.
     File(Option<String>),
+    /// A registered workspace app pane's icon.
+    App(&'static str),
+    /// The same appearance snapshot used by the Bot's sidebar avatar.
+    Bot(crate::avatar::BotLookConfig),
 }
 /// A split tab's headline rolling to the newly focused pane: the next pane
 /// rises from below, the previous one drops from above.
@@ -453,7 +458,7 @@ impl TabShift {
 /// Below this a chat column stops being comfortable to read.
 const MIN_CHAT_WIDTH: f32 = 420.;
 const MAX_SESSION_STACK: usize = 3;
-const PANE_LIMIT_MESSAGE: &str = "Not enough room to tile here. Widen the window or use another tab; columns can contain up to three sessions.";
+const PANE_LIMIT_MESSAGE: &str = "Not enough room to tile here. Widen the window or use another tab; columns can contain up to three panes.";
 /// A sideways tab drag sags; only a deliberate pull below the strip
 /// targets a pane (TitleBar's PANE_DROP_PULL).
 const PANE_DROP_PULL: f32 = 32.;
@@ -488,11 +493,6 @@ pub(crate) struct Shell {
     sidebar_list: sidebar_list::SidebarList,
     sidebar_slide: Option<PaneSlide>,
     sidebar_fraction: f32,
-    /// The collapsed inset sidebar peeking out over the workspace.
-    sidebar_peek: Option<sidebar_peek::SidebarPeek>,
-    peek_animating: bool,
-    peek_close: Option<gpui::Task<()>>,
-    peek_toggle_bounds: AnchorSlot,
     /// useTrafficLightsVisible: fullscreen hides the native buttons, so the
     /// title bar takes their room back.
     fullscreen: bool,
@@ -538,6 +538,10 @@ pub(crate) struct Shell {
     pending_folder: Option<(i64, AnchorSlot)>,
     _session_clock: gpui::Task<()>,
     notes: Option<Entity<Notes>>,
+    note_tabs: HashMap<i64, Entity<Notes>>,
+    item_tabs: HashMap<i64, Entity<crate::inbox::Inbox>>,
+    bot_document_tabs: HashMap<i64, Entity<crate::bots::BotDocumentPane>>,
+    bot_pane_views: HashMap<i64, Entity<app_panes::BotPaneView>>,
     todos_page: Option<Entity<crate::todos::TodosPage>>,
     /// The project sidebar's board; it follows the current project.
     project_todos: Option<Entity<crate::todos::TodoBoardView>>,
@@ -557,6 +561,8 @@ pub(crate) struct Shell {
     settings: Option<Entity<crate::settings::SettingsView>>,
     settings_events: Option<Subscription>,
     app_search: Option<search::Open>,
+    parked_search: Option<search::Open>,
+    preparing_panes: bool,
     saved_search: Option<(String, vorkspace_core::search::Scope)>,
     order: Vec<i64>,
     pub(crate) workspace: Workspace,
@@ -593,11 +599,6 @@ pub(crate) struct Shell {
     background_dialog: Option<project_settings::OpenBackground>,
     backgrounds: HashMap<i64, Entity<crate::project_background::ProjectBackground>>,
     background_card: AnchorSlot,
-    liquid: crate::liquid::Liquid,
-    /// The title bar's tabs, rising from the line beneath them.
-    tab_liquid: crate::liquid::Liquid,
-    /// Sessions, Explorer and Changes rise from the line under them.
-    sidebar_tab_liquid: crate::liquid::Liquid,
     /// Each project's working grid in the rail, by project path.
     project_marks: HashMap<String, Entity<vorkspace_ui::session_mark::ProjectMark>>,
 
@@ -844,10 +845,6 @@ impl Shell {
             sidebar_list: sidebar_list::SidebarList::new(cx),
             sidebar_slide: None,
             sidebar_fraction: if workspace.sidebar_visible { 1. } else { 0. },
-            sidebar_peek: None,
-            peek_animating: false,
-            peek_close: None,
-            peek_toggle_bounds: AnchorSlot::default(),
             fullscreen: false,
             tabs_frame,
             store,
@@ -890,6 +887,10 @@ impl Shell {
             pending_folder: None,
             _session_clock: session_clock,
             notes: None,
+            note_tabs: HashMap::new(),
+            item_tabs: HashMap::new(),
+            bot_document_tabs: HashMap::new(),
+            bot_pane_views: HashMap::new(),
             todos_page: None,
             project_todos: None,
             minion_registry: Default::default(),
@@ -906,6 +907,8 @@ impl Shell {
             settings: None,
             settings_events: None,
             app_search: None,
+            parked_search: None,
+            preparing_panes: false,
             saved_search: None,
             order: Vec::new(),
             workspace,
@@ -935,9 +938,6 @@ impl Shell {
             background_dialog: None,
             backgrounds: HashMap::new(),
             background_card: AnchorSlot::default(),
-            liquid: Default::default(),
-            tab_liquid: crate::liquid::Liquid::below(crate::panel_kit::stroke()),
-            sidebar_tab_liquid: crate::liquid::Liquid::below(crate::panel_kit::stroke()),
             project_marks: HashMap::new(),
 
             project_anchor: AnchorSlot::default(),
@@ -1056,6 +1056,7 @@ impl Shell {
                     }
                 }
                 this.sync_bot_search(cx);
+                this.refresh_bot_document_panes(cx);
                 this.update_usage_provider(cx);
                 this.invalidate_chrome(cx);
                 cx.notify();
@@ -1069,32 +1070,23 @@ impl Shell {
         ));
         this.observations.push(cx.subscribe(
             &bots,
-            |_, _, request: &crate::bots::ShowDetails, cx| {
-                let id = request.0.clone();
+            |this, _, request: &crate::bots::OpenWorkspacePane, cx| {
+                let request = request.clone();
+                this.navigation_revision += 1;
+                let revision = this.navigation_revision;
                 cx.spawn(async move |this, cx| {
                     let _ = this.update_in(cx, |this, window, cx| {
-                        if this
-                            .bots
-                            .as_ref()
-                            .is_some_and(|m| m.read(cx).active.as_ref() == Some(&id))
-                        {
-                            this.set_right_panel_open(true, window, cx);
+                        if this.navigation_revision == revision {
+                            this.open_bot_workspace_pane(request, window, cx);
                         }
                     });
                 })
                 .detach();
             },
         ));
-        let mut bot_chrome = bots.read(cx).overview_chrome();
         let mut bot_error = bots.read(cx).error.clone();
         this.observations
-            .push(cx.observe(&bots, move |this, bots, cx| {
-                let chrome = bots.read(cx).overview_chrome();
-                if chrome != bot_chrome {
-                    bot_chrome = chrome;
-                    this.invalidate_chrome(cx);
-                    cx.notify();
-                }
+            .push(cx.observe(&bots, move |_, bots, cx| {
                 let error = &bots.read(cx).error;
                 if *error != bot_error {
                     bot_error = error.clone();
@@ -1146,8 +1138,12 @@ impl Shell {
             this.order.push(summary.id);
             this.session_summaries.insert(summary.id, summary);
         }
-        if let Some(id) = this.workspace.active {
-            this.ensure_session(this.workspace.session_for_pane(id), cx);
+        if let Some(id) = this
+            .workspace
+            .active
+            .and_then(|id| this.workspace.session_for_pane(id))
+        {
+            this.ensure_session(id, cx);
             this.record_worktree_session(id, cx);
         }
         if let Some(id) = this.workspace.active {
@@ -1161,8 +1157,22 @@ impl Shell {
         this.initialize_automations(cx);
         cx.spawn(async move |this, cx| {
             let _ = this.update_in(cx, |this, window, cx| {
-                if this.navigation_revision == 0 && !this.restore_scope_tab(window, cx) {
-                    this.ensure_project_session(window, cx);
+                if this.navigation_revision == 0 {
+                    // Sidebar worktree selection resets at launch. An active
+                    // app pane restores from its layout, while standalone
+                    // Channels use the saved active pane, not project recall.
+                    let saved_app = this.workspace.active.filter(|id| {
+                        this.workspace.app_panes.get(id).is_some_and(|pane| {
+                            (pane.content.project_scoped()
+                                || pane.content == crate::workspace::AppPane::Channels)
+                                && this.app_pane_available(&pane.content, cx)
+                        })
+                    });
+                    if let Some(id) = saved_app {
+                        this.open(id, window, cx);
+                    } else if !this.restore_scope_tab(window, cx) {
+                        this.ensure_project_session(window, cx);
+                    }
                 }
                 this.persist(cx);
             });
@@ -1171,35 +1181,33 @@ impl Shell {
         this
     }
     fn update_chat_visibility(&mut self, cx: &mut Context<Self>) {
-        if let Some(id) = &self.active_terminal_tab
-            && let Some(terminal) = self.terminal_tabs.get(id)
-        {
-            let visible = self.settings.is_none() && self.app_search.is_none();
-            terminal.update(cx, |terminal, _| terminal.visible = visible);
-        }
-        for (provider, page) in &self.connector_pages {
-            let active = self.active_app_view == Some(app_views::AppView::Connector(*provider))
-                && self.settings.is_none()
-                && self.app_search.is_none();
-            page.update(cx, |page, cx| page.set_active(active, cx));
-        }
-        // Every pane of the active tab is on screen, not just the focused one.
-        let shown: HashSet<i64> = match self.workspace.active_tab() {
-            Some(tab)
-                if !self.app_view_open()
-                    && self.settings.is_none()
-                    && self.app_search.is_none()
-                    && !self.bot_active(cx) =>
-            {
-                self.workspace.layout(tab).leaf_ids().into_iter().collect()
-            }
-            _ => HashSet::new(),
-        };
+        let shown: HashSet<i64> = self
+            .workspace
+            .active_tab()
+            .filter(|_| self.settings.is_none())
+            .map(|tab| {
+                self.workspace
+                    .layout(tab)
+                    .leaf_ids()
+                    .into_iter()
+                    .filter(|id| {
+                        self.workspace
+                            .app_panes
+                            .get(id)
+                            .is_none_or(|pane| self.app_pane_available(&pane.content, cx))
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
+        self.update_app_pane_visibility(&shown, cx);
         // Hidden tabs keep their prepared image and any in-flight load. Only
         // closing a tab/pane should discard its background.
         let open: HashSet<i64> = self.workspace.open_sessions().into_iter().collect();
         self.backgrounds.retain(|id, _| open.contains(id));
         for &id in &shown {
+            if !self.session_summaries.contains_key(&id) {
+                continue;
+            }
             self.ensure_session(id, cx);
             self.history_clock += 1;
             self.history_recency.insert(id, self.history_clock);
@@ -1334,7 +1342,9 @@ impl Shell {
         }
     }
     fn refresh_session_mark(&mut self, id: i64, cx: &mut Context<Self>) {
-        let id = self.workspace.session_for_pane(id);
+        let Some(id) = self.workspace.session_for_pane(id) else {
+            return;
+        };
         let Some(view) = self.sessions.get(&id) else {
             return;
         };
@@ -1522,7 +1532,8 @@ impl Shell {
         let session = self
             .workspace
             .active
-            .and_then(|id| self.sessions.get(&self.workspace.session_for_pane(id)))
+            .and_then(|id| self.workspace.session_for_pane(id))
+            .and_then(|id| self.sessions.get(&id))
             .map(|view| {
                 let view = view.read(cx);
                 (
@@ -1633,28 +1644,18 @@ impl Shell {
     }
     /// requestAddToChat(text, "plain"): appended to the tab's draft as its
     /// own paragraph.
-    fn add_to_chat(&mut self, id: i64, text: &str, cx: &mut Context<Self>) {
-        let Some(view) = self.ensure_session(id, cx) else {
-            return;
-        };
-        let input = view.read(cx).input.clone();
-        if input.read(cx).is_composing() {
-            return;
+    fn add_to_chat(&mut self, id: i64, text: &str, cx: &mut Context<Self>) -> Result<(), String> {
+        if self.deleting.contains(&id) {
+            return Err("The originating chat is being deleted.".into());
         }
-        input.update(cx, |input, cx| {
-            let draft = input.content.to_string();
-            let separator = if draft.is_empty() || draft.ends_with("\n\n") {
-                ""
-            } else if draft.ends_with('\n') {
-                "\n"
-            } else {
-                "\n\n"
-            };
-            input.set_text(format!("{draft}{separator}{}\n\n", text.trim()), cx);
-        });
+        let view = self
+            .ensure_session(id, cx)
+            .ok_or("The originating chat is unavailable.")?;
+        view.update(cx, |chat, cx| chat.append_review_comment(text, cx))?;
         self.chat_hidden_off(id, cx);
         self.pending_composer_focus = Some(id);
         cx.notify();
+        Ok(())
     }
     fn chat_hidden_off(&mut self, id: i64, cx: &mut Context<Self>) {
         if let Some(review) = self.reviews.get(&id) {
@@ -1672,11 +1673,7 @@ impl Shell {
     fn fit_sidebar(&mut self, cx: &mut Context<Self>) {
         // These surfaces replace project tools rather than competing with them
         // for space. Preserve the session sidebar's own visibility preference.
-        if self.bot_active(cx)
-            || self.app_view_open()
-            || self.app_search.is_some()
-            || self.settings.is_some()
-        {
+        if !self.has_session_panes() || self.settings.is_some() {
             return;
         }
         if self.workspace.sidebar_visible {
@@ -1742,11 +1739,10 @@ impl Shell {
             .filter(|_| self.bot_active(cx))
             .and_then(|m| m.read(cx).chat())
             .or_else(|| {
-                self.workspace.active.and_then(|id| {
-                    self.sessions
-                        .get(&self.workspace.session_for_pane(id))
-                        .cloned()
-                })
+                self.workspace
+                    .active
+                    .and_then(|id| self.workspace.session_for_pane(id))
+                    .and_then(|id| self.sessions.get(&id).cloned())
             });
         if let Some(view) = view {
             let view = view.read(cx);
@@ -1774,11 +1770,27 @@ impl Shell {
         if self.focus_app_view(window, cx) {
             return;
         }
-        if let Some(bots) = self
-            .bots
-            .clone()
-            .filter(|m| m.read(cx).active.is_some() || m.read(cx).classic_channels_open())
+        if let Some(crate::workspace::AppPane::Bot(id)) = self
+            .workspace
+            .active
+            .and_then(|id| self.workspace.app_panes.get(&id))
+            .map(|pane| &pane.content)
         {
+            let id = id.clone();
+            if let Some(manager) = self.bots.clone() {
+                manager.update(cx, |m, cx| m.focus_bot_pane(&id, window, cx));
+            }
+            return;
+        }
+        if let Some(view) = self
+            .workspace
+            .active
+            .and_then(|id| self.bot_document_tabs.get(&id))
+        {
+            window.focus(&view.focus_handle(cx), cx);
+            return;
+        }
+        if let Some(bots) = self.bots.clone().filter(|_| self.bot_active(cx)) {
             bots.update(cx, |m, cx| m.focus_active(window, cx));
             return;
         }
@@ -1800,6 +1812,11 @@ impl Shell {
         self.focus.clone()
     }
     pub(crate) fn open(&mut self, id: i64, window: &mut Window, cx: &mut Context<Self>) {
+        self.prepare_tab_views(id, window, cx);
+        if self.workspace.app_panes.contains_key(&id) {
+            self.open_app_pane(id, window, cx);
+            return;
+        }
         if self.workspace.review_owners.contains_key(&id) {
             self.open_file_pane(id, window, cx);
             return;
@@ -1859,9 +1876,6 @@ impl Shell {
             self.open_file_pane(id, window, cx);
             return;
         }
-        if let Some(bots) = &self.bots {
-            bots.update(cx, |m, cx| m.close(cx));
-        }
         self.leave_app_views(cx);
         self.leave_app_search(cx);
         self.close_preview(cx);
@@ -1878,7 +1892,7 @@ impl Shell {
         self.workspace.collapsed.remove(&self.workspace.project);
         view.update(cx, |v, cx| v.load(cx));
         self.record_worktree_session(id, cx);
-        self.remember_title_tab(TitleTab::Session(self.workspace.tab_of(id).unwrap()));
+        self.remember_title_tab(TitleTab::Workspace(self.workspace.tab_of(id).unwrap()));
         self.reveal_active_tab(cx);
         self.review_focused = self
             .workspace
@@ -1908,11 +1922,11 @@ impl Shell {
         let tabs = ids
             .iter()
             .filter_map(|id| self.workspace.tab_of(*id))
-            .map(TitleTab::Session)
+            .map(TitleTab::Workspace)
             .collect::<Vec<_>>();
         let preferred = preferred
             .and_then(|id| self.workspace.tab_of(id))
-            .map(TitleTab::Session);
+            .map(TitleTab::Workspace);
         self.close_title_tabs(&tabs, preferred, window, cx);
     }
     fn visit(&mut self, step: isize, window: &mut Window, cx: &mut Context<Self>) {
@@ -1969,7 +1983,6 @@ impl Shell {
             None => PaneSlide::new(1. - to, to, self.workspace.right_panel_width),
         });
         self.resize = None;
-        self.drop_peek();
         self.workspace.sidebar_visible = visible;
         self.sync_right_panel(cx);
     }
@@ -1977,7 +1990,12 @@ impl Shell {
         self.open_app_search(window, cx);
     }
 
-    fn select_project(&mut self, path: String, window: &mut Window, cx: &mut Context<Self>) {
+    pub(crate) fn select_project(
+        &mut self,
+        path: String,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         if self
             .deleting_projects
             .contains(&vorkspace_core::files::path_key(&path))
@@ -1988,9 +2006,15 @@ impl Shell {
         }
         // Reselecting the visible Bot's project keeps its live detail editor.
         if path == self.workspace.project
-            && !self.tabless_page(cx)
-            && let Some(tab @ TitleTab::Bot { .. }) = self.active_title_tab(cx)
+            && self.settings.is_none()
+            && let Some(bot) = self.workspace_bot_context()
+            && self
+                .bots
+                .as_ref()
+                .is_some_and(|manager| manager.read(cx).active.as_deref() == Some(bot.as_str()))
+            && let Some(tab) = self.active_title_tab(cx)
             && self.workspace.scope_focus.get(&self.tab_scope()) == Some(&tab)
+            && self.visible_tabs(cx).contains(&tab)
         {
             return;
         }
@@ -2010,8 +2034,7 @@ impl Shell {
         self.sidebar_search
             .update(cx, |input, cx| input.set_text(String::new(), cx));
         self.workspace.collapsed.remove(&path);
-        // Bots are scoped tabs too; restore the user's last selection before
-        // a session fallback can replace it.
+        // Restore the last scoped tab before falling back to a session.
         if self.restore_scope_tab(window, cx) {
             return;
         }
@@ -2020,43 +2043,17 @@ impl Shell {
             .project_focus
             .get(&path)
             .copied()
-            .filter(|id| {
-                self.workspace.tab_of(*id).is_some()
-                    && self
-                        .session_summaries
-                        .contains_key(&self.workspace.session_for_pane(*id))
-                    && self
-                        .session_metadata(self.workspace.session_for_pane(*id), cx)
-                        .summary
-                        .cwd
-                        == path
-                    && self.in_worktree_scope(*id, cx)
-            })
+            .filter(|id| self.workspace.tab_of(*id).is_some() && self.pane_in_scope(*id, cx))
             .or_else(|| {
-                self.workspace
-                    .tabs
+                self.visible_tabs(cx)
                     .iter()
                     .rev()
-                    .find(|id| {
-                        self.session_summaries.contains_key(
-                            &self
-                                .workspace
-                                .session_for_pane(self.workspace.tab_focus(**id)),
-                        ) && self
-                            .session_metadata(
-                                self.workspace
-                                    .session_for_pane(self.workspace.tab_focus(**id)),
-                                cx,
-                            )
-                            .summary
-                            .cwd
-                            == path
-                            && self.in_worktree_scope(self.workspace.tab_focus(**id), cx)
-                    })
-                    .map(|tab| self.workspace.tab_focus(*tab))
+                    .filter(|tab| !self.is_standalone_channels_tab(tab))
+                    .find_map(|tab| tab.session())
+                    .map(|tab| self.workspace.tab_focus(tab))
             });
         if let Some(id) = self.workspace.active {
-            self.activate_session(id, window, cx);
+            self.open(id, window, cx);
         } else {
             self.ensure_project_session(window, cx);
         }
@@ -2332,7 +2329,7 @@ impl Render for Shell {
             && self
                 .workspace
                 .active
-                .map(|pane| self.workspace.session_for_pane(pane))
+                .and_then(|pane| self.workspace.session_for_pane(pane))
                 == Some(id)
             && let Some(view) = self.sessions.get(&id)
         {
@@ -2344,7 +2341,6 @@ impl Render for Shell {
             }
         }
         if let Some(m) = &self.bots {
-            m.read(cx).hide_html(cx);
             m.update(cx, |m, _| m.bind_window(window));
         }
         self.render_passes += 1;
@@ -2390,11 +2386,7 @@ impl Render for Shell {
                 }
             }
         };
-        if self.settings.is_some()
-            || self.app_view_open()
-            || self.app_search.is_some()
-            || self.bot_active(cx)
-        {
+        if self.settings.is_some() || !self.has_session_panes() {
             self.sidebar_fraction = 0.;
         }
         let sidebar_width = self.workspace.right_panel_width * self.sidebar_fraction;
@@ -2534,15 +2526,6 @@ impl Render for Shell {
                 p.set_show_excluded(self.workspace.preferences.show_excluded_files, cx);
             });
         }
-        if let Some(bots) = &self.bots {
-            let details = bots.read(cx).details.clone();
-            let inset = if self.workspace.classic_layout {
-                TITLE_BAR_HEIGHT
-            } else {
-                0.
-            };
-            details.update(cx, |view, cx| view.set_top_inset(inset, cx));
-        }
         self.sync_right_panel(cx);
         self.sync_notices(window, cx);
         div()
@@ -2605,15 +2588,6 @@ impl Render for Shell {
                         window,
                         cx,
                     );
-                    // Bots render above the session pane tree. Give its file
-                    // an independent visible tab using the normal navigation
-                    // path, which retains the Bot tab and live conversation.
-                    if this.bot_active(cx)
-                        && let Some(owner) = this.workspace.active
-                        && let Some(pane) = this.independent_file_pane(owner, cx)
-                    {
-                        this.open_file_pane(pane, window, cx);
-                    }
                     if let Some((line, column)) = location
                         && let Some(pane) = this.active_review(cx)
                     {
@@ -2702,24 +2676,8 @@ impl Render for Shell {
             .on_action(cx.listener(|this, _: &NewClaude, _, cx| this.create(Kind::Claude, cx)))
             .on_action(cx.listener(|this, _: &OpenProject, _, cx| this.open_project(cx)))
             .on_action(cx.listener(|this, _: &CloseTab, window, cx| {
-                if this.settings.is_none()
-                    && let Some(tab) = this.active_title_tab(cx)
-                    && matches!(tab, TitleTab::Terminal { .. } | TitleTab::Bot { .. })
-                    && !this.tabless_page(cx)
-                {
-                    this.close_title_tabs(&[tab], None, window, cx);
-                    return;
-                }
-                if this.active_app_view.is_some() && this.settings.is_none() {
-                    this.close_app_view(window, cx);
-                    return;
-                }
-                if this.app_search.is_some() {
-                    this.close_search_tab(window, cx);
-                    return;
-                }
-                if this.bot_active(cx) {
-                    this.close_bot_page(window, cx);
+                if this.settings.is_some() {
+                    this.close_settings(window, cx);
                     return;
                 }
                 // ⌘W in the focused dock closes its terminal.
@@ -2817,10 +2775,6 @@ impl Render for Shell {
                     }
                     if this.session_preview.is_some() {
                         this.close_preview(cx);
-                        return;
-                    }
-                    if this.peek_open() && this.menu.is_none() {
-                        this.set_peek(false, cx);
                         return;
                     }
                     if this.menu.is_none()
@@ -2940,12 +2894,7 @@ impl Render for Shell {
                 if let Some((start, width)) = this.resize {
                     if event.pressed_button == Some(MouseButton::Left) {
                         let delta = (event.position.x - start).as_f32();
-                        // Its separator faces the pane, on either side.
-                        let width = if !this.workspace.preferences.sidebar_right {
-                            width + delta
-                        } else {
-                            width - delta
-                        };
+                        let width = width + delta;
                         this.drag_resize(ResizeTarget::Sidebar, width, cx);
                     } else {
                         this.release_resizes(cx);
@@ -2975,7 +2924,6 @@ impl Render for Shell {
             .relative()
             .child(self.right_panel_resize_watch(cx))
             .children(self.layout_body(sidebar_width, right_shown, right_width, full, window, cx))
-            .children(self.peek_watch(window, cx))
             .children(self.classic_session_preview(cx))
             .child(self.notices_overlay(cx))
             .children(self.menu.as_ref().map(|open| {

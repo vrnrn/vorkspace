@@ -640,6 +640,46 @@ impl Store {
         upsert_note(&self.conn, note).map_err(|e| e.to_string())
     }
 
+    /// Update an existing note without changing its artifact subtype or
+    /// finalizing a pending slug. The legacy numeric note facade may resolve
+    /// to a native note whose identity and metadata must stay intact.
+    pub fn update_note_preserving_artifact(&self, note: &NoteUpsert) -> Result<Note, String> {
+        valid_id(&note.id)?;
+        if note.body.len() > MAX_BODY {
+            return Err("Content is too large".into());
+        }
+        if let Some(id) = note
+            .source_session_id
+            .as_deref()
+            .filter(|id| !id.is_empty())
+        {
+            valid_id(id)?;
+        }
+        if self.shared.is_some() {
+            self.shared_writable()?;
+        }
+        ensure_notes_table(&self.conn).map_err(|e| e.to_string())?;
+        // The existence check and update share one write transaction so a
+        // concurrent delete cannot turn this update into a new note.
+        let tx = Transaction::new_unchecked(&self.conn, TransactionBehavior::Immediate)
+            .map_err(|e| e.to_string())?;
+        let subtype: Option<Option<String>> = tx
+            .query_row(
+                "SELECT artifact_kind FROM notes WHERE id = ?1 AND content_kind = 'note'",
+                [&note.id],
+                |row| row.get(0),
+            )
+            .optional()
+            .map_err(|e| e.to_string())?;
+        let subtype = subtype.ok_or("Note no longer exists")?;
+        let mut update = note.clone();
+        update.finalize_slug = false;
+        let saved =
+            upsert_content(&tx, &update, "note", subtype.as_deref()).map_err(|e| e.to_string())?;
+        tx.commit().map_err(|e| e.to_string())?;
+        Ok(saved)
+    }
+
     pub fn delete_note(&self, id: &str) -> Result<(), String> {
         valid_id(id)?;
         if self.shared.is_some() {

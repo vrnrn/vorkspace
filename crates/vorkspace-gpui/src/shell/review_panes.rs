@@ -1,5 +1,6 @@
-//! Opening, reusing and closing review panes for a session.
+//! Opening, reusing and closing the workspace's file and review panes.
 use super::*;
+use crate::workspace::AppPane;
 
 impl Shell {
     pub(super) fn active_review(
@@ -45,6 +46,15 @@ impl Shell {
                     .iter()
                     .find_map(|(id, pane)| (pane == &review).then_some(*id))
                 else {
+                    if let ReviewEvent::Comment(comment) = event {
+                        review.update(cx, |review, cx| {
+                            review.complete_comment(
+                                comment,
+                                Err("This review has closed.".into()),
+                                cx,
+                            );
+                        });
+                    }
                     return;
                 };
                 match event {
@@ -63,9 +73,14 @@ impl Shell {
                         this.workspace.reviews.insert(id, state);
                         this.persist(cx);
                     }
-                    ReviewEvent::Comment(text) => {
-                        let owner = this.workspace.session_for_pane(id);
-                        this.add_to_chat(owner, text, cx);
+                    ReviewEvent::Comment(comment) => {
+                        if !comment.is_current(cx) {
+                            return;
+                        }
+                        let result = this.add_review_comment(id, comment.text(), cx);
+                        review.update(cx, |review, cx| {
+                            review.complete_comment(comment, result, cx)
+                        });
                     }
                     ReviewEvent::Empty => this.close_review(id, cx),
                     ReviewEvent::DragPane(position) => {
@@ -85,6 +100,46 @@ impl Shell {
         ));
         self.reviews.insert(id, review.clone());
         review
+    }
+
+    fn add_review_comment(
+        &mut self,
+        pane: i64,
+        text: &str,
+        cx: &mut Context<Self>,
+    ) -> Result<(), String> {
+        if self.workspace.tab_of(pane).is_none() {
+            return Err("Reopen the review before adding this comment.".into());
+        }
+        if let Some(owner) = self.workspace.session_for_pane(pane) {
+            return self.add_to_chat(owner, text, cx);
+        }
+        let bot = self
+            .workspace
+            .app_panes
+            .get(&pane)
+            .and_then(|pane| pane.review_bot.as_deref())
+            .ok_or("Open this file from a chat to add a comment there.")?;
+        if !self.workspace.preferences.bots {
+            return Err("Enable Bots in Settings, then try again.".into());
+        }
+        let manager = self
+            .bots
+            .clone()
+            .ok_or("The originating Bot is unavailable.")?;
+        let chat = manager.update(cx, |manager, cx| {
+            let actor = manager
+                .roster
+                .get(bot)
+                .ok_or("The originating Bot is unavailable. Copy the comment to another chat.")?;
+            if actor.is_minion() {
+                return Err("This team chat is read-only. Copy the comment to its parent Bot.");
+            }
+            manager.chat_for_action(bot, cx).ok_or(
+                "Open the originating Bot chat and wait for its draft to load, then try again.",
+            )
+        })?;
+        chat.update(cx, |chat, cx| chat.append_review_comment(text, cx))
     }
     /// openChangesTab / openCommitTab in the active tab; the pane slides
     /// in beside the chat when it is new.
@@ -110,29 +165,50 @@ impl Shell {
             recent.insert(0, path.clone());
             recent.truncate(30);
         }
-        // Closing a title tab retains its pane, like a conversation tab.
-        // Reopening one of its files must recover the existing dirty editor.
-        let retained = self.workspace.review_owners.keys().copied().find(|pane| {
-            self.workspace.tab_of(*pane).is_none()
-                && self
-                    .sessions
-                    .get(&self.workspace.session_for_pane(*pane))
-                    .is_some_and(|s| s.read(cx).summary.cwd == self.workspace.project)
-                && self.in_worktree_scope(*pane, cx)
-                && self
-                    .workspace
-                    .reviews
-                    .get(pane)
-                    .is_some_and(|r| r.tabs.iter().any(|existing| existing.same_tab(&tab)))
-        });
-        if let Some(pane) = retained {
-            self.open_file_pane(pane, window, cx);
-        }
-        let Some(id) = self.workspace.active else {
-            return;
+        let origin = self.workspace.active;
+        let standalone = origin.is_none_or(|id| self.workspace.session_for_pane(id).is_none());
+        let id = if standalone {
+            let bot = origin
+                .and_then(|id| self.workspace.app_panes.get(&id))
+                .and_then(|pane| match &pane.content {
+                    AppPane::Bot(bot) | AppPane::BotDocument { bot, .. } => Some(bot.clone()),
+                    AppPane::Review => pane.review_bot.clone(),
+                    _ => None,
+                });
+            let Some(id) = self.workspace.standalone_review_pane(
+                self.workspace.project.clone(),
+                self.working_copy().to_owned(),
+                bot,
+            ) else {
+                return;
+            };
+            id
+        } else {
+            // Reopen a retained file pane with its existing dirty editor.
+            let retained = self.workspace.review_owners.keys().copied().find(|pane| {
+                self.workspace.tab_of(*pane).is_none()
+                    && self.pane_in_scope(*pane, cx)
+                    && self
+                        .workspace
+                        .reviews
+                        .get(pane)
+                        .is_some_and(|r| r.tabs.iter().any(|existing| existing.same_tab(&tab)))
+            });
+            if let Some(pane) = retained {
+                self.open_file_pane(pane, window, cx);
+            }
+            self.workspace.active.unwrap()
         };
         let review = match self.review_for(id, cx) {
             Some(review) => review,
+            None if standalone => self.make_review(
+                id,
+                crate::git_tools::review::ReviewState {
+                    chat_hidden: true,
+                    ..Default::default()
+                },
+                cx,
+            ),
             None => {
                 let review = self.make_review(id, Default::default(), cx);
                 let ratio = review.read(cx).state.ratio;
@@ -160,11 +236,52 @@ impl Shell {
             }
             r.set_visible(true, cx);
         });
+        if standalone {
+            // Publish the editor state with its layout even before Changed is delivered.
+            self.workspace
+                .reviews
+                .insert(id, review.read(cx).state.clone());
+            if self.workspace.tab_of(id).is_none()
+                && let Some(bot) = origin.filter(|origin| {
+                    self.workspace
+                        .app_panes
+                        .get(origin)
+                        .is_some_and(|pane| matches!(pane.content, AppPane::Bot(_)))
+                })
+                && self.placement_allowed(DragSource::Pane(id), bot, Edge::Right)
+            {
+                self.workspace.place(id, bot, Edge::Right);
+                self.fit_active_pane_width();
+            }
+            self.open(id, window, cx);
+            return;
+        }
         self.review_focused = true;
         review.update(cx, |r, cx| r.focus_active(window, cx));
         self.fit_sidebar(cx);
         cx.notify();
     }
+
+    pub(super) fn open_standalone_review(
+        &mut self,
+        id: i64,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(review) = self.review_for(id, cx) else {
+            return;
+        };
+        self.prepare_app_view(Some(id), window, cx);
+        self.leave_app_views(cx);
+        self.workspace.open(id);
+        self.history.record(id);
+        self.review_focused = true;
+        review.update(cx, |review, cx| review.set_visible(true, cx));
+        self.remember_title_tab(TitleTab::Workspace(self.workspace.tab_of(id).unwrap()));
+        self.fit_sidebar(cx);
+        self.finish_app_pane_open(window, cx);
+    }
+
     /// The pane's last tab closed: it slides out, and a tab without its
     /// chat closes with it.
     pub(super) fn close_review(&mut self, id: i64, cx: &mut Context<Self>) {
@@ -180,7 +297,7 @@ impl Shell {
             if !chat_hidden {
                 // The closing pane stays mounted for its slide-out. Move focus
                 // before it disappears, rather than leaving keys in its editor.
-                self.pending_composer_focus = Some(self.workspace.session_for_pane(id));
+                self.pending_composer_focus = self.workspace.session_for_pane(id);
             }
         }
         if chat_hidden {

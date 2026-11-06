@@ -18,6 +18,7 @@ use std::{
     time::Duration,
 };
 use vorkspace_core::remote::{Connections, JobView, Machine};
+use vorkspace_ui::radius;
 use vorkspace_ui::theme::*;
 
 const TARGET: &str = "SSH target";
@@ -205,7 +206,7 @@ impl SettingsView {
                 div()
                     .h(px(36.))
                     .min_w_0()
-                    .rounded_lg()
+                    .rounded(px(radius::CONTROL))
                     .border_1()
                     .border_color(content(0.15))
                     .bg(content(0.03))
@@ -735,7 +736,7 @@ impl SettingsView {
         if !self.connections.machines.is_empty() {
             let mut list = div()
                 .mt_5()
-                .rounded_xl()
+                .rounded(px(radius::SURFACE))
                 .border_1()
                 .border_color(content(0.1))
                 .overflow_hidden();
@@ -783,7 +784,7 @@ impl SettingsView {
             page.push(
                 div()
                     .mt_5()
-                    .rounded_xl()
+                    .rounded(px(radius::SURFACE))
                     .border_1()
                     .border_color(content(0.15))
                     .px_5()
@@ -800,9 +801,9 @@ impl SettingsView {
             let name = self.connection_field(NAME, "Name (optional)", disabled, cx);
             let port = self.connection_field(PORT, "SSH port", disabled, cx);
             let connect_disabled = disabled || self.connection_value(TARGET, cx).trim().is_empty();
-            page.push(div().mt_5().p_5().rounded_xl().border_1().border_color(content(0.1)).flex().flex_col().gap_4()
+            page.push(div().mt_5().p_5().rounded(px(radius::SURFACE)).border_1().border_color(content(0.1)).flex().flex_col().gap_4()
                 .child(div().flex().justify_between().child(div().text_size(px(14.)).font_weight(FontWeight::MEDIUM).child("Connect through SSH"))
-                    .child(div().rounded_sm().bg(content(0.1)).px_2().py_1().text_size(px(11.)).text_color(content(0.6)).child("SSH")))
+                    .child(div().rounded(px(radius::SMALL)).bg(content(0.1)).px_2().py_1().text_size(px(11.)).text_color(content(0.6)).child("SSH")))
                 .child(target).child(name)
                 .child(div().id("ssh-advanced").role(Role::Button).aria_label("Advanced SSH settings").text_size(px(12.)).text_color(content(0.5)).cursor_pointer()
                     .child(if self.connections.advanced { "▾ Advanced" } else { "▸ Advanced" })
@@ -827,7 +828,7 @@ impl SettingsView {
                 .child(self.connections.progress.probe())
                 .mt_5()
                 .p_5()
-                .rounded_xl()
+                .rounded(px(radius::SURFACE))
                 .border_1()
                 .border_color(content(0.1))
                 .flex()
@@ -904,7 +905,7 @@ impl SettingsView {
                     .id("remote-connection-error")
                     .role(Role::Alert)
                     .mt_4()
-                    .rounded_lg()
+                    .rounded(px(radius::CONTAINER))
                     .bg(red(0.05))
                     .p_3()
                     .text_size(px(12.))

@@ -2,6 +2,13 @@
 // Maccy-inspired minimal clipboard menu; see licenses/LICENSE-MACCY-MIT.
 import AppKit
 
+// The custom menu follows vorkspace_ui::radius. AppKit styles native controls.
+private enum Corner {
+    static let control: CGFloat = 6
+    static let row: CGFloat = 8
+    static let surface: CGFloat = 12
+}
+
 // Identity plus a deadline prevents a timer for an old row from reopening a preview.
 struct ImageHover {
     private(set) var item: UInt64?
@@ -56,7 +63,7 @@ private class MenuButton: NSButton {
     }
     override func mouseEntered(with event: NSEvent) {
         wantsLayer = true
-        layer?.cornerRadius = 5
+        layer?.cornerRadius = Corner.row
         layer?.backgroundColor = menuHighlight.cgColor
         contentTintColor = actionTint
         entered?()
@@ -97,7 +104,7 @@ private final class MenuRow: NSTableRowView {
     override var interiorBackgroundStyle: NSView.BackgroundStyle { .normal }
     override func drawSelection(in dirtyRect: NSRect) {
         menuHighlight.setFill()
-        NSBezierPath(roundedRect: bounds, xRadius: 5, yRadius: 5).fill()
+        NSBezierPath(roundedRect: bounds, xRadius: Corner.row, yRadius: Corner.row).fill()
     }
 }
 private final class HistoryTable: NSTableView {
@@ -154,7 +161,7 @@ private final class ClipboardMenu: NSObject, NSTableViewDataSource, NSTableViewD
         material.blendingMode = .behindWindow
         material.state = .active
         material.wantsLayer = true
-        material.layer?.cornerRadius = 10
+        material.layer?.cornerRadius = Corner.surface
         material.layer?.masksToBounds = true
         panel.contentView = material
         search.isBordered = false
@@ -162,7 +169,7 @@ private final class ClipboardMenu: NSObject, NSTableViewDataSource, NSTableViewD
         search.drawsBackground = false
         search.focusRingType = .none
         search.wantsLayer = true
-        search.layer?.cornerRadius = 6
+        search.layer?.cornerRadius = Corner.control
         search.placeholderString = "Search clipboard…"
         search.setAccessibilityLabel("Search clipboard")
         search.delegate = self
@@ -438,7 +445,7 @@ private final class ClipboardMenu: NSObject, NSTableViewDataSource, NSTableViewD
     func tableView(_ tableView: NSTableView, rowViewForRow row: Int) -> NSTableRowView? {
         let view = MenuRow()
         view.wantsLayer = true
-        view.layer?.cornerRadius = 5
+        view.layer?.cornerRadius = Corner.row
         view.layer?.masksToBounds = true
         return view
     }

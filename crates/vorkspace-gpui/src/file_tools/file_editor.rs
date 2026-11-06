@@ -130,14 +130,16 @@ impl Focusable for FileEditor {
     }
 }
 impl FileEditor {
+    #[cfg(test)]
     pub(crate) fn new(path: String, git: Entity<ProjectGit>, cx: &mut Context<Self>) -> Self {
-        let mut this = Self::new_deferred(path, git, cx);
-        this.load(false, cx);
-        this
+        let cwd = git.read(cx).project().to_owned();
+        Self::new_in_working_copy(path, cwd, git, false, cx)
     }
-    pub(crate) fn new_deferred(
+    pub(crate) fn new_in_working_copy(
         path: String,
+        cwd: String,
         git: Entity<ProjectGit>,
+        deferred: bool,
         cx: &mut Context<Self>,
     ) -> Self {
         let input = cx.new(Input::editor);
@@ -213,9 +215,9 @@ impl FileEditor {
                 }
             }
         });
-        Self {
+        let mut this = Self {
             path,
-            cwd: git.read(cx).project().to_owned(),
+            cwd,
             git,
             git_original: None,
             git_staged: false,
@@ -258,7 +260,11 @@ impl FileEditor {
             navigation: None,
             _subscriptions: subscriptions,
             _poll: poll,
+        };
+        if !deferred {
+            this.load(false, cx);
         }
+        this
     }
     pub(crate) fn navigate(&mut self, line: usize, column: usize, cx: &mut Context<Self>) {
         self.navigation = Some((line, column));

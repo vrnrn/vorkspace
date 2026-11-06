@@ -5,33 +5,50 @@ use gpui::{EntityInputHandler, TestAppContext, VisualTestContext, point};
 #[gpui::test]
 fn bot_file_link_opens_visible_editor_and_preserves_its_chat(cx: &mut TestAppContext) {
     vorkspace_ui::clock::use_test_clock(cx);
+    check_bot_file_link(cx, 800., false);
+}
+
+#[gpui::test]
+fn bot_file_link_tiles_beside_its_chat_when_space_allows(cx: &mut TestAppContext) {
+    vorkspace_ui::clock::use_test_clock(cx);
+    check_bot_file_link(cx, 1500., true);
+}
+
+fn check_bot_file_link(cx: &mut TestAppContext, width: f32, tiled: bool) {
     let (window, _, session) = window(cx);
-    let folder =
-        std::env::temp_dir().join(format!("vorkspace-bot-file-link-{}", std::process::id()));
-    std::fs::create_dir_all(&folder).unwrap();
-    let path = folder.join("README.md").to_string_lossy().into_owned();
+    let folder = tempfile::tempdir().unwrap();
+    let path = folder
+        .path()
+        .join("README.md")
+        .to_string_lossy()
+        .into_owned();
     std::fs::write(&path, "# Heading\nsecond line\nthird line\n").unwrap();
+    let visual = &mut VisualTestContext::from_window(window.into(), cx);
+    visual.simulate_resize(gpui::size(px(width), px(800.)));
     window
-        .update(cx, |shell, w, cx| {
+        .update(visual, |shell, w, cx| {
             shell
                 .bot_manager()
                 .update(cx, |m, cx| m.create_named(Vec::new(), w, cx));
         })
         .unwrap();
-    cx.run_until_parked();
+    visual.run_until_parked();
     let (bot, chat) = window
-        .update(cx, |shell, _, cx| {
+        .update(visual, |shell, w, cx| {
             assert!(shell.bot_active(cx));
-            let bot = shell.active_title_tab(cx).unwrap();
-            let chat = shell.bot_manager().read(cx).chat().unwrap();
+            let bot = shell.workspace.active.unwrap();
+            let manager = shell.bot_manager();
+            assert!(manager.update(cx, |m, cx| m.dismiss_settings(w, cx)));
+            let chat = manager.read(cx).chat().unwrap();
+            assert!(chat.read(cx).input.focus_handle(cx).is_focused(w));
             chat.read(cx).input.clone().update(cx, |input, cx| {
                 input.set_text("Keep my Bot draft".into(), cx)
             });
             (bot, chat)
         })
         .unwrap();
-    let visual = &mut VisualTestContext::from_window(window.into(), cx);
     visual.run_until_parked();
+    assert!(visual.debug_bounds("bot-settings-dialog").is_none());
     assert!(
         visual.debug_bounds("composer-box").is_some(),
         "the action starts in the visible Bot"
@@ -49,18 +66,34 @@ fn bot_file_link_opens_visible_editor_and_preserves_its_chat(cx: &mut TestAppCon
         visual.debug_bounds("review-tab-strip").is_some(),
         "the file pane is rendered"
     );
-    assert!(visual.debug_bounds("composer-box").is_none());
+    if tiled {
+        let composer = visual
+            .debug_bounds("composer-box")
+            .expect("Bot remains visible");
+        let review = visual.debug_bounds("review-frame").unwrap();
+        assert!(composer.right() <= review.left());
+    } else {
+        assert!(visual.debug_bounds("composer-box").is_none());
+    }
     let (pane, editor) = window
         .update(visual, |shell, w, cx| {
             assert!(!shell.bot_active(cx));
             let pane = shell.workspace.active.unwrap();
-            assert_ne!(pane, session, "the file has its own title tab");
-            assert_eq!(shell.workspace.session_for_pane(pane), session);
+            assert_eq!(shell.workspace.session_for_pane(pane), None);
+            let expected_tab = if tiled { bot } else { pane };
+            assert_eq!(shell.workspace.tab_of(pane), Some(expected_tab));
+            if tiled {
+                assert_eq!(shell.workspace.layout(bot).leaf_ids(), [bot, pane]);
+            }
             assert!(
-                shell.visible_tabs(cx).contains(&bot),
-                "the Bot tab stays beside its file tab"
+                shell.visible_tabs(cx).contains(&TitleTab::Workspace(bot)),
+                "the Bot stays open"
             );
-            assert!(shell.visible_tabs(cx).contains(&TitleTab::Session(session)));
+            assert!(
+                shell
+                    .visible_tabs(cx)
+                    .contains(&TitleTab::Workspace(session))
+            );
             let review = shell.active_review(cx).unwrap();
             assert!(review.read(cx).state.chat_hidden);
             let editor = review
@@ -80,7 +113,11 @@ fn bot_file_link_opens_visible_editor_and_preserves_its_chat(cx: &mut TestAppCon
             editor.read(cx).input.clone().update(cx, |input, cx| {
                 input.replace_text_in_range(None, "unsaved", w, cx)
             });
-            shell.open_title_tab(&bot, w, cx);
+            shell.open(bot, w, cx);
+            assert!(
+                chat.read(cx).input.focus_handle(cx).is_focused(w),
+                "opening the Bot requests composer focus (tiled={tiled})"
+            );
             (pane, editor)
         })
         .unwrap();
@@ -88,7 +125,7 @@ fn bot_file_link_opens_visible_editor_and_preserves_its_chat(cx: &mut TestAppCon
     assert!(visual.debug_bounds("composer-box").is_some());
     window
         .update(visual, |shell, w, cx| {
-            assert_eq!(shell.active_title_tab(cx), Some(bot.clone()));
+            assert_eq!(shell.workspace.active, Some(bot));
             let restored = shell.bot_manager().read(cx).chat().unwrap();
             assert_eq!(
                 restored, chat,
@@ -98,6 +135,13 @@ fn bot_file_link_opens_visible_editor_and_preserves_its_chat(cx: &mut TestAppCon
                 restored.read(cx).input.read(cx).content.as_ref(),
                 "Keep my Bot draft"
             );
+            assert!(
+                restored.read(cx).input.focus_handle(cx).is_focused(w),
+                "the returning Bot composer receives focus (tiled={tiled}, focused={:?})",
+                w.focused(cx)
+            );
+            shell.close_pane(pane, w, cx);
+            assert_eq!(shell.workspace.tab_of(pane), None);
             assert!(restored.read(cx).input.focus_handle(cx).is_focused(w));
             w.dispatch_action(Box::new(crate::file_link::OpenPath(path.clone())), cx);
         })
@@ -119,12 +163,274 @@ fn bot_file_link_opens_visible_editor_and_preserves_its_chat(cx: &mut TestAppCon
             assert!(reopened.read(cx).dirty);
             assert!(reopened.read(cx).focus_handle(cx).contains_focused(w, cx));
             assert!(
-                shell.visible_tabs(cx).contains(&bot),
-                "the Bot tab stays beside its file tab"
+                shell.visible_tabs(cx).contains(&TitleTab::Workspace(bot)),
+                "reopening the file keeps the Bot"
+            );
+            reopened.update(cx, |_, cx| {
+                cx.emit(crate::file_tools::file_editor::FileEvent::AddToChat(
+                    "@README.md (line 2)".into(),
+                ));
+            });
+        })
+        .unwrap();
+    visual.run_until_parked();
+    window
+        .update(visual, |shell, _, cx| {
+            assert_eq!(
+                chat.read(cx).input.read(cx).content,
+                "Keep my Bot draft\n\n@README.md (line 2)\n\n"
+            );
+            assert!(
+                shell.sessions[&session]
+                    .read(cx)
+                    .input
+                    .read(cx)
+                    .content
+                    .is_empty()
             );
         })
         .unwrap();
-    std::fs::remove_dir_all(folder).unwrap();
+}
+
+#[gpui::test]
+fn restored_bot_review_keeps_its_comment_destination_after_moving_beside_another_bot(
+    cx: &mut TestAppContext,
+) {
+    let (window, _, _) = window(cx);
+    let repo = tempfile::tempdir().unwrap();
+    let path = repo.path().join("review.txt");
+    std::fs::write(&path, "before\n").unwrap();
+    for args in [
+        &["init", "-q"][..],
+        &["add", "review.txt"][..],
+        &[
+            "-c",
+            "user.name=Test",
+            "-c",
+            "user.email=test@example.com",
+            "-c",
+            "commit.gpgsign=false",
+            "commit",
+            "-qm",
+            "base",
+        ][..],
+    ] {
+        assert!(
+            std::process::Command::new("git")
+                .args(args)
+                .current_dir(repo.path())
+                .status()
+                .unwrap()
+                .success()
+        );
+    }
+    std::fs::write(&path, "after\n").unwrap();
+    let cwd = repo.path().to_string_lossy().into_owned();
+    let diff = ReviewTab::Changes {
+        cwd: cwd.clone(),
+        path: None,
+        staged: Some(false),
+    };
+    window
+        .update(cx, |shell, w, cx| {
+            shell
+                .bot_manager()
+                .update(cx, |manager, cx| manager.create_named(Vec::new(), w, cx));
+        })
+        .unwrap();
+    cx.run_until_parked();
+    let (bot, original_pane, review_pane, review) = window
+        .update(cx, |shell, w, cx| {
+            let bot_pane = shell.workspace.active.unwrap();
+            let manager = shell.bot_manager();
+            let bot = manager.read(cx).current().unwrap().id.clone();
+            shell.open_review(diff.clone(), w, cx);
+            let pane = shell.workspace.active.unwrap();
+            let review = shell.active_review(cx).unwrap();
+            shell.open_review(
+                ReviewTab::File {
+                    cwd,
+                    path: "review.txt".into(),
+                },
+                w,
+                cx,
+            );
+            assert_eq!(shell.workspace.active, Some(pane));
+            assert_eq!(
+                shell.workspace.app_panes[&pane].review_bot.as_deref(),
+                Some(bot.as_str())
+            );
+            shell.open_review(diff.clone(), w, cx);
+            assert_eq!(shell.workspace.active, Some(pane));
+            (bot, bot_pane, pane, review)
+        })
+        .unwrap();
+    cx.run_until_parked();
+    window
+        .update(cx, |shell, w, cx| {
+            shell
+                .bot_manager()
+                .update(cx, |manager, cx| manager.create_named(Vec::new(), w, cx));
+        })
+        .unwrap();
+    cx.run_until_parked();
+    let other = window
+        .update(cx, |shell, w, cx| {
+            let other = shell.workspace.active.unwrap();
+            assert_ne!(other, original_pane);
+            let crate::workspace::AppPane::Bot(other_bot) =
+                &shell.workspace.app_panes[&other].content
+            else {
+                panic!("the second Bot must own the active pane");
+            };
+            assert_ne!(other_bot, &bot);
+            shell.open_review(diff, w, cx);
+            let other_review = shell.workspace.active.unwrap();
+            assert_ne!(other_review, review_pane);
+            shell.close_pane(other_review, w, cx);
+            shell.workspace.place(review_pane, other, Edge::Right);
+            shell.open(review_pane, w, cx);
+            shell.close_pane(review_pane, w, cx);
+            shell.open(review_pane, w, cx);
+            assert_eq!(shell.active_review(cx), Some(review));
+            shell.workspace.place(review_pane, other, Edge::Right);
+            shell.open(review_pane, w, cx);
+            other
+        })
+        .unwrap();
+    cx.run_until_parked();
+    let (store, summaries, project, saved) = window
+        .update(cx, |shell, w, _| {
+            let (summaries, saved) = {
+                let db = locked(&shell.store).unwrap();
+                (db.sessions().unwrap(), db.ui_state().unwrap())
+            };
+            w.remove_window();
+            (
+                shell.store.clone(),
+                summaries,
+                shell.workspace.project.clone(),
+                saved,
+            )
+        })
+        .unwrap();
+    let restored = cx.update(|cx| {
+        cx.open_window(Default::default(), |_, cx| {
+            cx.new(|cx| Shell::new(store, summaries, project, saved, cx))
+        })
+        .unwrap()
+    });
+    cx.run_until_parked();
+    let (view, draft, manager, other_chat) = restored
+        .update(cx, |shell, w, cx| {
+            assert_eq!(shell.workspace.active, Some(review_pane));
+            assert_eq!(
+                shell.workspace.layout(other).leaf_ids(),
+                [other, review_pane]
+            );
+            assert_eq!(
+                shell.workspace.app_panes[&review_pane]
+                    .review_bot
+                    .as_deref(),
+                Some(bot.as_str())
+            );
+            let manager = shell.bot_manager();
+            assert_ne!(manager.read(cx).current().unwrap().id, bot);
+            let other_chat = manager.read(cx).chat().unwrap();
+            let view = shell
+                .active_review(cx)
+                .unwrap()
+                .read(cx)
+                .active_diff_for_test();
+            let draft = view.update(cx, |view, cx| view.open_comment_for_test(w, cx));
+            draft.update(cx, |input, cx| {
+                input.set_text("A review comment".into(), cx);
+                cx.emit(crate::input::Submitted);
+            });
+            (view, draft, manager, other_chat)
+        })
+        .unwrap();
+    cx.run_until_parked();
+    view.read_with(cx, |view, _| {
+        assert!(
+            view.comment_error_for_test()
+                .unwrap()
+                .contains("wait for its draft to load")
+        );
+    });
+    let chat = manager.update(cx, |manager, cx| manager.chat_for_action(&bot, cx).unwrap());
+    restored
+        .update(cx, |_, w, cx| {
+            chat.read(cx).input.clone().update(cx, |input, cx| {
+                input.set_text("Keep this draft".into(), cx);
+                input.replace_and_mark_text_in_range(None, " while typing", None, w, cx);
+            });
+            draft.update(cx, |_, cx| cx.emit(crate::input::Submitted));
+        })
+        .unwrap();
+    cx.run_until_parked();
+    view.read_with(cx, |view, _| {
+        assert!(
+            view.comment_error_for_test()
+                .unwrap()
+                .contains("Finish typing")
+        );
+    });
+    draft.read_with(cx, |draft, _| assert_eq!(draft.content, "A review comment"));
+    restored
+        .update(cx, |_, w, cx| {
+            chat.read(cx)
+                .input
+                .clone()
+                .update(cx, |input, cx| input.unmark_text(w, cx));
+            draft.update(cx, |_, cx| {
+                cx.emit(crate::input::Submitted);
+                cx.emit(crate::input::Submitted);
+            });
+        })
+        .unwrap();
+    cx.run_until_parked();
+    view.read_with(cx, |view, _| assert!(!view.has_comment_draft()));
+    chat.read_with(cx, |chat, cx| {
+        let text = &chat.input.read(cx).content;
+        assert!(text.starts_with("Keep this draft while typing\n\n"));
+        assert_eq!(text.matches("A review comment").count(), 1);
+        assert!(!chat.busy);
+    });
+    other_chat.read_with(cx, |chat, cx| {
+        assert!(chat.input.read(cx).content.is_empty())
+    });
+
+    let missing_draft = restored
+        .update(cx, |_, w, cx| {
+            let draft = view.update(cx, |view, cx| view.open_comment_for_test(w, cx));
+            manager.update(cx, |manager, _| {
+                manager.roster.bots.retain(|actor| actor.id != bot)
+            });
+            draft.update(cx, |input, cx| {
+                input.set_text("Keep me if the Bot is gone".into(), cx);
+                cx.emit(crate::input::Submitted);
+            });
+            draft
+        })
+        .unwrap();
+    cx.run_until_parked();
+    view.read_with(cx, |view, _| {
+        assert!(
+            view.comment_error_for_test()
+                .unwrap()
+                .contains("Bot is unavailable")
+        );
+    });
+    missing_draft.read_with(cx, |draft, _| {
+        assert_eq!(draft.content, "Keep me if the Bot is gone")
+    });
+    chat.read_with(cx, |chat, cx| {
+        assert!(!chat.input.read(cx).content.contains("Keep me"))
+    });
+    other_chat.read_with(cx, |chat, cx| {
+        assert!(chat.input.read(cx).content.is_empty())
+    });
 }
 
 #[gpui::test]
@@ -265,7 +571,7 @@ fn numbered_shortcuts_return_from_file_only_tabs_to_sessions(cx: &mut TestAppCon
                 let file = if detached {
                     let file = shell.independent_file_pane(first, cx).unwrap();
                     shell.workspace.close(first);
-                    shell.reorder_title_tab(&TitleTab::Session(file), 0, cx);
+                    shell.reorder_title_tab(&TitleTab::Workspace(file), 0, cx);
                     file
                 } else {
                     shell.reviews[&first].update(cx, |r, cx| {
@@ -277,7 +583,7 @@ fn numbered_shortcuts_return_from_file_only_tabs_to_sessions(cx: &mut TestAppCon
                 shell.open(session, w, cx);
                 assert_eq!(
                     shell.visible_tabs(cx),
-                    [TitleTab::Session(file), TitleTab::Session(session)]
+                    [TitleTab::Workspace(file), TitleTab::Workspace(session)]
                 );
                 file
             })
@@ -413,7 +719,7 @@ fn session_pane_grip_detaches_and_redocks_preserving_chat_and_dirty_files(cx: &m
             let file = *shell.workspace.review_owners.keys().next().unwrap();
             assert_eq!(
                 shell.visible_tabs(cx),
-                [TitleTab::Session(session), TitleTab::Session(file)]
+                [TitleTab::Workspace(session), TitleTab::Workspace(file)]
             );
             assert_eq!(shell.workspace.active, Some(session));
             assert!(!shell.reviews.contains_key(&session));
@@ -610,14 +916,14 @@ fn file_pane_grip_detaches_and_redocks_without_recreating_dirty_editors(cx: &mut
         .update(visual, |shell, _, cx| {
             let pane = shell.workspace.active.unwrap();
             assert!(pane < 0);
-            assert_eq!(shell.workspace.session_for_pane(pane), session);
+            assert_eq!(shell.workspace.session_for_pane(pane), Some(session));
             assert!(!shell.reviews.contains_key(&session));
             assert_eq!(shell.reviews[&pane], review);
             assert_eq!(review.read(cx).active_editor().unwrap(), editor);
             assert!(editor.read(cx).dirty);
             assert_eq!(
                 shell.visible_tabs(cx),
-                [TitleTab::Session(pane), TitleTab::Session(session)]
+                [TitleTab::Workspace(pane), TitleTab::Workspace(session)]
             );
             assert_eq!(
                 shell.tab_copy(pane, cx).headline,

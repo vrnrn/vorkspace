@@ -27,24 +27,31 @@ fn archived_project_is_not_reopened_by_active_session_or_stale_metadata() {
 fn terminal_legacy_restore_preserves_other_tabs_and_upgrades_scope_identity() {
     let raw = r#"{"tabs":[42],"active":42,"project":"/work","title_order":[{"Session":42},{"terminal":{"cwd":"/work"}},{"App":"Notes"},{"App":"Plugins"},{"terminal":{"cwd":"/work"}},{"terminal":{"id":700,"cwd":"/work"}},{"terminal":{"cwd":"/other"}},"Search",{"Bot":{"id":"bot","project":"/work","worktree":"/work"}}],"scope_focus":{"first":{"terminal":{"cwd":"/work"}},"also-first":{"terminal":{"cwd":"/work"}},"other":{"terminal":{"cwd":"/other"}},"modern":{"terminal":{"id":700,"cwd":"/work"}}}}"#;
     let workspace = Workspace::restore(Some(raw), &[(42, "/work".into())], "/work");
-    // Search and app pages are dropped; Bots retain their place in the strip.
-    assert_eq!(workspace.title_order.len(), 6);
-    assert_eq!(workspace.title_order[0], TitleTab::Session(42));
-    assert_eq!(
-        workspace.title_order[5],
-        TitleTab::Bot {
-            id: "bot".into(),
-            project: "/work".into(),
-            worktree: "/work".into(),
-        }
+    // Legacy destinations become workspace pane descriptors in the same order.
+    assert_eq!(workspace.title_order.len(), 8);
+    assert_eq!(workspace.title_order[0], TitleTab::Workspace(42));
+    assert!(
+        workspace
+            .title_order
+            .iter()
+            .all(|tab| matches!(tab, TitleTab::Workspace(_)))
     );
-    assert!(workspace.title_order.iter().all(TitleTab::in_strip));
+    let TitleTab::Workspace(bot) = workspace.title_order[7] else {
+        unreachable!()
+    };
+    assert_eq!(
+        workspace.app_panes[&bot].content,
+        AppPane::Bot("bot".into())
+    );
     assert_eq!(workspace.active, Some(42));
     let terminals: Vec<_> = workspace
         .title_order
         .iter()
         .filter_map(|tab| match tab {
-            TitleTab::Terminal { id, cwd } => Some((*id, cwd.as_str())),
+            TitleTab::Workspace(pane) => match &workspace.app_panes.get(pane)?.content {
+                AppPane::Terminal { id, cwd } => Some((*id, cwd.as_str())),
+                _ => None,
+            },
             _ => None,
         })
         .collect();
@@ -67,11 +74,12 @@ fn terminal_legacy_restore_preserves_other_tabs_and_upgrades_scope_identity() {
         workspace.scope_focus["also-first"],
         workspace.title_order[1]
     );
-    assert_eq!(workspace.scope_focus["other"], workspace.title_order[4]);
-    assert_eq!(workspace.scope_focus["modern"], workspace.title_order[3]);
+    assert_eq!(workspace.scope_focus["other"], workspace.title_order[5]);
+    assert_eq!(workspace.scope_focus["modern"], workspace.title_order[4]);
     assert!(matches!(
-        workspace.title_order[3],
-        TitleTab::Terminal { id: 700, .. }
+        workspace.title_order[4],
+        TitleTab::Workspace(pane)
+            if matches!(&workspace.app_panes[&pane].content, AppPane::Terminal { id: 700, .. })
     ));
     let saved = serde_json::to_string(&workspace).unwrap();
     let reopened = Workspace::restore(Some(&saved), &[(42, "/work".into())], "/work");

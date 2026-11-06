@@ -698,6 +698,36 @@ impl Conversation {
         self.composer_draft.touched = true;
         true
     }
+    pub(crate) fn append_review_comment(
+        &mut self,
+        text: &str,
+        cx: &mut Context<Self>,
+    ) -> Result<(), String> {
+        if self.user_read_only() {
+            return Err("This chat is read-only.".into());
+        }
+        let input = self.input.read(cx);
+        if input.is_composing() {
+            return Err("Finish typing in the destination chat, then try again.".into());
+        }
+        if !self.composer_draft.ready_for_replacement() {
+            return Err(
+                "Open the destination chat and wait for its draft to load, then try again.".into(),
+            );
+        }
+        let draft = input.content.as_ref();
+        let separator = if draft.is_empty() || draft.ends_with("\n\n") {
+            ""
+        } else if draft.ends_with('\n') {
+            "\n"
+        } else {
+            "\n\n"
+        };
+        let text = format!("{draft}{separator}{}\n\n", text.trim());
+        self.input.update(cx, |input, cx| input.set_text(text, cx));
+        Ok(())
+    }
+
     pub(super) fn persist_composer(&mut self, cx: &mut Context<Self>) {
         if !self.capture_composer(cx) {
             return;

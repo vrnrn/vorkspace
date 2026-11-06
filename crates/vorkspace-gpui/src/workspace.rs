@@ -1,7 +1,9 @@
 //! Viewport state: closing a tab never deletes or stops a session.
-//! A title tab is keyed by one of its sessions; a tab holding more than one
+//! A title tab is keyed by one of its panes; a tab holding more than one
 //! pane keeps its split tree in `layouts` and its last focused pane in
-//! `focused`. `active` is always the focused session.
+//! `focused`. `active` is always the focused pane.
+mod panes;
+pub(crate) use panes::{AppPane, AppPaneState};
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -128,7 +130,8 @@ impl SidebarNavigation {
 /// Sessions, terminals and Bots participate in the title strip.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub(crate) enum TitleTab {
-    Session(i64),
+    #[serde(rename = "Session")]
+    Workspace(i64),
     Search,
     App(AppView),
     /// A shell's identity is independent of its starting directory.
@@ -152,12 +155,12 @@ impl TitleTab {
     pub fn in_strip(&self) -> bool {
         matches!(
             self,
-            Self::Session(_) | Self::Terminal { .. } | Self::Bot { .. }
+            Self::Workspace(_) | Self::Terminal { .. } | Self::Bot { .. }
         )
     }
     pub fn session(&self) -> Option<i64> {
         match self {
-            Self::Session(id) => Some(*id),
+            Self::Workspace(id) => Some(*id),
             Self::Bot { .. } | Self::Search | Self::App(_) | Self::Terminal { .. } => None,
         }
     }
@@ -291,6 +294,7 @@ impl ProjectRailState {
 #[serde(default)]
 pub(crate) struct Workspace {
     pub tabs: Vec<i64>,
+    pub app_panes: HashMap<i64, AppPaneState>,
     pub title_order: Vec<TitleTab>,
     pub scope_focus: HashMap<String, TitleTab>,
     /// Sidebar narrowing belongs to this run. Reopen on the full project,
@@ -493,6 +497,7 @@ impl Default for Workspace {
     fn default() -> Self {
         Self {
             tabs: Vec::new(),
+            app_panes: HashMap::new(),
             title_order: Vec::new(),
             scope_focus: HashMap::new(),
             worktree_focus: HashMap::new(),
@@ -611,6 +616,9 @@ impl Workspace {
                 && state.reviews.get(id).is_some_and(|r| !r.tabs.is_empty())
         });
         known.extend(state.review_owners.keys().copied());
+        state.restore_terminal_tab_ids();
+        state.restore_app_panes();
+        known.extend(state.app_panes.keys().copied());
         let mut seen = HashSet::new();
         let mut layouts = std::mem::take(&mut state.layouts);
         let mut focused = std::mem::take(&mut state.focused);
@@ -631,8 +639,8 @@ impl Workspace {
                 .iter_mut()
                 .chain(state.scope_focus.values_mut())
             {
-                if *entry == TitleTab::Session(tab) {
-                    *entry = TitleTab::Session(key);
+                if *entry == TitleTab::Workspace(tab) {
+                    *entry = TitleTab::Workspace(key);
                 }
             }
             if layout.is_split() {
@@ -642,7 +650,7 @@ impl Workspace {
                 state.layouts.insert(key, layout);
             }
         }
-        state.restore_terminal_tab_ids();
+        state.restore_open_app_tabs();
         state.normalize_title_order();
         if state
             .desktop_project_preferences
@@ -651,7 +659,7 @@ impl Workspace {
             .is_some()
             && state.active.is_some_and(|id| {
                 sessions.iter().any(|(known, path)| {
-                    *known == state.session_for_pane(id) && !state.projects.contains(path)
+                    Some(*known) == state.session_for_pane(id) && !state.projects.contains(path)
                 })
             })
         {
@@ -667,7 +675,7 @@ impl Workspace {
                 .filter(|id| {
                     state.tab_of(*id).is_some()
                         && sessions.iter().any(|(known, path)| {
-                            *known == state.session_for_pane(*id) && *path == state.project
+                            Some(*known) == state.session_for_pane(*id) && *path == state.project
                         })
                 })
                 .or_else(|| {
@@ -678,7 +686,24 @@ impl Workspace {
                         .map(|tab| state.tab_focus(*tab))
                         .find(|id| {
                             sessions.iter().any(|(known, path)| {
-                                *known == state.session_for_pane(*id) && *path == state.project
+                                Some(*known) == state.session_for_pane(*id)
+                                    && *path == state.project
+                            })
+                        })
+                })
+                .or_else(|| {
+                    state
+                        .tabs
+                        .iter()
+                        .rev()
+                        .flat_map(|tab| state.layout(*tab).leaf_ids())
+                        .find(|id| {
+                            state.app_panes.get(id).is_some_and(|pane| {
+                                vorkspace_core::files::path_key(&pane.project)
+                                    == vorkspace_core::files::path_key(&state.project)
+                                    && (!pane.content.project_scoped()
+                                        || vorkspace_core::files::path_key(&pane.worktree)
+                                            == vorkspace_core::files::path_key(&state.project))
                             })
                         })
                 });
@@ -753,7 +778,7 @@ impl Workspace {
                     .contains(&vorkspace_core::files::path_key(path))
                 && state
                     .active
-                    .is_some_and(|pane| state.session_for_pane(pane) == *id)
+                    .is_some_and(|pane| state.session_for_pane(pane) == Some(*id))
         }) {
             state.project = project.clone();
             state
@@ -933,8 +958,13 @@ impl Workspace {
             self.projects.push(path.into());
         }
     }
-    pub fn session_for_pane(&self, id: i64) -> i64 {
-        self.review_owners.get(&id).copied().unwrap_or(id)
+    pub fn session_for_pane(&self, id: i64) -> Option<i64> {
+        self.review_owners
+            .get(&id)
+            .copied()
+            // Remote sessions also have negative IDs. Only an app descriptor
+            // identifies a leaf without a session owner.
+            .or_else(|| (!self.app_panes.contains_key(&id)).then_some(id))
     }
     /// Focus a session, opening it as its own tab unless a tab holds it.
     pub fn open(&mut self, id: i64) {
@@ -946,7 +976,7 @@ impl Workspace {
             }
             None => {
                 self.tabs.push(id);
-                self.title_order.push(TitleTab::Session(id));
+                self.title_order.push(TitleTab::Workspace(id));
             }
         }
         self.active = Some(id);
@@ -961,9 +991,9 @@ impl Workspace {
         self.tabs.remove(ix);
         self.tab_workspaces.remove(&tab);
         self.title_order
-            .retain(|entry| *entry != TitleTab::Session(tab));
+            .retain(|entry| *entry != TitleTab::Workspace(tab));
         self.scope_focus
-            .retain(|_, entry| *entry != TitleTab::Session(tab));
+            .retain(|_, entry| *entry != TitleTab::Workspace(tab));
         self.layouts.remove(&tab);
         self.focused.remove(&tab);
         self.project_focus.retain(|_, id| !layout.contains(*id));
@@ -994,7 +1024,7 @@ impl Workspace {
     pub fn layout(&self, tab: i64) -> PaneNode {
         self.layouts.get(&tab).cloned().unwrap_or_else(|| leaf(tab))
     }
-    /// Every session shown in some tab.
+    /// Every pane shown in some tab, including app and file panes.
     pub fn open_sessions(&self) -> Vec<i64> {
         self.tabs
             .iter()
@@ -1033,8 +1063,8 @@ impl Workspace {
             .iter_mut()
             .chain(self.scope_focus.values_mut())
         {
-            if *entry == TitleTab::Session(tab) {
-                *entry = TitleTab::Session(key);
+            if *entry == TitleTab::Workspace(tab) {
+                *entry = TitleTab::Workspace(key);
             }
         }
         if layout.is_split() {
@@ -1129,7 +1159,7 @@ impl Workspace {
         self.tabs.retain(|t| *t != source);
         self.tab_workspaces.remove(&source);
         self.title_order
-            .retain(|entry| *entry != TitleTab::Session(source));
+            .retain(|entry| *entry != TitleTab::Workspace(source));
         self.layouts.remove(&source);
         self.focused.remove(&source);
         let key = self.set_layout(
@@ -1163,10 +1193,10 @@ impl Workspace {
             .find_map(|next| {
                 self.title_order
                     .iter()
-                    .position(|tab| *tab == TitleTab::Session(*next))
+                    .position(|tab| *tab == TitleTab::Workspace(*next))
             })
             .unwrap_or(self.title_order.len());
-        self.title_order.insert(next, TitleTab::Session(id));
+        self.title_order.insert(next, TitleTab::Workspace(id));
         self.active = Some(id);
     }
     /// Show `to` in `from`'s pane (Session: Next/Previous in tab).
@@ -1210,6 +1240,14 @@ impl Workspace {
                 TitleTab::Terminal { id, .. } => Some(*id),
                 _ => None,
             })
+            .chain(
+                self.app_panes
+                    .values()
+                    .filter_map(|pane| match &pane.content {
+                        AppPane::Terminal { id, .. } => Some(*id),
+                        _ => None,
+                    }),
+            )
             .collect()
     }
 
@@ -1222,17 +1260,33 @@ impl Workspace {
         if let Some(max) = used.iter().max() {
             NEXT_TERMINAL_TAB_ID.fetch_max(max.saturating_add(1), Ordering::Relaxed);
         }
-        let mut legacy = HashMap::new();
-        for tab in &mut self.title_order {
-            if let TitleTab::Terminal { id, cwd } = tab
+        let mut pane_ids = self.app_panes.keys().copied().collect::<Vec<_>>();
+        pane_ids.sort_unstable();
+        for pane_id in pane_ids {
+            if let Some(AppPaneState {
+                content: AppPane::Terminal { id, .. },
+                ..
+            }) = self.app_panes.get_mut(&pane_id)
                 && *id == 0
             {
                 *id = fresh_terminal_tab_id(&used);
                 used.insert(*id);
+            }
+        }
+        let mut legacy = HashMap::new();
+        for tab in &mut self.title_order {
+            if let TitleTab::Terminal { id, cwd } = tab {
+                if *id == 0 {
+                    *id = fresh_terminal_tab_id(&used);
+                    used.insert(*id);
+                }
                 legacy.entry(cwd.clone()).or_insert(*id);
             }
         }
-        for tab in self.scope_focus.values_mut() {
+        let mut scope_names = self.scope_focus.keys().cloned().collect::<Vec<_>>();
+        scope_names.sort();
+        for scope in scope_names {
+            let tab = self.scope_focus.get_mut(&scope).unwrap();
             if let TitleTab::Terminal { id, cwd } = tab
                 && *id == 0
             {
@@ -1247,15 +1301,38 @@ impl Workspace {
 
     pub fn normalize_title_order(&mut self) {
         self.tab_workspaces.retain(|tab, _| self.tabs.contains(tab));
+        let pane_tabs = self
+            .tabs
+            .iter()
+            .flat_map(|tab| {
+                self.layout(*tab)
+                    .leaf_ids()
+                    .into_iter()
+                    .map(|id| (id, *tab))
+            })
+            .collect::<HashMap<_, _>>();
+        for entry in self
+            .title_order
+            .iter_mut()
+            .chain(self.scope_focus.values_mut())
+        {
+            if let TitleTab::Workspace(id) = entry
+                && let Some(tab) = pane_tabs.get(id)
+            {
+                *id = *tab;
+            }
+        }
         let mut seen = HashSet::new();
         self.title_order.retain(|tab| {
             tab.in_strip()
                 && tab.session().is_none_or(|id| self.tabs.contains(&id))
                 && seen.insert(tab.clone())
         });
-        self.scope_focus.retain(|_, tab| tab.in_strip());
+        self.scope_focus.retain(|_, tab| {
+            tab.in_strip() && tab.session().is_none_or(|id| self.tabs.contains(&id))
+        });
         for id in &self.tabs {
-            let tab = TitleTab::Session(*id);
+            let tab = TitleTab::Workspace(*id);
             if seen.insert(tab.clone()) {
                 self.title_order.push(tab);
             }
@@ -1355,3 +1432,5 @@ pub(crate) fn project_name(path: &str) -> String {
 
 #[cfg(test)]
 mod tests;
+#[cfg(test)]
+mod tests_app_panes;

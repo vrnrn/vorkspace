@@ -1,5 +1,6 @@
 //! Rendering the split pane tree and its session surfaces.
 use super::*;
+use vorkspace_ui::radius;
 
 impl Shell {
     /// The session pane's split header (SessionPane.tsx): grip, focus dot,
@@ -14,11 +15,7 @@ impl Shell {
         in_split: bool,
         cx: &mut Context<Self>,
     ) -> AnyElement {
-        let title = self
-            .sessions
-            .get(&id)
-            .map(|s| s.read(cx).display_title())
-            .unwrap_or_default();
+        let title = self.pane_title(id, cx);
         let focused = self.workspace.active == Some(id) && !self.review_focused;
         div()
             .id(("split-chat-header", id as usize))
@@ -63,7 +60,7 @@ impl Shell {
                     .flex()
                     .items_center()
                     .justify_center()
-                    .rounded_md()
+                    .rounded(px(radius::CONTROL))
                     .text_color(content(0.35))
                     .hover(|s| s.bg(content(0.05)).text_color(content(0.7)))
                     .child(icon("grip-vertical", 14.)),
@@ -95,7 +92,7 @@ impl Shell {
                     .flex()
                     .items_center()
                     .justify_center()
-                    .rounded(px(4.))
+                    .rounded(px(radius::SMALL))
                     .cursor(CursorStyle::Arrow)
                     .hover(|s| s.bg(content(0.1)))
                     .child(
@@ -133,19 +130,6 @@ impl Shell {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> AnyElement {
-        if let Some(id) = &self.active_terminal_tab
-            && let Some(terminal) = self.terminal_tabs.get(id)
-        {
-            return div()
-                .id("terminal-tab-body")
-                .debug_selector(|| "terminal-tab-body".into())
-                .size_full()
-                .child(terminal.clone())
-                .into_any_element();
-        }
-        if let Some(view) = self.app_view_body() {
-            return view;
-        }
         let Some(id) = self.workspace.active else {
             return div().size_full().into_any_element();
         };
@@ -155,6 +139,7 @@ impl Shell {
             return self.scrollable_pane_tree(tab, layout, window, cx);
         }
         self.pane_scroll_focus = None;
+        self.set_app_pane_width(id, self.pane_available_width(), cx);
         let hint = self.drop_hint(id);
         div()
             .size_full()
@@ -180,12 +165,11 @@ impl Shell {
         let view_width = view_width.max(1.);
         let view_height = view_height.max(1.);
         let width = view_width.max(layout.width_for_minimum(MIN_CHAT_WIDTH));
-        let stack = layout
-            .max_session_stack(|id| id >= 0 && !self.workspace.review_owners.contains_key(&id));
+        let stack = layout.max_session_stack(|id| self.workspace.counts_toward_pane_limit(id));
         let height = if stack > MAX_SESSION_STACK {
             view_height.max(
                 layout.height_for_minimum(view_height / MAX_SESSION_STACK as f32, |id| {
-                    id >= 0 && !self.workspace.review_owners.contains_key(&id)
+                    self.workspace.counts_toward_pane_limit(id)
                 }),
             )
         } else {
@@ -434,6 +418,12 @@ impl Shell {
             // Once the last neighbour has left, render the lone-pane header
             // state on this frame too, rather than flashing a full header.
             let split = (leaves.len() > 1 || motion.is_some()).then_some(shown);
+            let content_width = if entering.is_some() {
+                leaf.rect.w
+            } else {
+                rect.w
+            } * size.0;
+            self.set_app_pane_width(id, content_width, cx);
             let surface = self.session_surface(id, split, window, cx);
             let content = match entering {
                 Some(edge) => pinned(leaf, edge, surface),
@@ -450,10 +440,15 @@ impl Shell {
                                 .is_none_or(|r| r.chat_hidden),
                         |d| d.opacity(0.4),
                     )
-                    .on_mouse_down(
-                        MouseButton::Left,
-                        cx.listener(move |this, _, window, cx| this.focus_pane(id, window, cx)),
-                    )
+                    // Establish workspace focus before the clicked editor
+                    // chooses its caret or a child consumes the event.
+                    .capture_any_mouse_down(cx.listener(
+                        move |this, event: &MouseDownEvent, window, cx| {
+                            if event.button == MouseButton::Left {
+                                this.focus_pane(id, window, cx);
+                            }
+                        },
+                    ))
                     .child(content)
                     .children(self.drop_hint(id))
                     .into_any_element(),
@@ -461,6 +456,7 @@ impl Shell {
         }
         // Leaving panes paint over the neighbours growing into their room.
         for (leaf, edge, to) in &leaving {
+            self.set_app_pane_width(leaf.id, leaf.rect.w * size.0, cx);
             let surface = self.session_surface(leaf.id, Some(1.), window, cx);
             panes.push(
                 frame(leaf.id, leaf.rect.lerp(*to, t))
@@ -550,7 +546,7 @@ impl Shell {
                         div()
                             .px_3()
                             .py_2()
-                            .rounded_md()
+                            .rounded(px(radius::CONTROL))
                             .bg(pane_fill())
                             .border_1()
                             .border_color(crate::panel_kit::stroke())
@@ -610,6 +606,34 @@ impl Shell {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> AnyElement {
+        if self
+            .workspace
+            .app_panes
+            .get(&id)
+            .is_some_and(|pane| pane.content != crate::workspace::AppPane::Review)
+        {
+            let body = self
+                .app_pane_body(id, window, cx)
+                .unwrap_or_else(|| div().into_any_element());
+            return div()
+                .size_full()
+                .min_w_0()
+                .min_h_0()
+                .flex()
+                .flex_col()
+                .when_some(split.filter(|p| *p > 0.), |d, p| {
+                    d.child(self.split_header(id, p, true, cx))
+                })
+                .child(
+                    div()
+                        .flex_1()
+                        .min_w_0()
+                        .min_h_0()
+                        .overflow_hidden()
+                        .child(body),
+                )
+                .into_any_element();
+        }
         let in_split = split.is_some();
         let chat = self.sessions.get(&id).cloned();
         let now = vorkspace_ui::clock::Instant::now();
@@ -804,20 +828,13 @@ impl Shell {
         if self.right_panel_shown(cx) {
             main -= self.workspace.right_panel_width;
         }
-        if self.bot_active(cx) {
-            return main;
-        }
         if let Some(dock) = self.workspace.docks.get(&self.workspace.project)
             && dock.open
             && !dock.side.vertical()
         {
             main -= dock.size;
         }
-        let Some(tab) = self
-            .workspace
-            .active_tab()
-            .filter(|_| !self.app_view_open())
-        else {
+        let Some(tab) = self.workspace.active_tab() else {
             return main;
         };
         self.workspace

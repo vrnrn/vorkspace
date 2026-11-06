@@ -4,6 +4,7 @@ use vorkspace_core::{
     accounts::Profile,
     usage::{self, Limit},
 };
+use vorkspace_ui::radius;
 pub(crate) struct UsageResumed;
 impl EventEmitter<UsageResumed> for Conversation {}
 impl Conversation {
@@ -43,7 +44,7 @@ impl Conversation {
                 .mx_2()
                 .mb_2()
                 .p_3()
-                .rounded_lg()
+                .rounded(px(radius::CONTAINER))
                 .bg(content(0.04))
                 .flex()
                 .items_center()
@@ -550,7 +551,7 @@ impl Conversation {
             .line_height(px(16.))
             .text_color(content(if bot { 0.6 } else { 0.55 }));
         Some(if bot {
-            notice.mx(px(6.)).mb(px(8.)).rounded(px(8.)).border_1().border_color(status(StatusColor::Warning,0.2)).bg(status(StatusColor::Warning,0.06))
+            notice.mx(px(6.)).mb(px(8.)).rounded(px(radius::CONTAINER)).border_1().border_color(status(StatusColor::Warning,0.2)).bg(status(StatusColor::Warning,0.06))
                 .px(px(12.)).py(px(10.)).child(heading)
                 .child(div().pl(px(22.))
                     .child(div().mt(px(4.)).text_size(px(12.)).line_height(px(19.5)).text_color(content(0.6))
@@ -569,7 +570,7 @@ impl Conversation {
                         .flex()
                         .items_center()
                         .gap(px(8.))
-                        .rounded_t(px(10.))
+                        .rounded_t(px(radius::CONTAINER))
                         .border_1()
                         .border_b_0()
                         .border_color(status(StatusColor::Warning, 0.25))
@@ -604,7 +605,7 @@ fn usage_button(
         .aria_label(label)
         .h(px(24.))
         .px(px(6.))
-        .rounded_md()
+        .rounded(px(radius::CONTROL))
         .flex_shrink_0()
         .flex()
         .items_center()

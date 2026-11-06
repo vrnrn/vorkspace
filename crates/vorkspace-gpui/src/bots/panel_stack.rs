@@ -1,4 +1,4 @@
-//! PanelStack.tsx's 280ms slide over a covered, fading overview.
+//! Habit editors slide over their list while retaining field state.
 use super::panels::Route;
 use vorkspace_ui::clock::Instant;
 
@@ -178,8 +178,8 @@ mod tests {
     fn pages_slide_over_the_fading_overview_and_back_out() {
         let mut stack = PanelStack::default();
         let now = Instant::now();
-        let document = Route::Document("doc".into());
-        stack.sync("bot", Some(document.clone()), now);
+        let habit = Route::Habit("habit".into());
+        stack.sync("bot", Some(habit.clone()), now);
         let first = stack.frame(now);
         assert_eq!(first.base, Pose::SHOWN);
         assert_eq!(first.pages[0].pose, Pose::OUTSIDE);
@@ -196,7 +196,7 @@ mod tests {
         stack.sync("bot", None, back);
         let first = stack.frame(back);
         assert!(!first.covered);
-        assert_eq!(first.pages[0].route, document);
+        assert_eq!(first.pages[0].route, habit);
         assert!(!first.pages[0].interactive);
         assert_eq!(first.pages[0].pose, Pose::SHOWN);
         let settled = stack.frame(back + Duration::from_millis(280));
@@ -209,7 +209,7 @@ mod tests {
     fn updates_and_rapid_back_reopen_keep_the_current_position() {
         let mut stack = PanelStack::default();
         let now = Instant::now();
-        let route = Route::Session(42);
+        let route = Route::NewHabit;
         stack.sync("bot", Some(route.clone()), now);
         stack.frame(now);
         let mid = now + Duration::from_millis(90);
@@ -231,15 +231,15 @@ mod tests {
     fn replacing_pages_keeps_the_departing_page_above_the_new_one() {
         let mut stack = PanelStack::default();
         let now = Instant::now();
-        stack.sync("bot", Some(Route::Document("a".into())), now);
+        stack.sync("bot", Some(Route::Habit("a".into())), now);
         let settled = now + std::time::Duration::from_secs(1);
         stack.frame(now);
         stack.frame(settled);
-        stack.sync("bot", Some(Route::Session(1)), settled);
+        stack.sync("bot", Some(Route::NewHabit), settled);
         let frame = stack.frame(settled);
-        assert_eq!(frame.pages[0].route, Route::Session(1));
+        assert_eq!(frame.pages[0].route, Route::NewHabit);
         assert!(frame.pages[0].interactive);
-        assert_eq!(frame.pages[1].route, Route::Document("a".into()));
+        assert_eq!(frame.pages[1].route, Route::Habit("a".into()));
         assert!(!frame.pages[1].interactive);
     }
 
@@ -247,7 +247,7 @@ mod tests {
     fn switching_bots_discards_old_pages() {
         let mut stack = PanelStack::default();
         let now = Instant::now();
-        stack.sync("a", Some(Route::Session(1)), now);
+        stack.sync("a", Some(Route::NewHabit), now);
         stack.sync("b", None, now);
         let frame = stack.frame(now);
         assert!(frame.pages.is_empty());

@@ -35,11 +35,11 @@ impl Shell {
             .filter(|_| self.bot_active(cx))
             .and_then(|m| m.read(cx).chat())
             .or_else(|| {
-                self.workspace.active.and_then(|id| {
-                    self.sessions
-                        .get(&self.workspace.session_for_pane(id))
-                        .cloned()
-                })
+                self.workspace
+                    .active
+                    .and_then(|id| self.workspace.session_for_pane(id))
+                    .and_then(|id| self.sessions.get(&id))
+                    .cloned()
             });
         let mut profiles: HashMap<_, _> = Kind::ALL
             .into_iter()
@@ -205,6 +205,9 @@ impl Shell {
         if let Some(notes) = &self.notes {
             notes.update(cx, |notes, cx| notes.set_active(false, cx));
         }
+        for notes in self.note_tabs.values() {
+            notes.update(cx, |notes, cx| notes.set_active(false, cx));
+        }
         let context = self.settings_context(cx);
         let prefs = self.workspace.preferences.clone();
         let view = cx.new(|cx| SettingsView::new(section, prefs, context, cx));
@@ -347,9 +350,6 @@ impl Shell {
                             }
                         }
                     }
-                    if let Some(notes) = &this.notes {
-                        notes.update(cx, |notes, cx| notes.set_enabled(prefs.notes, cx));
-                    }
                     this.workspace.preferences = *prefs.clone();
                     this.apply_preferences(cx);
                     this.persist(cx);
@@ -457,6 +457,20 @@ impl Shell {
             vorkspace_ui::preferences::Preferences::MIN_UI_SCALE_PERCENT,
             vorkspace_ui::preferences::Preferences::MAX_UI_SCALE_PERCENT,
         );
+        let notes_enabled = self.workspace.preferences.notes;
+        let hidden_providers = self.workspace.preferences.hidden_providers.clone();
+        if let Some(notes) = &self.notes {
+            notes.update(cx, |notes, cx| {
+                notes.set_enabled(notes_enabled, cx);
+                notes.configure_recording(&hidden_providers, cx);
+            });
+        }
+        for notes in self.note_tabs.values() {
+            notes.update(cx, |notes, cx| {
+                notes.set_enabled(notes_enabled, cx);
+                notes.configure_recording(&hidden_providers, cx);
+            });
+        }
         crate::meetings::capture::init(cx);
         crate::background_helper::configure(
             self.workspace.preferences.clipboard_history,

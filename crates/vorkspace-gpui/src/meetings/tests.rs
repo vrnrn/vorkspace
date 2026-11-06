@@ -677,6 +677,69 @@ fn hiding_notes_and_reselecting_the_same_note_preserve_its_recording_draft(
 }
 
 #[gpui::test]
+fn clearing_a_note_waits_for_its_recording_draft_before_releasing_the_lease(
+    cx: &mut TestAppContext,
+) {
+    let (_root, meetings) = storage();
+    let id = recorded(&meetings, "Planning");
+    let page = page(&meetings, &id, cx);
+    page.update(cx, |page, cx| page.show_note("planning", Some(&id), cx));
+    type_into(
+        &page,
+        Field::Transcript,
+        "Unfinished transcript edit",
+        3..3,
+        cx,
+    );
+    page.update(cx, |page, cx| {
+        assert!(page.document.as_ref().unwrap().dirty());
+        page.clear_note(cx);
+        assert!(page.pending_note.is_some());
+    });
+    cx.run_until_parked();
+    page.read_with(cx, |page, _| {
+        assert!(!page.is_for_note("planning"));
+        assert!(!page.saving);
+        assert!(page.pending_note.is_none());
+        assert_ne!(page.document.as_ref().unwrap().id(), id);
+    });
+    let saved: Snapshot = decode(meetings.open_document(&id).unwrap()).unwrap();
+    assert_eq!(saved.transcript, "Unfinished transcript edit");
+    assert!(meetings.try_edit(&id).unwrap().is_some());
+}
+
+#[gpui::test]
+fn note_close_waits_for_a_recording_edit_save(cx: &mut TestAppContext) {
+    let (_root, meetings) = storage();
+    let id = recorded(&meetings, "Planning");
+    let page = page(&meetings, &id, cx);
+    page.update(cx, |page, cx| page.show_note("planning", Some(&id), cx));
+    type_into(
+        &page,
+        Field::Transcript,
+        "Transcript changed before close",
+        3..3,
+        cx,
+    );
+    page.update(cx, |page, cx| {
+        assert!(page.document.as_ref().unwrap().dirty());
+        assert!(page.has_pending_note_edit("planning"));
+        assert!(!page.has_pending_note_edit("other-note"));
+        assert!(!page.prepare_note_close(cx));
+        assert!(page.saving);
+    });
+    cx.run_until_parked();
+    page.update(cx, |page, cx| {
+        assert!(!page.saving);
+        assert!(!page.document.as_ref().unwrap().dirty());
+        assert!(!page.has_pending_note_edit("planning"));
+        assert!(page.prepare_note_close(cx));
+    });
+    let saved: Snapshot = decode(meetings.open_document(&id).unwrap()).unwrap();
+    assert_eq!(saved.transcript, "Transcript changed before close");
+}
+
+#[gpui::test]
 fn a_blank_note_recording_never_materializes_until_there_is_content(cx: &mut TestAppContext) {
     let (_root, meetings) = storage();
     let page = cx.new(|cx| Page::with_meetings(Ok(meetings.clone()), cx));

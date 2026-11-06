@@ -1,7 +1,7 @@
 use super::*;
 use crate::popover::{MenuAction, MenuItem};
 use serde::{Deserialize, Serialize};
-#[derive(Clone, Default, Serialize, Deserialize)]
+#[derive(Clone, Default, PartialEq, Serialize, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
 pub(super) struct Filters {
     pub show_archived: bool,
@@ -46,7 +46,12 @@ impl Filters {
     }
 }
 impl Bots {
-    pub(super) fn filter_menu(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    pub(super) fn filter_menu(
+        &mut self,
+        anchor: AnchorSlot,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         let f = &self.session_filters;
         let mut items: Vec<MenuItem> = vec![
             MenuAction::new("archived", "Show archived")
@@ -132,7 +137,7 @@ impl Bots {
         });
         self.picker = Some(OpenPicker {
             menu,
-            anchor: Anchor::Slot(self.session_filter_anchor.clone()),
+            anchor: Anchor::Slot(anchor),
             width: 228.,
             align: crate::popover::Align::Start,
             _events: vec![events],

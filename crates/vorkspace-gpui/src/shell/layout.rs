@@ -1,6 +1,7 @@
-// Project rail, conversation workspace, then project tools on the right.
+use vorkspace_ui::radius;
+// Project rail and sidebar on the left, then the conversation workspace.
 // Each column owns its header; subscriptions live above the rail settings.
-use super::{CORNER_BUTTONS_WIDTH, Shell};
+use super::Shell;
 use crate::{
     popover::{Anchor, popover},
     resource_pressure::SessionInfo,
@@ -37,21 +38,18 @@ impl Shell {
         cx: &mut Context<Self>,
     ) -> AnyElement {
         let card = self.workspace_content(false, right_width, full, window, cx);
-        // Project tools and Bot details occupy the same right-hand edge and
-        // share a saved width, while retaining their own visibility and content.
+        // A non-classic project panel retains its saved width.
         let panel = self
             .right_panel
             .clone()
             .filter(|_| right_shown && self.settings.is_none())
             .map(|panel| self.right_panel_frame(panel, right_width, full, cx));
-        // Search and app views (connectors, Notes, Automations) start at the top edge.
-        // Settings keeps its own header, whichever page it was opened from.
-        let app_view = self.settings.is_none()
-            && (self.active_app_view.is_some() || self.app_search.is_some());
-        let bare = self.bare_page(cx);
+        // Every workspace destination shares the title row. Settings keeps
+        // its own header above the parked workspace.
+        let project_tools = self.has_session_panes();
         // Collapsed navigation can extend past the rail. Keep its drag row
         // above page headers so the controls cannot cover their inputs.
-        let tab_bar = (!bare || self.strip_lead(window) > 0.).then(|| self.titlebar(window, cx));
+        let tab_bar = self.titlebar(window, cx);
         let navigation = self.navigation(window, cx);
         let rail_width = self.classic_rail_width();
         // At zero width the cached rail is not rendered, so it cannot stop
@@ -59,14 +57,14 @@ impl Shell {
         if rail_width <= 0. {
             self.hide_project_marks(cx);
         }
-        let corner = (self.settings.is_none() && !app_view).then(|| self.panel_toggle(window, cx));
+        let corner =
+            (self.settings.is_none() && project_tools).then(|| self.panel_toggle(window, cx));
         let header = self.classic_workspace_header(cx);
-        // Sessions, Explorer and Changes sit beside the rail or at the right edge.
-        let left = !self.workspace.preferences.sidebar_right;
-        let sidebar_navigation_row = left && self.rail_overhang(window) > 0.;
+        // Sessions, Explorer and Changes sit beside the rail on the left.
+        let sidebar_navigation_row = self.rail_overhang(window) > 0.;
         // Its rule leaves the corner to the rail divider's curve.
         let title_curve = if self.rail_meets_title_rule() {
-            crate::liquid::PANE_RADIUS
+            radius::SURFACE
         } else {
             0.
         };
@@ -81,13 +79,12 @@ impl Shell {
                 .overflow_hidden()
                 // Rounded toward its left neighbour like the pane, so its line
                 // curves at the top and bottom; on the left, the rail draws it.
-                .rounded_l(px(12.))
-                .when(!left, |d| d.border_l_1())
+                .rounded_l(px(radius::SURFACE))
                 .border_color(crate::panel_kit::stroke())
                 .child(
                     div()
                         .absolute()
-                        .map(|d| if left { d.left_0() } else { d.right_0() })
+                        .left_0()
                         .top_0()
                         .w(px(self.workspace.right_panel_width))
                         .h_full()
@@ -115,11 +112,6 @@ impl Shell {
                         .child(div().flex_1().min_h_0().child(self.sidebar_contents())),
                 )
         });
-        let (before, after) = if left {
-            (sidebar, None)
-        } else {
-            (None, sidebar)
-        };
         div()
             .flex_1()
             .min_h_0()
@@ -135,7 +127,7 @@ impl Shell {
                     ),
                 )
             })
-            .children(before)
+            .children(sidebar)
             .child(
                 div()
                     .id("main-pane-frame")
@@ -145,16 +137,22 @@ impl Shell {
                     .h_full()
                     .flex()
                     .flex_col()
-                    .rounded_l(px(12.))
+                    .rounded_l(px(radius::SURFACE))
                     // Beside a left sidebar, the pane draws its own curved edge.
-                    .when(left && sidebar_width > 0., |d| {
+                    .when(sidebar_width > 0., |d| {
                         d.border_l_1().border_color(crate::panel_kit::stroke())
                     })
-                    .bg(pane_fill())
-                    .children(tab_bar)
-                    .child(card),
+                    .when(self.workspace.project_rail_open, |d| d.bg(pane_fill()))
+                    .child(tab_bar)
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_h_0()
+                            .flex()
+                            .when(!self.workspace.project_rail_open, |d| d.bg(pane_fill()))
+                            .child(card),
+                    ),
             )
-            .children(after)
             .children(self.sidebar_resize(cx))
             .children(panel.map(|panel| div().h_full().bg(pane_fill()).child(panel)))
             .child(div().absolute().top_0().left_0().child(navigation))
@@ -162,32 +160,14 @@ impl Shell {
                 div()
                     .absolute()
                     .top_0()
-                    .right(px(if left { 0. } else { sidebar_width }))
+                    .right_0()
                     .h(px(TITLE_BAR_HEIGHT))
                     .children(corner),
             )
             .into_any_element()
     }
-    /// Sidebar pages omit the tabs. An expanded rail leaves them at the top;
-    /// collapsed navigation keeps a drag row above them for its overhang.
-    /// Settings keeps its own header over any page.
-    pub(super) fn bare_page(&self, cx: &gpui::App) -> bool {
-        self.settings.is_none() && self.tabless_page(cx)
-    }
-    /// Bot details retain the window corner; project tools have their own header.
+    /// Project tools have their own header.
     pub(super) fn corner_room(&self, cx: &gpui::App) -> f32 {
-        if self.bot_details_active(cx) {
-            if self.workspace.right_panel_open && !self.app_view_open() {
-                return self
-                    .right_drawn
-                    .max(if self.workspace.right_panel_width >= 312. {
-                        312.
-                    } else {
-                        252.
-                    });
-            }
-            return 6. + CORNER_BUTTONS_WIDTH + 12.;
-        }
         // The open sidebar's header holds them instead (`classic_corner`).
         if self.sidebar_fraction > 0. {
             return 6.;
@@ -214,6 +194,10 @@ impl Shell {
             .child(self.file_search_button(cx))
             .into_any_element()
     }
+    pub(super) fn sidebar_uncached(&self) -> bool {
+        self.sidebar_slide.is_some()
+    }
+
     fn sidebar_contents(&self) -> AnyElement {
         // Cached paint doesn't include inherited opacity in its key. Repaint
         // during the fade, even if the clip rounds to the same pixel on
@@ -242,13 +226,7 @@ impl Shell {
                 .id("sidebar-resize")
                 .debug_selector(|| "sidebar-resize".into())
                 .absolute()
-                .map(|d| {
-                    if !self.workspace.preferences.sidebar_right {
-                        d.left(px(self.classic_rail_width() + border - 2.))
-                    } else {
-                        d.right(px(border - 2.))
-                    }
-                })
+                .left(px(self.classic_rail_width() + border - 2.))
                 .w(px(4.))
                 .h_full()
                 .cursor(CursorStyle::ResizeLeftRight)
@@ -271,15 +249,6 @@ impl Shell {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> gpui::Div {
-        if let Some(search) = &self.app_search {
-            return div()
-                .flex_1()
-                .min_h_0()
-                .min_w_0()
-                .flex()
-                .overflow_hidden()
-                .child(search.view.clone());
-        }
         if let Some(settings) = &self.settings {
             return div()
                 .flex_1()
@@ -308,29 +277,8 @@ impl Shell {
                         // Every project lands on a blank session, as in
                         // vorkspace; this is empty only while one is created.
                         .child({
-                            if let Some(bots) = self.bots.clone().filter(|m| {
-                                m.read(cx).active.is_some() || m.read(cx).classic_channels_open()
-                            }) {
-                                let session = bots.read(cx).active_notification_session(cx);
-                                let linked = session.and_then(|id| self.linked_notice(id, cx));
-                                div()
-                                    .relative()
-                                    .size_full()
-                                    .child(bots)
-                                    .children(linked.map(|notice| {
-                                        div()
-                                            .absolute()
-                                            .top(px(12.))
-                                            .right(px(12.))
-                                            .w(px(320.))
-                                            .max_w_full()
-                                            .child(notice)
-                                    }))
-                                    .into_any_element()
-                            } else {
-                                let body = self.workspace_body(window, cx);
-                                self.with_dock(body, window, cx)
-                            }
+                            let body = self.workspace_body(window, cx);
+                            self.with_dock(body, window, cx)
                         }),
                 ),
             )

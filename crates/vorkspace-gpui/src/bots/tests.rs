@@ -7,6 +7,8 @@ use std::{
     sync::{Arc, Mutex, mpsc},
 };
 use vorkspace_core::store::Store;
+#[path = "island_tests.rs"]
+mod island_tests;
 #[path = "memory_tests.rs"]
 mod memory_tests;
 struct Setup {
@@ -17,6 +19,104 @@ struct Setup {
     session: i64,
     root: PathBuf,
     store: Database,
+}
+
+#[gpui::test]
+fn bot_session_and_document_requests_leave_the_island_as_a_browser(cx: &mut TestAppContext) {
+    let s = setup(cx);
+    let opened = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+    s.manager.update(cx, |manager, cx| {
+        let events = opened.clone();
+        let subscription = cx.subscribe(&cx.entity(), move |_, _, event: &OpenWorkspacePane, _| {
+            events.borrow_mut().push(event.clone());
+        });
+        manager.observations.push(subscription);
+        manager
+            .roster
+            .get_mut(&s.id)
+            .unwrap()
+            .documents
+            .push(bot::Document {
+                id: "document-one".into(),
+                kind: "document".into(),
+                title: "Plan".into(),
+                summary: String::new(),
+                body: "A Bot plan".into(),
+                created_at: 0,
+                updated_at: 0,
+            });
+        assert!(manager.document_for_pane(&s.id, "document-one").is_some());
+        assert!(
+            manager
+                .document_for_pane("another-bot", "document-one")
+                .is_none()
+        );
+        manager.open_session_workspace_pane(s.session, cx);
+        assert!(manager.route.is_none());
+        manager.open_document_workspace_pane("document-one", cx);
+        assert!(manager.route.is_none());
+    });
+    cx.run_until_parked();
+    let events = opened.borrow();
+    assert!(matches!(
+        &events[0],
+        OpenWorkspacePane::Session { bot, session }
+            if bot == &s.id && *session == s.session
+    ));
+    assert!(matches!(
+        &events[1],
+        OpenWorkspacePane::Document { bot, document }
+            if bot == &s.id && document == "document-one"
+    ));
+}
+
+#[gpui::test]
+fn workspace_context_tracks_a_bot_without_opening_a_tab(cx: &mut TestAppContext) {
+    let s = setup(cx);
+    let opened = std::rc::Rc::new(std::cell::Cell::new(0));
+    s.manager.update(cx, |manager, cx| {
+        let events = opened.clone();
+        let subscription = cx.subscribe(&cx.entity(), move |_, _, _: &TabOpened, _| {
+            events.set(events.get() + 1);
+        });
+        manager.observations.push(subscription);
+        manager.set_workspace_context(None, cx);
+        assert!(manager.active.is_none());
+        manager.set_workspace_context(Some(&s.id), cx);
+        assert_eq!(manager.active.as_deref(), Some(s.id.as_str()));
+    });
+    cx.run_until_parked();
+    assert_eq!(opened.get(), 0);
+}
+
+#[gpui::test]
+fn channels_restore_keeps_selection_while_bot_context_changes(cx: &mut TestAppContext) {
+    let s = setup(cx);
+    s.manager.update(cx, |manager, cx| {
+        manager.prefs.bots = true;
+        manager.prefs.channels = true;
+        manager.channels.open = false;
+        manager.channels.selected = Some("selected-channel".into());
+        manager.ensure_channels_pane(cx);
+        assert!(manager.classic_channels_open());
+        assert_eq!(
+            manager.channels.selected.as_deref(),
+            Some("selected-channel")
+        );
+        manager.set_workspace_context(None, cx);
+        assert!(manager.classic_channels_open());
+        manager.set_workspace_context(Some(&s.id), cx);
+        assert!(manager.classic_channels_open());
+        assert_eq!(
+            manager.channels.selected.as_deref(),
+            Some("selected-channel")
+        );
+        manager.ensure_channels_pane(cx);
+        assert_eq!(
+            manager.channels.selected.as_deref(),
+            Some("selected-channel")
+        );
+    });
 }
 
 // Install a real indexed, partially loaded Bot conversation into the manager.
@@ -197,7 +297,7 @@ fn channel_settings_are_anchored_and_keep_the_conversation_and_draft_visible(
         crate::popover::bind(cx);
         crate::composer::composer_completion::bind(cx);
     });
-    let s = setup(cx);
+    let s = setup_with_channels(cx, true);
     let id = s.manager.update(cx, |m, cx| {
         let mut next = m.channels.state.clone();
         let id = next
@@ -214,12 +314,14 @@ fn channel_settings_are_anchored_and_keep_the_conversation_and_draft_visible(
         )
         .unwrap();
         m.commit_channels(next, cx).unwrap();
-        m.channels.open = true;
         m.channels.selected = Some(id.clone());
         cx.notify();
         id
     });
     let visual = &mut gpui::VisualTestContext::from_window(s.window.into(), cx);
+    s.window
+        .update(visual, |shell, w, cx| shell.open_classic_channels(w, cx))
+        .unwrap();
     for (width, height) in [(1400., 900.), (900., 650.)] {
         visual.simulate_resize(gpui::size(px(width), px(height)));
         visual.run_until_parked();
@@ -1041,7 +1143,7 @@ fn channel_receipts_survive_retry_and_unreadable_history_is_never_replaced(
 
 #[gpui::test]
 fn channels_keep_drafts_when_hidden_and_render_in_the_native_shell(cx: &mut TestAppContext) {
-    let s = setup(cx);
+    let s = setup_with_channels(cx, true);
     let visual = &mut gpui::VisualTestContext::from_window(s.window.into(), cx);
     s.manager.update(visual, |m, cx| {
         let result = m
@@ -1060,9 +1162,11 @@ fn channels_keep_drafts_when_hidden_and_render_in_the_native_shell(cx: &mut Test
             .save_setting(&key, "Keep this unsent draft")
             .unwrap();
         m.channels.selected = Some(id);
-        m.channels.open = true;
         cx.notify();
     });
+    s.window
+        .update(visual, |shell, w, cx| shell.open_classic_channels(w, cx))
+        .unwrap();
     visual.run_until_parked();
     visual.refresh().unwrap();
     s.manager.read_with(visual, |m, cx| {
@@ -1072,15 +1176,16 @@ fn channels_keep_drafts_when_hidden_and_render_in_the_native_shell(cx: &mut Test
             "Keep this unsent draft"
         );
     });
-    s.manager.update(visual, |m, cx| {
-        m.channels.open = false;
-        cx.notify();
-    });
+    s.window
+        .update(visual, |shell, w, cx| {
+            shell.select_project(s.project.clone(), w, cx);
+        })
+        .unwrap();
     visual.run_until_parked();
-    s.manager.update(visual, |m, cx| {
-        m.channels.open = true;
-        cx.notify();
-    });
+    assert!(visual.debug_bounds("channel-surface").is_none());
+    s.window
+        .update(visual, |shell, w, cx| shell.open_classic_channels(w, cx))
+        .unwrap();
     visual.run_until_parked();
     visual.refresh().unwrap();
     s.manager.read_with(visual, |m, cx| {
@@ -1095,7 +1200,7 @@ fn channels_keep_drafts_when_hidden_and_render_in_the_native_shell(cx: &mut Test
 #[gpui::test]
 fn channel_composer_fits_both_sizes_and_failed_sends_preserve_the_draft(cx: &mut TestAppContext) {
     cx.update(input::bind);
-    let s = setup(cx);
+    let s = setup_with_channels(cx, true);
     let id = s.manager.update(cx, |m, cx| {
         let mut next = m.channels.state.clone();
         let id = next
@@ -1112,7 +1217,6 @@ fn channel_composer_fits_both_sizes_and_failed_sends_preserve_the_draft(cx: &mut
         )
         .unwrap();
         m.commit_channels(next, cx).unwrap();
-        m.channels.open = true;
         m.channels.selected = Some(id.clone());
         // Keep this UI test local: admitted turns cannot start a provider.
         m.channels.loading.insert((id.clone(), s.id.clone()));
@@ -1120,6 +1224,9 @@ fn channel_composer_fits_both_sizes_and_failed_sends_preserve_the_draft(cx: &mut
         id
     });
     let visual = &mut gpui::VisualTestContext::from_window(s.window.into(), cx);
+    s.window
+        .update(visual, |shell, w, cx| shell.open_classic_channels(w, cx))
+        .unwrap();
     for (width, height) in [(1400., 900.), (900., 650.)] {
         visual.simulate_resize(gpui::size(px(width), px(height)));
         visual.run_until_parked();
@@ -1235,7 +1342,7 @@ fn stopped_channel_work_cannot_publish_a_late_reply(cx: &mut TestAppContext) {
 }
 
 #[gpui::test]
-fn missing_document_uses_error_cards_without_moving_content(cx: &mut TestAppContext) {
+fn bot_errors_use_cards_without_moving_content(cx: &mut TestAppContext) {
     let s = setup(cx);
     let visual = &mut gpui::VisualTestContext::from_window(s.window.into(), cx);
     visual.run_until_parked();
@@ -1243,7 +1350,8 @@ fn missing_document_uses_error_cards_without_moving_content(cx: &mut TestAppCont
     let body = visual.debug_bounds("main-pane-frame").unwrap();
     s.manager.update(visual, |m, cx| {
         m.failed_reports.insert("failed-report".into());
-        m.open_document("deleted-document", cx);
+        m.error = Some("Could not complete the report.".into());
+        cx.notify();
     });
     visual.run_until_parked();
     visual.refresh().unwrap();
@@ -1251,7 +1359,7 @@ fn missing_document_uses_error_cards_without_moving_content(cx: &mut TestAppCont
         s.manager
             .read_with(visual, |m, _| m.error.clone())
             .as_deref(),
-        Some("Document unavailable. It may have been deleted.")
+        Some("Could not complete the report.")
     );
     let error = visual.debug_bounds("bot-error").unwrap();
     let viewport = s
@@ -1369,151 +1477,65 @@ fn settings_reset_restores_only_bot_soul_and_name(cx: &mut TestAppContext) {
 }
 
 #[gpui::test]
-fn detail_pages_slide_over_the_overview_and_back_without_recreating_content(
+fn live_habit_page_slides_inside_settings_and_back_without_recreating_fields(
     cx: &mut TestAppContext,
 ) {
-    for kind in ["markdown", "html", "session"] {
-        vorkspace_ui::clock::use_test_clock(cx);
-        let s = setup(cx);
-        let session = s
-            .window
-            .update(cx, |shell, _, _| shell.workspace.active.unwrap())
-            .unwrap();
-        s.window
-            .update(cx, |_, _, cx| {
-                s.manager.update(cx, |m, cx| {
-                    m.settings = None;
-                    m.overview_tab = OverviewTab::Documents;
-                    m.roster
-                        .get_mut(&s.id)
-                        .unwrap()
-                        .documents
-                        .push(bot::Document {
-                            id: "slide-document".into(),
-                            kind: kind.into(),
-                            title: "Slide document".into(),
-                            summary: String::new(),
-                            body: "# Document\n\nKeep this reader alive.".into(),
-                            created_at: 1,
-                            updated_at: 1,
-                        });
-                    cx.notify();
-                });
+    vorkspace_ui::clock::use_test_clock(cx);
+    cx.update(|cx| {
+        input::bind(cx);
+        crate::popover::bind(cx);
+    });
+    let s = setup(cx);
+    s.manager.update(cx, |m, cx| {
+        m.settings = Some(SettingsSection::Habits);
+        m.route = Some(Route::NewHabit);
+        cx.notify();
+    });
+    let visual = &mut gpui::VisualTestContext::from_window(s.window.into(), cx);
+    visual.run_until_parked();
+    let advance = |visual: &mut gpui::VisualTestContext, ms| {
+        let details = s.manager.read_with(visual, |m, _| m.habit_panel.clone());
+        details.update(visual, |d, cx| d.elapsed(Duration::from_millis(ms), cx));
+        visual
+            .update_window(s.window.into(), |_, w, cx| {
+                w.simulate_next_frame(cx);
+                w.draw(cx).clear(cx);
             })
             .unwrap();
-        let visual = &mut gpui::VisualTestContext::from_window(s.window.into(), cx);
-        visual.run_until_parked();
-        vorkspace_ui::clock::use_test_clock(cx);
-        let action = if kind == "session" {
-            json!({"type":"session", "sessionId":session})
-        } else {
-            json!({"type":"document", "documentId":"slide-document"})
-        };
-        s.window
-            .update(visual, |_, _, cx| {
-                s.manager
-                    .update(cx, |m, cx| m.card_action(&s.id, &action, cx))
-            })
-            .unwrap();
-        visual.run_until_parked();
-        let page: &'static str = Box::leak(
-            format!(
-                "bot-detail-page-{}",
-                if kind == "session" {
-                    format!("session:{session}")
-                } else {
-                    "document:slide-document".into()
-                }
-            )
-            .into_boxed_str(),
-        );
-        let advance = |visual: &mut gpui::VisualTestContext, ms| {
-            let details = s.manager.read_with(visual, |m, _| m.details.clone());
-            details.update(visual, |d, cx| d.elapsed(Duration::from_millis(ms), cx));
-            visual
-                .update_window(s.window.into(), |_, w, cx| {
-                    w.simulate_next_frame(cx);
-                    w.draw(cx).clear(cx);
-                })
-                .unwrap();
-        };
-        advance(visual, 70);
-        let stack = visual.debug_bounds("bot-detail-stack").unwrap();
-        let incoming = visual.debug_bounds(page).unwrap();
-        assert!(incoming.left() > stack.left() && incoming.left() < stack.right());
-        assert_eq!(
-            incoming.size, stack.size,
-            "sliding pages keep their full layout size"
-        );
-        assert!(visual.debug_bounds("bot-detail-base").unwrap().left() < stack.left());
-        advance(visual, 1000);
-        assert_eq!(visual.debug_bounds(page).unwrap().left(), stack.left());
-        let reader = s.manager.read_with(visual, |m, cx| match kind {
-            "html" => m.html_documents["slide-document"].entity_id(),
-            "session" => m.owner.session_entity(session, cx).unwrap().entity_id(),
-            _ => m.documents["slide-document"].entity_id(),
-        });
-        assert_eq!(
-            s.manager
-                .read_with(visual, |m, cx| m.native_detail_content(cx)),
-            kind == "html"
-        );
-        let back = visual.debug_bounds("bot-page-back").unwrap().center();
-        visual.simulate_click(back, Default::default());
-        visual.run_until_parked();
-        advance(visual, 70);
-        let outgoing = visual
-            .debug_bounds(page)
-            .expect("Back keeps the outgoing page mounted");
-        assert!(outgoing.left() > stack.left() && outgoing.left() < stack.right());
-        advance(visual, 1000);
-        assert!(visual.debug_bounds(page).is_none());
-        assert_eq!(
-            visual.debug_bounds("bot-detail-base").unwrap().left(),
-            stack.left()
-        );
-        assert!(
-            !s.manager
-                .read_with(visual, |m, cx| m.native_detail_content(cx))
-        );
+    };
+    let page = "bot-detail-page-new-habit";
+    advance(visual, 70);
+    let stack = visual.debug_bounds("bot-detail-stack").unwrap();
+    let incoming = visual.debug_bounds(page).unwrap();
+    assert!(incoming.left() > stack.left() && incoming.left() < stack.right());
+    assert_eq!(incoming.size, stack.size);
+    assert!(visual.debug_bounds("bot-detail-base").unwrap().left() < stack.left());
+    advance(visual, 1000);
+    assert_eq!(visual.debug_bounds(page).unwrap().left(), stack.left());
+    let field = s
+        .manager
+        .read_with(visual, |m, _| m.fields["habit-name"].entity_id());
+    let back = visual.debug_bounds("bot-page-back").unwrap().center();
+    visual.simulate_click(back, Default::default());
+    visual.run_until_parked();
+    advance(visual, 70);
+    let outgoing = visual.debug_bounds(page).unwrap();
+    assert!(outgoing.left() > stack.left() && outgoing.left() < stack.right());
+    advance(visual, 1000);
+    assert!(visual.debug_bounds(page).is_none());
 
-        vorkspace_ui::clock::use_test_clock(cx);
-        s.window
-            .update(visual, |_, _, cx| {
-                s.manager
-                    .update(cx, |m, cx| m.card_action(&s.id, &action, cx))
-            })
-            .unwrap();
-        visual.run_until_parked();
-        vorkspace_ui::clock::settle_animations(s.window, visual);
-        assert_eq!(visual.debug_bounds(page).unwrap().left(), stack.left());
-        s.manager.read_with(visual, |m, cx| {
-            let reopened = match kind {
-                "html" => m.html_documents["slide-document"].entity_id(),
-                "session" => m.owner.session_entity(session, cx).unwrap().entity_id(),
-                _ => m.documents["slide-document"].entity_id(),
-            };
-            assert_eq!(reader, reopened);
-        });
-        vorkspace_ui::clock::use_test_clock(cx);
-        s.window
-            .update(visual, |_, w, cx| {
-                s.manager.update(cx, |m, cx| {
-                    m.close(cx);
-                    m.open(&s.id, w, cx);
-                });
-            })
-            .unwrap();
-        visual.run_until_parked();
-        assert!(
-            visual.debug_bounds(page).is_none(),
-            "returning to a Bot must not replay an old page's exit"
-        );
-        assert_eq!(
-            visual.debug_bounds("bot-detail-base").unwrap().left(),
-            stack.left()
-        );
-    }
+    s.manager.update(visual, |m, cx| {
+        m.route = Some(Route::NewHabit);
+        cx.notify();
+    });
+    visual.run_until_parked();
+    vorkspace_ui::clock::settle_animations(s.window, visual);
+    assert_eq!(visual.debug_bounds(page).unwrap().left(), stack.left());
+    assert_eq!(
+        s.manager
+            .read_with(visual, |m, _| m.fields["habit-name"].entity_id()),
+        field
+    );
 }
 #[gpui::test]
 fn a_closed_creation_window_rehomes_the_same_unsaved_bot(cx: &mut TestAppContext) {
@@ -1574,15 +1596,20 @@ fn a_closed_creation_window_rehomes_the_same_unsaved_bot(cx: &mut TestAppContext
 }
 
 fn setup(cx: &mut TestAppContext) -> Setup {
+    setup_with_channels(cx, false)
+}
+
+fn setup_with_channels(cx: &mut TestAppContext, channels: bool) -> Setup {
     let dir = std::env::temp_dir().join(format!("native-bots-{}", bot::new_id()));
     std::fs::create_dir_all(&dir).unwrap();
     let project = dir.to_string_lossy().to_string();
     let store = Arc::new(Mutex::new(Store::open(&dir.join("native.sqlite")).unwrap()));
     let db = store.clone();
     let cwd = project.clone();
+    let saved = channels.then(|| json!({"preferences": {"channels": true}}).to_string());
     let window = cx.update(|cx| {
         cx.open_window(Default::default(), |_, cx| {
-            cx.new(|cx| Shell::new(db, Vec::new(), cwd, None, cx))
+            cx.new(|cx| Shell::new(db, Vec::new(), cwd, saved, cx))
         })
         .unwrap()
     });
@@ -1590,8 +1617,6 @@ fn setup(cx: &mut TestAppContext) -> Setup {
     let manager = window
         .update(cx, |shell, _, cx| {
             shell.workspace.right_panel_open = true;
-            // These tests were written for the sidebar at the right edge.
-            shell.workspace.preferences.sidebar_right = true;
             cx.notify();
             shell.bot_manager()
         })
@@ -1617,6 +1642,21 @@ fn setup(cx: &mut TestAppContext) -> Setup {
         root,
         store,
     }
+}
+
+fn close_bot_pane(s: &Setup, cx: &mut TestAppContext) {
+    s.window
+        .update(cx, |shell, w, cx| {
+            let pane = shell.workspace.active.unwrap();
+            assert_eq!(
+                shell.workspace.app_panes[&pane].content,
+                crate::workspace::AppPane::Bot(s.id.clone())
+            );
+            shell.close(pane, w, cx);
+            assert!(shell.workspace.tab_of(pane).is_none());
+        })
+        .unwrap();
+    cx.run_until_parked();
 }
 
 #[gpui::test]
@@ -1773,6 +1813,7 @@ fn image_draft_owner_lookup_covers_bot_and_channel_views(cx: &mut TestAppContext
 #[gpui::test]
 fn saved_draft_outbox_identity_survives_restart_and_is_not_enqueued_twice(cx: &mut TestAppContext) {
     let s = setup(cx);
+    close_bot_pane(&s, cx);
     let draft = vorkspace_core::follow_up::Message {
         id: format!("draft-{}", bot::new_id()),
         text: "Send this once".into(),
@@ -1804,6 +1845,7 @@ fn saved_draft_outbox_identity_survives_restart_and_is_not_enqueued_twice(cx: &m
         }
     });
     cx.run_until_parked();
+    assert!(!s.manager.read_with(cx, |m, _| m.chats.contains_key(&s.id)));
     let db = Store::open(Path::new(&s.project).join("native.sqlite").as_path()).unwrap();
     let roster = Roster::load(&db).unwrap();
     let queued: Vec<_> = roster
@@ -2403,7 +2445,6 @@ fn bot_work_disclosure_stays_in_chat_and_leaves_details_on_their_page(cx: &mut T
             s.manager.update(cx, |manager, cx| {
                 manager.settings = None;
                 manager.focus_active(window, cx);
-                manager.select_overview(OverviewTab::Documents, cx);
                 let transcript = manager.chats[&s.id].update(cx, |chat, cx| {
                     chat.summary.has_messages = true;
                     cx.notify();
@@ -2452,28 +2493,11 @@ fn bot_work_disclosure_stays_in_chat_and_leaves_details_on_their_page(cx: &mut T
                     "disclosure must not open the sidebar"
                 );
                 let manager = s.manager.read(cx);
-                assert!(manager.overview_tab == OverviewTab::Documents);
+                assert!(manager.open_islands.is_empty());
                 assert!(manager.route.is_none());
             })
             .unwrap();
     }
-}
-
-#[gpui::test]
-fn overview_pages_use_the_shared_reveal(cx: &mut TestAppContext) {
-    let s = setup(cx);
-    s.window
-        .update(cx, |_, _, cx| {
-            s.manager.update(cx, |m, cx| {
-                m.select_overview(OverviewTab::Documents, cx);
-                assert!(m.overview_reveal.is_some());
-                m.select_overview(OverviewTab::Sessions, cx);
-                assert!(m.overview_tab == OverviewTab::Sessions);
-                m.select_overview(OverviewTab::Documents, cx);
-                assert!(m.overview_tab == OverviewTab::Documents);
-            });
-        })
-        .unwrap();
 }
 
 #[gpui::test]
@@ -3101,340 +3125,6 @@ fn chat_composer_keeps_add_under_the_box_and_opens_the_model_list(cx: &mut TestA
 }
 
 #[gpui::test]
-fn bot_details_share_the_original_titlebar_and_project_tools_use_the_same_edge(
-    cx: &mut TestAppContext,
-) {
-    let s = setup(cx);
-    cx.update(|cx| {
-        vorkspace_ui::clock::use_test_clock(cx);
-        crate::shell::bind_keys(cx);
-    });
-    let session = s
-        .window
-        .update(cx, |shell, window, cx| {
-            assert!(shell.workspace.classic_layout);
-            s.manager.update(cx, |manager, cx| {
-                manager.settings = None;
-                manager.focus_active(window, cx);
-                cx.notify();
-            });
-            shell.workspace.active.unwrap()
-        })
-        .unwrap();
-    let visual = &mut gpui::VisualTestContext::from_window(s.window.into(), cx);
-    visual.run_until_parked();
-    vorkspace_ui::clock::settle_animations(s.window, visual);
-    let panel = visual.debug_bounds("right-panel-frame").unwrap();
-    let tabs = visual.debug_bounds("bot-overview-tabs").unwrap();
-    let toggle = visual.debug_bounds("toggle-right-panel").unwrap();
-    let strip = visual.debug_bounds("title-tab-strip").unwrap();
-    let bot_tab = Box::leak(format!("bot-title-tab-{}", s.id).into_boxed_str());
-    let session_tab = Box::leak(format!("title-tab-{session}").into_boxed_str());
-    assert_eq!(visual.debug_bounds(bot_tab).unwrap().top(), strip.top());
-    assert_eq!(visual.debug_bounds(session_tab).unwrap().top(), strip.top());
-    assert_eq!(tabs.top(), panel.top());
-    assert_eq!(tabs.size.height, px(TITLE_BAR_HEIGHT));
-    assert_eq!(tabs.left(), panel.left() + px(6.));
-    assert!(
-        visual.debug_bounds("bot-activity").is_none(),
-        "work is disclosed in chat"
-    );
-    assert!(
-        visual.debug_bounds("titlebar-file-search").is_none(),
-        "a Bot has no project files to search"
-    );
-    assert!(toggle.left() >= tabs.right());
-    assert!(tabs.bottom() <= panel.top() + px(TITLE_BAR_HEIGHT));
-    assert_eq!(
-        visual.debug_bounds("bot-session-list").unwrap().top(),
-        panel.top() + px(TITLE_BAR_HEIGHT)
-    );
-    assert!(
-        visual.debug_bounds("bot-overview-toggle").is_none(),
-        "only the shell owns the details toggle"
-    );
-    assert!(
-        visual.debug_bounds("sidebar-frame").is_none(),
-        "a Bot owns the main surface beside the project rail"
-    );
-    let session_bounds = visual.debug_bounds(session_tab).unwrap();
-    visual.simulate_click(session_bounds.center(), Default::default());
-    visual.run_until_parked();
-    vorkspace_ui::clock::settle_animations(s.window, visual);
-    let rail = visual.debug_bounds("classic-project-rail").unwrap();
-    let sidebar = visual.debug_bounds("sidebar-frame").unwrap();
-    assert_eq!(
-        sidebar.left(),
-        visual.debug_bounds("main-pane-frame").unwrap().right()
-    );
-    assert_eq!(
-        visual.debug_bounds("main-pane-frame").unwrap().left(),
-        rail.right()
-    );
-    assert!(visual.debug_bounds("classic-workspace-tabs").is_some());
-    assert!(visual.debug_bounds("right-panel-frame").is_none());
-    assert!(visual.debug_bounds("toggle-right-panel").is_none());
-    s.window
-        .update(visual, |shell, _, _| {
-            assert_eq!(shell.workspace.active, Some(session));
-            assert!(
-                shell.workspace.right_panel_open,
-                "leaving the Bot retains its details preference"
-            );
-        })
-        .unwrap();
-    let bot_bounds = visual.debug_bounds(bot_tab).unwrap();
-    visual.simulate_click(bot_bounds.center(), Default::default());
-    visual.run_until_parked();
-    vorkspace_ui::clock::settle_animations(s.window, visual);
-    assert_eq!(visual.debug_bounds("toggle-right-panel").unwrap(), toggle);
-    assert_eq!(visual.debug_bounds("right-panel-frame").unwrap(), panel);
-}
-
-#[gpui::test]
-fn titlebar_details_tabs_switch_pages_and_keep_habit_actions(cx: &mut TestAppContext) {
-    let s = setup(cx);
-    vorkspace_ui::clock::use_test_clock(cx);
-    s.window
-        .update(cx, |shell, _, cx| {
-            shell.workspace.right_panel_width = 400.;
-            s.manager.update(cx, |m, cx| {
-                m.settings = None;
-                cx.notify();
-            })
-        })
-        .unwrap();
-    let visual = &mut gpui::VisualTestContext::from_window(s.window.into(), cx);
-    visual.run_until_parked();
-    vorkspace_ui::clock::settle_animations(s.window, visual);
-    for (selector, tab) in [
-        ("bot-overview-Documents", OverviewTab::Documents),
-        ("bot-overview-Habits", OverviewTab::Habits),
-    ] {
-        let button = visual.debug_bounds(selector).unwrap();
-        visual.simulate_click(button.center(), Default::default());
-        visual.run_until_parked();
-        vorkspace_ui::clock::settle_animations(s.window, visual);
-        assert!(s.manager.read_with(visual, |m, _| m.overview_tab == tab));
-        assert!(visual.debug_bounds(selector).unwrap().size.width > px(26.));
-    }
-    let add = visual.debug_bounds("bot-new-habit").unwrap();
-    visual.simulate_click(add.center(), Default::default());
-    visual.run_until_parked();
-    vorkspace_ui::clock::settle_animations(s.window, visual);
-    assert!(
-        s.manager
-            .read_with(visual, |m, _| matches!(m.route, Some(Route::NewHabit)))
-    );
-    assert!(visual.debug_bounds("bot-overview-tabs").is_some());
-    let sessions = visual.debug_bounds("bot-overview-Sessions").unwrap();
-    visual.simulate_click(sessions.center(), Default::default());
-    visual.run_until_parked();
-    vorkspace_ui::clock::settle_animations(s.window, visual);
-    assert!(s.manager.read_with(visual, |m, _| m.route.is_none()
-        && m.overview_tab == OverviewTab::Sessions));
-    assert!(visual.debug_bounds("bot-activity").is_none());
-    for (selector, expected) in [
-        ("bot-overview-Changes", OverviewTab::Changes),
-        ("bot-overview-Sessions", OverviewTab::Sessions),
-    ] {
-        let tab = visual.debug_bounds(selector).unwrap();
-        visual.simulate_click(tab.center(), Default::default());
-        visual.run_until_parked();
-        vorkspace_ui::clock::settle_animations(s.window, visual);
-        assert!(
-            s.manager
-                .read_with(visual, |m, _| m.overview_tab == expected)
-        );
-    }
-}
-
-#[gpui::test]
-fn original_details_divider_resizes_and_closed_panels_keep_the_corner(cx: &mut TestAppContext) {
-    let s = setup(cx);
-    vorkspace_ui::clock::use_test_clock(cx);
-    s.window
-        .update(cx, |shell, _, cx| {
-            assert!(shell.workspace.classic_layout);
-            s.manager.update(cx, |manager, cx| {
-                manager.settings = None;
-                cx.notify();
-            });
-        })
-        .unwrap();
-    let visual = &mut gpui::VisualTestContext::from_window(s.window.into(), cx);
-    visual.run_until_parked();
-    vorkspace_ui::clock::settle_animations(s.window, visual);
-    for width in [220., 280., 400., 500.] {
-        s.window
-            .update(visual, |shell, _, cx| {
-                shell.workspace.right_panel_width = width;
-                cx.notify();
-            })
-            .unwrap();
-        visual.run_until_parked();
-        vorkspace_ui::clock::settle_animations(s.window, visual);
-        let panel = visual.debug_bounds("right-panel-frame").unwrap();
-        let divider = visual.debug_bounds("right-panel-resize").unwrap();
-        assert!((divider.center().x - panel.left() - px(0.5)).abs() <= px(0.5));
-        assert_eq!(panel.size.width, px(width));
-        let tabs = visual.debug_bounds("bot-overview-tabs").unwrap();
-        let toggle = visual.debug_bounds("toggle-right-panel").unwrap();
-        assert!(
-            tabs.right() < toggle.left(),
-            "Bot header actions stay available at the minimum details width"
-        );
-    }
-    let start = visual.debug_bounds("right-panel-resize").unwrap().center();
-    let end = start - gpui::point(px(40.), px(0.));
-    visual.simulate_mouse_down(start, MouseButton::Left, Default::default());
-    visual.simulate_mouse_move(end, MouseButton::Left, Default::default());
-    visual.simulate_mouse_up(end, MouseButton::Left, Default::default());
-    visual.run_until_parked();
-    vorkspace_ui::clock::settle_animations(s.window, visual);
-    s.window
-        .update(visual, |shell, _, _| {
-            assert_eq!(shell.workspace.right_panel_width, 540.);
-        })
-        .unwrap();
-    assert_eq!(
-        visual.debug_bounds("right-panel-frame").unwrap().size.width,
-        px(540.)
-    );
-    s.window
-        .update(visual, |shell, _, cx| {
-            shell
-                .git
-                .update(cx, |git, cx| git.set_project("~".into(), cx));
-            cx.notify();
-        })
-        .unwrap();
-    for _ in 0..2 {
-        visual.run_until_parked();
-        vorkspace_ui::clock::settle_animations(s.window, visual);
-        let open = visual.debug_bounds("toggle-right-panel").unwrap();
-        visual.simulate_click(open.center(), Default::default());
-        visual.run_until_parked();
-        vorkspace_ui::clock::settle_animations(s.window, visual);
-        assert!(visual.debug_bounds("bot-overview-tabs").is_none());
-        assert!(visual.debug_bounds("bot-overview-panel").is_none());
-        assert_eq!(visual.debug_bounds("toggle-right-panel").unwrap(), open);
-        let saved = locked(&s.store).unwrap().ui_state().unwrap().unwrap();
-        let saved: crate::workspace::Workspace = serde_json::from_str(&saved).unwrap();
-        assert!(!saved.right_panel_open);
-        assert_eq!(saved.right_panel_width, 540.);
-        visual.simulate_click(open.center(), Default::default());
-        visual.run_until_parked();
-        vorkspace_ui::clock::settle_animations(s.window, visual);
-        assert!(visual.debug_bounds("bot-overview-tabs").is_some());
-        assert_eq!(
-            visual.debug_bounds("right-panel-frame").unwrap().size.width,
-            px(540.)
-        );
-    }
-}
-
-#[gpui::test]
-fn opening_a_session_card_preserves_preview_state_when_returning_to_the_original_workspace(
-    cx: &mut TestAppContext,
-) {
-    let s = setup(cx);
-    vorkspace_ui::clock::use_test_clock(cx);
-    let (session, preview) = s
-        .window
-        .update(cx, |shell, _, cx| {
-            s.manager.update(cx, |manager, cx| {
-                manager.settings = None;
-                cx.notify();
-            });
-            let session = shell.workspace.active.unwrap();
-            let preview = shell.bot_ensure_session(session, cx).unwrap();
-            preview.update(cx, |session, cx| {
-                session.input.update(cx, |input, cx| {
-                    input.set_text("Keep this preview draft".into(), cx)
-                })
-            });
-            (session, preview)
-        })
-        .unwrap();
-    let visual = &mut gpui::VisualTestContext::from_window(s.window.into(), cx);
-    visual.run_until_parked();
-    vorkspace_ui::clock::settle_animations(s.window, visual);
-    assert!(visual.debug_bounds("sidebar-frame").is_none());
-    let toggle = visual.debug_bounds("toggle-right-panel").unwrap();
-    visual.simulate_click(toggle.center(), Default::default());
-    visual.run_until_parked();
-    vorkspace_ui::clock::settle_animations(s.window, visual);
-    assert!(visual.debug_bounds("right-panel-frame").is_none());
-    s.manager.update(visual, |manager, cx| {
-        manager.card_action(&s.id, &json!({"type":"session","sessionId":session}), cx)
-    });
-    visual.run_until_parked();
-    vorkspace_ui::clock::settle_animations(s.window, visual);
-    let details = visual.debug_bounds("right-panel-frame").unwrap();
-    assert!(s.manager.read_with(
-        visual,
-        |manager, _| matches!(manager.route,Some(Route::Session(id)) if id==session)
-    ));
-    let session_tab = Box::leak(format!("title-tab-{session}").into_boxed_str());
-    let session_bounds = visual.debug_bounds(session_tab).unwrap();
-    visual.simulate_click(session_bounds.center(), Default::default());
-    visual.run_until_parked();
-    vorkspace_ui::clock::settle_animations(s.window, visual);
-    let rail = visual.debug_bounds("classic-project-rail").unwrap();
-    let sidebar = visual.debug_bounds("sidebar-frame").unwrap();
-    assert_eq!(
-        sidebar.left(),
-        visual.debug_bounds("main-pane-frame").unwrap().right()
-    );
-    assert_eq!(
-        visual.debug_bounds("main-pane-frame").unwrap().left(),
-        rail.right()
-    );
-    assert!(
-        visual.debug_bounds("right-panel-frame").is_none(),
-        "ordinary sessions use the shared right-hand sidebar"
-    );
-    s.window
-        .update(visual, |shell, window, cx| {
-            assert_eq!(shell.workspace.active, Some(session));
-            assert!(
-                shell.workspace.right_panel_open,
-                "Bot details stay enabled for the next Bot visit"
-            );
-            let actual = shell.bot_ensure_session(session, cx).unwrap();
-            assert_eq!(actual.entity_id(), preview.entity_id());
-            assert_eq!(
-                actual.read(cx).input.read(cx).content,
-                "Keep this preview draft"
-            );
-            assert!(
-                actual
-                    .read(cx)
-                    .input
-                    .read(cx)
-                    .focus_handle(cx)
-                    .contains_focused(window, cx)
-            );
-        })
-        .unwrap();
-    let bot_tab = Box::leak(format!("bot-title-tab-{}", s.id).into_boxed_str());
-    let bot_bounds = visual.debug_bounds(bot_tab).unwrap();
-    visual.simulate_click(bot_bounds.center(), Default::default());
-    visual.run_until_parked();
-    vorkspace_ui::clock::settle_animations(s.window, visual);
-    assert_eq!(visual.debug_bounds("right-panel-frame").unwrap(), details);
-    assert_eq!(
-        preview.read_with(visual, |session, cx| session
-            .input
-            .read(cx)
-            .content
-            .to_string()),
-        "Keep this preview draft"
-    );
-}
-
-#[gpui::test]
 fn long_habit_draft_keeps_fields_and_schedule_inside_the_scrolling_page(cx: &mut TestAppContext) {
     let s = setup(cx);
     cx.update(|cx| {
@@ -3443,11 +3133,10 @@ fn long_habit_draft_keeps_fields_and_schedule_inside_the_scrolling_page(cx: &mut
         crate::popover::bind(cx);
     });
     s.window
-        .update(cx, |shell, _, cx| {
-            shell.workspace.right_panel_width = 220.;
+        .update(cx, |_, window, cx| {
+            window.resize(gpui::size(px(740.), px(800.)));
             s.manager.update(cx, |m, cx| {
-                m.settings = None;
-                m.overview_tab = OverviewTab::Habits;
+                m.settings = Some(SettingsSection::Habits);
                 m.route = Some(Route::NewHabit);
                 cx.notify();
             });
@@ -3470,8 +3159,11 @@ fn long_habit_draft_keeps_fields_and_schedule_inside_the_scrolling_page(cx: &mut
     });
     visual.run_until_parked();
     vorkspace_ui::clock::settle_animations(s.window, visual);
-    let project = visual.debug_bounds("classic-project-0").unwrap();
-    visual.simulate_click(project.center(), Default::default());
+    s.window
+        .update(visual, |shell, window, cx| {
+            shell.select_project(s.project.clone(), window, cx);
+        })
+        .unwrap();
     visual.run_until_parked();
     assert_eq!(
         s.manager
@@ -3595,7 +3287,7 @@ fn habit_detail_preserves_long_content_history_and_actions_without_edit_fields(
             shell.workspace.right_panel_width = 280.;
             s.manager.update(cx, |m, cx| {
                 m.settings = None;
-                m.overview_tab = OverviewTab::Habits;
+                m.settings = Some(SettingsSection::Habits);
                 m.habits = vec![h.clone()];
                 m.route = Some(Route::Habit(h.id.clone()));
                 cx.notify();
@@ -3650,7 +3342,7 @@ fn habit_detail_preserves_long_content_history_and_actions_without_edit_fields(
 }
 
 #[gpui::test]
-fn new_habit_click_transfers_composer_focus_after_the_animated_page_mounts(
+fn new_habit_click_transfers_settings_focus_after_the_animated_page_mounts(
     cx: &mut TestAppContext,
 ) {
     let s = setup(cx);
@@ -3658,8 +3350,7 @@ fn new_habit_click_transfers_composer_focus_after_the_animated_page_mounts(
     s.window
         .update(cx, |_, window, cx| {
             s.manager.update(cx, |m, cx| {
-                m.settings = None;
-                m.overview_tab = OverviewTab::Habits;
+                m.settings = Some(SettingsSection::Habits);
                 m.route = None;
                 m.focus_active(window, cx);
                 cx.notify();
@@ -3670,15 +3361,8 @@ fn new_habit_click_transfers_composer_focus_after_the_animated_page_mounts(
     visual.run_until_parked();
     s.window
         .update(visual, |_, window, cx| {
-            s.manager.read_with(cx, |m, cx| {
-                assert!(
-                    m.chat()
-                        .unwrap()
-                        .read(cx)
-                        .input
-                        .focus_handle(cx)
-                        .is_focused(window)
-                );
+            s.manager.read_with(cx, |m, _| {
+                assert!(m.settings_focus.is_focused(window));
             });
         })
         .unwrap();
@@ -3695,7 +3379,7 @@ fn new_habit_click_transfers_composer_focus_after_the_animated_page_mounts(
             .unwrap();
         visual.run_until_parked();
     };
-    // Follow the actual header action, with the old composer still focused.
+    // Follow the settings action and focus its field after the page mounts.
     let add = visual.debug_bounds("bot-new-habit").unwrap();
     visual.simulate_click(add.center(), Default::default());
     visual.run_until_parked();
@@ -3722,7 +3406,7 @@ fn new_habit_click_transfers_composer_focus_after_the_animated_page_mounts(
     for reopen in [false, true] {
         visual
             .update_window(s.window.into(), |_, window, cx| {
-                let details = s.manager.read(cx).details.clone();
+                let details = s.manager.read(cx).habit_panel.clone();
                 details.update(cx, |v, cx| v.elapsed(std::time::Duration::from_secs(1), cx));
                 window.draw(cx).clear(cx);
             })
@@ -3732,6 +3416,7 @@ fn new_habit_click_transfers_composer_focus_after_the_animated_page_mounts(
         visual.run_until_parked();
         assert!(s.manager.read_with(visual, |m, _| m.route.is_none()));
         if !reopen {
+            vorkspace_ui::clock::settle_animations(s.window, visual);
             let add = visual.debug_bounds("bot-new-habit").unwrap();
             visual.simulate_click(add.center(), Default::default());
             visual.run_until_parked();
@@ -3861,7 +3546,7 @@ fn sidebar_bot_only_marks_unread_replies_and_swaps_the_mark_for_options_on_hover
 }
 
 #[gpui::test]
-fn sidebar_right_click_opens_bot_menu_outside_the_bot_and_edits_its_look(cx: &mut TestAppContext) {
+fn sidebar_options_lead_to_settings_where_appearance_is_edited(cx: &mut TestAppContext) {
     cx.update(input::bind);
     let s = setup(cx);
     vorkspace_ui::clock::use_test_clock(cx);
@@ -3896,19 +3581,26 @@ fn sidebar_right_click_opens_bot_menu_outside_the_bot_and_edits_its_look(cx: &mu
         click_count: 1,
     });
     visual.run_until_parked();
-    // BotMenu opens beside the pointer with 5 3D face styles, shape dropdown,
-    // texture toggle switch, grid scale slider, and nine circular presets.
+    assert!(visual.debug_bounds("bot-settings-look-picker").is_none());
+    assert!(visual.debug_bounds("menu-action-background").is_none());
+    let settings = visual.debug_bounds("menu-action-settings").unwrap();
+    visual.simulate_click(settings.center(), Default::default());
+    visual.run_until_parked();
+    let edit = visual.debug_bounds("bot-look-edit").unwrap();
+    let preview = visual.debug_bounds("bot-look").unwrap();
+    assert!(edit.left() > preview.center().x && edit.bottom() < preview.center().y);
+    visual.simulate_click(edit.center(), Default::default());
+    visual.run_until_parked();
     let first = visual
         .debug_bounds("bot-mascot-0")
-        .expect("right-click opens the Bot's menu");
+        .expect("the pencil opens appearance settings");
     let last = visual.debug_bounds("bot-mascot-4").unwrap();
     assert_eq!(first.top(), last.top());
-    assert_eq!(first.size.height, px(32.));
-    assert!(first.left() >= at.x);
-    let shape_dd = visual.debug_bounds("bot-shape-dropdown").unwrap();
+    assert_eq!(first.size.height, px(44.));
+    let shape_dd = visual.debug_bounds("settings-bot-shape-dropdown").unwrap();
     visual.simulate_click(shape_dd.center(), Default::default());
     visual.run_until_parked();
-    let shape = visual.debug_bounds("bot-shape-4").unwrap();
+    let shape = visual.debug_bounds("settings-bot-shape-4").unwrap();
     visual.simulate_click(shape.center(), Default::default());
     visual.run_until_parked();
     assert!(visual.debug_bounds("bot-custom-color").is_none());
@@ -3919,27 +3611,13 @@ fn sidebar_right_click_opens_bot_menu_outside_the_bot_and_edits_its_look(cx: &mu
     let pink = visual.debug_bounds("bot-color-4").unwrap().center();
     visual.simulate_click(pink, Default::default());
     visual.run_until_parked();
-    let bg_btn = visual.debug_bounds("bot-bg-color-button").unwrap();
-    let fg_btn = visual.debug_bounds("bot-fg-color-button").unwrap();
+    let bg_btn = visual.debug_bounds("settings-bot-bg-color-button").unwrap();
+    let fg_btn = visual.debug_bounds("settings-bot-fg-color-button").unwrap();
     assert_eq!(bg_btn.top(), fg_btn.top());
     assert!(bg_btn.bottom() <= visual.debug_bounds("bot-color-0").unwrap().top());
     assert!(visual.debug_bounds("menu-action-delete").is_none());
-    let settings_row = visual.debug_bounds("menu-action-settings").unwrap();
-    let card = s.manager.read_with(visual, |m, cx| {
-        m.menu
-            .as_ref()
-            .unwrap()
-            .1
-            .read(cx)
-            .surface_region()
-            .get()
-            .unwrap()
-    });
-    let name_bounds = visual.debug_bounds("bot-options-name").unwrap();
-    assert_eq!(name_bounds.top() - card.top(), px(9.));
-    assert_eq!(card.bottom() - settings_row.bottom(), px(9.));
-    let die = visual.debug_bounds("bot-randomize-seed").unwrap();
-    let grid_slider = visual.debug_bounds("bot-grid-slider").unwrap();
+    let die = visual.debug_bounds("settings-bot-randomize-seed").unwrap();
+    let grid_slider = visual.debug_bounds("settings-bot-grid-slider").unwrap();
     assert!(die.bottom() <= grid_slider.top());
     visual.simulate_click(bg_btn.center(), Default::default());
     visual.run_until_parked();
@@ -3950,7 +3628,7 @@ fn sidebar_right_click_opens_bot_menu_outside_the_bot_and_edits_its_look(cx: &mu
     });
     assert_eq!(color, bot::COLORS_BOT[4]);
     assert_eq!(badge_shape, "hex");
-    // Opening Background image from the Bot menu keeps the effect dropdown above the modal.
+    // Background customization belongs to the settings appearance menu too.
     s.manager.update(visual, |m, cx| {
         m.roster.get_mut(&s.id).unwrap().background =
             Some(vorkspace_core::project_appearance::Background {
@@ -3965,6 +3643,14 @@ fn sidebar_right_click_opens_bot_menu_outside_the_bot_and_edits_its_look(cx: &mu
     assert!(
         s.manager
             .read_with(visual, |m, _| m.menu.is_none() && m.background.is_some())
+    );
+    assert!(
+        visual.debug_bounds("bot-settings-dialog").is_none(),
+        "the background editor owns this modal transition"
+    );
+    assert!(
+        s.manager
+            .read_with(visual, |m, _| m.settings == Some(SettingsSection::General))
     );
     let effect_trigger = visual.debug_bounds("project-background-effect").unwrap();
     visual.simulate_click(effect_trigger.center(), Default::default());
@@ -3989,6 +3675,10 @@ fn sidebar_right_click_opens_bot_menu_outside_the_bot_and_edits_its_look(cx: &mu
     visual.simulate_click(close_bg.center(), Default::default());
     visual.run_until_parked();
     assert!(s.manager.read_with(visual, |m, _| m.background.is_none()));
+    assert!(
+        visual.debug_bounds("bot-settings-dialog").is_some(),
+        "closing the child restores settings"
+    );
 }
 
 #[gpui::test]
@@ -4436,6 +4126,7 @@ fn a_queued_message_waits_for_the_running_turn_instead_of_steering(cx: &mut Test
 #[gpui::test]
 fn claimed_outbox_message_is_presented_as_uncertain_before_retry(cx: &mut TestAppContext) {
     let s = setup(cx);
+    close_bot_pane(&s, cx);
     let id = format!("uncertain-{}", bot::new_id());
     s.manager.update(cx, |manager, cx| {
         manager.chats.remove(&s.id);
@@ -4452,6 +4143,7 @@ fn claimed_outbox_message_is_presented_as_uncertain_before_retry(cx: &mut TestAp
         );
     });
     cx.run_until_parked();
+    assert!(!s.manager.read_with(cx, |m, _| m.chats.contains_key(&s.id)));
     let other = Store::open(&Path::new(&s.project).join("native.sqlite")).unwrap();
     let queued = Roster::load(&other)
         .unwrap()
@@ -4983,44 +4675,6 @@ fn minion_channel_admission_filters_reads_and_refuses_user_posts(cx: &mut TestAp
         assert!(m.channel_user_read_only(&team));
         assert!(m.channels.state.get(&team).unwrap().messages.is_empty());
     });
-}
-
-#[gpui::test]
-fn todo_badge_counts_without_opening_the_board(cx: &mut TestAppContext) {
-    let s = setup(cx);
-    let board = vorkspace_core::todos::TodoBoard::Bot(s.id.clone());
-    locked(&s.store)
-        .unwrap()
-        .add_todo(&board, "Persisted", vorkspace_core::todos::TodoStatus::Todo)
-        .unwrap();
-    // A restart opens straight to the Sessions tab.
-    let (owner, prefs) = s
-        .manager
-        .read_with(cx, |m, _| (m.owner.clone(), m.prefs.clone()));
-    let restored = cx.new(|cx| {
-        Bots::new(
-            s.store.clone(),
-            owner,
-            prefs,
-            Some(s.id.clone()),
-            AnchorSlot::default(),
-            cx,
-        )
-    });
-    cx.run_until_parked();
-    restored.read_with(cx, |m, cx| {
-        assert!(m.overview_tab == OverviewTab::Sessions);
-        assert!(m.todo_board.is_none());
-        assert_eq!(m.open_todos(&s.id, cx), 1);
-    });
-    // A task the Bot adds while another tab is selected counts too.
-    locked(&s.store)
-        .unwrap()
-        .add_todo(&board, "Added", vorkspace_core::todos::TodoStatus::Todo)
-        .unwrap();
-    cx.update(crate::todos::changed);
-    cx.run_until_parked();
-    restored.read_with(cx, |m, cx| assert_eq!(m.open_todos(&s.id, cx), 2));
 }
 
 #[gpui::test]

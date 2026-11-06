@@ -325,6 +325,8 @@ impl Bots {
                     run.view.update(cx, |v, cx| v.bot_stop(cx));
                 }
                 this.roster.bots.retain(|m| m.id != id);
+                this.open_islands.remove(&id);
+                this.expanded_islands.remove(&id);
                 if this.active.as_ref() == Some(&id) {
                     this.active = None;
                     this.settings = None;

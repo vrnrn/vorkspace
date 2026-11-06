@@ -1,4 +1,5 @@
 use super::*;
+use vorkspace_ui::radius;
 
 use crate::popover::{Anchor, AnchorSlot, Menu, MenuAction, MenuEvent, MenuItem, MenuStyle};
 use gpui::{AnyView, EventEmitter, FocusHandle};
@@ -156,7 +157,7 @@ impl gpui::Render for ChannelLookEditor {
                     .px_2p5()
                     .flex()
                     .items_center()
-                    .rounded_md()
+                    .rounded(px(radius::CONTROL))
                     .border_1()
                     .border_color(content(0.1))
                     .bg(content(0.05))
@@ -227,7 +228,7 @@ impl gpui::Render for ChannelLookEditor {
                                                 .role(Role::Button)
                                                 .aria_label("Randomize seed")
                                                 .size(px(22.))
-                                                .rounded_md()
+                                                .rounded(px(radius::CONTROL))
                                                 .border_1()
                                                 .border_color(content(0.14))
                                                 .bg(content(0.06))
@@ -326,7 +327,7 @@ impl gpui::Render for ChannelLookEditor {
                                     .flex_1()
                                     .h(px(24.))
                                     .px_2()
-                                    .rounded_md()
+                                    .rounded(px(radius::CONTROL))
                                     .border_1()
                                     .border_color(if bg_active {
                                         accent_color()
@@ -364,7 +365,7 @@ impl gpui::Render for ChannelLookEditor {
                                         .flex_1()
                                         .h(px(24.))
                                         .px_2()
-                                        .rounded_md()
+                                        .rounded(px(radius::CONTROL))
                                         .border_1()
                                         .border_color(if fg_active {
                                             accent_color()
@@ -400,7 +401,7 @@ impl gpui::Render for ChannelLookEditor {
                                         .h(px(24.))
                                         .w(px(28.))
                                         .flex_shrink_0()
-                                        .rounded_md()
+                                        .rounded(px(radius::CONTROL))
                                         .border_1()
                                         .border_color(content(0.15))
                                         .bg(content(0.05))
@@ -593,8 +594,19 @@ impl Bots {
         }
     }
 
+    #[cfg(test)]
     pub(crate) fn classic_channels_open(&self) -> bool {
         self.prefs.bots && self.prefs.channels && self.channels.open
+    }
+
+    /// Restore the Channels browser in its existing pane without selecting a
+    /// different channel, moving workspace focus, or opening a host tab.
+    pub(crate) fn ensure_channels_pane(&mut self, cx: &mut Context<Self>) {
+        if !self.prefs.bots || !self.prefs.channels || self.channels.open {
+            return;
+        }
+        self.channels.open = true;
+        self.changed(cx);
     }
 
     pub(crate) fn close_classic_channels(&mut self, cx: &mut Context<Self>) {
@@ -607,11 +619,7 @@ impl Bots {
 
     /// The original rail lists Channels beside Bots, regardless of which
     /// project's session/file pane happens to be selected.
-    pub(crate) fn classic_channels_rail(
-        &mut self,
-        liquid: &crate::liquid::Liquid,
-        cx: &mut Context<Self>,
-    ) -> AnyElement {
+    pub(crate) fn classic_channels_rail(&mut self, cx: &mut Context<Self>) -> AnyElement {
         if !self.prefs.bots || !self.prefs.channels {
             return div().into_any_element();
         }
@@ -629,13 +637,12 @@ impl Bots {
             .pb_3()
             .child(
                 section_label("Channels").child(
-                    icon_button_hover("classic-add-channel", "New channel", "plus", 0.)
+                    icon_button("classic-add-channel", "New channel", "plus")
                         .debug_selector(|| "classic-add-channel".into())
                         .focusable()
                         .tab_stop(true)
                         .size(px(20.))
                         .relative()
-                        .child(liquid.row("add:channel", false))
                         .on_click(cx.listener(|this, _, window, cx| {
                             this.open_classic_channel(None, window, cx);
                         })),
@@ -669,13 +676,13 @@ impl Bots {
                     .h(px(32.))
                     .min_w_0()
                     .px_2()
-                    .rounded_md()
+                    .rounded(px(radius::CONTROL))
                     .flex()
                     .items_center()
                     .gap_2()
                     .text_size(px(14.))
                     .opacity(if selected { 1. } else { 0.65 })
-                    .child(liquid.row(format!("channel:{id}"), selected))
+                    .when(selected, |d| d.bg(content(0.1)))
                     // Like a Project, its mark is the grid in its colour.
                     .child(
                         div()
@@ -686,8 +693,8 @@ impl Bots {
                             .justify_center()
                             .child(vorkspace_ui::session_mark::color_dots(bg)),
                     )
-                    .hover(|s| s.opacity(1.))
-                    .focus(|s| s.opacity(1.))
+                    .hover(|s| s.bg(content(0.08)).opacity(1.))
+                    .focus(|s| s.bg(content(0.1)).opacity(1.))
                     .child(
                         div()
                             .debug_selector({

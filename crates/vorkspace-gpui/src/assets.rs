@@ -157,6 +157,9 @@ impl AssetSource for Assets {
 }
 fn icon_body(path: &str) -> Option<&'static str> {
     Some(match path {
+        "bot-island" => {
+            "<rect x='3' y='3' width='18' height='18' rx='5'/><path d='M8 8h8M8 12h5M8 16h8'/>"
+        }
         "annotation-brush-icon" => {
             "<path d='M14 14 21 5a2 2 0 0 0-3-3l-9 7 5 5Z'/><path d='M10 11c-3-1-5 1-5 4 0 2-1 3-3 4 4 1 8 1 10-2 1-2 0-4-2-6Z'/>"
         }

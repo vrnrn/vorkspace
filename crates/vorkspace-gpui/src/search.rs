@@ -10,6 +10,7 @@ use gpui::{
 };
 use std::{
     collections::HashMap,
+    path::Path,
     sync::{
         Arc,
         atomic::{AtomicBool, Ordering},
@@ -47,6 +48,8 @@ pub(crate) struct SearchView {
     recent: Vec<String>,
     logos: HashMap<String, String>,
     files: Vec<vorkspace_core::files::ProjectFile>,
+    visible: bool,
+    listing_pending: bool,
     scope: Scope,
     query: String,
     hits: Vec<Hit>,
@@ -93,23 +96,7 @@ impl SearchView {
             this.active = 0;
             this.refresh(cx);
         });
-        let listing_cancel = Arc::new(AtomicBool::new(false));
-        let flag = listing_cancel.clone();
-        let root = cwd.clone();
-        let work = cx.background_executor().spawn(async move {
-            vorkspace_core::files::list_project_files_sync_cancellable(&root, Some(&flag))
-        });
-        cx.spawn(async move |this, cx| {
-            let result = work.await;
-            let _ = this.update(cx, |this, cx| {
-                if let Ok(files) = result {
-                    this.files = files;
-                    this.rank(cx);
-                }
-            });
-        })
-        .detach();
-        Self {
+        let mut this = Self {
             input,
             cwd,
             store,
@@ -119,6 +106,8 @@ impl SearchView {
             recent: sources.recent,
             logos: sources.logos,
             files: vec![],
+            visible: true,
+            listing_pending: false,
             scope: Scope::All,
             query: String::new(),
             hits: vec![],
@@ -135,14 +124,77 @@ impl SearchView {
             truncated: (false, false),
             error: None,
             cancel: Arc::new(AtomicBool::new(false)),
-            listing_cancel,
+            listing_cancel: Arc::new(AtomicBool::new(false)),
             debounce: None,
             _changed: changed,
+        };
+        this.reload_files(cx);
+        this
+    }
+
+    pub(crate) fn is_visible(&self) -> bool {
+        self.visible
+    }
+
+    /// A revealed pane receives one current snapshot from the Shell.
+    pub(crate) fn set_active(&mut self, sources: Option<Sources>, cx: &mut Context<Self>) {
+        self.visible = sources.is_some();
+        if let Some(sources) = sources {
+            self.summaries = sources.summaries;
+            self.live = sources.live;
+            self.projects = sources.projects;
+            self.recent = sources.recent;
+            self.logos = sources.logos;
+            self.live_revision += 1;
+            self.reload_files(cx);
+            self.refresh(cx);
+        } else {
+            self.listing_cancel.store(true, Ordering::Release);
+            self.cancel_query();
         }
+    }
+
+    fn reload_files(&mut self, cx: &mut Context<Self>) {
+        self.listing_cancel.store(true, Ordering::Release);
+        self.listing_cancel = Arc::new(AtomicBool::new(false));
+        self.files.clear();
+        self.listing_pending = true;
+        let flag = self.listing_cancel.clone();
+        let check = flag.clone();
+        let root = self.cwd.clone();
+        let work = cx.background_executor().spawn(async move {
+            let mut files =
+                vorkspace_core::files::list_project_files_sync_cancellable(&root, Some(&flag))?;
+            if !vorkspace_core::remote_workspace::is_remote(Path::new(&root)) {
+                // git ls-files includes cached paths deleted from the working copy.
+                files.retain(|file| {
+                    !flag.load(Ordering::Acquire) && Path::new(&file.path).is_file()
+                });
+            }
+            Ok::<_, String>(files)
+        });
+        cx.spawn(async move |this, cx| {
+            let result = work.await;
+            let _ = this.update(cx, |this, cx| {
+                if check.load(Ordering::Acquire) {
+                    return;
+                }
+                this.listing_pending = false;
+                if let Ok(files) = result {
+                    this.files = files;
+                }
+                this.rank(cx);
+            });
+        })
+        .detach();
     }
 
     pub(crate) fn draft(&self, cx: &App) -> (String, Scope) {
         (self.input.read(cx).content.to_string(), self.scope)
+    }
+    #[cfg(test)]
+    pub(crate) fn hits(&self) -> &[Hit] {
+        &self.hits
     }
     pub(crate) fn restore_draft(&mut self, draft: (String, Scope), cx: &mut Context<Self>) {
         self.scope = draft.1;
@@ -157,7 +209,7 @@ impl SearchView {
     pub(crate) fn update_session(
         &mut self,
         summary: Session,
-        rows: Arc<Vec<Row>>,
+        rows: Option<Arc<Vec<Row>>>,
         cx: &mut Context<Self>,
     ) {
         if let Some(old) = self.summaries.iter_mut().find(|s| s.id == summary.id) {
@@ -165,25 +217,37 @@ impl SearchView {
         } else {
             self.summaries.push(summary.clone());
         }
-        self.live.insert(summary.id, rows);
-        self.live_revision += 1;
-        if !self.query.is_empty() {
-            self.rank(cx);
-            self.refresh_live(cx);
-        }
-    }
-    pub(crate) fn remove_live_session(&mut self, id: i64, cx: &mut Context<Self>) {
-        if self.live.remove(&id).is_some() {
-            self.live_revision += 1;
+        let id = summary.id;
+        if let Some(rows) = rows {
+            self.live.insert(id, rows);
+        } else {
+            self.live.remove(&id);
             self.local.retain(
                 |hit| !matches!(hit.target, Target::Message { session, .. } if session == id),
             );
+        }
+        self.live_revision += 1;
+        if self.visible && !self.query.is_empty() {
             self.rank(cx);
             self.refresh_live(cx);
         }
     }
+    pub(crate) fn forget_session(&mut self, id: i64, cx: &mut Context<Self>) {
+        self.summaries.retain(|session| session.id != id);
+        self.live.remove(&id);
+        self.live_revision += 1;
+        if self.scope.sessions() {
+            // The saved-history query may have opened its SQLite snapshot
+            // before deletion. Retire that query as well as the live rows.
+            self.refresh(cx);
+        }
+    }
     fn refresh_live(&mut self, cx: &mut Context<Self>) {
-        if self.query.is_empty() || !self.scope.sessions() || self.live_task.is_some() {
+        if !self.visible
+            || self.query.is_empty()
+            || !self.scope.sessions()
+            || self.live_task.is_some()
+        {
             return;
         }
         let check = self.cancel.clone();
@@ -191,12 +255,15 @@ impl SearchView {
             cx.background_executor()
                 .timer(Duration::from_millis(100))
                 .await;
-            let Ok((work, revision)) = this.update(cx, |this, cx| {
+            let Ok(Some((work, revision))) = this.update(cx, |this, cx| {
+                if check.load(Ordering::Acquire) {
+                    return None;
+                }
                 let live = this.live.clone();
                 let summaries = this.summaries.clone();
                 let query = this.query.clone();
                 let flag = this.cancel.clone();
-                (
+                Some((
                     cx.background_executor().spawn(async move {
                         summaries
                             .into_iter()
@@ -208,15 +275,15 @@ impl SearchView {
                             .collect::<Vec<_>>()
                     }),
                     this.live_revision,
-                )
+                ))
             }) else {
                 return;
             };
             let hits = work.await;
-            if check.load(Ordering::Acquire) {
-                return;
-            }
             let _ = this.update(cx, |this, cx| {
+                if check.load(Ordering::Acquire) {
+                    return;
+                }
                 this.live_task = None;
                 if this.live_revision == revision {
                     this.local = hits;
@@ -248,11 +315,14 @@ impl SearchView {
         self.pointer = None;
         cx.notify();
     }
-    fn refresh(&mut self, cx: &mut Context<Self>) {
+    fn cancel_query(&mut self) {
         self.cancel.store(true, Ordering::Release);
-        self.cancel = Arc::new(AtomicBool::new(false));
         self.debounce = None;
         self.live_task = None;
+    }
+    fn refresh(&mut self, cx: &mut Context<Self>) {
+        self.cancel_query();
+        self.cancel = Arc::new(AtomicBool::new(false));
         self.local.clear();
         self.remote.clear();
         self.content.clear();
@@ -262,14 +332,19 @@ impl SearchView {
         self.files_loading = !self.query.is_empty() && self.scope.files();
         self.rank(cx);
         self.scroll.set_offset(point(px(0.), px(0.)));
-        if self.query.is_empty() {
+        if !self.visible || self.query.is_empty() {
             return;
         }
+        let check = self.cancel.clone();
         self.debounce = Some(cx.spawn(async move |this, cx| {
             cx.background_executor()
                 .timer(Duration::from_millis(200))
                 .await;
-            let _ = this.update(cx, |this, cx| this.start(cx));
+            let _ = this.update(cx, |this, cx| {
+                if !check.load(Ordering::Acquire) {
+                    this.start(cx);
+                }
+            });
         }));
     }
     fn start(&mut self, cx: &mut Context<Self>) {
@@ -300,10 +375,10 @@ impl SearchView {
             });
             cx.spawn(async move |this, cx| {
                 let (local, saved) = work.await;
-                if check.load(Ordering::Acquire) {
-                    return;
-                }
                 let _ = this.update(cx, |this, cx| {
+                    if check.load(Ordering::Acquire) {
+                        return;
+                    }
                     this.sessions_loading = false;
                     match saved {
                         Ok((hits, truncated)) => {
@@ -346,10 +421,10 @@ impl SearchView {
             });
             cx.spawn(async move |this, cx| {
                 let result = work.await;
-                if check.load(Ordering::Acquire) {
-                    return;
-                }
                 let _ = this.update(cx, |this, cx| {
+                    if check.load(Ordering::Acquire) {
+                        return;
+                    }
                     this.files_loading = false;
                     match result {
                         Ok((hits, truncated)) => {
@@ -482,7 +557,9 @@ impl Render for SearchView {
                 .into_any_element()
             })
             .collect();
-        let loading = self.sessions_loading || self.files_loading;
+        let loading = self.sessions_loading
+            || self.files_loading
+            || (self.listing_pending && self.scope.files() && !self.query.is_empty());
         div()
             .id("app-search")
             .key_context("Workspace")

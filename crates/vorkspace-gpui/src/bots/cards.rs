@@ -174,7 +174,7 @@ impl Bots {
 
     pub(super) fn card_action(&mut self, bot: &str, value: &Value, cx: &mut Context<Self>) {
         if value["type"] != "choice" {
-            self.active = Some(bot.into());
+            self.set_workspace_context(Some(bot), cx);
             if let Some(handle) = self.parent_window {
                 let app: &mut App = cx;
                 app.defer(move |cx| {
@@ -190,25 +190,18 @@ impl Bots {
             }
             "session" => {
                 if let Some(id) = value["sessionId"].as_i64() {
-                    self.route = Some(Route::Session(id));
-                    self.show_overview(cx);
-                    self.overview_tab = OverviewTab::Sessions;
-                    cx.notify();
+                    self.open_session_workspace_pane(id, cx);
                 }
             }
             "document" => {
                 if let Some(id) = value["documentId"].as_str() {
-                    self.open_document(id, cx);
-                    self.route = Some(Route::Document(id.into()));
-                    self.show_overview(cx);
-                    self.overview_tab = OverviewTab::Documents;
-                    cx.notify();
+                    self.open_document_workspace_pane(id, cx);
                 }
             }
             "habit" => {
+                cx.emit(TabOpened(bot.into()));
                 if value["started"] == true {
-                    self.show_overview(cx);
-                    self.overview_tab = OverviewTab::Habits;
+                    self.settings = Some(SettingsSection::Habits);
                     self.route = Some(Route::Habit(format!(
                         "card-{}",
                         value["id"].as_str().unwrap_or_default()
@@ -243,8 +236,7 @@ impl Bots {
                             },
                             cx,
                         );
-                        self.show_overview(cx);
-                        self.overview_tab = OverviewTab::Habits;
+                        self.settings = Some(SettingsSection::Habits);
                         self.route = None;
                     }
                     Err(e) => self.error = Some(e),

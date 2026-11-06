@@ -82,6 +82,21 @@ pub(super) fn load(store: &Database) -> Result<Loaded, String> {
     Ok((store.list_notes()?, links))
 }
 
+/// Pinned panes only need their own document. Repeating the library's full
+/// recording import and note-body load for every open tab would retain every
+/// other note's body in each pane.
+pub(super) fn load_pinned(store: &Database, note_id: &str) -> Result<Loaded, String> {
+    let store = locked(store)?;
+    let notes = store.get_note(note_id)?.into_iter().collect();
+    let links = store
+        .note_recordings()?
+        .into_iter()
+        .filter(|link| !link.deleted && link.note_id == note_id)
+        .map(|link| (link.note_id, link.recording_id))
+        .collect();
+    Ok((notes, links))
+}
+
 impl Notes {
     pub(crate) fn configure_recording(&mut self, hidden: &[String], cx: &mut Context<Self>) {
         self.recording
@@ -133,6 +148,15 @@ impl Notes {
         })();
         match result {
             Ok(Some((note, ephemeral))) => {
+                // The durable link, not a possibly stale view cache, decides
+                // whether this recording belongs to a pinned document tab.
+                if self.pinned.as_ref().is_some_and(|id| id != &note.id) {
+                    return;
+                }
+                if self.pinned.is_none() && self.open_tabs.contains(&note.id) {
+                    cx.emit(Event::OpenTab(note.id));
+                    return;
+                }
                 self.flush(cx);
                 if self.dirty {
                     return;
