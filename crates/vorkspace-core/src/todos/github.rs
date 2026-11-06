@@ -529,8 +529,8 @@ fn require_cli_options(help: &str, flags: &[&str]) -> Result<(), String> {
     Ok(())
 }
 
-fn ensure_label(root: &Path, repo: &str, label: &str) -> Result<(), String> {
-    let listed = || -> Result<bool, String> {
+fn ensure_label(root: &Path, repo: &str, label: &str) -> Result<String, String> {
+    let listed = || -> Result<Option<String>, String> {
         let raw = run_gh(
             root,
             &[
@@ -541,10 +541,12 @@ fn ensure_label(root: &Path, repo: &str, label: &str) -> Result<(), String> {
         let labels: Vec<Value> = serde_json::from_str(&raw).map_err(|e| e.to_string())?;
         Ok(labels
             .iter()
-            .any(|value| value.get("name").and_then(Value::as_str) == Some(label)))
+            .filter_map(|value| value.get("name").and_then(Value::as_str))
+            .find(|name| name.eq_ignore_ascii_case(label))
+            .map(str::to_owned))
     };
-    if listed()? {
-        return Ok(());
+    if let Some(name) = listed()? {
+        return Ok(name);
     }
     pinned(root, repo)?;
     let result = run_gh(
@@ -563,13 +565,17 @@ fn ensure_label(root: &Path, repo: &str, label: &str) -> Result<(), String> {
         true,
     );
     match result {
-        Ok(_) => Ok(()),
-        Err(error) => {
-            if listed()? {
-                Ok(())
-            } else {
-                Err(error)
-            }
+        Ok(_) => Ok(label.into()),
+        Err(error) => listed()?.ok_or(error),
+    }
+}
+
+fn append_status_label_removals(args: &mut Vec<String>, existing: &[String], target: Option<&str>) {
+    for label in existing {
+        let reserved = label.eq_ignore_ascii_case(IN_PROGRESS_LABEL)
+            || label.eq_ignore_ascii_case(IN_REVIEW_LABEL);
+        if reserved && target.is_none_or(|target| !label.eq_ignore_ascii_case(target)) {
+            args.extend(["--remove-label".into(), label.clone()]);
         }
     }
 }
@@ -697,27 +703,20 @@ pub fn update(
             TodoStatus::InReview => Some(IN_REVIEW_LABEL),
             _ => None,
         };
-        if let Some(target) = target {
-            ensure_label(root, expected_repo, target)?;
-        }
         let existing_labels = &current
             .issue
             .as_ref()
             .ok_or("GitHub issue metadata is missing")?
             .labels;
-        if let Some(target) =
-            target.filter(|target| !existing_labels.iter().any(|name| name == target))
-        {
-            args.extend(["--add-label".into(), target.into()]);
+        if let Some(target) = target.filter(|target| {
+            !existing_labels
+                .iter()
+                .any(|name| name.eq_ignore_ascii_case(target))
+        }) {
+            let label = ensure_label(root, expected_repo, target)?;
+            args.extend(["--add-label".into(), label]);
         }
-        for previous in [IN_PROGRESS_LABEL, IN_REVIEW_LABEL]
-            .into_iter()
-            .filter(|name| {
-                Some(*name) != target && existing_labels.iter().any(|existing| existing == name)
-            })
-        {
-            args.extend(["--remove-label".into(), previous.into()]);
-        }
+        append_status_label_removals(&mut args, existing_labels, target);
     }
     if args.len() > 6 {
         let refs = args.iter().map(String::as_str).collect::<Vec<_>>();
@@ -871,6 +870,31 @@ mod tests {
             issue(&closed, "acme/app", 0).unwrap().status,
             TodoStatus::Done
         );
+    }
+
+    #[test]
+    fn moving_to_todo_removes_status_labels_with_their_existing_spelling() {
+        let row = json!({
+            "number":7,"title":"Ship","url":"https://github.com/acme/app/issues/7","state":"OPEN",
+            "labels":[{"name":"Vorkspace:In-Progress"},{"name":"VORKSPACE:In-Review"},{"name":"Needs triage"}],
+        });
+        let item = issue(&row, "acme/app", 0).unwrap();
+        assert_eq!(item.status, TodoStatus::InReview);
+        let labels = item.issue.unwrap().labels;
+        let mut args = Vec::new();
+        append_status_label_removals(&mut args, &labels, None);
+        assert_eq!(
+            args,
+            [
+                "--remove-label",
+                "Vorkspace:In-Progress",
+                "--remove-label",
+                "VORKSPACE:In-Review"
+            ],
+        );
+        args.clear();
+        append_status_label_removals(&mut args, &labels, Some(IN_PROGRESS_LABEL));
+        assert_eq!(args, ["--remove-label", "VORKSPACE:In-Review"]);
     }
 
     #[test]
