@@ -631,6 +631,186 @@ fn rejected_detail_save_keeps_the_draft_and_error(cx: &mut TestAppContext) {
 }
 
 #[gpui::test]
+fn publishing_requires_saving_the_open_or_reopened_detail_draft(cx: &mut TestAppContext) {
+    let (window, store) = board_window(cx);
+    // Simulate a linked board in the view while keeping the fixture entirely local.
+    let project = tempfile::tempdir().unwrap();
+    let board = TodoBoard::Project(project.path().to_string_lossy().into_owned());
+    let (task, dependency) = {
+        let store = locked(&store).unwrap();
+        (
+            store
+                .add_todo(&board, "Original", TodoStatus::Todo)
+                .unwrap(),
+            store
+                .add_todo(&board, "Dependency", TodoStatus::Todo)
+                .unwrap(),
+        )
+    };
+    window
+        .update(cx, |view, _, cx| view.set_board(Some(board.clone()), cx))
+        .unwrap();
+    cx.run_until_parked();
+    window
+        .update(cx, |view, _, cx| {
+            view.github_repo = Some("example/project".into());
+            cx.notify();
+        })
+        .unwrap();
+    let visual = &mut gpui::VisualTestContext::from_window(window.into(), cx);
+    let click = |selector, visual: &mut gpui::VisualTestContext| {
+        let bounds = visual.debug_bounds(selector).unwrap();
+        visual.simulate_click(bounds.center(), Default::default());
+    };
+    let card: &'static str = Box::leak(format!("todo-{}", task.id).into_boxed_str());
+    click(card, visual);
+    click("todo-details-edit", visual);
+    window
+        .update(visual, |view, _, cx| {
+            let editor = view.details.as_ref().unwrap();
+            editor.title.update(cx, |input, cx| {
+                input.set_text("Unfinished title".into(), cx)
+            });
+            editor.description.update(cx, |input, cx| {
+                input.set_text("Unfinished description".into(), cx)
+            });
+            view.append_attachment("https://example.com/design".into(), cx);
+            view.toggle_dependency(dependency.id.clone(), cx);
+        })
+        .unwrap();
+    for reopen in [false, true] {
+        if reopen {
+            click("todo-details-close", visual);
+            click(card, visual);
+            click("todo-details-edit", visual);
+        }
+        click("todo-publish", visual);
+        window
+            .update(visual, |view, _, cx| {
+                assert_eq!(view.pending_changes, 0);
+                assert!(
+                    view.change_error
+                        .as_deref()
+                        .unwrap()
+                        .contains("Save your changes before publishing")
+                );
+                let editor = view.details.as_ref().unwrap();
+                assert_eq!(editor.title.read(cx).content.as_ref(), "Unfinished title");
+                assert_eq!(
+                    editor.description.read(cx).content.as_ref(),
+                    "Unfinished description"
+                );
+                assert_eq!(
+                    TodoBoardView::reference_lines(&editor.attachments, cx),
+                    ["https://example.com/design"]
+                );
+                assert_eq!(
+                    TodoBoardView::dependency_values(&editor.dependencies, cx),
+                    [dependency.id.clone()]
+                );
+            })
+            .unwrap();
+    }
+    let store = locked(&store).unwrap();
+    assert_eq!(store.get_todo(&board, &task.id).unwrap(), Some(task));
+    assert!(store.pending_todo_submissions(&board).unwrap().is_empty());
+}
+
+#[gpui::test]
+fn stale_local_detail_save_preserves_both_edits_until_explicit_reload(cx: &mut TestAppContext) {
+    let (window, store) = board_window(cx);
+    let board = TodoBoard::Personal;
+    let task = locked(&store)
+        .unwrap()
+        .add_todo_with_details(
+            &board,
+            "Original",
+            TodoStatus::Todo,
+            "Old description",
+            &[],
+            &[],
+        )
+        .unwrap();
+    cx.update(changed);
+    cx.run_until_parked();
+    window
+        .update(cx, |view, _, cx| {
+            view.open_details(&task, cx);
+            view.detail_editing = true;
+            view.details
+                .as_ref()
+                .unwrap()
+                .title
+                .update(cx, |input, cx| input.set_text("My new title".into(), cx));
+        })
+        .unwrap();
+    // Leave the editor's view stale so the persistence boundary must catch the race.
+    let updated = locked(&store)
+        .unwrap()
+        .todo_action(
+            &board,
+            "todos.update",
+            &serde_json::json!({"id":task.id,"description":"Newer description"}),
+        )
+        .unwrap();
+    let revision = updated["updatedAt"].as_i64().unwrap();
+    assert!(revision > task.updated_at);
+    window
+        .update(cx, |view, _, cx| {
+            assert_eq!(view.items[0].updated_at, task.updated_at);
+            view.save_details(cx);
+            assert_eq!(view.pending_changes, 1);
+        })
+        .unwrap();
+    cx.run_until_parked();
+    let saved = locked(&store)
+        .unwrap()
+        .get_todo(&board, &task.id)
+        .unwrap()
+        .unwrap();
+    assert_eq!(saved.title, "Original");
+    assert_eq!(saved.description, "Newer description");
+    let visual = &mut gpui::VisualTestContext::from_window(window.into(), cx);
+    window
+        .update(visual, |view, _, cx| {
+            assert!(
+                view.change_error
+                    .as_deref()
+                    .unwrap()
+                    .contains("draft is preserved")
+            );
+            let editor = view.details.as_ref().unwrap();
+            assert_eq!(editor.revision, task.updated_at);
+            assert_eq!(editor.title.read(cx).content.as_ref(), "My new title");
+        })
+        .unwrap();
+    let reload = visual.debug_bounds("todo-reload-details").unwrap();
+    visual.simulate_click(reload.center(), Default::default());
+    window
+        .update(visual, |view, _, cx| {
+            let editor = view.details.as_ref().unwrap();
+            assert_eq!(editor.revision, revision);
+            assert_eq!(
+                editor.description.read(cx).content.as_ref(),
+                "Newer description"
+            );
+            editor
+                .title
+                .update(cx, |input, cx| input.set_text("My new title".into(), cx));
+            view.save_details(cx);
+        })
+        .unwrap();
+    visual.run_until_parked();
+    let saved = locked(&store)
+        .unwrap()
+        .get_todo(&board, &task.id)
+        .unwrap()
+        .unwrap();
+    assert_eq!(saved.title, "My new title");
+    assert_eq!(saved.description, "Newer description");
+}
+
+#[gpui::test]
 fn refreshed_issue_does_not_replace_the_editors_original_revision(cx: &mut TestAppContext) {
     let (window, store) = board_window(cx);
     let mut issue = locked(&store)
