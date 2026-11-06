@@ -6,6 +6,7 @@ use crate::{
 };
 use gpui::{AnyElement, Context, Role, div, prelude::*, px};
 use vorkspace_meetings::recording::{CaptureSource, Phase, State};
+use vorkspace_ui::radius;
 use vorkspace_ui::theme::icon;
 
 impl Page {
@@ -144,7 +145,7 @@ pub(super) fn editor(label: &'static str, input: &gpui::Entity<crate::input::Inp
         .aria_label(label)
         .size_full()
         .min_h_0()
-        .rounded(px(page::CARD_CORNER))
+        .rounded(px(radius::CONTAINER))
         .border_1()
         .border_color(page::divider())
         .overflow_hidden()

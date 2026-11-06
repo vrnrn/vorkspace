@@ -1,6 +1,7 @@
 use super::*;
 use chrono::{Local, TimeZone};
 use gpui::AnimationExt;
+use vorkspace_ui::radius;
 
 pub(super) fn toggle(id: impl Into<gpui::ElementId>, on: bool) -> gpui::Stateful<gpui::Div> {
     crate::controls::compact_switch(
@@ -377,7 +378,7 @@ impl Automations {
                     div()
                         .w(px(80.))
                         .h(px(page::CONTROL_HEIGHT))
-                        .rounded(px(page::CORNER))
+                        .rounded(px(radius::CONTROL))
                         .bg(content(0.1))
                         .px(px(8.))
                         .flex()
@@ -618,7 +619,7 @@ impl Automations {
                         .mx(page::detail_padding(narrow))
                         .mt(px(12.))
                         .p(px(12.))
-                        .rounded(px(page::CARD_CORNER))
+                        .rounded(px(radius::SURFACE))
                         .border_1()
                         .border_color(gpui::rgba(0xf8717140))
                         .flex()
@@ -655,7 +656,7 @@ impl Automations {
         let triggers_section = div().child(section("Triggers")).child(
             div()
                 .mt(px(8.))
-                .rounded(px(page::CARD_CORNER))
+                .rounded(px(radius::SURFACE))
                 .border_1()
                 .border_color(page::divider())
                 .when(!triggers.is_empty(), |d| {
@@ -760,7 +761,7 @@ impl Automations {
                 div()
                     .relative()
                     .mt(px(8.))
-                    .rounded(px(page::CARD_CORNER))
+                    .rounded(px(radius::CONTAINER))
                     .border_1()
                     .border_color(page::divider())
                     .bg(content(0.03))
@@ -828,7 +829,7 @@ impl Automations {
         let session = div().child(section("Session")).child(
             div()
                 .mt(px(8.))
-                .rounded(px(page::CARD_CORNER))
+                .rounded(px(radius::SURFACE))
                 .overflow_hidden()
                 .border_1()
                 .border_color(page::divider())
@@ -870,7 +871,7 @@ impl Automations {
             .map(|(_, label)| label.clone())
             .unwrap_or_else(|| format!("{} minutes", draft.missed_run_grace_minutes));
         let advanced = div()
-            .rounded(px(page::CARD_CORNER))
+            .rounded(px(radius::SURFACE))
             .border_1()
             .border_color(page::divider())
             .child(
@@ -943,7 +944,7 @@ impl Automations {
         let duration_width = px(56.);
         let mut table = div()
             .mt(px(8.))
-            .rounded(px(page::CARD_CORNER))
+            .rounded(px(radius::SURFACE))
             .overflow_hidden()
             .border_1()
             .border_color(page::divider());
@@ -1005,7 +1006,7 @@ impl Automations {
                     .flex()
                     .items_center()
                     .gap(px(4.))
-                    .rounded(px(page::CORNER))
+                    .rounded(px(radius::CONTROL))
                     .font_weight(gpui::FontWeight::MEDIUM)
                     .text_color(color)
                     .bg(fill)

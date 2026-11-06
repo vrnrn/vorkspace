@@ -1,5 +1,6 @@
 //! Bot turn headers, reactions and prompt actions.
 use super::*;
+use vorkspace_ui::radius;
 
 impl TranscriptView {
     /// TurnDuration with `revealOnHover`: copy, save as note and quote in
@@ -220,7 +221,7 @@ impl TranscriptView {
                 .px(px(7. * scale))
                 .flex()
                 .items_center()
-                .rounded(px(8. * scale))
+                .rounded(px(radius::CONTAINER * scale))
                 .bg(content(0.17))
                 .border_1()
                 .border_color(content(0.1))

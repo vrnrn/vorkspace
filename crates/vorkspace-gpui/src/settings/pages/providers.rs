@@ -4,6 +4,7 @@ use crate::settings::{
 };
 use gpui::{AnyElement, Context, SharedString, div, prelude::*, px};
 use vorkspace_core::provider::Kind;
+use vorkspace_ui::radius;
 use vorkspace_ui::theme::*;
 impl SettingsView {
     pub(super) fn providers_page(&mut self, cx: &mut Context<Self>) -> Vec<AnyElement> {
@@ -79,7 +80,7 @@ impl SettingsView {
                         .w(px(320.))
                         .px_2()
                         .py_1()
-                        .rounded_md()
+                        .rounded(px(radius::CONTROL))
                         .border_1()
                         .border_color(content(0.1))
                         .bg(content(0.05))

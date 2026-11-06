@@ -16,6 +16,7 @@ use std::{
     sync::mpsc::{Receiver, TryRecvError},
     time::Duration,
 };
+use vorkspace_ui::radius;
 use vorkspace_ui::theme::*;
 
 pub(crate) const CATEGORIES: [(&str, &str); 5] = [
@@ -934,7 +935,7 @@ impl SettingsView {
                         .aria_label("Mute project notifications")
                         .w(px(280.))
                         .p_3()
-                        .rounded_lg()
+                        .rounded(px(radius::SURFACE))
                         .border_1()
                         .border_color(content(0.15))
                         .bg(pane_fill())
@@ -960,7 +961,7 @@ impl SettingsView {
                                 .px_2()
                                 .border_1()
                                 .border_color(content(0.15))
-                                .rounded_md()
+                                .rounded(px(radius::CONTROL))
                                 .child(custom.input.clone()),
                         )
                         .when(custom.error.is_some(), |d| {
@@ -1103,7 +1104,7 @@ impl SettingsView {
                                 .aria_label(date.to_string())
                                 .aria_selected(selected)
                                 .size(px(32.))
-                                .rounded_md()
+                                .rounded(px(radius::CONTROL))
                                 .flex()
                                 .items_center()
                                 .justify_center()

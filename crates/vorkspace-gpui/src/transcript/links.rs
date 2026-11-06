@@ -4,6 +4,7 @@ use crate::popover::{Menu, MenuAction, MenuEvent, MenuItem, menu_popover};
 use gpui::{AnyElement, Entity, Point, Subscription};
 use std::path::Path;
 use vorkspace_core::files;
+use vorkspace_ui::radius;
 
 #[derive(Default)]
 pub(super) struct State {
@@ -191,7 +192,7 @@ impl TranscriptView {
                         .gap_3()
                         .px_3()
                         .py_2()
-                        .rounded(px(12.))
+                        .rounded(px(radius::SURFACE))
                         .border_1()
                         .border_color(rgb(0xf87171))
                         .bg(rgb(0x252525))

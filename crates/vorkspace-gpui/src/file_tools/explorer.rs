@@ -21,6 +21,7 @@ use std::{
     path::{Path, PathBuf},
 };
 use vorkspace_core::files::{self, DirEntry, NameIssueKind, Severity};
+use vorkspace_ui::radius;
 use vorkspace_ui::{file_icons::file_type_icon, theme::*};
 
 const MOD: &str = "⌘";
@@ -47,7 +48,7 @@ impl Render for DraggedFile {
             .gap_1p5()
             .px_2()
             .py_1p5()
-            .rounded_md()
+            .rounded(px(radius::CONTROL))
             .border_1()
             .border_color(stroke())
             .bg(pane_fill())
@@ -1235,7 +1236,7 @@ impl Explorer {
             .flex()
             .items_center()
             .justify_center()
-            .rounded_md()
+            .rounded(px(radius::CONTROL))
             .when(!enabled, |d| d.opacity(0.4))
             .when(enabled, |d| d.hover(|s| s.bg(content(0.05))))
             .child(icon(path, 14.).text_color(content(0.5)).when(enabled, |i| {
@@ -1314,7 +1315,7 @@ impl Explorer {
                             .flex_1()
                             .flex()
                             .items_center()
-                            .rounded_sm()
+                            .rounded(px(radius::SMALL))
                             .bg(content(0.1))
                             .border_1()
                             .border_color(accent_color())

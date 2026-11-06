@@ -4,6 +4,7 @@ use crate::controls::{primary_button, secondary_button};
 use gpui::{
     AnimationExt, AnyElement, App, Div, FontWeight, MouseButton, Role, SharedString, div, px,
 };
+use vorkspace_ui::radius;
 use vorkspace_ui::theme::*;
 fn account_button(
     id: SharedString,
@@ -15,7 +16,7 @@ fn account_button(
         .role(Role::Button)
         .aria_label(label)
         .size_7()
-        .rounded_md()
+        .rounded(px(radius::CONTROL))
         .flex()
         .items_center()
         .justify_center()
@@ -73,7 +74,7 @@ impl Accounts {
                         .px(px(10.))
                         .flex()
                         .items_center()
-                        .rounded_lg()
+                        .rounded(px(radius::CONTROL))
                         .bg(content(0.04))
                         .border_1()
                         .border_color(content(0.1))
@@ -90,7 +91,7 @@ impl Accounts {
                     .mt_3()
                     .h_8()
                     .w_full()
-                    .rounded_lg()
+                    .rounded(px(radius::CONTROL))
                     .justify_center()
                     .gap(px(6.))
                     .text_size(px(11.))
@@ -137,7 +138,7 @@ impl Accounts {
                     .min_w_0()
                     .flex_1()
                     .pr_1()
-                    .rounded_md()
+                    .rounded(px(radius::CONTROL))
                     .overflow_hidden()
                     .border_1()
                     .border_color(content(0.1))
@@ -157,7 +158,7 @@ impl Accounts {
                             .h_6()
                             .border_0()
                             .px(px(10.))
-                            .rounded(px(4.5))
+                            .rounded(px(radius::CONTROL))
                             .bg(content(0.05))
                             .text_size(px(11.))
                             .text_color(content(0.45))
@@ -188,7 +189,7 @@ impl Accounts {
                         .ml_1()
                         .h_6()
                         .px(px(10.))
-                        .rounded(px(4.5))
+                        .rounded(px(radius::CONTROL))
                         .gap(px(6.))
                         .text_size(px(11.))
                         .when(self.working, |d| {
@@ -241,7 +242,7 @@ impl Accounts {
                         .child(
                             div()
                                 .size_7()
-                                .rounded_lg()
+                                .rounded(px(radius::CONTROL))
                                 .bg(content(0.05))
                                 .border_1()
                                 .border_color(content(0.06))
@@ -395,7 +396,7 @@ impl Accounts {
                                     .children(org.map(|org| {
                                         div()
                                             .px_1()
-                                            .rounded_sm()
+                                            .rounded(px(radius::SMALL))
                                             .bg(content(0.07))
                                             .text_size(px(9.))
                                             .text_color(content(0.5))
@@ -628,7 +629,7 @@ impl Accounts {
                     .aria_label(account.label.clone())
                     .px(px(10.))
                     .py_2()
-                    .rounded_lg()
+                    .rounded(px(radius::CONTAINER))
                     .border_1()
                     .border_color(if active { accent(0.2) } else { content(0.06) })
                     .bg(fill)
@@ -662,7 +663,7 @@ impl Accounts {
                                             .flex_shrink_0()
                                             .truncate()
                                             .px_1()
-                                            .rounded_sm()
+                                            .rounded(px(radius::SMALL))
                                             .bg(content(0.07))
                                             .text_size(px(9.))
                                             .line_height(px(16.))
@@ -710,7 +711,7 @@ impl Accounts {
                 .h_8()
                 .w_full()
                 .px(px(10.))
-                .rounded_lg()
+                .rounded(px(radius::CONTROL))
                 .flex()
                 .items_center()
                 .gap_2()
@@ -780,7 +781,7 @@ fn back_header(
                 .role(Role::Button)
                 .aria_label(label)
                 .size_6()
-                .rounded_md()
+                .rounded(px(radius::CONTROL))
                 .flex()
                 .items_center()
                 .justify_center()
@@ -994,7 +995,7 @@ impl Render for Accounts {
                         }
                     }))
                     .w(px(400.))
-                    .rounded_xl()
+                    .rounded(px(radius::SURFACE))
                     .border_1()
                     .border_color(content(0.1))
                     .bg(pane_fill())
@@ -1012,7 +1013,7 @@ impl Render for Accounts {
                     .child(
                         div()
                             .size_16()
-                            .rounded(px(16.))
+                            .rounded(px(radius::MODAL))
                             .bg(content(0.06))
                             .flex()
                             .items_center()

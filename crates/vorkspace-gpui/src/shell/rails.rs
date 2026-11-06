@@ -5,6 +5,7 @@
 use super::*;
 use std::time::Duration;
 use vorkspace_ui::clock::Instant;
+use vorkspace_ui::radius;
 use vorkspace_ui::reveal::{Disclosure, bezier};
 
 /// RevealHeight's `reveal-height-in` and `reveal-height-out`.
@@ -305,7 +306,7 @@ impl Shell {
                     .items_center()
                     .gap(px(6.))
                     .px(px(6.))
-                    .rounded_md()
+                    .rounded(px(radius::CONTROL))
                     .cursor(CursorStyle::Arrow)
                     .when(open, |d| d.bg(content(0.1)))
                     .when(!open, |d| d.hover(|s| s.bg(content(0.1))))
@@ -368,7 +369,7 @@ impl Shell {
                         .id((id, (lead as usize) << 8 | ix))
                         .role(Role::Button)
                         .aria_label(label)
-                        .rounded(px(4.))
+                        .rounded(px(radius::SMALL))
                         .bg(content(0.15))
                         .px(px(6.))
                         .py(px(2.))

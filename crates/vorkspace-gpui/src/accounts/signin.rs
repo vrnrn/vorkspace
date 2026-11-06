@@ -3,6 +3,7 @@ use gpui::{
     Animation, AnimationExt, AnyElement, FontWeight, Role, SharedString, Transformation, div,
     percentage, px,
 };
+use vorkspace_ui::radius;
 use vorkspace_ui::theme::*;
 
 impl Accounts {
@@ -70,7 +71,7 @@ impl Accounts {
                 div()
                     .size(px(64.))
                     .flex_shrink_0()
-                    .rounded(px(16.))
+                    .rounded(px(radius::MODAL))
                     .bg(content(0.06))
                     .border_1()
                     .border_color(content(0.08))
@@ -116,7 +117,7 @@ impl Accounts {
                     .mt_4()
                     .h(px(32.))
                     .px(px(14.))
-                    .rounded_lg()
+                    .rounded(px(radius::CONTROL))
                     .flex_shrink_0()
                     .flex()
                     .items_center()

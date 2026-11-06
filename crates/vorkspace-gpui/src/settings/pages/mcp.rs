@@ -4,6 +4,7 @@ use crate::settings::{
     widgets::{note, secondary_button},
 };
 use gpui::{AnyElement, Context, SharedString, div, prelude::*, px};
+use vorkspace_ui::radius;
 use vorkspace_ui::theme::*;
 impl SettingsView {
     pub(super) fn mcp_page(&mut self, cx: &mut Context<Self>) -> Vec<AnyElement> {
@@ -143,7 +144,7 @@ impl SettingsView {
                 div()
                     .mt_6()
                     .overflow_hidden()
-                    .rounded_xl()
+                    .rounded(px(radius::SURFACE))
                     .border_1()
                     .border_color(content(0.1))
                     .bg(content(0.03))

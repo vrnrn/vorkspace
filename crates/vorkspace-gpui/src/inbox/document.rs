@@ -9,6 +9,7 @@ use pulldown_cmark::{Event, Options, Parser, Tag, TagEnd};
 use std::{path::PathBuf, sync::Arc};
 use vorkspace_model::markdown_model;
 use vorkspace_ui::clock::Instant;
+use vorkspace_ui::radius;
 use vorkspace_ui::theme::*;
 
 enum Row {
@@ -157,7 +158,7 @@ impl InboxDocument {
                         .w_full()
                         .max_w(px(576.))
                         .max_h(px(448.))
-                        .rounded(px(crate::controls::page::CARD_CORNER))
+                        .rounded(px(radius::CONTAINER))
                         .border_1()
                         .border_color(content(0.1))
                         .object_fit(gpui::ObjectFit::Contain)
@@ -171,7 +172,7 @@ impl InboxDocument {
                         .w_full()
                         .max_w(px(576.))
                         .h(px(128.))
-                        .rounded(px(crate::controls::page::CARD_CORNER))
+                        .rounded(px(radius::CONTAINER))
                         .border_1()
                         .border_color(content(0.1))
                         .bg(content(0.06))
@@ -196,7 +197,7 @@ impl InboxDocument {
                         .w_full()
                         .min_w_0()
                         .overflow_x_scroll()
-                        .rounded(px(crate::controls::page::CARD_CORNER))
+                        .rounded(px(radius::CONTAINER))
                         .border_1()
                         .border_color(content(0.1))
                         .bg(content(0.03))

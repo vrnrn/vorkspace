@@ -6,6 +6,7 @@ use gpui::{
 };
 use std::path::PathBuf;
 use vorkspace_core::git::{self, Snapshot};
+use vorkspace_ui::radius;
 use vorkspace_ui::theme::*;
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -299,7 +300,7 @@ impl gpui::Render for GitPicker {
                     .min_h(px(32.))
                     .px(px(8.))
                     .py(px(6.))
-                    .rounded(px(6.))
+                    .rounded(px(radius::CONTROL))
                     .flex()
                     .items_center()
                     .gap(px(8.))

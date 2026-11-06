@@ -1,6 +1,7 @@
 use super::*;
 use gpui::{AnyElement, Div, ElementId, EventEmitter, Stateful};
 use serde_json::{Value, json};
+use vorkspace_ui::radius;
 pub(crate) struct CardAction(pub Value);
 impl EventEmitter<CardAction> for crate::transcript::TranscriptView {}
 /// The chat's one-line cards: a 12px-round outline that brightens on hover.
@@ -13,7 +14,7 @@ fn line_card(id: impl Into<ElementId>) -> Stateful<Div> {
         .min_w_0()
         .items_center()
         .gap_2p5()
-        .rounded_xl()
+        .rounded(px(radius::SURFACE))
         .border_1()
         .border_color(content(0.1))
         .line_height(px(20.))
@@ -183,7 +184,7 @@ pub(crate) fn render(
         _ => "file",
     };
     div()
-        .rounded_lg()
+        .rounded(px(radius::SURFACE))
         .border_1()
         .border_color(content(0.12))
         .bg(content(0.035))

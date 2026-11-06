@@ -1,5 +1,6 @@
 use super::*;
 use bot::memory;
+use vorkspace_ui::radius;
 
 /// A line is meaningful only within its Bot and source file. The core's unique
 /// original-line check still decides whether an edit can safely be saved.
@@ -328,7 +329,7 @@ impl Bots {
         div()
             .size(px(28.))
             .flex_shrink_0()
-            .rounded_md()
+            .rounded(px(radius::CONTROL))
             .bg(content(0.06))
             .flex()
             .items_center()
@@ -401,7 +402,7 @@ impl Bots {
             .flex()
             .items_start()
             .gap_2p5()
-            .rounded_md()
+            .rounded(px(radius::CONTROL))
             .bg(content(0.05))
             .px_2()
             .py_2()
@@ -471,7 +472,7 @@ impl Bots {
                         move || format!("bot-memory-fact-{key}")
                     })
                     .group("memory-fact")
-                    .rounded_md()
+                    .rounded(px(radius::CONTROL))
                     .flex()
                     .items_center()
                     .hover(|s| s.bg(content(0.05)))

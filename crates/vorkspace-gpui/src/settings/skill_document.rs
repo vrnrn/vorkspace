@@ -7,6 +7,7 @@ use gpui::{
 use std::sync::Arc;
 use vorkspace_model::markdown_model;
 use vorkspace_ui::clock::Instant;
+use vorkspace_ui::radius;
 use vorkspace_ui::theme::*;
 
 pub(super) struct DocumentData {
@@ -96,7 +97,7 @@ impl SkillDocument {
                 .pb_6()
                 .child(
                     div()
-                        .rounded_lg()
+                        .rounded(px(radius::SURFACE))
                         .border_1()
                         .border_color(content(0.1))
                         .bg(content(0.03))
@@ -154,7 +155,7 @@ impl SkillDocument {
             Part::Code { fence, lines } => div()
                 .id(id.clone())
                 .overflow_x_scroll()
-                .rounded_lg()
+                .rounded(px(radius::CONTAINER))
                 .border_1()
                 .border_color(content(0.1))
                 .bg(content(0.03))

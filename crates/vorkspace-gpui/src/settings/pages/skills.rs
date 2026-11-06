@@ -6,6 +6,7 @@ use crate::settings::{
 use gpui::{
     AnyElement, ClipboardItem, Context, Focusable, Role, SharedString, div, prelude::*, px,
 };
+use vorkspace_ui::radius;
 use vorkspace_ui::theme::*;
 impl SettingsView {
     fn skill_create_form(&mut self, cx: &mut Context<Self>) -> AnyElement {
@@ -35,7 +36,7 @@ impl SettingsView {
                     .mb_2()
                     .px_2()
                     .py(px(6.))
-                    .rounded_md()
+                    .rounded(px(radius::CONTROL))
                     .bg(content(0.1))
                     .child(name),
             )
@@ -54,7 +55,7 @@ impl SettingsView {
                             .aria_label(label)
                             .flex_1()
                             .min_w_0()
-                            .rounded_md()
+                            .rounded(px(radius::CONTROL))
                             .px_2()
                             .py(px(6.))
                             .bg(content(if scope == value { 0.16 } else { 0.1 }))
@@ -112,7 +113,7 @@ impl SettingsView {
                             .aria_label("Cancel")
                             .px_2()
                             .py_1()
-                            .rounded_md()
+                            .rounded(px(radius::CONTROL))
                             .text_size(px(12.))
                             .line_height(px(16.))
                             .text_color(content(0.5))
@@ -132,7 +133,7 @@ impl SettingsView {
                             .aria_label("Create skill")
                             .px_2()
                             .py_1()
-                            .rounded_md()
+                            .rounded(px(radius::CONTROL))
                             .bg(content(0.2))
                             .text_size(px(12.))
                             .line_height(px(16.))
@@ -307,7 +308,7 @@ impl SettingsView {
                 div()
                     .debug_selector(|| "settings-skill-form".into())
                     .mb_4()
-                    .rounded_lg()
+                    .rounded(px(radius::SURFACE))
                     .border_1()
                     .border_color(content(0.1))
                     .bg(content(0.03))
@@ -507,7 +508,7 @@ impl SettingsView {
             list = list.child(
                 div()
                     .overflow_hidden()
-                    .rounded_lg()
+                    .rounded(px(radius::SURFACE))
                     .border_1()
                     .border_color(content(0.1))
                     .children(rows),
@@ -687,7 +688,7 @@ impl SettingsView {
             .role(Role::TabList)
             .aria_label("Markdown view")
             .flex()
-            .rounded_md()
+            .rounded(px(radius::CONTROL))
             .border_1()
             .border_color(content(0.1))
             .bg(content(0.1))
@@ -704,7 +705,7 @@ impl SettingsView {
                             .role(Role::Tab)
                             .aria_label(label)
                             .aria_selected(source == value)
-                            .rounded(px(4.))
+                            .rounded(px(radius::SMALL))
                             .px_2()
                             .py(px(2.))
                             .text_size(px(11.))

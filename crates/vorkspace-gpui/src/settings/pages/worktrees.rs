@@ -4,6 +4,7 @@ use crate::settings::{
     widgets::{note, secondary_button},
 };
 use gpui::{AnyElement, Context, SharedString, div, prelude::*, px};
+use vorkspace_ui::radius;
 use vorkspace_ui::theme::*;
 impl SettingsView {
     pub(super) fn worktrees_page(&mut self, cx: &mut Context<Self>) -> Vec<AnyElement> {
@@ -55,7 +56,7 @@ impl SettingsView {
             page.push(
                 div()
                     .mt_4()
-                    .rounded_xl()
+                    .rounded(px(radius::SURFACE))
                     .border_1()
                     .border_color(content(0.1))
                     .px_4()
@@ -83,7 +84,7 @@ impl SettingsView {
             page.push(
                 div()
                     .mt_4()
-                    .rounded_xl()
+                    .rounded(px(radius::SURFACE))
                     .border_1()
                     .border_color(content(0.1))
                     .overflow_hidden()

@@ -1,6 +1,7 @@
 use crate::settings::SettingsView;
 use crate::settings::{SettingsEvent, management::Target, widgets::icon_action};
 use gpui::{AnyElement, Context, SharedString, div, prelude::*, px};
+use vorkspace_ui::radius;
 use vorkspace_ui::theme::*;
 impl SettingsView {
     pub(super) fn bots_page(&mut self, cx: &mut Context<Self>) -> Vec<AnyElement> {
@@ -40,7 +41,7 @@ impl SettingsView {
                 div().flex().items_center().gap_2().child("Channels").child(
                     div()
                         .px_1p5()
-                        .rounded_sm()
+                        .rounded(px(radius::SMALL))
                         .border_1()
                         .border_color(content(0.1))
                         .text_size(px(11.))
@@ -63,7 +64,7 @@ impl SettingsView {
                 div().flex().items_center().gap_2().child("Minions").child(
                     div()
                         .px_1p5()
-                        .rounded_sm()
+                        .rounded(px(radius::SMALL))
                         .border_1()
                         .border_color(content(0.1))
                         .text_size(px(11.))

@@ -23,6 +23,7 @@ use std::{
     sync::Arc,
 };
 use vorkspace_core::diff::{self, Block, Line, LineKind};
+use vorkspace_ui::radius;
 use vorkspace_ui::{file_icons::file_type_icon, theme::*};
 
 pub(crate) const FILE_HEADER: f32 = 40.;
@@ -1032,7 +1033,7 @@ impl DiffView {
                         .cursor_pointer()
                         .px_2()
                         .py_1()
-                        .rounded_md()
+                        .rounded(px(radius::CONTROL))
                         .text_size(px(12.))
                         .text_color(content(0.85))
                         .when((self.layout == Layout::Split) == split, |d| {
@@ -1554,7 +1555,7 @@ impl DiffView {
                                 .flex()
                                 .items_center()
                                 .justify_center()
-                                .rounded(px(3.))
+                                .rounded(px(radius::SMALL))
                                 .hover(|s| s.bg(content(0.12)))
                                 .child(icon("comment-add", 12.).text_color(content(1.)))
                                 .on_click(cx.listener(move |this, _, window, cx| {
@@ -1581,7 +1582,7 @@ impl DiffView {
                                     .flex()
                                     .items_center()
                                     .justify_center()
-                                    .rounded(px(3.))
+                                    .rounded(px(radius::SMALL))
                                     .when(busy, |d| d.opacity(0.35))
                                     .when(!busy, |d| d.hover(|s| s.bg(content(0.12))))
                                     .child(icon("check", 12.).text_color(content(1.)))
@@ -1850,7 +1851,7 @@ impl Render for DiffView {
                     .child(
                         div()
                             .min_h(px(72.))
-                            .rounded_lg()
+                            .rounded(px(radius::CONTAINER))
                             .border_1()
                             .border_color(content(0.1))
                             .bg(floating_fill())
@@ -1883,7 +1884,7 @@ impl Render for DiffView {
                                     .items_center()
                                     .gap(px(6.))
                                     .px(px(10.))
-                                    .rounded_md()
+                                    .rounded(px(radius::CONTROL))
                                     .bg(content(1.))
                                     .text_size(px(12.))
                                     .font_weight(FontWeight::MEDIUM)

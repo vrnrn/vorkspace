@@ -1,6 +1,7 @@
 use super::{SettingsView, widgets::secondary_button};
 use gpui::{AnyElement, Context, div, prelude::*, px};
 use vorkspace_helper::{DictationPhase, word_rules};
+use vorkspace_ui::radius;
 use vorkspace_ui::theme::content;
 
 impl SettingsView {
@@ -114,7 +115,7 @@ impl SettingsView {
             .gap_2()
             .child(
                 div()
-                    .rounded_md()
+                    .rounded(px(radius::CONTROL))
                     .border_1()
                     .border_color(content(0.15))
                     .bg(content(0.03))

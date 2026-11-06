@@ -3,6 +3,7 @@ use super::*;
 use gpui::AnyElement;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
+use vorkspace_ui::radius;
 
 #[derive(Clone, Default, Deserialize, Serialize)]
 pub(crate) struct Plan {
@@ -90,7 +91,7 @@ impl TranscriptView {
             .w_full()
             .my_2()
             .p_3()
-            .rounded(px(12.))
+            .rounded(px(radius::SURFACE))
             .border_1()
             .border_color(content(0.1))
             .bg(content(0.06))

@@ -3,6 +3,7 @@ use crate::popover::{Anchor, AnchorSlot, Menu, MenuAction, MenuEvent, menu_popov
 use chrono::{Local, TimeZone};
 use gpui::{Context, Entity, EventEmitter, Role, Subscription, Window, div, prelude::*, px};
 use vorkspace_core::session_groups::{reminder_at, reminder_presets};
+use vorkspace_ui::radius;
 use vorkspace_ui::theme::*;
 
 #[derive(Clone, PartialEq, Eq)]
@@ -176,7 +177,7 @@ impl Render for View {
                                     .id(("due-reminder-open", ix))
                                     .role(Role::Button)
                                     .cursor_pointer()
-                                    .rounded_md()
+                                    .rounded(px(radius::CONTROL))
                                     .bg(content(0.1))
                                     .hover(|s| s.bg(content(0.15)))
                                     .px_2()
@@ -196,7 +197,7 @@ impl Render for View {
                                     .aria_label("Snooze")
                                     .cursor_pointer()
                                     .relative()
-                                    .rounded_md()
+                                    .rounded(px(radius::CONTROL))
                                     .text_color(content(0.65))
                                     .hover(|s| s.bg(content(0.1)))
                                     .px_2()
@@ -213,7 +214,7 @@ impl Render for View {
                                     .id(("due-reminder-dismiss", ix))
                                     .role(Role::Button)
                                     .cursor_pointer()
-                                    .rounded_md()
+                                    .rounded(px(radius::CONTROL))
                                     .text_color(content(0.5))
                                     .hover(|s| s.bg(content(0.1)))
                                     .px_2()
@@ -241,7 +242,7 @@ impl Render for View {
                     .role(Role::Region)
                     .aria_label("Due reminders")
                     .overflow_hidden()
-                    .rounded(px(12.))
+                    .rounded(px(radius::SURFACE))
                     .border_1()
                     .border_color(content(0.15))
                     .bg(fill)

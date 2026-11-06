@@ -8,6 +8,7 @@ use vorkspace_core::{
     provider::{self, Event, Request},
     transcript::{Row, Transcript},
 };
+use vorkspace_ui::radius;
 
 const SNAPSHOT_CHARS: usize = 64_000;
 const BLOCK_CHARS: usize = 8_000;
@@ -780,7 +781,7 @@ impl Render for Btw {
                     .flex()
                     .items_center()
                     .flex_shrink_0()
-                    .rounded_md()
+                    .rounded(px(radius::CONTROL))
                     .bg(content(if selected { 0.1 } else { 0. }))
                     .child(
                         div()
@@ -805,7 +806,7 @@ impl Render for Btw {
                             .flex()
                             .items_center()
                             .justify_center()
-                            .rounded_md()
+                            .rounded(px(radius::CONTROL))
                             .hover(|style| style.bg(content(0.1)))
                             .child(icon("x-mark", 12.))
                             .on_click(
@@ -883,7 +884,7 @@ impl Render for Btw {
         }));
         let composer = div().p_1p5().flex_shrink_0().child(
             div()
-                .rounded_lg()
+                .rounded(px(radius::CONTAINER))
                 .border_1()
                 .border_color(content(0.12))
                 .bg(content(0.025))

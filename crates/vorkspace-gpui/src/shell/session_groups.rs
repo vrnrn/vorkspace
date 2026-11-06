@@ -10,6 +10,7 @@ use vorkspace_core::{
     },
     store::Reminder,
 };
+use vorkspace_ui::radius;
 
 actions!(
     session_groups,
@@ -1045,7 +1046,7 @@ impl Shell {
                         .px_2()
                         .flex()
                         .items_center()
-                        .rounded_sm()
+                        .rounded(px(radius::SMALL))
                         .bg(content(0.1))
                         .border_1()
                         .border_color(rgba(0x4da3f566))
@@ -1078,7 +1079,7 @@ impl Shell {
                 .items_center()
                 .gap(px(2.))
                 .px(px(2.))
-                .rounded_sm()
+                .rounded(px(radius::SMALL))
                 .text_size(px(11.))
                 .text_color(rgb(ACCENT))
                 .child(
@@ -1203,7 +1204,7 @@ impl Shell {
             .cursor(CursorStyle::Arrow)
             .h(px(32.))
             .px_2()
-            .rounded_md()
+            .rounded(px(radius::CONTROL))
             .flex()
             .items_center()
             .gap_2()
@@ -1414,7 +1415,7 @@ impl Shell {
                 .cursor(CursorStyle::Arrow)
                 .px_3()
                 .py_1p5()
-                .rounded_md()
+                .rounded(px(radius::CONTROL))
                 .text_size(px(12.))
                 .child(label)
         };
@@ -1423,7 +1424,7 @@ impl Shell {
             .px(px(10.))
             .flex()
             .items_center()
-            .rounded_md()
+            .rounded(px(radius::CONTROL))
             .border_1()
             .border_color(if dialog.error.is_some() {
                 rgba(0xf8717199).into()

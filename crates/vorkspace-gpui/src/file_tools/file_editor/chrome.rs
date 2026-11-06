@@ -2,6 +2,7 @@ use super::FileEditor;
 use crate::panel_kit::{stroke, tabular};
 use gpui::{AnyElement, App, Context, Role, div, prelude::*, px};
 use std::path::{Component, Path};
+use vorkspace_ui::radius;
 use vorkspace_ui::{file_icons::file_type_icon, theme::*};
 
 const HEADER_HEIGHT: f32 = 30.;
@@ -110,7 +111,7 @@ impl FileEditor {
             .px_2()
             .flex()
             .items_center()
-            .rounded_md()
+            .rounded(px(radius::CONTROL))
             .text_size(px(11.))
             .line_height(px(14.))
             .text_color(content(if wrap { 1. } else { 0.45 }))
@@ -130,7 +131,7 @@ impl FileEditor {
             .flex_shrink_0()
             .flex()
             .items_center()
-            .rounded_md()
+            .rounded(px(radius::CONTROL))
             .bg(content(0.1))
             .p(px(2.))
             .children(
@@ -147,7 +148,7 @@ impl FileEditor {
                             .flex()
                             .items_center()
                             .px_2()
-                            .rounded(px(4.))
+                            .rounded(px(radius::SMALL))
                             .text_size(px(11.))
                             .line_height(px(14.))
                             .text_color(content(if self.preview == preview { 1. } else { 0.45 }))

@@ -1,6 +1,7 @@
 //! Permission requests use the queued-message shelf and its upward reveal.
 use super::*;
 use std::cell::RefCell;
+use vorkspace_ui::radius;
 
 #[derive(Default)]
 pub(super) struct State {
@@ -147,7 +148,7 @@ fn approval_button(id: &'static str, label: &'static str) -> gpui::Stateful<gpui
         .flex_shrink_0()
         .h(px(26.))
         .px(px(10.))
-        .rounded_md()
+        .rounded(px(radius::CONTROL))
         .flex()
         .items_center()
         .text_size(px(12.))

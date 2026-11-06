@@ -5,6 +5,7 @@ use gpui::{
     Context, EventEmitter, FontWeight, Role, SharedString, Task, Window, div, prelude::*, px, rgb,
 };
 use vorkspace_core::checkpoint::{CheckpointFile, CheckpointStatus};
+use vorkspace_ui::radius;
 use vorkspace_ui::{file_icons::file_type_icon, theme::*};
 
 /// The card shows this many files until expanded.
@@ -173,7 +174,7 @@ fn text_button(id: &'static str, label: &'static str, enabled: bool) -> gpui::St
         .px(px(10.))
         .flex()
         .items_center()
-        .rounded(px(6.))
+        .rounded(px(radius::CONTROL))
         .text_size(px(11.))
         .text_color(content(0.5))
         .when(!enabled, |d| d.opacity(0.35))
@@ -209,7 +210,7 @@ fn counts(additions: i64, deletions: i64, gap: f32) -> gpui::Div {
 fn card() -> gpui::Div {
     div()
         .w_full()
-        .rounded(px(12.))
+        .rounded(px(radius::SURFACE))
         .border_1()
         .border_color(content(0.06))
         .bg(content(0.03))
@@ -275,7 +276,7 @@ impl Render for SessionReview {
                     .flex()
                     .items_center()
                     .justify_center()
-                    .rounded(px(8.))
+                    .rounded(px(radius::CONTAINER))
                     .bg(content(0.08))
                     .child(icon("file-diff", 16.).text_color(content(0.55))),
             )
@@ -337,7 +338,7 @@ impl Render for SessionReview {
                             .px(px(10.))
                             .flex()
                             .items_center()
-                            .rounded(px(6.))
+                            .rounded(px(radius::CONTROL))
                             .bg(content(0.08))
                             .text_size(px(11.))
                             .font_weight(FontWeight::MEDIUM)

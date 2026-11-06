@@ -6,6 +6,7 @@ use std::{
     io::{Cursor, Read},
     path::PathBuf,
 };
+use vorkspace_ui::radius;
 
 #[derive(Clone)]
 pub(crate) struct Attachment {
@@ -339,7 +340,7 @@ impl Render for Photo {
             div()
                 .size(px(36.))
                 .flex_shrink_0()
-                .rounded_lg()
+                .rounded(px(radius::CONTAINER))
                 .bg(content(0.04))
                 .flex()
                 .items_center()
@@ -483,7 +484,7 @@ impl TranscriptView {
                         .gap_1p5()
                         .px_1()
                         .py_1()
-                        .rounded_md()
+                        .rounded(px(radius::CONTROL))
                         .bg(content(0.06))
                         .child(vorkspace_ui::file_icons::file_type_icon(
                             &file.name, false, false, 16.,

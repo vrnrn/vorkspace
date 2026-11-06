@@ -1,6 +1,7 @@
 use super::*;
 use gpui::{Entity, Focusable, PathBuilder, Subscription, point};
 use vorkspace_core::follow_up::Message as Draft;
+use vorkspace_ui::radius;
 
 pub(super) struct DraftEdit {
     id: String,
@@ -238,7 +239,7 @@ impl TranscriptView {
                             .relative()
                             .min_w_0()
                             .max_w(px(576.))
-                            .rounded(px(12.))
+                            .rounded(px(radius::SURFACE))
                             .border_1()
                             .border_color(content(0.))
                             .bg(content(0.04))
@@ -271,7 +272,7 @@ impl TranscriptView {
                                             .id("saved-draft-editor")
                                             .min_w(px(120.))
                                             .max_w_full()
-                                            .rounded_md()
+                                            .rounded(px(radius::CONTROL))
                                             .border_1()
                                             .border_color(content(0.3))
                                             .px_2()
@@ -464,7 +465,7 @@ fn draft_button(id: &'static str, label: &'static str) -> gpui::Stateful<gpui::D
         .role(Role::Button)
         .aria_label(label)
         .h(px(28.))
-        .rounded_md()
+        .rounded(px(radius::CONTROL))
         .flex()
         .items_center()
         .gap(px(6.))

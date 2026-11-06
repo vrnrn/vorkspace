@@ -5,6 +5,7 @@ use gpui::{AnyElement, Task};
 use std::{cell::Cell, sync::Arc};
 use vorkspace_editor::editor_analysis::Analysis;
 use vorkspace_ui::editor_scrollbar::{Metrics, WIDTH};
+use vorkspace_ui::radius;
 
 const TOP_PADDING: f32 = 8.;
 const BOTTOM_PADDING: f32 = 32.;
@@ -458,7 +459,7 @@ impl Input {
                 .left(px(left))
                 .top(px(top))
                 .w(px(width))
-                .rounded(px(6.))
+                .rounded(px(radius::CONTROL))
                 .border_1()
                 .border_color(vorkspace_ui::theme::content(0.12))
                 .bg(vorkspace_ui::theme::shell_fill().opacity(1.))
@@ -1132,7 +1133,7 @@ impl Input {
                 .flex()
                 .flex_col()
                 .overflow_hidden()
-                .rounded(px(4.))
+                .rounded(px(radius::SMALL))
                 .border_1()
                 .border_color(vorkspace_ui::theme::content(0.14))
                 .bg(vorkspace_ui::theme::shell_fill().opacity(0.92))
@@ -1174,7 +1175,7 @@ impl Input {
                 .max_w(px(360.))
                 .px_2()
                 .py_1()
-                .rounded_md()
+                .rounded(px(radius::CONTROL))
                 .bg(vorkspace_ui::theme::pane_fill())
                 .border_1()
                 .border_color(vorkspace_ui::theme::content(0.14))

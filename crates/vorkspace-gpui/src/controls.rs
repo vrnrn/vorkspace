@@ -1,4 +1,5 @@
 //! Shared native control behavior; callers retain their surface-specific styling.
+use vorkspace_ui::radius;
 pub(crate) mod page;
 
 use gpui::{
@@ -43,7 +44,7 @@ pub(crate) fn icon_button(
         .flex()
         .items_center()
         .justify_center()
-        .rounded_md()
+        .rounded(px(radius::CONTROL))
         .tooltip(move |_, cx| cx.new(|_| Tooltip(label.clone())).into())
 }
 
@@ -126,7 +127,7 @@ impl Render for Tooltip {
             .debug_selector(|| "control-tooltip".into())
             .px_2()
             .py_1()
-            .rounded_md()
+            .rounded(px(radius::CONTROL))
             .bg(background)
             .border_1()
             .border_color(content(0.12))
@@ -173,7 +174,7 @@ fn button_base(
         .flex_shrink_0()
         .items_center()
         .gap(px(6.))
-        .rounded_md()
+        .rounded(px(radius::CONTROL))
         .border_1()
         .border_color(content(0.1))
         .px(px(10.))
@@ -221,7 +222,7 @@ pub(crate) fn bot_button(
         .gap_1p5()
         .px_2p5()
         .py_1p5()
-        .rounded_md()
+        .rounded(px(radius::CONTROL))
         .text_size(px(12.))
         .text_color(content(0.8))
         .hover(|s| s.bg(content(0.08)).text_color(content(1.)))

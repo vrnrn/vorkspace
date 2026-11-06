@@ -5,6 +5,7 @@ use gpui::EventEmitter;
 use serde::Deserialize;
 use serde_json::json;
 use vorkspace_core::remote::{Connections, Machine};
+use vorkspace_ui::radius;
 
 pub(super) struct Open {
     picker: Entity<RemoteProjectPicker>,
@@ -252,7 +253,7 @@ impl RemoteProjectPicker {
             .role(Role::Button)
             .aria_label(format!("Browse {name}"))
             .w_full()
-            .rounded_md()
+            .rounded(px(radius::CONTROL))
             .px_2()
             .py(px(6.))
             .flex()
@@ -342,7 +343,7 @@ impl Render for RemoteProjectPicker {
                             .h_8()
                             .min_w_0()
                             .flex_1()
-                            .rounded_md()
+                            .rounded(px(radius::CONTROL))
                             .border_1()
                             .border_color(content(0.1))
                             .bg(content(0.03))
@@ -375,7 +376,7 @@ impl Render for RemoteProjectPicker {
                 .min_h(px(96.))
                 .max_h(px(280.))
                 .overflow_y_scroll()
-                .rounded_md()
+                .rounded(px(radius::CONTROL))
                 .border_1()
                 .border_color(content(0.1))
                 .p_1()

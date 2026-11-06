@@ -13,6 +13,7 @@ use gpui::{
 use vorkspace_core::{agent::AccessMode, provider::Kind};
 #[cfg(not(test))]
 use vorkspace_macos::global_hotkey as hotkey;
+use vorkspace_ui::radius;
 use vorkspace_ui::theme::*;
 #[derive(Clone)]
 pub(crate) struct Launch {
@@ -288,7 +289,7 @@ impl Render for QuickComposer {
             .id("quick-composer")
             .size_full()
             .p_4()
-            .rounded_xl()
+            .rounded(px(radius::SURFACE))
             .bg(shell_fill())
             .text_color(content(1.))
             .font_family(vorkspace_ui::fonts::UI)
@@ -414,7 +415,7 @@ impl Render for QuickComposer {
                                 .aria_label(mode.label())
                                 .px_3()
                                 .py_2()
-                                .rounded_md()
+                                .rounded(px(radius::CONTROL))
                                 .text_size(px(12.))
                                 .hover(|s| s.bg(content(0.1)))
                                 .child(mode.label())

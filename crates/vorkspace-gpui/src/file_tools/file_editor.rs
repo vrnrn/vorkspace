@@ -13,6 +13,7 @@ use gpui::{
 };
 use std::{path::PathBuf, sync::Arc, time::Duration};
 use vorkspace_core::files::document::{self, Document, TextDocument};
+use vorkspace_ui::radius;
 use vorkspace_ui::theme::*;
 
 mod chrome;
@@ -1044,7 +1045,7 @@ impl gpui::Render for FileEditor {
                             .aria_label("Open externally")
                             .px_3()
                             .py_1()
-                            .rounded_md()
+                            .rounded(px(radius::CONTROL))
                             .hover(|s| s.bg(content(0.1)))
                             .child("Open externally")
                             .on_click(cx.listener(|this, _, _, cx| {
@@ -1072,7 +1073,7 @@ impl gpui::Render for FileEditor {
                                     .aria_label("Retry")
                                     .px_3()
                                     .py_1()
-                                    .rounded_md()
+                                    .rounded(px(radius::CONTROL))
                                     .bg(content(0.1))
                                     .child("Retry")
                                     .on_click(cx.listener(|this, _, _, cx| this.load(true, cx))),
@@ -1084,7 +1085,7 @@ impl gpui::Render for FileEditor {
                                     .aria_label("Reveal")
                                     .px_3()
                                     .py_1()
-                                    .rounded_md()
+                                    .rounded(px(radius::CONTROL))
                                     .bg(content(0.1))
                                     .child("Reveal")
                                     .on_click(cx.listener(|this, _, _, cx| {
@@ -1103,7 +1104,7 @@ impl gpui::Render for FileEditor {
                                     .aria_label("Copy path")
                                     .px_3()
                                     .py_1()
-                                    .rounded_md()
+                                    .rounded(px(radius::CONTROL))
                                     .bg(content(0.1))
                                     .child("Copy path")
                                     .on_click(cx.listener(|this, _, _, cx| {

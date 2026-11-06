@@ -6,6 +6,7 @@ use gpui::{
     linear_gradient, prelude::*, px, rgb,
 };
 use vorkspace_ui::preferences::UI_SCALE_PERCENTS;
+use vorkspace_ui::radius;
 use vorkspace_ui::theme::*;
 
 /// ACCENT_COLOR_PRESETS, after the Default swatch.
@@ -50,7 +51,7 @@ fn swatch(surface: u32, panel: u32, solid: u32, accent: u32) -> AnyElement {
         .relative()
         .size_4()
         .overflow_hidden()
-        .rounded(px(4.))
+        .rounded(px(radius::SMALL))
         .border_1()
         .border_color(content(0.15))
         .bg(rgb(surface))
@@ -450,7 +451,7 @@ impl SettingsView {
                             .flex()
                             .items_center()
                             .gap_2()
-                            .rounded_md()
+                            .rounded(px(radius::CONTROL))
                             .border_1()
                             .border_color(content(0.1))
                             .child(
@@ -486,7 +487,7 @@ impl SettingsView {
             .child(
                 div()
                     .overflow_hidden()
-                    .rounded_lg()
+                    .rounded(px(radius::CONTAINER))
                     .border_1()
                     .border_color(content(0.1))
                     .map(|d| match &image {

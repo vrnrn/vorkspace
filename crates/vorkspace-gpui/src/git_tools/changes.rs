@@ -29,6 +29,7 @@ use vorkspace_core::{
     provider::{self, Event, Kind, Request},
     scm::{self, ChangedFile, DiffIndex, Pr},
 };
+use vorkspace_ui::radius;
 use vorkspace_ui::{file_icons::file_type_icon, theme::*};
 
 const MOD: &str = "⌘";
@@ -1026,7 +1027,7 @@ impl Changes {
                         .flex()
                         .items_center()
                         .justify_center()
-                        .rounded_md()
+                        .rounded(px(radius::CONTROL))
                         .child(self.branch_anchor.probe())
                         .when(busy, |d| d.opacity(0.4))
                         .when(menu_open, |d| d.bg(content(0.1)))
@@ -1088,7 +1089,7 @@ impl Changes {
                     .child(
                         div()
                             .w_full()
-                            .rounded_md()
+                            .rounded(px(radius::CONTROL))
                             .bg(content(0.1))
                             .py_1()
                             .pl_2()
@@ -1112,7 +1113,7 @@ impl Changes {
                             .flex()
                             .items_center()
                             .justify_center()
-                            .rounded_md()
+                            .rounded(px(radius::CONTROL))
                             .bg(content(0.1))
                             .when(!generating && !can_generate, |d| d.opacity(0.4))
                             .when(generating || can_generate, |d| {
@@ -1273,7 +1274,7 @@ impl Changes {
                 .justify_center()
                 .gap(px(6.))
                 .px_2()
-                .rounded_md()
+                .rounded(px(radius::CONTROL))
                 .text_size(px(12.))
                 .font_weight(FontWeight::MEDIUM)
                 .bg(content(0.1))

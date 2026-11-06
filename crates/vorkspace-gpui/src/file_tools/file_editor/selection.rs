@@ -9,6 +9,7 @@ use gpui::{
     prelude::*, px,
 };
 use std::{ops::Range, path::Path};
+use vorkspace_ui::radius;
 use vorkspace_ui::theme::*;
 
 #[derive(Clone)]
@@ -196,7 +197,7 @@ impl FileEditor {
                                 .gap_1p5()
                                 .h(px(28.))
                                 .px_2()
-                                .rounded(px(8.))
+                                .rounded(px(radius::CONTAINER))
                                 .text_size(px(13.))
                                 .hover(|s| s.bg(content(0.05)))
                                 .cursor_pointer()

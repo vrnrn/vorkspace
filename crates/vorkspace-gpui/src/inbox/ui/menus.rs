@@ -1,5 +1,6 @@
 //! Inbox filters, connection and action menus.
 use super::*;
+use vorkspace_ui::radius;
 
 impl Inbox {
     pub(super) fn filters_active(&self) -> bool {
@@ -274,7 +275,7 @@ impl Inbox {
                     .w(px(440.))
                     .max_w_full()
                     .p(px(24.))
-                    .rounded(px(page::CARD_CORNER))
+                    .rounded(px(radius::MODAL))
                     .border_1()
                     .border_color(page::divider())
                     .bg(background)

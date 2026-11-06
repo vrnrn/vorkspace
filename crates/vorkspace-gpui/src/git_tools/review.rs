@@ -27,6 +27,7 @@ use vorkspace_core::{
     diff,
     scm::{self, ChangedFile, FileDiff, FileDiffVersion},
 };
+use vorkspace_ui::radius;
 use vorkspace_ui::{file_icons::file_type_icon, pane_motion::PaneReveal, theme::*};
 
 const CONCURRENCY: usize = 4;
@@ -1528,7 +1529,7 @@ impl ReviewPane {
                                             .items_center()
                                             .gap(px(6.))
                                             .px_2()
-                                            .rounded_md()
+                                            .rounded(px(radius::CONTROL))
                                             .text_size(px(13.))
                                             .text_color(content(0.5))
                                             .child(if let ReviewTab::File { .. } = &ghost {
@@ -1567,7 +1568,7 @@ impl ReviewPane {
                         .flex()
                         .items_center()
                         .justify_center()
-                        .rounded_md()
+                        .rounded(px(radius::CONTROL))
                         .cursor(CursorStyle::OpenHand)
                         .text_color(content(0.35))
                         .hover(|s| s.bg(content(0.05)).text_color(content(0.7)))
@@ -1666,7 +1667,7 @@ impl ReviewPane {
                             .gap(px(6.))
                             .px_2()
                             .pr(px(28.))
-                            .rounded_md()
+                            .rounded(px(radius::CONTROL))
                             .text_size(px(13.))
                             .map(|d| {
                                 if active {
@@ -1725,7 +1726,7 @@ impl ReviewPane {
                             .flex()
                             .items_center()
                             .justify_center()
-                            .rounded(px(4.))
+                            .rounded(px(radius::SMALL))
                             .when(!(active || hovered), |d| d.opacity(0.))
                             .hover(|s| s.bg(content(0.1)))
                             .child(icon("x", 12.))

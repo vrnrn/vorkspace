@@ -14,6 +14,7 @@ use vorkspace_core::visual::{
     Camera, ChartKind, Node, SceneObject, Series, Shape, TextSize, ThemeColor, VisualDocument,
     VisualRuntime,
 };
+use vorkspace_ui::radius;
 use vorkspace_ui::theme::{accent_color, content};
 
 mod scene;
@@ -90,7 +91,7 @@ fn control(id: impl Into<SharedString>) -> Stateful<Div> {
         .flex()
         .items_center()
         .justify_center()
-        .rounded_md()
+        .rounded(px(radius::CONTROL))
         .text_size(px(12.))
         .line_height(px(16.))
         .cursor_pointer()
@@ -148,7 +149,7 @@ fn action_button(
         .flex()
         .items_center()
         .justify_center()
-        .rounded_md()
+        .rounded(px(radius::CONTROL))
         .cursor_pointer()
         .when(active, |d| d.bg(content(0.06)))
         .hover(|s| s.bg(content(0.08)))
@@ -704,7 +705,7 @@ impl VisualView {
                             })
                             .px_2()
                             .py_1()
-                            .rounded_md()
+                            .rounded(px(radius::CONTROL))
                             .border_1()
                             .border_color(content(0.14))
                             .child(slot.input.clone()),
@@ -835,7 +836,7 @@ impl VisualView {
                     )
                     .h(px(height))
                     .overflow_hidden()
-                    .rounded_lg()
+                    .rounded(px(radius::CONTAINER))
                     .border_1()
                     .border_color(content(0.08))
                     .cursor(gpui::CursorStyle::OpenHand)
@@ -1102,7 +1103,7 @@ impl Render for VisualView {
                 div()
                     .px_3()
                     .py_2()
-                    .rounded_md()
+                    .rounded(px(radius::CONTROL))
                     .border_1()
                     .border_color(color(&ThemeColor::Negative))
                     .text_size(px(12.))

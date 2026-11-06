@@ -1,4 +1,5 @@
 use super::*;
+use vorkspace_ui::radius;
 
 fn gallery_card(
     id: impl Into<gpui::ElementId>,
@@ -11,7 +12,7 @@ fn gallery_card(
         .h_full()
         .min_w_0()
         .p(px(12.))
-        .rounded(px(page::CARD_CORNER))
+        .rounded(px(radius::SURFACE))
         .border_1()
         .border_color(page::divider())
         .flex()
@@ -23,7 +24,7 @@ fn gallery_card(
             div()
                 .size(px(page::CONTROL_HEIGHT))
                 .flex_shrink_0()
-                .rounded(px(page::CORNER))
+                .rounded(px(radius::CONTROL))
                 .bg(content(0.08))
                 .text_color(page::secondary_ink())
                 .flex()

@@ -8,6 +8,7 @@ pub mod fonts;
 pub mod palettes;
 pub mod pane_motion;
 pub mod preferences;
+pub mod radius;
 pub mod reflow_motion;
 pub mod reveal;
 pub mod session_mark;

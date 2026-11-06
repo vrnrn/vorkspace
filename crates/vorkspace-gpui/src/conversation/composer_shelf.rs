@@ -6,6 +6,7 @@ use std::{
     collections::{HashMap, HashSet},
 };
 use vorkspace_ui::clock::Instant;
+use vorkspace_ui::radius;
 use vorkspace_ui::{pane_motion::PaneSlide, reveal::Disclosure, theme::content};
 
 #[derive(Default)]
@@ -32,7 +33,7 @@ pub(super) fn card(id: &'static str, classic_layout: bool) -> Stateful<Div> {
     };
     div()
         .id(id)
-        .rounded_t(px(10.))
+        .rounded_t(px(radius::CONTAINER))
         .border_1()
         .border_b_0()
         .border_color(content(border_alpha))
