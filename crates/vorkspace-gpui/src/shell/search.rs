@@ -270,6 +270,126 @@ mod tests {
     use gpui::TestAppContext;
 
     #[gpui::test]
+    fn parked_search_refreshes_same_working_copy_files_and_content_as_a_split(
+        cx: &mut TestAppContext,
+    ) {
+        use std::{path::Path, process::Command, time::Duration};
+        use vorkspace_core::search::Scope;
+
+        let root = tempfile::tempdir().unwrap();
+        let cwd = root.path().to_string_lossy().into_owned();
+        for (path, text) in [
+            ("needle-before.txt", "original filename"),
+            ("needle-delete.txt", "to be deleted"),
+            ("contents.txt", "needle before\n"),
+        ] {
+            std::fs::write(root.path().join(path), text).unwrap();
+        }
+        for args in [&["init", "--quiet"][..], &["add", "--", "."][..]] {
+            assert!(
+                Command::new("git")
+                    .arg("-C")
+                    .arg(root.path())
+                    .args(args)
+                    .status()
+                    .unwrap()
+                    .success()
+            );
+        }
+        let (window, _, _) = crate::shell::tests::window(cx);
+        window
+            .update(cx, |shell, w, cx| shell.select_project(cwd.clone(), w, cx))
+            .unwrap();
+        cx.run_until_parked();
+        let (session, pane, view) = window
+            .update(cx, |shell, w, cx| {
+                let session = shell.workspace.active.unwrap();
+                shell.open_app_search(w, cx);
+                let pane = shell.workspace.active.unwrap();
+                let view = shell.app_search.as_ref().unwrap().view.clone();
+                view.update(cx, |view, cx| {
+                    view.restore_draft(("needle".into(), Scope::Files), cx)
+                });
+                (session, pane, view)
+            })
+            .unwrap();
+        let results = |cx: &mut TestAppContext| {
+            cx.run_until_parked();
+            cx.executor().advance_clock(Duration::from_millis(200));
+            cx.run_until_parked();
+            view.read_with(cx, |view, _| {
+                let mut files = view
+                    .hits()
+                    .iter()
+                    .filter_map(|hit| {
+                        let Target::File { path, location } = &hit.target else {
+                            return None;
+                        };
+                        Some((
+                            Path::new(path)
+                                .file_name()
+                                .unwrap()
+                                .to_string_lossy()
+                                .into_owned(),
+                            *location,
+                        ))
+                    })
+                    .collect::<Vec<_>>();
+                files.sort();
+                files
+            })
+        };
+        assert_eq!(
+            results(cx),
+            [
+                ("contents.txt".into(), Some((1, 1))),
+                ("needle-before.txt".into(), None),
+                ("needle-delete.txt".into(), None),
+            ]
+        );
+        window
+            .update(cx, |shell, w, cx| {
+                shell.open(session, w, cx);
+                assert!(shell.app_search.is_none());
+                assert_eq!(shell.parked_search.as_ref().unwrap().view, view);
+            })
+            .unwrap();
+        std::fs::rename(
+            root.path().join("needle-before.txt"),
+            root.path().join("needle-renamed.txt"),
+        )
+        .unwrap();
+        std::fs::remove_file(root.path().join("needle-delete.txt")).unwrap();
+        std::fs::write(root.path().join("needle-created.txt"), "new file").unwrap();
+        std::fs::write(
+            root.path().join("contents.txt"),
+            "no match here\nneedle after\n",
+        )
+        .unwrap();
+
+        window
+            .update(cx, |shell, w, cx| {
+                // A prepared Search sibling becomes visible without an explicit
+                // open_app_search call, and keeps the same view and query.
+                shell.workspace.place(pane, session, Edge::Right);
+                shell.open(session, w, cx);
+                assert_eq!(shell.workspace.layout(session).leaf_ids(), [session, pane]);
+                assert!(shell.app_search.is_none());
+                assert_eq!(shell.parked_search.as_ref().unwrap().view, view);
+                assert_eq!(view.read(cx).draft(cx), ("needle".into(), Scope::Files));
+            })
+            .unwrap();
+        assert_eq!(
+            results(cx),
+            [
+                ("contents.txt".into(), Some((2, 1))),
+                ("needle-created.txt".into(), None),
+                ("needle-renamed.txt".into(), None),
+            ]
+        );
+    }
+
+    #[gpui::test]
     fn parked_search_rebuilds_for_a_new_working_copy_and_opens_its_own_file(
         cx: &mut TestAppContext,
     ) {
