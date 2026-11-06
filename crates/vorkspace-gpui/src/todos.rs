@@ -10,6 +10,7 @@ use gpui::{
     Role, SharedString, Stateful, Subscription, Window, div, prelude::*, px,
 };
 use std::borrow::Cow;
+use std::collections::HashMap;
 use vorkspace_core::todos::{TodoBoard, TodoItem, TodoStatus, TodoSync};
 use vorkspace_runtime::runtime::{Database, locked};
 use vorkspace_ui::radius;
@@ -19,6 +20,8 @@ mod creation;
 mod details;
 mod service;
 pub(crate) use service::action as todo_action;
+
+const STALE_DETAILS: &str = "This to-do changed while you were editing. Your draft is preserved; reload details before saving.";
 
 /// Bumped after any board changes, so every open view of it reloads.
 #[derive(Default)]
@@ -68,7 +71,9 @@ struct SavedDetails {
 
 #[derive(Clone)]
 struct DetailsEditor {
+    /// Original card and draft key. A linked issue can change displayed IDs.
     id: String,
+    issue: Option<service::IssueIdentity>,
     revision: i64,
     dependencies_complete: bool,
     title: Entity<Input>,
@@ -77,6 +82,18 @@ struct DetailsEditor {
     dependencies: Entity<Input>,
     url: Entity<Input>,
     preview: Entity<crate::markdown::Document>,
+}
+
+impl DetailsEditor {
+    fn matches_revision(&self, item: &TodoItem) -> bool {
+        // Local receipt revisions and GitHub timestamps have different owners.
+        self.id == item.id
+            && self.revision == item.updated_at
+            && self
+                .issue
+                .as_ref()
+                .map_or(item.issue.is_none(), |issue| issue.matches(item))
+    }
 }
 
 #[derive(Clone)]
@@ -106,6 +123,7 @@ pub(crate) struct TodoBoardView {
     store: Database,
     board: Option<TodoBoard>,
     items: Vec<TodoItem>,
+    published_receipts: HashMap<String, service::IssueIdentity>,
     /// Guards against an older load landing after a newer one.
     generation: u64,
     /// The last load's failure.
@@ -185,6 +203,7 @@ impl TodoBoardView {
             store,
             board: None,
             items: Vec::new(),
+            published_receipts: HashMap::new(),
             generation: 0,
             error: None,
             github_notice: None,
@@ -233,6 +252,7 @@ impl TodoBoardView {
         }
         self.board = board;
         self.items.clear();
+        self.published_receipts.clear();
         self.error = None;
         self.github_notice = None;
         self.github_repo = None;
@@ -265,18 +285,21 @@ impl TodoBoardView {
                     return;
                 }
                 match result {
-                    Ok(snapshot) => {
-                        this.items = snapshot.items;
-                        this.error = snapshot.github_error;
-                        this.github_notice = snapshot.github_notice;
-                        this.github_repo = snapshot.github_repo;
-                    }
+                    Ok(snapshot) => this.install_snapshot(snapshot),
                     Err(error) => this.error = Some(error),
                 }
                 cx.notify();
             });
         })
         .detach();
+    }
+
+    fn install_snapshot(&mut self, snapshot: service::BoardSnapshot) {
+        self.items = snapshot.items;
+        self.published_receipts = snapshot.published_receipts;
+        self.error = snapshot.github_error;
+        self.github_notice = snapshot.github_notice;
+        self.github_repo = snapshot.github_repo;
     }
 
     /// Queues a store change to run off the main thread after this view's
@@ -534,6 +557,52 @@ impl TodoBoardView {
         Some(format!("{}\0{id}", self.board.as_ref()?.key()))
     }
 
+    fn details_issue<'a>(
+        &'a self,
+        editor: &'a DetailsEditor,
+    ) -> Option<&'a service::IssueIdentity> {
+        editor
+            .issue
+            .as_ref()
+            .or_else(|| self.published_receipts.get(&editor.id))
+    }
+
+    fn details_item(&self, editor: &DetailsEditor) -> Option<&TodoItem> {
+        self.items
+            .iter()
+            .find(|item| item.id == editor.id)
+            .or_else(|| {
+                let issue = self.details_issue(editor)?;
+                self.items.iter().find(|item| issue.matches(item))
+            })
+    }
+
+    fn open_detail_item(&self) -> Option<&TodoItem> {
+        self.details_item(self.details.as_ref()?)
+    }
+
+    fn saved_details_key(&self, item: &TodoItem) -> Option<String> {
+        let key = self.details_key(&item.id)?;
+        if self.saved_details.contains_key(&key) {
+            return Some(key);
+        }
+        item.issue.as_ref()?;
+        let prefix = self.details_key("")?;
+        // Leave other drafts under their original keys if two card IDs were
+        // editable before the publication receipt was visible to this view.
+        self.saved_details
+            .iter()
+            .filter_map(|(key, editor)| {
+                (key.starts_with(&prefix)
+                    && self
+                        .details_issue(editor)
+                        .is_some_and(|issue| issue.matches(item)))
+                .then_some(key)
+            })
+            .min()
+            .cloned()
+    }
+
     fn stash_details(&mut self) {
         if let Some(editor) = self.details.take()
             && let Some(key) = self.details_key(&editor.id)
@@ -545,15 +614,16 @@ impl TodoBoardView {
     }
 
     fn open_details(&mut self, item: &TodoItem, cx: &mut Context<Self>) {
-        if self
-            .details
-            .as_ref()
-            .is_some_and(|details| details.id == item.id)
-        {
+        if self.details.as_ref().is_some_and(|editor| {
+            editor.id == item.id
+                || self
+                    .details_item(editor)
+                    .is_some_and(|current| current.id == item.id)
+        }) {
             return;
         }
         self.stash_details();
-        if let Some(key) = self.details_key(&item.id)
+        if let Some(key) = self.saved_details_key(item)
             && let Some(mut editor) = self.saved_details.remove(&key)
         {
             let text = editor.description.read(cx).content.clone();
@@ -658,6 +728,7 @@ impl TodoBoardView {
         let preview = cx.new(|cx| crate::markdown::Document::prose(&text, "No description", cx));
         self.details = Some(DetailsEditor {
             id: item.id.clone(),
+            issue: service::IssueIdentity::from_item(item),
             revision: item.updated_at,
             dependencies_complete: !item
                 .issue
@@ -762,7 +833,7 @@ impl TodoBoardView {
         let Some(editor) = self.details.as_ref() else {
             return;
         };
-        let Some(item) = self.items.iter().find(|item| item.id == editor.id) else {
+        let Some(item) = self.details_item(editor) else {
             return;
         };
         if item
@@ -877,8 +948,7 @@ impl TodoBoardView {
         let Some(details) = self.details.as_ref() else {
             return;
         };
-        let id = details.id.clone();
-        let Some(item) = self.items.iter().find(|item| item.id == id) else {
+        let Some(item) = self.details_item(details) else {
             return;
         };
         if item.pending_edit.is_some()
@@ -890,8 +960,8 @@ impl TodoBoardView {
             return;
         }
         let remote = item.issue.is_some();
-        if item.updated_at != details.revision {
-            self.change_error = Some("This to-do changed while you were editing. Your draft is preserved; reload details before saving.".into());
+        if !details.matches_revision(item) {
+            self.change_error = Some(STALE_DETAILS.into());
             cx.notify();
             return;
         }
@@ -905,7 +975,7 @@ impl TodoBoardView {
         let description = details.description.read(cx).content.to_string();
         let attachments = Self::reference_lines(&details.attachments, cx);
         let mut input = serde_json::json!({
-            "id":id,"title":title,"description":description,"expectedUpdatedAt":details.revision
+            "id":item.id,"title":title,"description":description,"expectedUpdatedAt":details.revision
         });
         if details.dependencies_complete {
             input["dependencies"] =
@@ -914,7 +984,7 @@ impl TodoBoardView {
         if !remote || !attachments.is_empty() {
             input["attachments"] = serde_json::json!(attachments);
         }
-        self.queue_detail_change(id, "todos.update", input, cx);
+        self.queue_detail_change(details.id.clone(), "todos.update", input, cx);
     }
 
     fn publish_details(&mut self, cx: &mut Context<Self>) {
@@ -924,13 +994,13 @@ impl TodoBoardView {
         let Some(details) = self.details.as_ref() else {
             return;
         };
-        let Some(item) = self.items.iter().find(|item| item.id == details.id) else {
+        let Some(item) = self.details_item(details) else {
             return;
         };
         if item.sync != TodoSync::Local || item.issue.is_some() {
             return;
         }
-        if item.updated_at != details.revision {
+        if !details.matches_revision(item) {
             self.change_error = Some("This to-do changed while you were editing. Your draft is preserved; reload details before publishing.".into());
             cx.notify();
             return;
@@ -983,14 +1053,11 @@ impl TodoBoardView {
             cx.notify();
             return;
         }
-        let Some(details) = self.details.as_ref() else {
+        let Some(item) = self.open_detail_item() else {
             return;
         };
-        let id = details.id.clone();
-        let edit = self
-            .items
-            .iter()
-            .any(|item| item.id == id && item.pending_edit.is_some());
+        let id = item.id.clone();
+        let edit = item.pending_edit.is_some();
         self.confirm_retry = false;
         self.change(
             move |store, board| {
@@ -1015,14 +1082,11 @@ impl TodoBoardView {
         if self.pending_changes > 0 {
             return;
         }
-        let Some(details) = self.details.as_ref() else {
+        let Some(item) = self.open_detail_item() else {
             return;
         };
-        let id = details.id.clone();
-        let edit = self
-            .items
-            .iter()
-            .any(|item| item.id == id && item.pending_edit.is_some());
+        let id = item.id.clone();
+        let edit = item.pending_edit.is_some();
         self.change(
             move |store, board| {
                 service::action(
@@ -1050,10 +1114,10 @@ impl TodoBoardView {
             cx.notify();
             return;
         }
-        let Some(details) = self.details.as_ref() else {
+        let Some(item) = self.open_detail_item() else {
             return;
         };
-        let id = details.id.clone();
+        let id = item.id.clone();
         self.confirm_discard = false;
         self.change(
             move |store, board| {
@@ -1078,10 +1142,10 @@ impl TodoBoardView {
             cx.notify();
             return;
         }
-        let Some(details) = self.details.as_ref() else {
+        let Some(item) = self.open_detail_item() else {
             return;
         };
-        let id = details.id.clone();
+        let id = item.id.clone();
         self.confirm_cancel = false;
         self.change(
             move |store, board| {
@@ -1099,7 +1163,7 @@ impl TodoBoardView {
 
     fn editor_panel(&self, cx: &mut Context<Self>) -> Option<gpui::AnyElement> {
         let editor = self.details.as_ref()?;
-        let item = self.items.iter().find(|item| item.id == editor.id)?;
+        let item = self.details_item(editor)?;
         let remote = item.issue.is_some();
         let issue = item.issue.clone();
         let can_publish = matches!(self.board, Some(TodoBoard::Project(_)))
@@ -1406,16 +1470,19 @@ impl TodoBoardView {
                             .debug_selector(|| "todo-details-save".into())
                             .on_click(cx.listener(|this, _, _, cx| this.save_details(cx))),
                         )
-                        .when(!uncertain && !pending_edit && item.updated_at != editor.revision, |d| {
+                        .when(!uncertain && !pending_edit && !editor.matches_revision(item), |d| {
+                            let label = if self.saved_details_key(item).is_some() {
+                                "Discard draft and open saved draft"
+                            } else {
+                                "Discard draft and reload"
+                            };
                             d.child(
-                                labeled_secondary("todo-reload-details", "Discard draft and reload", false, self.pending_changes > 0)
+                                labeled_secondary("todo-reload-details", label, false, self.pending_changes > 0)
                                     .debug_selector(|| "todo-reload-details".into())
                                     .on_click(cx.listener(|this, _, _, cx| {
                                         if this.pending_changes > 0 { return; }
-                                        let Some(id) = this.details.as_ref().map(|editor| editor.id.clone()) else { return; };
-                                        let Some(item) = this.items.iter().find(|item| item.id == id).cloned() else { return; };
+                                        let Some(item) = this.open_detail_item().cloned() else { return; };
                                         this.details = None;
-                                        if let Some(key) = this.details_key(&id) { this.saved_details.remove(&key); }
                                         this.change_error = None;
                                         this.open_details(&item, cx);
                                     })),

@@ -2,6 +2,7 @@
 //! GitHub reads and writes run on the caller's background executor without
 //! holding the shared database lock.
 use serde_json::{Value, json};
+use std::collections::HashMap;
 use std::path::Path;
 use vorkspace_core::todos::{TodoBoard, TodoIssue, TodoItem, TodoStatus, TodoSync, github};
 use vorkspace_runtime::runtime::{Database, locked};
@@ -42,11 +43,74 @@ impl Drop for RemoteOperation {
     }
 }
 
+#[derive(Clone)]
+pub(super) struct IssueIdentity {
+    repo: String,
+    number: i64,
+}
+
+impl IssueIdentity {
+    pub(super) fn from_item(item: &TodoItem) -> Option<Self> {
+        let issue = item.issue.as_ref()?;
+        Some(Self {
+            repo: issue.repo.clone(),
+            number: issue.number,
+        })
+    }
+
+    pub(super) fn matches(&self, item: &TodoItem) -> bool {
+        item.issue.as_ref().is_some_and(|issue| {
+            issue.repo.eq_ignore_ascii_case(&self.repo) && issue.number == self.number
+        })
+    }
+}
+
+#[derive(Default)]
 pub(super) struct BoardSnapshot {
     pub items: Vec<TodoItem>,
+    /// Local publication receipts can outlive their displayed cards.
+    pub published_receipts: HashMap<String, IssueIdentity>,
     pub github_error: Option<String>,
     pub github_notice: Option<String>,
     pub github_repo: Option<String>,
+}
+
+impl BoardSnapshot {
+    pub(super) fn project(
+        local: Vec<TodoItem>,
+        pending_edits: Vec<TodoItem>,
+        remote: Option<Vec<TodoItem>>,
+    ) -> Self {
+        let published_receipts = local
+            .iter()
+            .filter(|item| item.sync == TodoSync::Synced)
+            .filter_map(|item| Some((item.id.clone(), IssueIdentity::from_item(item)?)))
+            .collect();
+        let online = remote.is_some();
+        let mut items = attach_pending(
+            match remote {
+                Some(remote) => merge_remote(local, remote),
+                None => local,
+            },
+            pending_edits,
+        );
+        if online {
+            items.sort_by_key(|item| {
+                (
+                    TodoStatus::ALL
+                        .iter()
+                        .position(|status| *status == item.status)
+                        .unwrap_or(0),
+                    item.position,
+                )
+            });
+        }
+        Self {
+            items,
+            published_receipts,
+            ..Self::default()
+        }
+    }
 }
 
 pub(super) fn list(store: &Database, board: &TodoBoard) -> Result<BoardSnapshot, String> {
@@ -55,27 +119,18 @@ pub(super) fn list(store: &Database, board: &TodoBoard) -> Result<BoardSnapshot,
     let TodoBoard::Project(project) = board else {
         return Ok(BoardSnapshot {
             items: local,
-            github_error: None,
-            github_notice: None,
-            github_repo: None,
+            ..BoardSnapshot::default()
         });
     };
     let repo = match github::repo(Path::new(project)) {
         Ok(Some(repo)) => repo,
         Ok(None) => {
-            return Ok(BoardSnapshot {
-                items: attach_pending(local, pending_edits),
-                github_error: None,
-                github_notice: None,
-                github_repo: None,
-            });
+            return Ok(BoardSnapshot::project(local, pending_edits, None));
         }
         Err(error) => {
             return Ok(BoardSnapshot {
-                items: attach_pending(local, pending_edits),
                 github_error: Some(error),
-                github_notice: None,
-                github_repo: None,
+                ..BoardSnapshot::project(local, pending_edits, None)
             });
         }
     };
@@ -83,33 +138,19 @@ pub(super) fn list(store: &Database, board: &TodoBoard) -> Result<BoardSnapshot,
         Ok(remote) => remote,
         Err(error) => {
             return Ok(BoardSnapshot {
-                items: attach_pending(local, pending_edits),
                 github_error: Some(error),
-                github_notice: None,
                 github_repo: Some(repo),
+                ..BoardSnapshot::project(local, pending_edits, None)
             });
         }
     };
     let github_notice = remote
         .truncated
         .then(|| "Only the latest 500 GitHub issues are shown.".into());
-    let remote = remote.items;
-    let mut items = merge_remote(local, remote);
-    items = attach_pending(items, pending_edits);
-    items.sort_by_key(|item| {
-        (
-            vorkspace_core::todos::TodoStatus::ALL
-                .iter()
-                .position(|status| *status == item.status)
-                .unwrap_or(0),
-            item.position,
-        )
-    });
     Ok(BoardSnapshot {
-        items,
-        github_error: None,
         github_notice,
         github_repo: Some(repo),
+        ..BoardSnapshot::project(local, pending_edits, Some(remote.items))
     })
 }
 
@@ -515,7 +556,18 @@ pub(crate) fn action(
         "todos.update" | "todos.remove" => {
             let id = input_id(input)?;
             let local = locked(store)?;
-            let issue = local.get_todo(board, id)?.and_then(|item| item.issue);
+            let receipt = local.get_todo(board, id)?;
+            // An edit queued against a local revision may reach the service
+            // after publication has linked that ID to GitHub.
+            if let Some(receipt) = &receipt
+                && receipt.issue.is_some()
+                && input
+                    .get("expectedUpdatedAt")
+                    .is_some_and(|revision| revision.as_i64() != Some(receipt.updated_at))
+            {
+                return Err(super::STALE_DETAILS.into());
+            }
+            let issue = receipt.and_then(|item| item.issue);
             if issue.is_none() && !id.starts_with("github:") {
                 return local.todo_action(board, action, input);
             }
