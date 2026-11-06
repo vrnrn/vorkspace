@@ -644,7 +644,7 @@ mod tests {
         );
         assert!(
             saved.updated_at > task.updated_at,
-            "an open editor detects the changed link"
+            "the changed link advances the task revision"
         );
         check(
             merge_remote(store.list_todos(&board).unwrap(), vec![remote.clone()]),
@@ -653,6 +653,19 @@ mod tests {
         );
         drop(store);
         let store = Store::open(&path).unwrap();
+        // A form opened before publication can still submit the old local
+        // reference. The write owner must preserve its new issue identity.
+        store.todo_action(&board, "todos.update", &json!({
+            "id":task.id, "title":"Edited after publication", "dependencies":[dependency.id],
+        })).unwrap();
+        assert_eq!(
+            store
+                .get_todo(&board, &task.id)
+                .unwrap()
+                .unwrap()
+                .dependencies,
+            [remote.issue.as_ref().unwrap().url.clone()]
+        );
         check(store.list_todos(&board).unwrap(), &dependency.id, cx);
         check(
             merge_remote(store.list_todos(&board).unwrap(), vec![remote.clone()]),

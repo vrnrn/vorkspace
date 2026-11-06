@@ -196,13 +196,14 @@ impl Store {
         ensure_schema(&self.conn).map_err(|e| e.to_string())
     }
 
-    fn validate_todo_dependencies(
+    fn resolve_todo_dependencies(
         &self,
         board: &TodoBoard,
         id: Option<&str>,
         dependencies: &[String],
-    ) -> Result<(), String> {
-        for dependency in dependencies {
+    ) -> Result<Vec<String>, String> {
+        let mut dependencies = dependencies.to_vec();
+        for dependency in &mut dependencies {
             if let Some(number) = dependency.strip_prefix('#') {
                 if !matches!(board, TodoBoard::Project(_))
                     || number
@@ -223,11 +224,20 @@ impl Store {
                 }
                 continue;
             }
-            if self.get_todo(board, dependency)?.is_none() {
-                return Err(format!("Dependency {dependency} is not on this board"));
+            let linked = self
+                .get_todo(board, dependency)?
+                .ok_or_else(|| format!("Dependency {dependency} is not on this board"))?;
+            if let Some(issue) = linked.issue {
+                // Older open editors and CLI callers can retain the local ID
+                // after publication. Resolve it at the write boundary too.
+                *dependency = issue.url;
             }
         }
-        let Some(id) = id else { return Ok(()) };
+        let mut unique = std::collections::HashSet::new();
+        dependencies.retain(|reference| unique.insert(reference.clone()));
+        let Some(id) = id else {
+            return Ok(dependencies);
+        };
         let mut stack = dependencies
             .iter()
             .filter(|dependency| {
@@ -254,7 +264,7 @@ impl Store {
                 }));
             }
         }
-        Ok(())
+        Ok(dependencies)
     }
 
     /// Every item on a board, ordered by column then position.
@@ -311,7 +321,7 @@ impl Store {
         let description = clean_description(description)?;
         let attachments = clean_references(attachments, MAX_ATTACHMENTS, "attachment")?;
         let dependencies = clean_references(dependencies, MAX_DEPENDENCIES, "dependency")?;
-        self.validate_todo_dependencies(board, None, &dependencies)?;
+        let dependencies = self.resolve_todo_dependencies(board, None, &dependencies)?;
         let now = now_millis();
         let id = crate::session::new_id();
         let tx = self
@@ -355,7 +365,7 @@ impl Store {
         if dependencies.iter().any(|value| value == id) {
             return Err("A to-do cannot depend on itself".into());
         }
-        self.validate_todo_dependencies(board, Some(id), &dependencies)?;
+        let dependencies = self.resolve_todo_dependencies(board, Some(id), &dependencies)?;
         self.conn.execute(
             "UPDATE todo_items SET description=?1,attachments=?2,dependencies=?3,updated_at=?4 WHERE board=?5 AND id=?6",
             params![description, serde_json::to_string(&attachments).map_err(|e|e.to_string())?, serde_json::to_string(&dependencies).map_err(|e|e.to_string())?, now_millis(), board.key(), id],
@@ -395,7 +405,7 @@ impl Store {
             .map(|values| clean_references(values, MAX_DEPENDENCIES, "dependency"))
             .transpose()?
             .unwrap_or(current.dependencies.clone());
-        self.validate_todo_dependencies(board, Some(id), &dependencies)?;
+        let dependencies = self.resolve_todo_dependencies(board, Some(id), &dependencies)?;
         let next_status = status.unwrap_or(current.status);
         let tx = self
             .conn
