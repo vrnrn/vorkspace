@@ -1986,6 +1986,14 @@ impl Shell {
             cx.notify();
             return;
         }
+        // Reselecting the visible Bot's project keeps its live detail editor.
+        if path == self.workspace.project
+            && !self.tabless_page(cx)
+            && let Some(tab @ TitleTab::Bot { .. }) = self.active_title_tab(cx)
+            && self.workspace.scope_focus.get(&self.tab_scope()) == Some(&tab)
+        {
+            return;
+        }
         self.selected_sessions.clear();
         self.selection_anchor = None;
         self.sidebar_target = None;

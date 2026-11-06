@@ -41,6 +41,7 @@ fn sidebar_highlight(
 
 #[gpui::test]
 fn sidebar_highlights_only_the_visible_bot_or_session(cx: &mut TestAppContext) {
+    vorkspace_ui::clock::use_test_clock(cx);
     let (window, other, session) = window(cx);
     window
         .update(cx, |shell, w, cx| {
@@ -116,6 +117,19 @@ fn sidebar_highlights_only_the_visible_bot_or_session(cx: &mut TestAppContext) {
     click(&project_row, cx);
     window
         .update(cx, |shell, _, cx| {
+            assert!(shell.bot_active(cx));
+            assert_eq!(
+                shell.active_title_tab(cx),
+                Some(bot.clone()),
+                "a project restores its selected Bot tab"
+            );
+        })
+        .unwrap();
+    assert!(pill_at(window, &bot_key, cx));
+    let session_tab = format!("title-tab-{session}");
+    click(&session_tab, cx);
+    window
+        .update(cx, |shell, _, cx| {
             assert!(!shell.bot_active(cx));
             assert_eq!(shell.workspace.project, "/work/vorkspace");
             assert_eq!(shell.workspace.active, Some(session));
@@ -164,7 +178,7 @@ fn sidebar_highlights_only_the_visible_bot_or_session(cx: &mut TestAppContext) {
             "the Bot surface hides session row {selector}"
         );
     }
-    click(&format!("title-tab-{session}"), cx);
+    click(&session_tab, cx);
     assert!(sidebar_highlight(window, session_row, cx));
     assert!(!pill_at(window, &bot_key, cx));
     assert!(!sidebar_highlight(
