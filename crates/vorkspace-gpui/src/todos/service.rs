@@ -258,9 +258,14 @@ fn github_repo(board: &TodoBoard) -> Result<(&Path, String), String> {
     Ok((root, repo))
 }
 
-fn publish(store: &Database, board: &TodoBoard, id: &str, retry: bool) -> Result<Value, String> {
+fn publish(
+    store: &Database,
+    board: &TodoBoard,
+    id: &str,
+    expected_revision: Option<i64>,
+) -> Result<Value, String> {
     let _operation = RemoteOperation::publication(board, id)?;
-    publish_admitted(store, board, id, retry)
+    publish_admitted(store, board, id, false, expected_revision)
 }
 
 fn publish_admitted(
@@ -268,21 +273,32 @@ fn publish_admitted(
     board: &TodoBoard,
     id: &str,
     retry: bool,
+    expected_revision: Option<i64>,
 ) -> Result<Value, String> {
     let (root, repo) = github_repo(board)?;
     let preflight = locked(store)?
         .get_todo(board, id)?
         .ok_or("To-do not found")?;
+    if expected_revision.is_some_and(|revision| revision != preflight.updated_at) {
+        return Err(
+            "This to-do changed while preparing publication; reload its details before publishing"
+                .into(),
+        );
+    }
     github::validate_create(root, &repo, &preflight)?;
     let (draft, token) = if retry {
-        if preflight.pending_repo.as_deref() != Some(repo.as_str()) {
+        if !preflight
+            .pending_repo
+            .as_deref()
+            .is_some_and(|submitted| submitted.eq_ignore_ascii_case(&repo))
+        {
             return Err(
                 "The project's GitHub origin changed since this issue was submitted".into(),
             );
         }
-        locked(store)?.retry_todo_publish(board, id)?
+        locked(store)?.retry_todo_publish(board, id, preflight.updated_at)?
     } else {
-        locked(store)?.begin_todo_publish(board, id, &repo)?
+        locked(store)?.begin_todo_publish(board, id, &repo, preflight.updated_at)?
     };
     let result = github::create(
         root,
@@ -357,13 +373,19 @@ pub(crate) fn action(
                     store,
                     board,
                     added["id"].as_str().ok_or("New to-do has no ID")?,
-                    false,
+                    None,
                 )
             } else {
                 Ok(added)
             }
         }
-        "todos.publish" => publish(store, board, input_id(input)?, false),
+        "todos.publish" => {
+            let revision = input
+                .get("expectedUpdatedAt")
+                .map(|value| value.as_i64().ok_or("expectedUpdatedAt must be an integer"))
+                .transpose()?;
+            publish(store, board, input_id(input)?, revision)
+        }
         "todos.reconcile" | "todos.retry" | "todos.cancelPublish" => {
             let id = input_id(input)?;
             let _operation = RemoteOperation::publication(board, id)?;
@@ -383,7 +405,7 @@ pub(crate) fn action(
             let current_repo = github_repo(board).ok();
             let pinned = current_repo
                 .as_ref()
-                .filter(|(_, repo)| repo == submitted_repo);
+                .filter(|(_, repo)| repo.eq_ignore_ascii_case(submitted_repo));
             if let Some((root, repo)) = pinned {
                 match github::find_submission(root, repo, &token) {
                     Ok(Some(found)) => {
@@ -424,7 +446,7 @@ pub(crate) fn action(
                 if action == "todos.cancelPublish" {
                     return Ok(json!(locked(store)?.cancel_todo_publish(board, id)?));
                 }
-                return publish_admitted(store, board, id, true);
+                return publish_admitted(store, board, id, true, Some(draft.updated_at));
             }
             Ok(json!({"found":false,"uncertain":true,"id":id}))
         }
@@ -486,97 +508,75 @@ pub(crate) fn action(
         }
         "todos.update" | "todos.remove" => {
             let id = input_id(input)?;
-            let local = locked(store)?.get_todo(board, id)?;
-            let (root, repo) = match board {
-                TodoBoard::Project(_) => github_repo(board)
-                    .map(|(root, repo)| (Some(root), Some(repo)))
-                    .unwrap_or((None, None)),
-                _ => (None, None),
-            };
-            let issue = local
-                .as_ref()
-                .and_then(|item| item.issue.as_ref())
-                .map(|issue| (issue.repo.clone(), issue.number));
-            let number = repo
-                .as_ref()
-                .and_then(|repo| github::parse_issue_id(id, repo))
-                .or_else(|| issue.as_ref().map(|(_, number)| *number));
-            if id.starts_with("github:") && number.is_none() {
-                return Err("Issue is outside this project".into());
+            let local = locked(store)?;
+            let issue = local.get_todo(board, id)?.and_then(|item| item.issue);
+            if issue.is_none() && !id.starts_with("github:") {
+                return local.todo_action(board, action, input);
             }
-            if let Some(number) = number {
-                let root = root
-                    .ok_or("The GitHub origin is unavailable; the linked issue was not changed")?;
-                let repo = repo
-                    .ok_or("The GitHub origin is unavailable; the linked issue was not changed")?;
-                if issue
-                    .as_ref()
-                    .is_some_and(|(linked_repo, _)| linked_repo != &repo)
-                {
+            drop(local);
+            let (root, repo) = github_repo(board).map_err(|_| {
+                if issue.is_some() {
+                    "The GitHub origin is unavailable; the linked issue was not changed"
+                } else {
+                    "Issue is outside this project"
+                }
+            })?;
+            let number = if let Some(issue) = issue {
+                if !issue.repo.eq_ignore_ascii_case(&repo) {
                     return Err("Linked issue belongs to another repository".into());
                 }
-                if input.get("before").is_some() {
-                    return Err("GitHub issue ordering cannot be changed".into());
-                }
-                let update = if action == "todos.remove" {
-                    json!({"status":"done"})
-                } else {
-                    input.clone()
-                };
-                let _operation = RemoteOperation::issue(&repo, number)?;
-                github::validate_update(root, &repo, &update)?;
-                let snapshot = match github::view(root, &repo, number) {
-                    Ok(snapshot) => snapshot,
-                    Err(error) => {
-                        let snapshot = remote_snapshot(&repo, number, &update);
-                        let attempt =
-                            locked(store)?.begin_remote_todo_edit(board, &snapshot, &update)?;
-                        locked(store)?.uncertain_remote_todo_edit(board, &snapshot.id, &attempt)?;
-                        return Err(format!(
-                            "GitHub is unavailable; the requested edit was saved locally and was not sent: {error}"
-                        ));
-                    }
-                };
-                if input
-                    .get("expectedUpdatedAt")
-                    .and_then(Value::as_i64)
-                    .is_some_and(|expected| expected != snapshot.updated_at)
-                {
-                    return Err("This GitHub issue changed after it was opened; reopen its details before saving".into());
-                }
-                let attempt = locked(store)?.begin_remote_todo_edit(board, &snapshot, &update)?;
-                let result = match github::update(root, &repo, number, &update) {
-                    Ok(result) => {
-                        locked(store)?.clear_remote_todo_edit(board, &snapshot.id, &attempt)?;
-                        result
-                    }
-                    Err(error) => {
-                        let _ = locked(store)?.uncertain_remote_todo_edit(
-                            board,
-                            &snapshot.id,
-                            &attempt,
-                        );
-                        return Err(format!(
-                            "GitHub edit is unconfirmed; the requested change is saved locally and was not replayed: {error}"
-                        ));
-                    }
-                };
-                return if action == "todos.remove" {
-                    Ok(json!({"closed":true,"item":result}))
-                } else {
-                    Ok(json!(result))
-                };
+                issue.number
+            } else {
+                github::parse_issue_id(id, &repo).ok_or("Issue is outside this project")?
+            };
+            if input.get("before").is_some() {
+                return Err("GitHub issue ordering cannot be changed".into());
             }
-            if local
-                .as_ref()
-                .is_some_and(|item| item.sync != TodoSync::Local)
+            let update = if action == "todos.remove" {
+                json!({"status":"done"})
+            } else {
+                input.clone()
+            };
+            let _operation = RemoteOperation::issue(&repo, number)?;
+            github::validate_update(root, &repo, &update)?;
+            let snapshot = match github::view(root, &repo, number) {
+                Ok(snapshot) => snapshot,
+                Err(error) => {
+                    let snapshot = remote_snapshot(&repo, number, &update);
+                    let attempt =
+                        locked(store)?.begin_remote_todo_edit(board, &snapshot, &update)?;
+                    locked(store)?.uncertain_remote_todo_edit(board, &snapshot.id, &attempt)?;
+                    return Err(format!(
+                        "GitHub is unavailable; the requested edit was saved locally and was not sent: {error}"
+                    ));
+                }
+            };
+            if input
+                .get("expectedUpdatedAt")
+                .and_then(Value::as_i64)
+                .is_some_and(|expected| expected != snapshot.updated_at)
             {
-                return Err(
-                    "This GitHub submission is pending or uncertain; reconcile it before editing"
-                        .into(),
-                );
+                return Err("This GitHub issue changed after it was opened; reopen its details before saving".into());
             }
-            locked(store)?.todo_action(board, action, input)
+            let attempt = locked(store)?.begin_remote_todo_edit(board, &snapshot, &update)?;
+            let result = match github::update(root, &repo, number, &update) {
+                Ok(result) => {
+                    locked(store)?.clear_remote_todo_edit(board, &snapshot.id, &attempt)?;
+                    result
+                }
+                Err(error) => {
+                    let _ =
+                        locked(store)?.uncertain_remote_todo_edit(board, &snapshot.id, &attempt);
+                    return Err(format!(
+                        "GitHub edit is unconfirmed; the requested change is saved locally and was not replayed: {error}"
+                    ));
+                }
+            };
+            if action == "todos.remove" {
+                Ok(json!({"closed":true,"item":result}))
+            } else {
+                Ok(json!(result))
+            }
         }
         _ => Err("Unknown to-do action".into()),
     }
@@ -631,7 +631,12 @@ mod tests {
         };
         check(store.list_todos(&board).unwrap(), &dependency.id, cx);
         store
-            .begin_todo_publish(&board, &dependency.id, "test/project")
+            .begin_todo_publish(
+                &board,
+                &dependency.id,
+                "test/project",
+                dependency.updated_at,
+            )
             .unwrap();
         let remote = remote_snapshot("test/project", 12, &json!({"title":"Dependency"}));
         store
@@ -653,8 +658,8 @@ mod tests {
         );
         drop(store);
         let store = Store::open(&path).unwrap();
-        // A form opened before publication can still submit the old local
-        // reference. The write owner must preserve its new issue identity.
+        // Revision-checked editors must reload after the link changes. A
+        // caller supplying an older local ID still resolves the new identity.
         store.todo_action(&board, "todos.update", &json!({
             "id":task.id, "title":"Edited after publication", "dependencies":[dependency.id],
         })).unwrap();
@@ -682,7 +687,7 @@ mod tests {
             .add_todo(&board, "Review this", TodoStatus::InReview)
             .unwrap();
         let (pending, token) = store
-            .begin_todo_publish(&board, &draft.id, "example/project")
+            .begin_todo_publish(&board, &draft.id, "example/project", draft.updated_at)
             .unwrap();
         let mut remote = pending.clone();
         remote.id = "github:example/project#42".into();

@@ -9,7 +9,7 @@ use gpui::{
     App, Context, Div, ElementId, Entity, FocusHandle, Focusable, FontWeight, Global, MouseButton,
     Role, SharedString, Stateful, Subscription, Window, div, prelude::*, px,
 };
-use vorkspace_core::todos::{TodoBoard, TodoItem, TodoStatus};
+use vorkspace_core::todos::{TodoBoard, TodoItem, TodoStatus, TodoSync};
 use vorkspace_runtime::runtime::{Database, locked};
 use vorkspace_ui::radius;
 use vorkspace_ui::theme::*;
@@ -341,7 +341,7 @@ impl TodoBoardView {
                 let editor = self
                     .details
                     .as_ref()
-                    .filter(|editor| editor.id == saved.id)
+                    .filter(|editor| self.board.as_ref() == Some(board) && editor.id == saved.id)
                     .or_else(|| self.saved_details.get(&key));
                 if let Some(editor) = editor {
                     Self::set_details_read_only(editor, false, cx);
@@ -851,11 +851,7 @@ impl TodoBoardView {
             return;
         };
         if item.pending_edit.is_some()
-            || matches!(
-                item.sync,
-                vorkspace_core::todos::TodoSync::Pending
-                    | vorkspace_core::todos::TodoSync::Uncertain
-            )
+            || matches!(item.sync, TodoSync::Pending | TodoSync::Uncertain)
         {
             self.change_error =
                 Some("Reconcile the pending GitHub change before editing this to-do".into());
@@ -863,67 +859,82 @@ impl TodoBoardView {
             return;
         }
         let remote = item.issue.is_some();
-        if remote && item.updated_at != details.revision {
-            self.change_error = Some("This issue changed while you were editing. Your draft is preserved; reload details before saving.".into());
+        if item.updated_at != details.revision {
+            self.change_error = Some("This to-do changed while you were editing. Your draft is preserved; reload details before saving.".into());
             cx.notify();
             return;
         }
         let title = details.title.read(cx).content.to_string();
         let description = details.description.read(cx).content.to_string();
-        let attachments = details
-            .attachments
-            .read(cx)
-            .content
-            .lines()
-            .map(str::trim)
-            .filter(|value| !value.is_empty())
-            .map(str::to_owned)
-            .collect::<Vec<_>>();
-        let dependencies = details
-            .dependencies
-            .read(cx)
-            .content
-            .split(',')
-            .map(str::trim)
-            .filter(|value| !value.is_empty())
-            .map(str::to_owned)
-            .collect::<Vec<_>>();
-        let saved_details = SavedDetails { id: id.clone() };
-        let mut input = serde_json::json!({"id":id,"title":title,"description":description});
+        let attachments = Self::reference_lines(&details.attachments, cx);
+        let mut input = serde_json::json!({
+            "id":id,"title":title,"description":description,"expectedUpdatedAt":details.revision
+        });
         if details.dependencies_complete {
-            input["dependencies"] = serde_json::json!(dependencies);
-        }
-        if remote {
-            input["expectedUpdatedAt"] = serde_json::json!(details.revision);
+            input["dependencies"] =
+                serde_json::json!(Self::dependency_values(&details.dependencies, cx));
         }
         if !remote || !attachments.is_empty() {
             input["attachments"] = serde_json::json!(attachments);
         }
-        let queued = self.queue_change(
-            move |store, board| service::action(store, board, "todos.update", &input).map(|_| ()),
-            None,
-            Some(saved_details),
-            cx,
-        );
-        if queued && let Some(editor) = self.details.as_ref() {
-            Self::set_details_read_only(editor, true, cx);
-        }
+        self.queue_detail_change(id, "todos.update", input, cx);
     }
 
-    fn detail_action(&mut self, action: &'static str, cx: &mut Context<Self>) {
+    fn publish_details(&mut self, cx: &mut Context<Self>) {
         if self.pending_changes > 0 {
             return;
         }
         let Some(details) = self.details.as_ref() else {
             return;
         };
+        let Some(item) = self.items.iter().find(|item| item.id == details.id) else {
+            return;
+        };
+        if item.sync != TodoSync::Local || item.issue.is_some() {
+            return;
+        }
+        if item.updated_at != details.revision {
+            self.change_error = Some("This to-do changed while you were editing. Your draft is preserved; reload details before publishing.".into());
+            cx.notify();
+            return;
+        }
+        let unsaved = if !details.url.read(cx).content.trim().is_empty() {
+            Some("Add or clear the unfinished attachment link before publishing.")
+        } else if details.title.read(cx).content.as_ref() != item.title.as_str()
+            || details.description.read(cx).content.as_ref() != item.description.as_str()
+            || Self::reference_lines(&details.attachments, cx) != item.attachments
+            || Self::dependency_values(&details.dependencies, cx) != item.dependencies
+        {
+            Some("Save your changes before publishing this to-do.")
+        } else {
+            None
+        };
+        if let Some(reason) = unsaved {
+            self.change_error = Some(reason.into());
+            cx.notify();
+            return;
+        }
         let id = details.id.clone();
-        self.change(
-            move |store, board| {
-                service::action(store, board, action, &serde_json::json!({"id":id})).map(|_| ())
-            },
+        let input = serde_json::json!({"id":id,"expectedUpdatedAt":details.revision});
+        self.queue_detail_change(id, "todos.publish", input, cx);
+    }
+
+    fn queue_detail_change(
+        &mut self,
+        id: String,
+        action: &'static str,
+        input: serde_json::Value,
+        cx: &mut Context<Self>,
+    ) {
+        let queued = self.queue_change(
+            move |store, board| service::action(store, board, action, &input).map(|_| ()),
+            None,
+            Some(SavedDetails { id }),
             cx,
         );
+        if queued && let Some(editor) = self.details.as_ref() {
+            Self::set_details_read_only(editor, true, cx);
+        }
     }
 
     fn retry_detail(&mut self, cx: &mut Context<Self>) {
@@ -1354,7 +1365,7 @@ impl TodoBoardView {
                             .debug_selector(|| "todo-details-save".into())
                             .on_click(cx.listener(|this, _, _, cx| this.save_details(cx))),
                         )
-                        .when(remote && item.updated_at != editor.revision, |d| {
+                        .when(!uncertain && !pending_edit && item.updated_at != editor.revision, |d| {
                             d.child(
                                 labeled_secondary("todo-reload-details", "Discard draft and reload", false, self.pending_changes > 0)
                                     .debug_selector(|| "todo-reload-details".into())
@@ -1377,9 +1388,8 @@ impl TodoBoardView {
                                     false,
                                     self.pending_changes > 0,
                                 )
-                                .on_click(cx.listener(
-                                    |this, _, _, cx| this.detail_action("todos.publish", cx),
-                                )),
+                                .debug_selector(|| "todo-publish".into())
+                                .on_click(cx.listener(|this, _, _, cx| this.publish_details(cx))),
                             )
                         })
                         .when(uncertain || pending_edit, |d| {
