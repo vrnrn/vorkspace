@@ -1986,13 +1986,32 @@ impl Shell {
         self.open_app_search(window, cx);
     }
 
-    fn select_project(&mut self, path: String, window: &mut Window, cx: &mut Context<Self>) {
+    pub(crate) fn select_project(
+        &mut self,
+        path: String,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         if self
             .deleting_projects
             .contains(&vorkspace_core::files::path_key(&path))
         {
             self.error = Some("This project is being deleted.".into());
             cx.notify();
+            return;
+        }
+        // Reselecting the visible Bot's project keeps its live detail editor.
+        if path == self.workspace.project
+            && self.settings.is_none()
+            && let Some(bot) = self.workspace_bot_context()
+            && self
+                .bots
+                .as_ref()
+                .is_some_and(|manager| manager.read(cx).active.as_deref() == Some(bot.as_str()))
+            && let Some(tab) = self.active_title_tab(cx)
+            && self.workspace.scope_focus.get(&self.tab_scope()) == Some(&tab)
+            && self.visible_tabs(cx).contains(&tab)
+        {
             return;
         }
         self.selected_sessions.clear();

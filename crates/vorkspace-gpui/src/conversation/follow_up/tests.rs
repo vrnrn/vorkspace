@@ -28,6 +28,7 @@ fn queue_entrances_slide_above_a_stationary_composer_for_the_first_and_later_mes
     cx: &mut TestAppContext,
 ) {
     use std::time::Duration;
+    vorkspace_ui::clock::use_test_clock(cx);
     let window = conversation(cx);
     cx.run_until_parked();
     window
@@ -38,73 +39,50 @@ fn queue_entrances_slide_above_a_stationary_composer_for_the_first_and_later_mes
             cx.notify();
         })
         .unwrap();
-    cx.refresh().unwrap();
-    let bounds = |window: WindowHandle<Conversation>, cx: &mut TestAppContext| {
-        window
-            .update(cx, |view, window, _| {
-                let composer = window
-                    .painted_quads()
-                    .into_iter()
-                    .find(|quad| {
-                        (quad.corner_radii.top_left.0 / window.scale_factor() - 8.).abs() < 0.1
-                            && quad.bounds.size.width.0 / window.scale_factor() > 300.
-                    })
-                    .expect("the composer surface must be painted");
-                (
-                    f32::from(view.composer_anchor.get().unwrap().top()),
-                    composer.bounds.top().0 / window.scale_factor(),
-                )
+    let visual = &mut VisualTestContext::from_window(window.into(), cx);
+    let bounds = |visual: &mut VisualTestContext| {
+        visual.update(|window, cx| {
+            window.refresh();
+            window.draw(cx).clear(cx);
+        });
+        let queue_top = window
+            .update(visual, |view, _, _| {
+                view.composer_anchor.get().unwrap().top()
             })
-            .unwrap()
+            .unwrap();
+        let composer = visual.debug_bounds("composer-box").unwrap();
+        (queue_top, composer)
     };
-    let (mut queue_top, input_top) = bounds(window, cx);
+    let (mut queue_top, input) = bounds(visual);
     for (index, text) in ["First queued message", "A second queued message"]
         .into_iter()
         .enumerate()
     {
         window
-            .update(cx, |view, _, cx| {
+            .update(visual, |view, _, cx| {
                 view.enqueue_follow_up(text.into(), None, cx);
-                view.follow_ups.motion.elapsed(Duration::ZERO);
-                cx.notify();
             })
             .unwrap();
-        cx.refresh().unwrap();
-        let (starting, composer) = bounds(window, cx);
+        let (starting, composer) = bounds(visual);
+        assert_eq!(composer, input, "the input must stay still");
         assert!(
-            (composer - input_top).abs() < 1.,
-            "the input must stay still"
-        );
-        assert!(
-            (starting - queue_top).abs() < 8.,
+            (starting - queue_top).abs() < px(8.),
             "the entrance starts behind the input"
         );
 
-        window
-            .update(cx, |view, _, cx| {
-                view.follow_ups.motion.elapsed(Duration::from_millis(40));
-                cx.notify();
-            })
-            .unwrap();
-        cx.refresh().unwrap();
-        let (middle, composer) = bounds(window, cx);
-        assert!((composer - input_top).abs() < 1.);
-        assert!(middle < starting - 5., "the queue must slide upward");
+        visual.executor().advance_clock(Duration::from_millis(40));
+        let (middle, composer) = bounds(visual);
+        assert_eq!(composer, input);
+        assert!(middle < starting - px(5.), "the queue must slide upward");
 
-        window
-            .update(cx, |view, _, cx| {
-                view.follow_ups.motion.elapsed(Duration::from_secs(1));
-                cx.notify();
-            })
-            .unwrap();
-        cx.refresh().unwrap();
-        let (settled, composer) = bounds(window, cx);
-        assert!((composer - input_top).abs() < 1.);
+        visual.executor().advance_clock(Duration::from_millis(960));
+        let (settled, composer) = bounds(visual);
+        assert_eq!(composer, input);
         assert!(
-            settled < middle - 5.,
+            settled < middle - px(5.),
             "the spring must settle into the full row height"
         );
-        assert!(queue_top - settled >= if index == 0 { 60. } else { 30. });
+        assert!(queue_top - settled >= px(if index == 0 { 60. } else { 30. }));
         queue_top = settled;
     }
 }

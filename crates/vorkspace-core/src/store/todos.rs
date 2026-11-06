@@ -196,13 +196,14 @@ impl Store {
         ensure_schema(&self.conn).map_err(|e| e.to_string())
     }
 
-    fn validate_todo_dependencies(
+    fn resolve_todo_dependencies(
         &self,
         board: &TodoBoard,
         id: Option<&str>,
         dependencies: &[String],
-    ) -> Result<(), String> {
-        for dependency in dependencies {
+    ) -> Result<Vec<String>, String> {
+        let mut dependencies = dependencies.to_vec();
+        for dependency in &mut dependencies {
             if let Some(number) = dependency.strip_prefix('#') {
                 if !matches!(board, TodoBoard::Project(_))
                     || number
@@ -223,11 +224,20 @@ impl Store {
                 }
                 continue;
             }
-            if self.get_todo(board, dependency)?.is_none() {
-                return Err(format!("Dependency {dependency} is not on this board"));
+            let linked = self
+                .get_todo(board, dependency)?
+                .ok_or_else(|| format!("Dependency {dependency} is not on this board"))?;
+            if let Some(issue) = linked.issue {
+                // Older open editors and CLI callers can retain the local ID
+                // after publication. Resolve it at the write boundary too.
+                *dependency = issue.url;
             }
         }
-        let Some(id) = id else { return Ok(()) };
+        let mut unique = std::collections::HashSet::new();
+        dependencies.retain(|reference| unique.insert(reference.clone()));
+        let Some(id) = id else {
+            return Ok(dependencies);
+        };
         let mut stack = dependencies
             .iter()
             .filter(|dependency| {
@@ -254,7 +264,7 @@ impl Store {
                 }));
             }
         }
-        Ok(())
+        Ok(dependencies)
     }
 
     /// Every item on a board, ordered by column then position.
@@ -311,7 +321,7 @@ impl Store {
         let description = clean_description(description)?;
         let attachments = clean_references(attachments, MAX_ATTACHMENTS, "attachment")?;
         let dependencies = clean_references(dependencies, MAX_DEPENDENCIES, "dependency")?;
-        self.validate_todo_dependencies(board, None, &dependencies)?;
+        let dependencies = self.resolve_todo_dependencies(board, None, &dependencies)?;
         let now = now_millis();
         let id = crate::session::new_id();
         let tx = self
@@ -355,7 +365,7 @@ impl Store {
         if dependencies.iter().any(|value| value == id) {
             return Err("A to-do cannot depend on itself".into());
         }
-        self.validate_todo_dependencies(board, Some(id), &dependencies)?;
+        let dependencies = self.resolve_todo_dependencies(board, Some(id), &dependencies)?;
         self.conn.execute(
             "UPDATE todo_items SET description=?1,attachments=?2,dependencies=?3,updated_at=?4 WHERE board=?5 AND id=?6",
             params![description, serde_json::to_string(&attachments).map_err(|e|e.to_string())?, serde_json::to_string(&dependencies).map_err(|e|e.to_string())?, now_millis(), board.key(), id],
@@ -395,7 +405,7 @@ impl Store {
             .map(|values| clean_references(values, MAX_DEPENDENCIES, "dependency"))
             .transpose()?
             .unwrap_or(current.dependencies.clone());
-        self.validate_todo_dependencies(board, Some(id), &dependencies)?;
+        let dependencies = self.resolve_todo_dependencies(board, Some(id), &dependencies)?;
         let next_status = status.unwrap_or(current.status);
         let tx = self
             .conn
@@ -526,6 +536,11 @@ impl Store {
             .as_ref()
             .ok_or("Created issue has no identity")?;
         let draft = self.get_todo(board, id)?.ok_or("To-do not found")?;
+        let dependents = self
+            .list_todos(board)?
+            .into_iter()
+            .filter(|item| item.dependencies.iter().any(|dependency| dependency == id))
+            .collect::<Vec<_>>();
         let follow_up = (draft.status != remote.status).then(|| TodoRemoteEdit {
             attempt_id: uuid::Uuid::new_v4().to_string(),
             input: serde_json::json!({"id":remote.id,"status":draft.status.id()}),
@@ -546,6 +561,30 @@ impl Store {
             return Err(
                 "The submitted to-do changed; reconcile its GitHub issue before continuing".into(),
             );
+        }
+        // The remote list replaces the local card identity. Publish its
+        // incoming links in the same transaction so they resolve against both
+        // the remote issue and the retained local receipt when offline.
+        for mut dependent in dependents {
+            for reference in &mut dependent.dependencies {
+                if reference == id {
+                    *reference = issue.url.clone();
+                }
+            }
+            let mut seen = std::collections::HashSet::new();
+            dependent
+                .dependencies
+                .retain(|reference| seen.insert(reference.clone()));
+            tx.execute(
+                "UPDATE todo_items SET dependencies=?1,updated_at=?2 WHERE board=?3 AND id=?4",
+                params![
+                    serde_json::to_string(&dependent.dependencies).map_err(|e| e.to_string())?,
+                    now_millis().max(dependent.updated_at.saturating_add(1)),
+                    board.key(),
+                    dependent.id
+                ],
+            )
+            .map_err(|e| e.to_string())?;
         }
         tx.commit().map_err(|e| e.to_string())?;
         Ok(follow_up)

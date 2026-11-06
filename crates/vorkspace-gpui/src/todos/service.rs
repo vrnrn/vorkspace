@@ -137,105 +137,6 @@ fn merge_remote(local: Vec<TodoItem>, mut remote: Vec<TodoItem>) -> Vec<TodoItem
     items
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use vorkspace_core::store::Store;
-
-    #[test]
-    fn matched_create_keeps_reconciliation_and_initial_status() {
-        let store = Store::open(Path::new(":memory:")).unwrap();
-        let board = TodoBoard::Project("/project".into());
-        let draft = store
-            .add_todo(&board, "Review this", TodoStatus::InReview)
-            .unwrap();
-        let (pending, token) = store
-            .begin_todo_publish(&board, &draft.id, "example/project")
-            .unwrap();
-        let mut remote = pending.clone();
-        remote.id = "github:example/project#42".into();
-        remote.status = TodoStatus::Todo;
-        remote.sync = TodoSync::Synced;
-        remote.submission_token = Some(token.clone());
-        remote.issue = Some(TodoIssue {
-            repo: "example/project".into(),
-            number: 42,
-            url: "https://github.com/example/project/issues/42".into(),
-            labels: vec![],
-            dependencies_truncated: false,
-        });
-        for state in [TodoSync::Pending, TodoSync::Uncertain] {
-            if state == TodoSync::Uncertain {
-                store.uncertain_todo_publish(&board, &draft.id).unwrap();
-            }
-            let items = merge_remote(store.list_todos(&board).unwrap(), vec![remote.clone()]);
-            assert_eq!(items.len(), 1);
-            assert_eq!(items[0].id, draft.id);
-            assert_eq!(items[0].sync, state);
-            assert_eq!(items[0].status, TodoStatus::InReview);
-            assert_eq!(items[0].submission_token.as_deref(), Some(token.as_str()));
-        }
-        let followup = store
-            .finish_todo_publish(&board, &draft.id, &remote)
-            .unwrap()
-            .unwrap();
-        assert_eq!(followup.input["status"], "inReview");
-        let edits = store.pending_remote_todo_edits(&board).unwrap();
-        assert_eq!(edits.len(), 1);
-        assert_eq!(edits[0].id, remote.id);
-        let items = merge_remote(store.list_todos(&board).unwrap(), vec![remote.clone()]);
-        assert_eq!(items.len(), 1);
-        assert_eq!(items[0].id, remote.id);
-    }
-
-    #[test]
-    fn active_edit_blocks_discard_and_late_completion_cannot_clear_a_successor() {
-        let store: Database = std::sync::Arc::new(std::sync::Mutex::new(
-            Store::open(Path::new(":memory:")).unwrap(),
-        ));
-        let board = TodoBoard::Project("/receipt-owner-test".into());
-        let snapshot = remote_snapshot("test/receipt-owner", 7, &json!({"title":"Task"}));
-        let first = locked(&store)
-            .unwrap()
-            .begin_remote_todo_edit(&board, &snapshot, &json!({"title":"First"}))
-            .unwrap();
-        let operation = RemoteOperation::issue("test/receipt-owner", 7).unwrap();
-        let discard = json!({"id":snapshot.id,"confirmChecked":true});
-        assert!(
-            action(&store, &board, "todos.discardEdit", &discard)
-                .unwrap_err()
-                .contains("still running")
-        );
-        assert!(RemoteOperation::issue("TEST/receipt-owner", 7).is_err());
-        drop(operation);
-        action(&store, &board, "todos.discardEdit", &discard).unwrap();
-        let successor = locked(&store)
-            .unwrap()
-            .begin_remote_todo_edit(&board, &snapshot, &json!({"title":"Successor"}))
-            .unwrap();
-        assert!(
-            locked(&store)
-                .unwrap()
-                .clear_remote_todo_edit(&board, &snapshot.id, &first)
-                .is_err()
-        );
-        assert!(
-            locked(&store)
-                .unwrap()
-                .uncertain_remote_todo_edit(&board, &snapshot.id, &first)
-                .is_err()
-        );
-        let saved = locked(&store)
-            .unwrap()
-            .pending_remote_todo_edits(&board)
-            .unwrap();
-        let edit = saved[0].pending_edit.as_ref().unwrap();
-        assert_eq!(edit.attempt_id, successor);
-        assert_eq!(edit.input["title"], "Successor");
-        assert_eq!(edit.phase, TodoSync::Pending);
-    }
-}
-
 fn attach_pending(mut items: Vec<TodoItem>, pending: Vec<TodoItem>) -> Vec<TodoItem> {
     for edit in pending {
         if let Some(existing) = items.iter_mut().find(|item| {
@@ -678,5 +579,191 @@ pub(crate) fn action(
             locked(store)?.todo_action(board, action, input)
         }
         _ => Err("Unknown to-do action".into()),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use gpui::AppContext;
+    use vorkspace_core::store::Store;
+
+    #[gpui::test]
+    fn published_dependency_stays_openable_online_offline_and_after_reopen(
+        cx: &mut gpui::TestAppContext,
+    ) {
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().join("tasks.sqlite");
+        let board = TodoBoard::Project("/dependency-test".into());
+        let store = Store::open(&path).unwrap();
+        let dependency = store
+            .add_todo(&board, "Dependency", TodoStatus::Todo)
+            .unwrap();
+        let task = store
+            .add_todo_with_details(
+                &board,
+                "Dependent task",
+                TodoStatus::Todo,
+                "",
+                &[],
+                std::slice::from_ref(&dependency.id),
+            )
+            .unwrap();
+        let view = cx.new(|cx| {
+            super::super::TodoBoardView::new(
+                std::sync::Arc::new(std::sync::Mutex::new(
+                    Store::open(Path::new(":memory:")).unwrap(),
+                )),
+                false,
+                cx,
+            )
+        });
+        let check = |items: Vec<TodoItem>, expected: &str, cx: &mut gpui::TestAppContext| {
+            view.update(cx, |view, _| {
+                view.items = items;
+                let task = view.items.iter().find(|item| item.id == task.id).unwrap();
+                let linked = view
+                    .dependency_item(&task.dependencies[0])
+                    .expect("dependency is openable");
+                assert_eq!(linked.id, expected);
+                assert_eq!(linked.title, "Dependency");
+            });
+        };
+        check(store.list_todos(&board).unwrap(), &dependency.id, cx);
+        store
+            .begin_todo_publish(&board, &dependency.id, "test/project")
+            .unwrap();
+        let remote = remote_snapshot("test/project", 12, &json!({"title":"Dependency"}));
+        store
+            .finish_todo_publish(&board, &dependency.id, &remote)
+            .unwrap();
+        let saved = store.get_todo(&board, &task.id).unwrap().unwrap();
+        assert_eq!(
+            saved.dependencies,
+            [remote.issue.as_ref().unwrap().url.clone()]
+        );
+        assert!(
+            saved.updated_at > task.updated_at,
+            "the changed link advances the task revision"
+        );
+        check(
+            merge_remote(store.list_todos(&board).unwrap(), vec![remote.clone()]),
+            &remote.id,
+            cx,
+        );
+        drop(store);
+        let store = Store::open(&path).unwrap();
+        // A form opened before publication can still submit the old local
+        // reference. The write owner must preserve its new issue identity.
+        store.todo_action(&board, "todos.update", &json!({
+            "id":task.id, "title":"Edited after publication", "dependencies":[dependency.id],
+        })).unwrap();
+        assert_eq!(
+            store
+                .get_todo(&board, &task.id)
+                .unwrap()
+                .unwrap()
+                .dependencies,
+            [remote.issue.as_ref().unwrap().url.clone()]
+        );
+        check(store.list_todos(&board).unwrap(), &dependency.id, cx);
+        check(
+            merge_remote(store.list_todos(&board).unwrap(), vec![remote.clone()]),
+            &remote.id,
+            cx,
+        );
+    }
+
+    #[test]
+    fn matched_create_keeps_reconciliation_and_initial_status() {
+        let store = Store::open(Path::new(":memory:")).unwrap();
+        let board = TodoBoard::Project("/project".into());
+        let draft = store
+            .add_todo(&board, "Review this", TodoStatus::InReview)
+            .unwrap();
+        let (pending, token) = store
+            .begin_todo_publish(&board, &draft.id, "example/project")
+            .unwrap();
+        let mut remote = pending.clone();
+        remote.id = "github:example/project#42".into();
+        remote.status = TodoStatus::Todo;
+        remote.sync = TodoSync::Synced;
+        remote.submission_token = Some(token.clone());
+        remote.issue = Some(TodoIssue {
+            repo: "example/project".into(),
+            number: 42,
+            url: "https://github.com/example/project/issues/42".into(),
+            labels: vec![],
+            dependencies_truncated: false,
+        });
+        for state in [TodoSync::Pending, TodoSync::Uncertain] {
+            if state == TodoSync::Uncertain {
+                store.uncertain_todo_publish(&board, &draft.id).unwrap();
+            }
+            let items = merge_remote(store.list_todos(&board).unwrap(), vec![remote.clone()]);
+            assert_eq!(items.len(), 1);
+            assert_eq!(items[0].id, draft.id);
+            assert_eq!(items[0].sync, state);
+            assert_eq!(items[0].status, TodoStatus::InReview);
+            assert_eq!(items[0].submission_token.as_deref(), Some(token.as_str()));
+        }
+        let followup = store
+            .finish_todo_publish(&board, &draft.id, &remote)
+            .unwrap()
+            .unwrap();
+        assert_eq!(followup.input["status"], "inReview");
+        let edits = store.pending_remote_todo_edits(&board).unwrap();
+        assert_eq!(edits.len(), 1);
+        assert_eq!(edits[0].id, remote.id);
+        let items = merge_remote(store.list_todos(&board).unwrap(), vec![remote.clone()]);
+        assert_eq!(items.len(), 1);
+        assert_eq!(items[0].id, remote.id);
+    }
+
+    #[test]
+    fn active_edit_blocks_discard_and_late_completion_cannot_clear_a_successor() {
+        let store: Database = std::sync::Arc::new(std::sync::Mutex::new(
+            Store::open(Path::new(":memory:")).unwrap(),
+        ));
+        let board = TodoBoard::Project("/receipt-owner-test".into());
+        let snapshot = remote_snapshot("test/receipt-owner", 7, &json!({"title":"Task"}));
+        let first = locked(&store)
+            .unwrap()
+            .begin_remote_todo_edit(&board, &snapshot, &json!({"title":"First"}))
+            .unwrap();
+        let operation = RemoteOperation::issue("test/receipt-owner", 7).unwrap();
+        let discard = json!({"id":snapshot.id,"confirmChecked":true});
+        assert!(
+            action(&store, &board, "todos.discardEdit", &discard)
+                .unwrap_err()
+                .contains("still running")
+        );
+        assert!(RemoteOperation::issue("TEST/receipt-owner", 7).is_err());
+        drop(operation);
+        action(&store, &board, "todos.discardEdit", &discard).unwrap();
+        let successor = locked(&store)
+            .unwrap()
+            .begin_remote_todo_edit(&board, &snapshot, &json!({"title":"Successor"}))
+            .unwrap();
+        assert!(
+            locked(&store)
+                .unwrap()
+                .clear_remote_todo_edit(&board, &snapshot.id, &first)
+                .is_err()
+        );
+        assert!(
+            locked(&store)
+                .unwrap()
+                .uncertain_remote_todo_edit(&board, &snapshot.id, &first)
+                .is_err()
+        );
+        let saved = locked(&store)
+            .unwrap()
+            .pending_remote_todo_edits(&board)
+            .unwrap();
+        let edit = saved[0].pending_edit.as_ref().unwrap();
+        assert_eq!(edit.attempt_id, successor);
+        assert_eq!(edit.input["title"], "Successor");
+        assert_eq!(edit.phase, TodoSync::Pending);
     }
 }

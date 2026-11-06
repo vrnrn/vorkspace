@@ -467,6 +467,23 @@ impl TodoBoardView {
             .items
             .iter()
             .any(|item| item.id == id && item.issue.is_some());
+        let before = if let Some(target) = before {
+            let Some(at) = self
+                .items
+                .iter()
+                .position(|item| item.id == target && item.status == status)
+            else {
+                return;
+            };
+            // GitHub cards have no SQLite ordering slot. Use the next local
+            // card in the displayed column, or append if there is none.
+            self.items[at..]
+                .iter()
+                .find(|item| item.status == status && item.issue.is_none() && item.id != id)
+                .map(|item| item.id.clone())
+        } else {
+            None
+        };
         self.change(
             move |store, board| {
                 let mut input = serde_json::json!({"id":id,"status":status.id()});
