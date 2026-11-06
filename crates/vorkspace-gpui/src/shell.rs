@@ -1043,6 +1043,9 @@ impl Shell {
         }
         this.observations.push(
             cx.subscribe(&bots, |this, _, _: &crate::bots::Changed, cx| {
+                if this.prune_deleted_bot_tabs(cx) {
+                    this.persist(cx);
+                }
                 // Restored legacy panes share the durable classification even
                 // when their original project-session view is still cached.
                 for view in this.sessions.values() {
@@ -1091,6 +1094,7 @@ impl Shell {
                 }
             }));
         this.bots = Some(bots);
+        this.prune_deleted_bot_tabs(cx);
         let voice_owner: crate::vox::Host = std::rc::Rc::new(cx.weak_entity());
         crate::vox::set_workspace_toggle(
             |cx| {
@@ -2007,13 +2011,8 @@ impl Shell {
         self.sidebar_search
             .update(cx, |input, cx| input.set_text(String::new(), cx));
         self.workspace.collapsed.remove(&path);
-        // A project restores its last workspace tab, including mixed layouts
-        // and Bots. Resource identity and scope are checked by the tab owner.
-        if matches!(
-            self.workspace.scope_focus.get(&self.tab_scope()),
-            Some(TitleTab::Workspace(_) | TitleTab::Terminal { .. })
-        ) && self.restore_scope_tab(window, cx)
-        {
+        // Restore the last scoped tab before falling back to a session.
+        if self.restore_scope_tab(window, cx) {
             return;
         }
         self.workspace.active = self

@@ -140,6 +140,9 @@ pub enum TodoSync {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct TodoRemoteEdit {
+    /// Identity of the admitted attempt, retained across recovery reads.
+    #[serde(default, skip_serializing)]
+    pub attempt_id: String,
     pub input: serde_json::Value,
     pub phase: TodoSync,
 }

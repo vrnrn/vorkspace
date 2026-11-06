@@ -546,6 +546,81 @@ fn rejected_detail_save_keeps_the_draft_and_error(cx: &mut TestAppContext) {
 }
 
 #[gpui::test]
+fn refreshed_issue_does_not_replace_the_editors_original_revision(cx: &mut TestAppContext) {
+    let (window, store) = board_window(cx);
+    let mut issue = locked(&store)
+        .unwrap()
+        .add_todo(&TodoBoard::Personal, "Original", TodoStatus::Todo)
+        .unwrap();
+    issue.issue = Some(vorkspace_core::todos::TodoIssue {
+        repo: "example/project".into(),
+        number: 42,
+        url: "https://github.com/example/project/issues/42".into(),
+        labels: vec![],
+        dependencies_truncated: false,
+    });
+    issue.sync = vorkspace_core::todos::TodoSync::Synced;
+    cx.run_until_parked();
+    window
+        .update(cx, |view, _, cx| {
+            view.items = vec![issue.clone()];
+            view.open_details(&issue, cx);
+            view.details
+                .as_ref()
+                .unwrap()
+                .description
+                .update(cx, |input, cx| {
+                    input.set_text("My unfinished edit".into(), cx)
+                });
+            let mut refreshed = issue.clone();
+            refreshed.updated_at += 1;
+            refreshed.description = "Someone else's newer edit".into();
+            refreshed.issue.as_mut().unwrap().dependencies_truncated = true;
+            view.items = vec![refreshed.clone()];
+            view.stash_details();
+            view.open_details(&refreshed, cx);
+            assert_eq!(view.details.as_ref().unwrap().revision, issue.updated_at);
+            assert!(view.details.as_ref().unwrap().dependencies_complete);
+            view.detail_editing = true;
+            view.save_details(cx);
+            assert_eq!(view.pending_changes, 0);
+            assert!(
+                view.change_error
+                    .as_deref()
+                    .unwrap()
+                    .contains("draft is preserved")
+            );
+            assert_eq!(
+                view.details
+                    .as_ref()
+                    .unwrap()
+                    .description
+                    .read(cx)
+                    .content
+                    .as_ref(),
+                "My unfinished edit"
+            );
+        })
+        .unwrap();
+    let visual = &mut gpui::VisualTestContext::from_window(window.into(), cx);
+    visual.refresh().unwrap();
+    let reload = visual.debug_bounds("todo-reload-details").unwrap();
+    visual.simulate_click(reload.center(), Default::default());
+    window
+        .update(visual, |view, _, cx| {
+            let editor = view.details.as_ref().unwrap();
+            assert_eq!(editor.revision, issue.updated_at + 1);
+            assert!(!editor.dependencies_complete);
+            assert_eq!(
+                editor.description.read(cx).content.as_ref(),
+                "Someone else's newer edit"
+            );
+            assert!(view.change_error.is_none());
+        })
+        .unwrap();
+}
+
+#[gpui::test]
 fn cards_open_details_for_local_and_github_items_and_escape_returns_to_the_board(
     cx: &mut TestAppContext,
 ) {
