@@ -371,6 +371,7 @@ struct Comment {
     anchor: AnchorSlot,
     input: gpui::Entity<Input>,
     pending: Option<Rc<()>>,
+    edited_while_pending: bool,
     error: Option<String>,
     _events: Vec<Subscription>,
 }
@@ -982,7 +983,15 @@ impl DiffView {
         let focus = input.read(cx).focus_handle(cx);
         window.focus(&focus, cx);
         let events = vec![
-            cx.subscribe(&input, |_, _, _: &input::Changed, cx| cx.notify()),
+            cx.subscribe(&input, |this, input, _: &input::Changed, cx| {
+                if let Some(comment) = &mut this.comment
+                    && comment.input == input
+                    && comment.pending.is_some()
+                {
+                    comment.edited_while_pending = true;
+                }
+                cx.notify();
+            }),
             cx.subscribe_in(&input, window, |this, _, _: &input::Submitted, _, cx| {
                 this.add_comment(cx)
             }),
@@ -993,6 +1002,7 @@ impl DiffView {
             anchor,
             input,
             pending: None,
+            edited_while_pending: false,
             error: None,
             _events: events,
         });
@@ -1017,6 +1027,7 @@ impl DiffView {
         }
         let token = Rc::new(());
         comment.pending = Some(token.clone());
+        comment.edited_while_pending = false;
         comment.error = None;
         cx.emit(DiffEvent::Comment(CommentRequest { text, draft, token }));
         cx.notify();
@@ -1077,7 +1088,11 @@ impl DiffView {
         comment.pending = None;
         let input = comment.input.read(cx);
         match result {
-            Ok(()) if input.content == request.draft && !input.is_composing() => {
+            Ok(())
+                if !comment.edited_while_pending
+                    && input.content == request.draft
+                    && !input.is_composing() =>
+            {
                 self.retiring_comment_focus = Some(input.focus_handle(cx));
                 self.comment = None;
             }

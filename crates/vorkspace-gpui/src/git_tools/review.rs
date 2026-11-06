@@ -215,6 +215,12 @@ impl Source {
         self.loading = false;
         self.refresh_pending = false;
     }
+
+    fn retire(&mut self, cx: &mut gpui::App) {
+        self.cancel();
+        self.view
+            .update(cx, |view, cx| view.cancel_pending_comment(cx));
+    }
 }
 
 /// Closed diff tabs retain their models, viewport and completed highlights.
@@ -637,7 +643,7 @@ impl ReviewPane {
             self.remember_body_focus(cx);
         }
         let mut removed = self.sources.remove(ix);
-        removed.cancel();
+        removed.retire(cx);
         self.git
             .update(cx, |git, cx| review_cache(git).remember(&removed, cx));
         if self.state.active >= ix && self.state.active > 0 {
@@ -669,7 +675,7 @@ impl ReviewPane {
         }
         let source = self.sources.remove(keep);
         for mut removed in self.sources.drain(..) {
-            removed.cancel();
+            removed.retire(cx);
             self.git
                 .update(cx, |git, cx| review_cache(git).remember(&removed, cx));
         }
@@ -953,10 +959,7 @@ impl ReviewPane {
         self.closed = true;
         self.visible = false;
         for source in &mut self.sources {
-            source.cancel();
-            source
-                .view
-                .update(cx, |view, cx| view.cancel_pending_comment(cx));
+            source.retire(cx);
             if let Some(editor) = &source.editor {
                 editor.update(cx, |editor, cx| editor.set_visible(false, cx));
             }

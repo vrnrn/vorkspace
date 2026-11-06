@@ -19,16 +19,24 @@ fn a_comment_acknowledgement_preserves_newer_edits_and_cannot_clear_a_retry(
             })
         })
         .unwrap();
-    window
+    let draft = window
         .update(cx, |view, w, cx| {
             view.set_files(vec![file("comment.rs", "before\n", "after\n")], cx);
             let draft = view.open_comment_for_test(w, cx);
             draft.update(cx, |input, cx| {
                 input.set_text("Original comment".into(), cx)
             });
+            draft
+        })
+        .unwrap();
+    window
+        .update(cx, |view, _, cx| {
             view.add_comment(cx);
             view.add_comment(cx);
-            draft.update(cx, |input, cx| input.set_text("Newer edit".into(), cx));
+            draft.update(cx, |input, cx| {
+                input.set_text("Newer edit".into(), cx);
+                input.set_text("Original comment".into(), cx);
+            });
         })
         .unwrap();
     let first = requests.borrow()[0].clone();
@@ -38,7 +46,7 @@ fn a_comment_acknowledgement_preserves_newer_edits_and_cannot_clear_a_retry(
             view.complete_comment(&first, Ok(()), cx);
             assert_eq!(
                 view.comment.as_ref().unwrap().input.read(cx).content,
-                "Newer edit"
+                "Original comment"
             );
             view.add_comment(cx);
             view.complete_comment(&first, Ok(()), cx);
@@ -49,7 +57,18 @@ fn a_comment_acknowledgement_preserves_newer_edits_and_cannot_clear_a_retry(
     assert_eq!(requests.borrow().len(), 2);
     window
         .update(cx, |view, _, cx| {
+            view.cancel_pending_comment(cx);
             view.complete_comment(&second, Ok(()), cx);
+            assert!(view.has_comment_draft());
+            assert!(!view.owns_comment(&second));
+            view.add_comment(cx);
+        })
+        .unwrap();
+    let third = requests.borrow()[2].clone();
+    assert_eq!(requests.borrow().len(), 3);
+    window
+        .update(cx, |view, _, cx| {
+            view.complete_comment(&third, Ok(()), cx);
             assert!(!view.has_comment_draft());
         })
         .unwrap();

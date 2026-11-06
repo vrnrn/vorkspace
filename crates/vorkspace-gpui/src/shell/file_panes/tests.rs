@@ -262,8 +262,15 @@ fn restored_bot_review_keeps_its_comment_destination_after_moving_beside_another
             );
             shell.open_review(diff.clone(), w, cx);
             assert_eq!(shell.workspace.active, Some(pane));
-            manager.update(cx, |manager, cx| manager.create_named(Vec::new(), w, cx));
             (bot, bot_pane, pane, review)
+        })
+        .unwrap();
+    cx.run_until_parked();
+    window
+        .update(cx, |shell, w, cx| {
+            shell
+                .bot_manager()
+                .update(cx, |manager, cx| manager.create_named(Vec::new(), w, cx));
         })
         .unwrap();
     cx.run_until_parked();
@@ -271,6 +278,12 @@ fn restored_bot_review_keeps_its_comment_destination_after_moving_beside_another
         .update(cx, |shell, w, cx| {
             let other = shell.workspace.active.unwrap();
             assert_ne!(other, original_pane);
+            let crate::workspace::AppPane::Bot(other_bot) =
+                &shell.workspace.app_panes[&other].content
+            else {
+                panic!("the second Bot must own the active pane");
+            };
+            assert_ne!(other_bot, &bot);
             shell.open_review(diff, w, cx);
             let other_review = shell.workspace.active.unwrap();
             assert_ne!(other_review, review_pane);
