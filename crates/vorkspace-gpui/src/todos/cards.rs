@@ -99,7 +99,7 @@ impl TodoBoardView {
                         .gap_1()
                         .pt_1()
                         .children(item.dependencies.iter().take(2).map(|reference| {
-                            let target = self.dependency_item(reference).cloned();
+                            let target = self.dependency_item(item, reference).cloned();
                             div()
                                 .id(SharedString::from(format!(
                                     "dependency-{}-{reference}",
@@ -117,7 +117,7 @@ impl TodoBoardView {
                                         .flex_1()
                                         .min_w_0()
                                         .truncate()
-                                        .child(self.dependency_label(reference)),
+                                        .child(self.dependency_label(item, reference)),
                                 )
                                 .when_some(target, |d, target| {
                                     d.role(Role::Button)
@@ -145,14 +145,10 @@ impl TodoBoardView {
             .into_any_element()
     }
 
-    pub(super) fn dependency_item(&self, reference: &str) -> Option<&TodoItem> {
-        self.items.iter().find(|item| {
-            item.id == reference
-                || Self::dependency_ref(item) == reference
-                || item
-                    .issue
-                    .as_ref()
-                    .is_some_and(|issue| issue.url == reference)
-        })
+    pub(super) fn dependency_item(&self, owner: &TodoItem, reference: &str) -> Option<&TodoItem> {
+        let key = self.dependency_key(owner, reference);
+        self.items
+            .iter()
+            .find(|item| item.id == reference || Self::dependency_ref(item) == key.as_ref())
     }
 }

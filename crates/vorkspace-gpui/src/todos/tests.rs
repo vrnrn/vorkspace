@@ -499,7 +499,7 @@ fn details_editor_saves_description_attachments_and_dependencies(cx: &mut TestAp
             });
             view.append_attachment("https://example.com/design".into(), cx);
             view.toggle_dependency(dependency.id.clone(), cx);
-            assert_eq!(view.dependency_label(&dependency.id), "Prerequisite");
+            assert_eq!(view.dependency_label(&task, &dependency.id), "Prerequisite");
             view.save_details(cx);
         })
         .unwrap();

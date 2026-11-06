@@ -126,7 +126,8 @@ fn merge_remote(local: Vec<TodoItem>, mut remote: Vec<TodoItem>) -> Vec<TodoItem
         } else if !item.issue.as_ref().is_some_and(|issue| {
             remote.iter().any(|other| {
                 other.issue.as_ref().is_some_and(|candidate| {
-                    candidate.repo == issue.repo && candidate.number == issue.number
+                    candidate.repo.eq_ignore_ascii_case(&issue.repo)
+                        && candidate.number == issue.number
                 })
             })
         }) {
@@ -145,7 +146,9 @@ fn attach_pending(mut items: Vec<TodoItem>, pending: Vec<TodoItem>) -> Vec<TodoI
                     .issue
                     .as_ref()
                     .zip(edit.issue.as_ref())
-                    .is_some_and(|(a, b)| a.repo == b.repo && a.number == b.number)
+                    .is_some_and(|(a, b)| {
+                        a.repo.eq_ignore_ascii_case(&b.repo) && a.number == b.number
+                    })
         }) {
             if existing.id == edit.id {
                 existing.pending_edit = edit.pending_edit;
@@ -159,7 +162,7 @@ fn attach_pending(mut items: Vec<TodoItem>, pending: Vec<TodoItem>) -> Vec<TodoI
     items
 }
 
-fn saved_edit_applied(current: &TodoItem, input: &Value) -> bool {
+fn saved_edit_applied(current: &TodoItem, before: &TodoItem, input: &Value) -> bool {
     if input.get("attachments").is_some() {
         return false;
     }
@@ -173,7 +176,7 @@ fn saved_edit_applied(current: &TodoItem, input: &Value) -> bool {
     if input
         .get("description")
         .and_then(Value::as_str)
-        .is_some_and(|description| description.trim() != current.description)
+        .is_some_and(|description| !github::description_edit_applied(current, before, description))
     {
         return false;
     }
@@ -462,7 +465,10 @@ pub(crate) fn action(
                 .as_ref()
                 .ok_or("Pending issue identity is unavailable")?;
             let _operation = RemoteOperation::issue(&issue.repo, issue.number)?;
-            let edit = saved.pending_edit.ok_or("Pending edit is unavailable")?;
+            let edit = saved
+                .pending_edit
+                .as_ref()
+                .ok_or("Pending edit is unavailable")?;
             if action == "todos.discardEdit" {
                 if input.get("confirmChecked").and_then(Value::as_bool) != Some(true) {
                     return Err(
@@ -476,7 +482,7 @@ pub(crate) fn action(
             let number = github::parse_issue_id(id, &repo)
                 .ok_or("Choose a GitHub issue from this project")?;
             let current = github::view(root, &repo, number)?;
-            if saved_edit_applied(&current, &edit.input) {
+            if saved_edit_applied(&current, &saved, &edit.input) {
                 locked(store)?.clear_remote_todo_edit(board, id, &edit.attempt_id)?;
                 return Ok(json!({"applied":true,"item":current}));
             }
@@ -623,7 +629,7 @@ mod tests {
                 view.items = items;
                 let task = view.items.iter().find(|item| item.id == task.id).unwrap();
                 let linked = view
-                    .dependency_item(&task.dependencies[0])
+                    .dependency_item(task, &task.dependencies[0])
                     .expect("dependency is openable");
                 assert_eq!(linked.id, expected);
                 assert_eq!(linked.title, "Dependency");
@@ -677,6 +683,118 @@ mod tests {
             &remote.id,
             cx,
         );
+    }
+
+    #[test]
+    fn saved_description_edit_requires_retaining_attachment_links() {
+        let mut before = remote_snapshot("example/project", 7, &json!({"title":"Task"}));
+        before.description = "Old details".into();
+        before.attachments = vec!["https://example.com/screenshot".into()];
+        let requested = json!({"description":"New details"});
+        let mut current = before.clone();
+        current.description = "New details".into();
+        current.attachments.clear();
+        assert!(!saved_edit_applied(&current, &before, &requested));
+        current.description =
+            "New details\n\n[Attachment](<https://example.com/screenshot>)".into();
+        current.attachments = before.attachments.clone();
+        assert!(saved_edit_applied(&current, &before, &requested));
+    }
+
+    #[gpui::test]
+    fn dependency_selection_keeps_same_number_issues_distinct_after_origin_changes(
+        cx: &mut gpui::TestAppContext,
+    ) {
+        use super::super::TodoBoardView;
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("tasks.sqlite");
+        let board = TodoBoard::Project(directory.path().to_string_lossy().into_owned());
+        let database: Database =
+            std::sync::Arc::new(std::sync::Mutex::new(Store::open(&path).unwrap()));
+        let old = remote_snapshot("Old/App", 7, &json!({"title":"Dependency"}));
+        let current = remote_snapshot("New/App", 7, &json!({"title":"Dependency"}));
+        let (task, receipt, items) = {
+            let store = locked(&database).unwrap();
+            let receipt = store
+                .add_todo(&board, "Dependency", TodoStatus::Todo)
+                .unwrap();
+            store
+                .begin_todo_publish(&board, &receipt.id, "Old/App", receipt.updated_at)
+                .unwrap();
+            store
+                .finish_todo_publish(&board, &receipt.id, &old)
+                .unwrap();
+            let task = store
+                .add_todo_with_details(
+                    &board,
+                    "Dependent",
+                    TodoStatus::Todo,
+                    "",
+                    &[],
+                    &["#7".into()],
+                )
+                .unwrap();
+            let items = merge_remote(store.list_todos(&board).unwrap(), vec![current.clone()]);
+            (task, receipt.id, items)
+        };
+        let view = cx.new(|cx| TodoBoardView::new(database, false, cx));
+        let old_ref = "https://github.com/old/app/issues/7";
+        let new_ref = "https://github.com/new/app/issues/7";
+        view.update(cx, |view, cx| {
+            view.board = Some(board.clone());
+            view.github_repo = Some("New/App".into());
+            view.items = items;
+            view.open_details(&task, cx);
+            assert_eq!(TodoBoardView::dependency_ref(&old), old_ref);
+            assert_eq!(TodoBoardView::dependency_ref(&current), new_ref);
+            assert_eq!(
+                view.dependency_label(&task, old_ref),
+                "Old/App#7 · Dependency"
+            );
+            assert_eq!(
+                view.dependency_label(&task, new_ref),
+                "New/App#7 · Dependency"
+            );
+            assert_eq!(view.dependency_item(&task, "#7").unwrap().id, current.id);
+            let old_owner = remote_snapshot("Old/App", 12, &json!({"title":"Former issue"}));
+            assert_eq!(view.dependency_item(&old_owner, "#7").unwrap().id, receipt);
+            view.toggle_dependency(TodoBoardView::dependency_ref(&old), cx);
+            view.toggle_dependency(TodoBoardView::dependency_ref(&current), cx);
+            let editor = view.details.as_ref().unwrap();
+            assert_eq!(
+                TodoBoardView::dependency_values(&editor.dependencies, cx),
+                [old_ref]
+            );
+            view.toggle_dependency(TodoBoardView::dependency_ref(&current), cx);
+            view.save_details(cx);
+        });
+        cx.run_until_parked();
+        let store = Store::open(&path).unwrap();
+        let saved = store.get_todo(&board, &task.id).unwrap().unwrap();
+        assert_eq!(saved.dependencies, [old_ref, new_ref]);
+        assert_eq!(
+            github::dependency_refs(&saved.dependencies, "New/App").unwrap(),
+            ["#7", old_ref],
+        );
+        view.update(cx, |view, cx| {
+            view.items = merge_remote(store.list_todos(&board).unwrap(), vec![current.clone()]);
+            view.open_details(&saved, cx);
+            assert_eq!(
+                view.dependency_item(&saved, "https://github.com/OLD/APP/issues/7")
+                    .unwrap()
+                    .id,
+                receipt
+            );
+            assert_eq!(
+                view.dependency_item(&saved, new_ref).unwrap().id,
+                current.id
+            );
+            let editor = view.details.as_ref().unwrap();
+            assert_eq!(
+                TodoBoardView::dependency_values(&editor.dependencies, cx),
+                [old_ref, new_ref]
+            );
+        });
     }
 
     #[test]
