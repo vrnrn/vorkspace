@@ -2935,7 +2935,9 @@ fn selected_file_reference_preserves_the_live_draft_and_requests_focus(cx: &mut 
                     input.set_text("Existing draft\n".into(), cx)
                 });
             });
-            shell.add_to_chat(active, "@src/main.rs (lines 2-4)", cx);
+            shell
+                .add_to_chat(active, "@src/main.rs (lines 2-4)", cx)
+                .unwrap();
             let chat = shell.sessions[&active].read(cx);
             assert_eq!(
                 chat.input.read(cx).content,

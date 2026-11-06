@@ -5,7 +5,7 @@
 use crate::{
     file_tools::file_editor::{FileEditor, FileEvent},
     git_status::{GitChanged, ProjectGit},
-    git_tools::diff_view::{DiffEvent, DiffFile, DiffView},
+    git_tools::diff_view::{CommentRequest, DiffEvent, DiffFile, DiffView},
     panel_kit::{selection, spinner, stroke},
     popover::{Anchor, Menu, MenuAction, MenuEvent, menu_popover},
 };
@@ -152,11 +152,32 @@ pub(crate) struct ReviewState {
 
 pub(crate) enum ReviewEvent {
     Changed,
-    Comment(String),
+    Comment(ReviewComment),
     DragPane(Point<Pixels>),
     /// The last tab closed.
     Empty,
     WordWrap(bool),
+}
+
+pub(crate) enum ReviewComment {
+    File(String),
+    Diff(Entity<DiffView>, CommentRequest),
+}
+
+impl ReviewComment {
+    pub(crate) fn text(&self) -> &str {
+        match self {
+            Self::File(text) => text,
+            Self::Diff(_, request) => &request.text,
+        }
+    }
+
+    pub(crate) fn is_current(&self, cx: &gpui::App) -> bool {
+        match self {
+            Self::File(_) => true,
+            Self::Diff(view, request) => view.read(cx).owns_comment(request),
+        }
+    }
 }
 
 #[derive(Clone)]
@@ -194,10 +215,16 @@ impl Source {
         self.loading = false;
         self.refresh_pending = false;
     }
+
+    fn retire(&mut self, cx: &mut gpui::App) {
+        self.cancel();
+        self.view
+            .update(cx, |view, cx| view.cancel_pending_comment(cx));
+    }
 }
 
 /// Closed diff tabs retain their models, viewport and completed highlights.
-/// Editors are deliberately excluded, so no dirty document is kept here.
+/// Unsaved edits and comments stay with their original pane.
 fn review_cache(git: &mut ProjectGit) -> &mut ReviewCache {
     git.review_cache
         .get_or_insert_with(|| Box::new(ReviewCache::default()))
@@ -242,8 +269,12 @@ impl ReviewCache {
             .position(|s| Self::matches(&s.tab, tab))?;
         self.sources.remove(ix)
     }
-    fn remember(&mut self, source: &Source) {
-        if source.editor.is_some() || source.files.is_none() || source.error.is_some() {
+    fn remember(&mut self, source: &Source, cx: &gpui::App) {
+        if source.editor.is_some()
+            || source.files.is_none()
+            || source.error.is_some()
+            || source.view.read(cx).has_comment_draft()
+        {
             return;
         }
         let text_bytes = source
@@ -305,6 +336,7 @@ pub(crate) struct ReviewPane {
     pending_close: Option<(usize, bool)>,
     close_prompted: bool,
     menu: Option<(usize, Point<gpui::Pixels>, Entity<Menu>, Subscription)>,
+    comment_error: Option<String>,
     _subscriptions: Vec<Subscription>,
 }
 struct FileTabDrag {
@@ -407,6 +439,7 @@ impl ReviewPane {
             pending_close: None,
             close_prompted: false,
             menu: None,
+            comment_error: None,
             _subscriptions: subscriptions,
         };
         let tabs = this.state.tabs.clone();
@@ -452,7 +485,7 @@ impl ReviewPane {
                     }
                 }
                 if let FileEvent::AddToChat(text) = event {
-                    cx.emit(ReviewEvent::Comment(text.clone()));
+                    cx.emit(ReviewEvent::Comment(ReviewComment::File(text.clone())));
                 }
                 if let FileEvent::WordWrap(wrap) = event {
                     cx.emit(ReviewEvent::WordWrap(*wrap));
@@ -489,6 +522,21 @@ impl ReviewPane {
             _events: events,
         }
     }
+    pub(crate) fn complete_comment(
+        &mut self,
+        comment: &ReviewComment,
+        result: Result<(), String>,
+        cx: &mut Context<Self>,
+    ) {
+        match comment {
+            ReviewComment::File(_) => self.comment_error = result.err(),
+            ReviewComment::Diff(view, request) => {
+                view.update(cx, |view, cx| view.complete_comment(request, result, cx));
+            }
+        }
+        cx.notify();
+    }
+
     /// openChangesTab / openCommitTab: an existing tab takes the new focus.
     pub(crate) fn open(&mut self, tab: ReviewTab, cx: &mut Context<Self>) {
         self.remember_body_focus(cx);
@@ -595,9 +643,9 @@ impl ReviewPane {
             self.remember_body_focus(cx);
         }
         let mut removed = self.sources.remove(ix);
-        removed.cancel();
+        removed.retire(cx);
         self.git
-            .update(cx, |git, _| review_cache(git).remember(&removed));
+            .update(cx, |git, cx| review_cache(git).remember(&removed, cx));
         if self.state.active >= ix && self.state.active > 0 {
             self.state.active -= 1;
         }
@@ -627,9 +675,9 @@ impl ReviewPane {
         }
         let source = self.sources.remove(keep);
         for mut removed in self.sources.drain(..) {
-            removed.cancel();
+            removed.retire(cx);
             self.git
-                .update(cx, |git, _| review_cache(git).remember(&removed));
+                .update(cx, |git, cx| review_cache(git).remember(&removed, cx));
         }
         self.sources.push(source);
         self.state.active = 0;
@@ -722,6 +770,10 @@ impl ReviewPane {
         self.sources
             .get(self.state.active)
             .and_then(|s| s.editor.clone())
+    }
+    #[cfg(test)]
+    pub(crate) fn active_diff_for_test(&self) -> Entity<DiffView> {
+        self.sources[self.state.active].view.clone()
     }
     pub(crate) fn navigate_file(&mut self, line: usize, column: usize, cx: &mut Context<Self>) {
         if let Some(editor) = self
@@ -907,12 +959,12 @@ impl ReviewPane {
         self.closed = true;
         self.visible = false;
         for source in &mut self.sources {
-            source.cancel();
+            source.retire(cx);
             if let Some(editor) = &source.editor {
                 editor.update(cx, |editor, cx| editor.set_visible(false, cx));
             }
             self.git
-                .update(cx, |git, _| review_cache(git).remember(source));
+                .update(cx, |git, cx| review_cache(git).remember(source, cx));
         }
     }
     /// Focus and Git changes reread the working tree; commits never change.
@@ -1376,23 +1428,26 @@ impl ReviewPane {
     }
 
     fn diff_event(&mut self, ix: usize, event: &DiffEvent, cx: &mut Context<Self>) {
+        // A closed review can briefly retain the cached view after its new
+        // source has subscribed. Only the live source owns its events.
         if self.closed {
             return;
         }
         let source = &self.sources[ix];
+        if let DiffEvent::Comment(request) = event {
+            cx.emit(ReviewEvent::Comment(ReviewComment::Diff(
+                source.view.clone(),
+                request.clone(),
+            )));
+            return;
+        }
         let ReviewTab::Changes { cwd, .. } = &source.tab else {
-            if let DiffEvent::Comment(text) = event {
-                cx.emit(ReviewEvent::Comment(text.clone()));
-            }
             return;
         };
         let cwd = PathBuf::from(cwd);
         let (id, work): (SharedString, Box<dyn FnOnce() -> Result<(), String> + Send>) = match event
         {
-            DiffEvent::Comment(text) => {
-                cx.emit(ReviewEvent::Comment(text.clone()));
-                return;
-            }
+            DiffEvent::Comment(_) => return,
             DiffEvent::StageFile(id) | DiffEvent::DiscardFile(id) => {
                 let Some(relative) = id.strip_prefix("unstaged:").map(str::to_owned) else {
                     return;
@@ -1888,6 +1943,14 @@ impl Render for ReviewPane {
             )
             .font_weight(FontWeight::NORMAL)
             .child(self.tabs(window, cx))
+            .children(self.comment_error.clone().map(|error| {
+                div()
+                    .px_3()
+                    .py_2()
+                    .text_size(px(12.))
+                    .text_color(status(StatusColor::Danger, 1.))
+                    .child(error)
+            }))
             .child(
                 div()
                     .relative()

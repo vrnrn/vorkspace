@@ -109,8 +109,14 @@ pub(crate) enum DiffEvent {
     StageFile(SharedString),
     DiscardFile(SharedString),
     StageHunk(SharedString, usize),
-    /// Text for the active chat's composer.
-    Comment(String),
+    Comment(CommentRequest),
+}
+
+#[derive(Clone)]
+pub(crate) struct CommentRequest {
+    pub text: String,
+    draft: SharedString,
+    token: Rc<()>,
 }
 
 #[derive(Clone, PartialEq)]
@@ -364,6 +370,9 @@ struct Comment {
     line: Line,
     anchor: AnchorSlot,
     input: gpui::Entity<Input>,
+    pending: Option<Rc<()>>,
+    edited_while_pending: bool,
+    error: Option<String>,
     _events: Vec<Subscription>,
 }
 
@@ -402,6 +411,7 @@ pub(crate) struct DiffView {
     /// The axis this wheel gesture scrolls, and when it last moved.
     wheel_axis: Option<(bool, std::time::Instant)>,
     comment: Option<Comment>,
+    retiring_comment_focus: Option<FocusHandle>,
     action_slots: HashMap<usize, AnchorSlot>,
     focus: FocusHandle,
 }
@@ -467,6 +477,7 @@ impl DiffView {
             overview_hovered: false,
             wheel_axis: None,
             comment: None,
+            retiring_comment_focus: None,
             action_slots: HashMap::new(),
             focus: cx.focus_handle(),
         }
@@ -972,37 +983,122 @@ impl DiffView {
         let focus = input.read(cx).focus_handle(cx);
         window.focus(&focus, cx);
         let events = vec![
-            cx.subscribe(&input, |_, _, _: &input::Changed, cx| cx.notify()),
-            cx.subscribe_in(
-                &input,
-                window,
-                |this, _, _: &input::Submitted, window, cx| this.add_comment(window, cx),
-            ),
+            cx.subscribe(&input, |this, input, _: &input::Changed, cx| {
+                if let Some(comment) = &mut this.comment
+                    && comment.input == input
+                    && comment.pending.is_some()
+                {
+                    comment.edited_while_pending = true;
+                }
+                cx.notify();
+            }),
+            cx.subscribe_in(&input, window, |this, _, _: &input::Submitted, _, cx| {
+                this.add_comment(cx)
+            }),
         ];
         self.comment = Some(Comment {
             path,
             line,
             anchor,
             input,
+            pending: None,
+            edited_while_pending: false,
+            error: None,
             _events: events,
         });
         cx.notify();
     }
-    fn add_comment(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let Some(comment) = &self.comment else {
+    fn add_comment(&mut self, cx: &mut Context<Self>) {
+        let Some(comment) = self
+            .comment
+            .as_mut()
+            .filter(|comment| comment.pending.is_none())
+        else {
             return;
         };
-        let text = diff::format_comment(
-            &comment.path,
-            &comment.line,
-            &comment.input.read(cx).content,
-        );
+        let input = comment.input.read(cx);
+        if input.is_composing() {
+            return;
+        }
+        let draft = input.content.clone();
+        let text = diff::format_comment(&comment.path, &comment.line, &draft);
         if text.is_empty() {
             return;
         }
-        self.comment = None;
-        window.focus(&self.focus, cx);
-        cx.emit(DiffEvent::Comment(text));
+        let token = Rc::new(());
+        comment.pending = Some(token.clone());
+        comment.edited_while_pending = false;
+        comment.error = None;
+        cx.emit(DiffEvent::Comment(CommentRequest { text, draft, token }));
+        cx.notify();
+    }
+
+    pub(crate) fn has_comment_draft(&self) -> bool {
+        self.comment.is_some()
+    }
+
+    pub(crate) fn owns_comment(&self, request: &CommentRequest) -> bool {
+        self.comment
+            .as_ref()
+            .and_then(|comment| comment.pending.as_ref())
+            .is_some_and(|token| Rc::ptr_eq(token, &request.token))
+    }
+
+    pub(crate) fn cancel_pending_comment(&mut self, cx: &mut Context<Self>) {
+        if let Some(comment) = &mut self.comment
+            && comment.pending.take().is_some()
+        {
+            comment.error = Some("Reopen the review before adding this comment.".into());
+            cx.notify();
+        }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn open_comment_for_test(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> gpui::Entity<Input> {
+        let line = self.files[0]
+            .blocks
+            .iter()
+            .flat_map(Block::lines)
+            .find(|line| line.kind == LineKind::Add)
+            .unwrap()
+            .clone();
+        self.open_comment(0, line, AnchorSlot::default(), window, cx);
+        self.comment.as_ref().unwrap().input.clone()
+    }
+
+    #[cfg(test)]
+    pub(crate) fn comment_error_for_test(&self) -> Option<&str> {
+        self.comment.as_ref()?.error.as_deref()
+    }
+
+    pub(crate) fn complete_comment(
+        &mut self,
+        request: &CommentRequest,
+        result: Result<(), String>,
+        cx: &mut Context<Self>,
+    ) {
+        if !self.owns_comment(request) {
+            return;
+        }
+        let comment = self.comment.as_mut().unwrap();
+        comment.pending = None;
+        let input = comment.input.read(cx);
+        match result {
+            Ok(())
+                if !comment.edited_while_pending
+                    && input.content == request.draft
+                    && !input.is_composing() =>
+            {
+                self.retiring_comment_focus = Some(input.focus_handle(cx));
+                self.comment = None;
+            }
+            Ok(()) => {}
+            Err(error) => comment.error = Some(error),
+        }
         cx.notify();
     }
     fn dismiss_comment(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -1770,6 +1866,13 @@ fn tool_button(
 
 impl Render for DiffView {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        if self
+            .retiring_comment_focus
+            .take()
+            .is_some_and(|focus| focus.is_focused(window))
+        {
+            window.focus(&self.focus, cx);
+        }
         if self.files.is_empty() {
             return div()
                 .id("diff-review")
@@ -1804,7 +1907,7 @@ impl Render for DiffView {
         let sticky = self.sticky_header(cx);
         let comment = self.comment.as_ref().map(|c| {
             let location = diff::comment_location(&c.path, &c.line);
-            let can_add = !c.input.read(cx).content.trim().is_empty();
+            let can_add = c.pending.is_none() && !c.input.read(cx).content.trim().is_empty();
             popover(
                 "diff-comment",
                 crate::popover::Anchor::Slot(c.anchor.clone()),
@@ -1861,6 +1964,13 @@ impl Render for DiffView {
                             .text_color(content(1.))
                             .child(c.input.clone()),
                     )
+                    .children(c.error.clone().map(|error| {
+                        div()
+                            .mt_2()
+                            .text_size(px(12.))
+                            .text_color(status(StatusColor::Danger, 1.))
+                            .child(error)
+                    }))
                     .child(
                         div()
                             .mt_2()
@@ -1897,9 +2007,9 @@ impl Render for DiffView {
                                     )
                                     .child("Add to chat")
                                     .when(can_add, |d| {
-                                        d.on_click(cx.listener(|this, _, window, cx| {
-                                            this.add_comment(window, cx)
-                                        }))
+                                        d.on_click(
+                                            cx.listener(|this, _, _, cx| this.add_comment(cx)),
+                                        )
                                     }),
                             ),
                     ),

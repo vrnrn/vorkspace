@@ -1,4 +1,80 @@
 use super::*;
+
+#[gpui::test]
+fn a_comment_acknowledgement_preserves_newer_edits_and_cannot_clear_a_retry(
+    cx: &mut gpui::TestAppContext,
+) {
+    let window = cx.update(|cx| {
+        cx.open_window(Default::default(), |_, cx| cx.new(DiffView::new))
+            .unwrap()
+    });
+    let requests = Rc::new(std::cell::RefCell::new(Vec::new()));
+    let subscription = window
+        .update(cx, |_, _, cx| {
+            let requests = requests.clone();
+            cx.subscribe(&cx.entity(), move |_, _, event: &DiffEvent, _| {
+                if let DiffEvent::Comment(request) = event {
+                    requests.borrow_mut().push(request.clone());
+                }
+            })
+        })
+        .unwrap();
+    let draft = window
+        .update(cx, |view, w, cx| {
+            view.set_files(vec![file("comment.rs", "before\n", "after\n")], cx);
+            let draft = view.open_comment_for_test(w, cx);
+            draft.update(cx, |input, cx| {
+                input.set_text("Original comment".into(), cx)
+            });
+            draft
+        })
+        .unwrap();
+    window
+        .update(cx, |view, _, cx| {
+            view.add_comment(cx);
+            view.add_comment(cx);
+            draft.update(cx, |input, cx| {
+                input.set_text("Newer edit".into(), cx);
+                input.set_text("Original comment".into(), cx);
+            });
+        })
+        .unwrap();
+    let first = requests.borrow()[0].clone();
+    assert_eq!(requests.borrow().len(), 1);
+    window
+        .update(cx, |view, _, cx| {
+            view.complete_comment(&first, Ok(()), cx);
+            assert_eq!(
+                view.comment.as_ref().unwrap().input.read(cx).content,
+                "Original comment"
+            );
+            view.add_comment(cx);
+            view.complete_comment(&first, Ok(()), cx);
+            assert!(view.comment.as_ref().unwrap().pending.is_some());
+        })
+        .unwrap();
+    let second = requests.borrow()[1].clone();
+    assert_eq!(requests.borrow().len(), 2);
+    window
+        .update(cx, |view, _, cx| {
+            view.cancel_pending_comment(cx);
+            view.complete_comment(&second, Ok(()), cx);
+            assert!(view.has_comment_draft());
+            assert!(!view.owns_comment(&second));
+            view.add_comment(cx);
+        })
+        .unwrap();
+    let third = requests.borrow()[2].clone();
+    assert_eq!(requests.borrow().len(), 3);
+    window
+        .update(cx, |view, _, cx| {
+            view.complete_comment(&third, Ok(()), cx);
+            assert!(!view.has_comment_draft());
+        })
+        .unwrap();
+    drop(subscription);
+}
+
 #[gpui::test]
 fn review_overview_has_no_change_markers_and_supports_scrolling_and_dragging(
     cx: &mut gpui::TestAppContext,

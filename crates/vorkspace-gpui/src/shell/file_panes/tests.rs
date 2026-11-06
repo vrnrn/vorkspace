@@ -166,8 +166,271 @@ fn check_bot_file_link(cx: &mut TestAppContext, width: f32, tiled: bool) {
                 shell.visible_tabs(cx).contains(&TitleTab::Workspace(bot)),
                 "reopening the file keeps the Bot"
             );
+            reopened.update(cx, |_, cx| {
+                cx.emit(crate::file_tools::file_editor::FileEvent::AddToChat(
+                    "@README.md (line 2)".into(),
+                ));
+            });
         })
         .unwrap();
+    visual.run_until_parked();
+    window
+        .update(visual, |shell, _, cx| {
+            assert_eq!(
+                chat.read(cx).input.read(cx).content,
+                "Keep my Bot draft\n\n@README.md (line 2)\n\n"
+            );
+            assert!(
+                shell.sessions[&session]
+                    .read(cx)
+                    .input
+                    .read(cx)
+                    .content
+                    .is_empty()
+            );
+        })
+        .unwrap();
+}
+
+#[gpui::test]
+fn restored_bot_review_keeps_its_comment_destination_after_moving_beside_another_bot(
+    cx: &mut TestAppContext,
+) {
+    let (window, _, _) = window(cx);
+    let repo = tempfile::tempdir().unwrap();
+    let path = repo.path().join("review.txt");
+    std::fs::write(&path, "before\n").unwrap();
+    for args in [
+        &["init", "-q"][..],
+        &["add", "review.txt"][..],
+        &[
+            "-c",
+            "user.name=Test",
+            "-c",
+            "user.email=test@example.com",
+            "-c",
+            "commit.gpgsign=false",
+            "commit",
+            "-qm",
+            "base",
+        ][..],
+    ] {
+        assert!(
+            std::process::Command::new("git")
+                .args(args)
+                .current_dir(repo.path())
+                .status()
+                .unwrap()
+                .success()
+        );
+    }
+    std::fs::write(&path, "after\n").unwrap();
+    let cwd = repo.path().to_string_lossy().into_owned();
+    let diff = ReviewTab::Changes {
+        cwd: cwd.clone(),
+        path: None,
+        staged: Some(false),
+    };
+    window
+        .update(cx, |shell, w, cx| {
+            shell
+                .bot_manager()
+                .update(cx, |manager, cx| manager.create_named(Vec::new(), w, cx));
+        })
+        .unwrap();
+    cx.run_until_parked();
+    let (bot, original_pane, review_pane, review) = window
+        .update(cx, |shell, w, cx| {
+            let bot_pane = shell.workspace.active.unwrap();
+            let manager = shell.bot_manager();
+            let bot = manager.read(cx).current().unwrap().id.clone();
+            shell.open_review(diff.clone(), w, cx);
+            let pane = shell.workspace.active.unwrap();
+            let review = shell.active_review(cx).unwrap();
+            shell.open_review(
+                ReviewTab::File {
+                    cwd,
+                    path: "review.txt".into(),
+                },
+                w,
+                cx,
+            );
+            assert_eq!(shell.workspace.active, Some(pane));
+            assert_eq!(
+                shell.workspace.app_panes[&pane].review_bot.as_deref(),
+                Some(bot.as_str())
+            );
+            shell.open_review(diff.clone(), w, cx);
+            assert_eq!(shell.workspace.active, Some(pane));
+            (bot, bot_pane, pane, review)
+        })
+        .unwrap();
+    cx.run_until_parked();
+    window
+        .update(cx, |shell, w, cx| {
+            shell
+                .bot_manager()
+                .update(cx, |manager, cx| manager.create_named(Vec::new(), w, cx));
+        })
+        .unwrap();
+    cx.run_until_parked();
+    let other = window
+        .update(cx, |shell, w, cx| {
+            let other = shell.workspace.active.unwrap();
+            assert_ne!(other, original_pane);
+            let crate::workspace::AppPane::Bot(other_bot) =
+                &shell.workspace.app_panes[&other].content
+            else {
+                panic!("the second Bot must own the active pane");
+            };
+            assert_ne!(other_bot, &bot);
+            shell.open_review(diff, w, cx);
+            let other_review = shell.workspace.active.unwrap();
+            assert_ne!(other_review, review_pane);
+            shell.close_pane(other_review, w, cx);
+            shell.workspace.place(review_pane, other, Edge::Right);
+            shell.open(review_pane, w, cx);
+            shell.close_pane(review_pane, w, cx);
+            shell.open(review_pane, w, cx);
+            assert_eq!(shell.active_review(cx), Some(review));
+            shell.workspace.place(review_pane, other, Edge::Right);
+            shell.open(review_pane, w, cx);
+            other
+        })
+        .unwrap();
+    cx.run_until_parked();
+    let (store, summaries, project, saved) = window
+        .update(cx, |shell, w, _| {
+            let (summaries, saved) = {
+                let db = locked(&shell.store).unwrap();
+                (db.sessions().unwrap(), db.ui_state().unwrap())
+            };
+            w.remove_window();
+            (
+                shell.store.clone(),
+                summaries,
+                shell.workspace.project.clone(),
+                saved,
+            )
+        })
+        .unwrap();
+    let restored = cx.update(|cx| {
+        cx.open_window(Default::default(), |_, cx| {
+            cx.new(|cx| Shell::new(store, summaries, project, saved, cx))
+        })
+        .unwrap()
+    });
+    cx.run_until_parked();
+    let (view, draft, manager, other_chat) = restored
+        .update(cx, |shell, w, cx| {
+            assert_eq!(shell.workspace.active, Some(review_pane));
+            assert_eq!(
+                shell.workspace.layout(other).leaf_ids(),
+                [other, review_pane]
+            );
+            assert_eq!(
+                shell.workspace.app_panes[&review_pane]
+                    .review_bot
+                    .as_deref(),
+                Some(bot.as_str())
+            );
+            let manager = shell.bot_manager();
+            assert_ne!(manager.read(cx).current().unwrap().id, bot);
+            let other_chat = manager.read(cx).chat().unwrap();
+            let view = shell
+                .active_review(cx)
+                .unwrap()
+                .read(cx)
+                .active_diff_for_test();
+            let draft = view.update(cx, |view, cx| view.open_comment_for_test(w, cx));
+            draft.update(cx, |input, cx| {
+                input.set_text("A review comment".into(), cx);
+                cx.emit(crate::input::Submitted);
+            });
+            (view, draft, manager, other_chat)
+        })
+        .unwrap();
+    cx.run_until_parked();
+    view.read_with(cx, |view, _| {
+        assert!(
+            view.comment_error_for_test()
+                .unwrap()
+                .contains("wait for its draft to load")
+        );
+    });
+    let chat = manager.update(cx, |manager, cx| manager.chat_for_action(&bot, cx).unwrap());
+    restored
+        .update(cx, |_, w, cx| {
+            chat.read(cx).input.clone().update(cx, |input, cx| {
+                input.set_text("Keep this draft".into(), cx);
+                input.replace_and_mark_text_in_range(None, " while typing", None, w, cx);
+            });
+            draft.update(cx, |_, cx| cx.emit(crate::input::Submitted));
+        })
+        .unwrap();
+    cx.run_until_parked();
+    view.read_with(cx, |view, _| {
+        assert!(
+            view.comment_error_for_test()
+                .unwrap()
+                .contains("Finish typing")
+        );
+    });
+    draft.read_with(cx, |draft, _| assert_eq!(draft.content, "A review comment"));
+    restored
+        .update(cx, |_, w, cx| {
+            chat.read(cx)
+                .input
+                .clone()
+                .update(cx, |input, cx| input.unmark_text(w, cx));
+            draft.update(cx, |_, cx| {
+                cx.emit(crate::input::Submitted);
+                cx.emit(crate::input::Submitted);
+            });
+        })
+        .unwrap();
+    cx.run_until_parked();
+    view.read_with(cx, |view, _| assert!(!view.has_comment_draft()));
+    chat.read_with(cx, |chat, cx| {
+        let text = &chat.input.read(cx).content;
+        assert!(text.starts_with("Keep this draft while typing\n\n"));
+        assert_eq!(text.matches("A review comment").count(), 1);
+        assert!(!chat.busy);
+    });
+    other_chat.read_with(cx, |chat, cx| {
+        assert!(chat.input.read(cx).content.is_empty())
+    });
+
+    let missing_draft = restored
+        .update(cx, |_, w, cx| {
+            let draft = view.update(cx, |view, cx| view.open_comment_for_test(w, cx));
+            manager.update(cx, |manager, _| {
+                manager.roster.bots.retain(|actor| actor.id != bot)
+            });
+            draft.update(cx, |input, cx| {
+                input.set_text("Keep me if the Bot is gone".into(), cx);
+                cx.emit(crate::input::Submitted);
+            });
+            draft
+        })
+        .unwrap();
+    cx.run_until_parked();
+    view.read_with(cx, |view, _| {
+        assert!(
+            view.comment_error_for_test()
+                .unwrap()
+                .contains("Bot is unavailable")
+        );
+    });
+    missing_draft.read_with(cx, |draft, _| {
+        assert_eq!(draft.content, "Keep me if the Bot is gone")
+    });
+    chat.read_with(cx, |chat, cx| {
+        assert!(!chat.input.read(cx).content.contains("Keep me"))
+    });
+    other_chat.read_with(cx, |chat, cx| {
+        assert!(chat.input.read(cx).content.is_empty())
+    });
 }
 
 #[gpui::test]

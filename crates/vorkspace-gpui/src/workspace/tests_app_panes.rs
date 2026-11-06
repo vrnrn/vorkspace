@@ -180,6 +180,26 @@ fn mixed_session_note_bot_terminal_and_document_layout_survives_restore() {
 }
 
 #[test]
+fn reviews_from_two_bots_and_an_unowned_review_have_distinct_pane_ids() {
+    let mut workspace = Workspace::default();
+    let mut bot_review = |bot: &str| {
+        workspace
+            .standalone_review_pane("/work".into(), "/copy".into(), Some(bot.into()))
+            .unwrap()
+    };
+    let first = bot_review("first");
+    let second = bot_review("second");
+    assert_ne!(first, second);
+    assert_eq!(bot_review("first"), first);
+    let unowned = workspace
+        .app_pane(AppPane::Review, "/work".into(), "/copy".into())
+        .unwrap();
+    assert_ne!(unowned, first);
+    assert_ne!(unowned, second);
+    assert_eq!(workspace.app_panes[&unowned].review_bot, None);
+}
+
+#[test]
 fn closed_terminal_descriptor_reserves_its_process_identity() {
     let mut workspace = Workspace::default();
     workspace.app_panes.insert(
@@ -191,6 +211,7 @@ fn closed_terminal_descriptor_reserves_its_process_identity() {
             },
             project: "/work".into(),
             worktree: "/work".into(),
+            review_bot: None,
         },
     );
     let saved = serde_json::to_string(&workspace).unwrap();

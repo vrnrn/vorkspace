@@ -159,12 +159,7 @@ impl Shell {
             let active = visible(&AppPane::App(AppView::Notes));
             view.update(cx, |view, cx| view.set_active(active, cx));
         }
-        if let Some(search) = self.app_search.as_ref().or(self.parked_search.as_ref()) {
-            let active = visible(&AppPane::Search);
-            search
-                .view
-                .update(cx, |view, cx| view.set_active(active, cx));
-        }
+        self.sync_search_visibility(visible(&AppPane::Search), cx);
         for (id, view) in &self.note_tabs {
             view.update(cx, |v, cx| v.set_active(shown.contains(id), cx));
         }

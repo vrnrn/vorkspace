@@ -188,10 +188,13 @@ impl Inbox {
             cx.subscribe(&comment, |this, _, _: &input::Submitted, cx| {
                 this.post_comment(cx)
             }),
-            cx.subscribe(&diff_view, |this, _, event: &DiffEvent, cx| {
-                if let DiffEvent::Comment(text) = event {
+            cx.subscribe(&diff_view, |this, view, event: &DiffEvent, cx| {
+                if let DiffEvent::Comment(request) = event
+                    && view.read(cx).owns_comment(request)
+                {
                     this.comment
-                        .update(cx, |input, cx| input.set_text(text.clone(), cx));
+                        .update(cx, |input, cx| input.set_text(request.text.clone(), cx));
+                    view.update(cx, |view, cx| view.complete_comment(request, Ok(()), cx));
                     this.tab = Tab::Summary;
                     this.summary_scroll.scroll_to_end();
                     this.focus_comment = true;
