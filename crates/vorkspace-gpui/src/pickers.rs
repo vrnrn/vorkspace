@@ -1,3 +1,4 @@
+use vorkspace_ui::radius;
 // The pickers that open as flyouts beside a menu row: ModelPicker.tsx's
 // ModelFlyout and SearchableProjectPicker.tsx's ProjectPickerPopover. Each
 // owns a search field; arrows and Enter in it move and pick in the list.
@@ -585,7 +586,7 @@ impl ModelList {
             .cursor(CursorStyle::Arrow)
             .flex_shrink_0()
             .size(px(32.))
-            .rounded(px(6.))
+            .rounded(px(radius::CONTROL))
             .flex()
             .items_center()
             .justify_center()
@@ -650,7 +651,7 @@ impl Render for ModelList {
                     .flex_shrink_0()
                     .h(px(32.))
                     .px_1()
-                    .rounded(px(8.))
+                    .rounded(px(radius::CONTAINER))
                     .flex()
                     .items_center()
                     .text_size(px(13.))
@@ -935,7 +936,7 @@ impl Render for ProjectPicker {
                     .h(px(36.))
                     .px(px(10.))
                     .gap(px(10.))
-                    .rounded(px(8.))
+                    .rounded(px(radius::CONTAINER))
                     .flex()
                     .items_center()
                     .text_color(content(if active { 1. } else { 0.75 }))
@@ -1080,7 +1081,7 @@ impl Render for ProjectPicker {
                             .h(px(36.))
                             .px(px(10.))
                             .gap(px(10.))
-                            .rounded(px(8.))
+                            .rounded(px(radius::CONTAINER))
                             .flex()
                             .items_center()
                             .text_size(px(13.))
@@ -1104,7 +1105,7 @@ impl Render for ProjectPicker {
                                 .h(px(36.))
                                 .px(px(10.))
                                 .gap(px(10.))
-                                .rounded(px(8.))
+                                .rounded(px(radius::CONTAINER))
                                 .flex()
                                 .items_center()
                                 .text_size(px(13.))

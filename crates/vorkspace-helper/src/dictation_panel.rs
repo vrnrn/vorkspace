@@ -2,6 +2,7 @@
 use gpui::{prelude::*, *};
 use vorkspace_helper::{DictationPhase, DictationStatus};
 use vorkspace_macos::notch::{self, Geometry, Placement};
+use vorkspace_ui::radius;
 
 pub struct Panel {
     pub status: DictationStatus,
@@ -142,7 +143,7 @@ fn action(id: &'static str, label: &'static str) -> Stateful<Div> {
         .flex()
         .items_center()
         .justify_center()
-        .rounded_md()
+        .rounded(px(radius::CONTROL))
         .hover(|s| s.bg(rgba(0xffffff18)))
         .on_mouse_down(MouseButton::Left, |_, window, _| window.prevent_default())
 }

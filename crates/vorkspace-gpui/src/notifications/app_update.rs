@@ -5,6 +5,7 @@ use gpui::{Context, EventEmitter, FontWeight, Render, Role, Window, div, img, pr
 use vorkspace_core::store::Store;
 use vorkspace_model::markdown_model;
 use vorkspace_ui::clock::Instant;
+use vorkspace_ui::radius;
 use vorkspace_ui::theme::*;
 const MARKER: &str = "vorkspace.installedUpdate";
 const VERSION: &str = "vorkspace.lastSeenAppVersion";
@@ -78,7 +79,7 @@ impl Render for InstalledUpdateNotice {
             .role(Role::Status)
             .relative()
             .overflow_hidden()
-            .rounded(px(8.))
+            .rounded(px(radius::CONTAINER))
             .bg(content(0.12))
             .child(
                 div()
@@ -90,7 +91,7 @@ impl Render for InstalledUpdateNotice {
                     .w_full()
                     .items_start()
                     .gap(px(8.))
-                    .rounded(px(8.))
+                    .rounded(px(radius::CONTAINER))
                     .p(px(8.))
                     .pr(px(32.))
                     .hover(|s| {
@@ -139,7 +140,7 @@ impl Render for InstalledUpdateNotice {
                     .right(px(4.))
                     .top(px(4.))
                     .size(px(24.))
-                    .rounded(px(6.))
+                    .rounded(px(radius::CONTROL))
                     .cursor_pointer()
                     .flex()
                     .items_center()
@@ -385,7 +386,7 @@ impl Render for WhatsNew {
             .flex()
             .flex_col()
             .overflow_hidden()
-            .rounded(px(12.))
+            .rounded(px(radius::SURFACE))
             .border_1()
             .border_color(content(0.1))
             .text_color(content(1.))

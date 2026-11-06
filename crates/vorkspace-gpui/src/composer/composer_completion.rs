@@ -20,6 +20,7 @@ use vorkspace_core::{
     files::ProjectFile,
     skills::DiscoveredSkill,
 };
+use vorkspace_ui::radius;
 use vorkspace_ui::theme::*;
 
 actions!(completion, [Accept, Dismiss]);
@@ -960,7 +961,7 @@ impl Render for Completion {
                         .aria_label(choice.label.clone())
                         .px_3()
                         .py_1p5()
-                        .rounded_md()
+                        .rounded(px(radius::CONTROL))
                         .flex()
                         .items_center()
                         .gap_2()
@@ -974,7 +975,7 @@ impl Render for Completion {
                             div()
                                 .size(px(30.))
                                 .flex_shrink_0()
-                                .rounded(px(6.))
+                                .rounded(px(radius::CONTROL))
                                 .bg(content(0.05))
                                 .flex()
                                 .items_center()

@@ -1,5 +1,6 @@
 //! editorSearch.ts's two-row Find/Replace panel, using the same query engine.
 use super::*;
+use vorkspace_ui::radius;
 impl FileEditor {
     pub(super) fn search_panel(&self, cx: &mut Context<Self>) -> AnyElement {
         let count = if self.search_invalid {
@@ -25,7 +26,7 @@ impl FileEditor {
             .flex()
             .items_center()
             .px_2()
-            .rounded_md()
+            .rounded(px(radius::CONTROL))
             .border_1()
             .border_color(if bad {
                 rgb(0xf87171).opacity(0.55).into()
@@ -60,7 +61,7 @@ impl FileEditor {
                 .flex()
                 .items_center()
                 .justify_center()
-                .rounded_md()
+                .rounded(px(radius::CONTROL))
                 .text_size(px(11.))
                 .font_weight(gpui::FontWeight::SEMIBOLD)
                 .text_color(content(if on { 1. } else { 0.6 }))
@@ -147,7 +148,7 @@ impl FileEditor {
                                         .px_2()
                                         .flex()
                                         .items_center()
-                                        .rounded_md()
+                                        .rounded(px(radius::CONTROL))
                                         .border_1()
                                         .border_color(content(0.1))
                                         .bg(content(0.06))
@@ -160,7 +161,7 @@ impl FileEditor {
                                         .aria_label("Replace")
                                         .px_2()
                                         .py_1()
-                                        .rounded_md()
+                                        .rounded(px(radius::CONTROL))
                                         .text_size(px(11.))
                                         .text_color(content(0.6))
                                         .hover(|s| s.bg(content(0.1)))
@@ -176,7 +177,7 @@ impl FileEditor {
                                         .aria_label("Replace All")
                                         .px_2()
                                         .py_1()
-                                        .rounded_md()
+                                        .rounded(px(radius::CONTROL))
                                         .text_size(px(11.))
                                         .text_color(content(0.6))
                                         .hover(|s| s.bg(content(0.1)))

@@ -3,6 +3,7 @@ use crate::{
     accounts::resets::{ResetRow, rows},
     settings::widgets::{primary_button, secondary_button},
 };
+use vorkspace_ui::radius;
 
 #[derive(Clone)]
 enum Command {
@@ -125,7 +126,7 @@ impl UsageFooter {
                 row.key
             )))
             .flex_shrink_0()
-            .rounded_lg()
+            .rounded(px(radius::CONTAINER))
             .bg(content(0.045))
             .border_1()
             .border_color(content(0.06))

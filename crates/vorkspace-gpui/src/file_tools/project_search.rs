@@ -17,6 +17,7 @@ use std::{
     time::Duration,
 };
 use vorkspace_core::search::project::{self, SearchMatch, SearchOptions};
+use vorkspace_ui::radius;
 use vorkspace_ui::{file_icons::file_type_icon, theme::*};
 
 fn accent(alpha: f32) -> gpui::Hsla {
@@ -284,7 +285,7 @@ impl ProjectSearch {
             .flex()
             .items_center()
             .justify_center()
-            .rounded(px(2.))
+            .rounded(px(radius::SMALL))
             .text_color(content(if active { 1. } else { 0.4 }))
             .when(active, |d| d.bg(content(0.1)))
             .hover(|s| s.bg(content(0.1)).text_color(content(0.7)))
@@ -297,7 +298,7 @@ impl ProjectSearch {
             .min_w_0()
             .flex_shrink_0()
             .flex()
-            .rounded(px(6.))
+            .rounded(px(radius::CONTROL))
             .border_1()
             .border_color(content(0.))
             .track_focus(&input.focus_handle(cx))
@@ -494,7 +495,7 @@ impl Render for ProjectSearch {
                             .flex()
                             .items_center()
                             .justify_center()
-                            .rounded(px(6.))
+                            .rounded(px(radius::CONTROL))
                             .text_color(content(0.5))
                             .hover(|s| s.bg(content(0.1)).text_color(content(1.)))
                             .child(icon("chevron-left", 16.))
@@ -526,7 +527,7 @@ impl Render for ProjectSearch {
                             .flex()
                             .items_center()
                             .gap_1()
-                            .rounded(px(6.))
+                            .rounded(px(radius::CONTROL))
                             .border_1()
                             .border_color(content(0.))
                             .track_focus(&self.query.focus_handle(cx))

@@ -1,6 +1,7 @@
 //! React's command names, defaults, scopes, filter and shortcut recorder.
 use crate::settings::{Preferences, SettingsView};
 use gpui::{AnyElement, Context, Focusable, FontWeight, Role, div, prelude::*, px};
+use vorkspace_ui::radius;
 use vorkspace_ui::theme::*;
 #[derive(Clone, Copy)]
 pub(crate) struct Binding {
@@ -467,7 +468,7 @@ impl SettingsView {
                                     .flex()
                                     .items_center()
                                     .truncate()
-                                    .rounded_md()
+                                    .rounded(px(radius::CONTROL))
                                     .border_1()
                                     .border_color(if recording {
                                         accent_color()
@@ -505,7 +506,7 @@ impl SettingsView {
                                         .role(Role::Button)
                                         .aria_label(format!("Reset {command} shortcut"))
                                         .p_1()
-                                        .rounded_md()
+                                        .rounded(px(radius::CONTROL))
                                         .cursor_pointer()
                                         .hover(|s| s.bg(content(0.1)))
                                         .child(icon("rotate-ccw", 14.))

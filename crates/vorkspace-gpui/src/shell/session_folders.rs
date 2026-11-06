@@ -1,6 +1,7 @@
 //! SessionFolderPicker.tsx and the composer's local /add-to-folder command.
 use super::*;
 use vorkspace_core::session_groups::Folder;
+use vorkspace_ui::radius;
 actions!(session_folders, [Dismiss]);
 pub(super) fn bind(cx: &mut App) {
     cx.bind_keys([KeyBinding::new(
@@ -158,7 +159,7 @@ impl Render for Picker {
                             .gap_2()
                             .px_2()
                             .py_2()
-                            .rounded_md()
+                            .rounded(px(radius::CONTROL))
                             .text_size(px(13.))
                             .when(ix == self.active, |d| d.bg(content(0.1)))
                             .child(

@@ -14,6 +14,7 @@ use vorkspace_core::{
     git::{self, Snapshot},
 };
 use vorkspace_runtime::runtime::{Database, locked};
+use vorkspace_ui::radius;
 use vorkspace_ui::theme::*;
 
 #[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
@@ -385,7 +386,7 @@ impl Render for WorktreeSwitcher {
                             .flex()
                             .items_center()
                             .gap_2()
-                            .rounded_md()
+                            .rounded(px(radius::CONTROL))
                             .px_2()
                             .py(px(6.))
                             .text_color(content(1.))
@@ -513,7 +514,7 @@ impl Render for WorktreeSwitcher {
                                 .flex()
                                 .items_center()
                                 .gap(px(10.))
-                                .rounded_lg()
+                                .rounded(px(radius::CONTAINER))
                                 .px(px(10.))
                                 .text_size(px(13.))
                                 .text_color(content(0.75))

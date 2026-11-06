@@ -1,3 +1,4 @@
+use vorkspace_ui::radius;
 mod accounts;
 mod approvals;
 mod attachment_drop;
@@ -769,7 +770,7 @@ fn tool_pill(id: &'static str, label: &'static str) -> gpui::Stateful<gpui::Div>
         .flex_shrink_0()
         .h(px(26.))
         .px(px(6.))
-        .rounded_md()
+        .rounded(px(radius::CONTROL))
         .flex()
         .items_center()
         .gap_1()
@@ -803,7 +804,7 @@ pub(super) fn quiet_control(
         .min_w_0()
         .px_1p5()
         .gap_1p5()
-        .rounded_md()
+        .rounded(px(radius::CONTROL))
         .flex()
         .items_center()
         .text_size(px(12.))

@@ -13,6 +13,7 @@ use gpui::{
 use std::{collections::HashMap, path::PathBuf};
 use vorkspace_core::scm::{self, HistoryCommit};
 use vorkspace_model::git_graph::{self, GraphCommit, NodeKind, Row, RowGraph, SWIMLANE_WIDTH};
+use vorkspace_ui::radius;
 use vorkspace_ui::theme::*;
 
 const ROW: f32 = 44.;
@@ -508,7 +509,7 @@ fn header_action(
         .flex()
         .items_center()
         .justify_center()
-        .rounded_md()
+        .rounded(px(radius::CONTROL))
         .when(!enabled, |d| d.opacity(0.4))
         .when(enabled, |d| d.hover(|s| s.bg(content(0.05))))
         .child(if spinning {

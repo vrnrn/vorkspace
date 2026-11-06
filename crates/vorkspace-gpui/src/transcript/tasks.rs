@@ -18,6 +18,7 @@ use vorkspace_core::tool::{
 };
 use vorkspace_model::markdown_model;
 use vorkspace_ui::clock::Instant;
+use vorkspace_ui::radius;
 use vorkspace_ui::reveal::{Disclosure, Motion};
 use vorkspace_ui::theme::*;
 
@@ -41,7 +42,7 @@ fn task_list(list: &TaskList, start: usize) -> AnyElement {
         .w_full()
         .min_w_0()
         .my_1()
-        .rounded(px(10.))
+        .rounded(px(radius::SURFACE))
         .border_1()
         .border_color(content(0.1))
         .bg(content(0.035))
@@ -450,7 +451,7 @@ fn agent(
         .mx(px(-6.))
         .px_1p5()
         .py_1()
-        .rounded(px(6.))
+        .rounded(px(radius::CONTROL))
         .text_size(px(14.))
         .line_height(px(20.))
         .when(has_detail, |d| {
@@ -1028,7 +1029,7 @@ impl gpui::Render for AgentBrief {
             .max_w(px(480.))
             .px_2()
             .py_1p5()
-            .rounded(px(6.))
+            .rounded(px(radius::CONTROL))
             .bg(rgb(0x292929))
             .border_1()
             .border_color(content(0.12))

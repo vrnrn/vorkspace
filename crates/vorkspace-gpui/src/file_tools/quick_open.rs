@@ -9,6 +9,7 @@ use std::sync::{
     atomic::{AtomicBool, Ordering},
 };
 use vorkspace_core::{composer, files::ProjectFile};
+use vorkspace_ui::radius;
 use vorkspace_ui::theme::*;
 
 #[derive(Clone, Copy)]
@@ -191,7 +192,7 @@ impl Render for QuickOpen {
                     .aria_label(row.detail.clone())
                     .px_3()
                     .py_2()
-                    .rounded_md()
+                    .rounded(px(radius::CONTROL))
                     .flex()
                     .gap_2p5()
                     .items_center()

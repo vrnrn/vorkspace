@@ -2,6 +2,7 @@
 use super::widgets::{note, primary_button, red, secondary_button};
 use super::*;
 use vorkspace_core::provider::Kind;
+use vorkspace_ui::radius;
 
 #[derive(Clone)]
 pub(super) enum Target {
@@ -374,7 +375,7 @@ impl SettingsView {
                     rows.push(
                         div()
                             .p_2()
-                            .rounded_md()
+                            .rounded(px(radius::CONTROL))
                             .border_1()
                             .border_color(content(0.1))
                             .bg(content(0.03))
@@ -604,7 +605,7 @@ impl SettingsView {
                     "This permanently deletes the working copy and everything inside it.",
                 ));
                 let mut consequences = div()
-                    .rounded_lg()
+                    .rounded(px(radius::CONTAINER))
                     .border_1()
                     .border_color(content(0.1))
                     .bg(content(0.05))
@@ -666,7 +667,7 @@ impl SettingsView {
                             .items_center()
                             .gap_3()
                             .p_3()
-                            .rounded_lg()
+                            .rounded(px(radius::CONTAINER))
                             .border_1()
                             .border_color(content(0.1))
                             .text_size(px(12.5))
@@ -880,7 +881,7 @@ impl SettingsView {
                             448.
                         }))
                         .max_w_full()
-                        .rounded_xl()
+                        .rounded(px(radius::SURFACE))
                         .bg({
                             let mut fill = shell_fill();
                             fill.a = 1.;
@@ -943,7 +944,7 @@ fn form_field(label: &str, input: Entity<Input>, height: f32) -> AnyElement {
                 .h(px(height))
                 .px(px(10.))
                 .py_1()
-                .rounded_md()
+                .rounded(px(radius::CONTROL))
                 .border_1()
                 .border_color(content(0.1))
                 .bg(content(0.04))

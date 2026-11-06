@@ -1,5 +1,6 @@
 use super::*;
 use std::path::PathBuf;
+use vorkspace_ui::radius;
 pub(crate) struct StartOrchestration(pub vorkspace_core::orchestration::Plan);
 pub(crate) struct StopOrchestration;
 
@@ -434,7 +435,7 @@ impl Conversation {
                         .when(!image, |d| {
                             d.h(px(26.))
                                 .px(px(6.))
-                                .rounded_md()
+                                .rounded(px(radius::CONTROL))
                                 .bg(content(0.1))
                                 .text_color(content(1.))
                                 .hover(|s| s.bg(content(0.15)))
@@ -481,7 +482,7 @@ impl Conversation {
                         .gap_1p5()
                         .px_2()
                         .py_1()
-                        .rounded_md()
+                        .rounded(px(radius::CONTROL))
                         .bg(content(0.06))
                         .text_size(px(11.))
                         .child(vorkspace_ui::file_icons::file_type_icon(
@@ -610,7 +611,7 @@ impl Conversation {
             .id("orchestration-card")
             .mb_2()
             .p_3()
-            .rounded_lg()
+            .rounded(px(radius::SURFACE))
             .border_1()
             .border_color(tint(FUCHSIA_300, 0.2))
             .bg(tint(FUCHSIA_300, 0.04))

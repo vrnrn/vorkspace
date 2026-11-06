@@ -1,6 +1,7 @@
 //! LinkedWorkItemUpdateNotice: shell-local card on the active session surface.
 use super::github_activity::Card;
 use gpui::{Context, EventEmitter, Render, Role, Window, div, prelude::*, px};
+use vorkspace_ui::radius;
 use vorkspace_ui::theme::*;
 #[derive(Clone)]
 pub(crate) enum LinkedActivityEvent {
@@ -262,7 +263,7 @@ impl Render for LinkedActivity {
                                 div()
                                     .id("archive-linked-session")
                                     .role(Role::Button)
-                                    .rounded(px(6.))
+                                    .rounded(px(radius::CONTROL))
                                     .px(px(8.))
                                     .py(px(4.))
                                     .bg(content(0.1))
@@ -287,7 +288,7 @@ impl Render for LinkedActivity {
                                 div()
                                     .id("delete-linked-session")
                                     .role(Role::Button)
-                                    .rounded(px(6.))
+                                    .rounded(px(radius::CONTROL))
                                     .px(px(8.))
                                     .py(px(4.))
                                     .text_size(px(11.))
@@ -326,7 +327,7 @@ impl Render for LinkedActivity {
                         .role(Role::Button)
                         .cursor_pointer()
                         .flex_1()
-                        .rounded(px(6.))
+                        .rounded(px(radius::CONTROL))
                         .px(px(8.))
                         .py(px(4.))
                         .bg(content(1.))
@@ -343,7 +344,7 @@ impl Render for LinkedActivity {
                         .role(Role::Button)
                         .cursor_pointer()
                         .flex_1()
-                        .rounded(px(6.))
+                        .rounded(px(radius::CONTROL))
                         .px(px(8.))
                         .py(px(4.))
                         .bg(content(0.1))

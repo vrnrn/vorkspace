@@ -6,6 +6,7 @@ use vorkspace_core::{
     harness_updates::{self, Update},
     provider::Kind,
 };
+use vorkspace_ui::radius;
 use vorkspace_ui::theme::*;
 
 pub(crate) enum HarnessUpdatesEvent {
@@ -163,7 +164,7 @@ impl Render for HarnessUpdates {
                     .cursor_pointer()
                     .px(px(8.))
                     .py(px(4.))
-                    .rounded(px(6.))
+                    .rounded(px(radius::CONTROL))
                     .text_size(px(11.))
                     .text_color(content(0.7))
                     .hover(|s| s.bg(content(0.1)))
@@ -180,7 +181,7 @@ impl Render for HarnessUpdates {
                 .flex()
                 .items_center()
                 .justify_center()
-                .rounded(px(6.))
+                .rounded(px(radius::CONTROL))
                 .text_color(content(if busy { 0.16 } else { 0.4 }))
                 .when(!busy, |el| {
                     el.cursor_pointer()
@@ -230,7 +231,7 @@ impl Render for HarnessUpdates {
                             )))
                             .px(px(8.))
                             .py(px(4.))
-                            .rounded(px(6.))
+                            .rounded(px(radius::CONTROL))
                             .bg(content(0.1))
                             .text_size(px(11.))
                             .opacity(if updating { 0.6 } else { 1. })

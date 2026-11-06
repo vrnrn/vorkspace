@@ -5,6 +5,7 @@ use gpui::{ListAlignment, ListOffset, ListState, list};
 use std::time::Duration;
 use vorkspace_core::project_appearance::ProjectAppearance;
 use vorkspace_ui::clock::Instant;
+use vorkspace_ui::radius;
 
 const DEFAULT_ROWS: usize = 4;
 const ROW_HEIGHT: f32 = 49.;
@@ -416,7 +417,7 @@ impl LiveAgents {
             .flex_shrink_0()
             .aria_selected(agent.selected)
             .cursor(CursorStyle::Arrow)
-            .rounded_md()
+            .rounded(px(radius::CONTROL))
             .when(agent.selected, |d| d.bg(content(0.1)))
             .when(!agent.selected, |d| d.hover(|s| s.bg(content(0.08))))
             .on_click(move |_, window, cx| {
@@ -611,7 +612,7 @@ impl Render for LiveAgents {
                     )
                     .debug_selector(|| "compact-working".into())
                     .size(px(32.))
-                    .rounded_md()
+                    .rounded(px(radius::CONTROL))
                     .flex()
                     .items_center()
                     .justify_center()
@@ -792,7 +793,7 @@ impl Render for LiveAgents {
                     .w_full()
                     .min_h_0()
                     .flex_shrink_1()
-                    .rounded_lg()
+                    .rounded(px(radius::CONTAINER))
                     .overflow_hidden()
                     .when(!compact, |d| d.bg(content(0.05)))
                     .flex()

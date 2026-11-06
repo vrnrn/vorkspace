@@ -3,6 +3,7 @@ use gpui::{prelude::*, *};
 use std::time::Duration;
 use vorkspace_macos::notch::{self, Geometry, Placement};
 use vorkspace_meetings::recording::{Phase, State};
+use vorkspace_ui::radius;
 
 #[derive(Default)]
 struct RecordingPanel(Option<WindowHandle<Panel>>);
@@ -204,7 +205,7 @@ fn action(id: &'static str, label: &'static str, enabled: bool) -> Stateful<Div>
         .flex()
         .items_center()
         .justify_center()
-        .rounded(px(5.))
+        .rounded(px(radius::CONTROL))
         .when(enabled, |button| {
             button.cursor_pointer().hover(|s| s.bg(rgba(0xffffff18)))
         })

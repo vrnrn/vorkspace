@@ -1,5 +1,7 @@
 # Vorkspace Design Guide
 
+App chrome uses the shared `vorkspace_ui::radius` scale: 4 pt for small chips and icon actions, 6 pt for controls and tabs, 8 pt for inset content, 12 pt for surfaces, and 16 pt for dialogs. Fill, stroke, clipping and hover use the same shape. AppKit window corners, circles and artwork retain their own geometry.
+
 Vorkspace should feel like one quiet, native macOS tool. Chrome recedes; the
 conversation, code and user's work carry the color. Use this guide for every UI
 change, and extend it when you add a new shared convention.

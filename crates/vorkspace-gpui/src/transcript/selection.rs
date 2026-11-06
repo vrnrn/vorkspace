@@ -6,6 +6,7 @@ use gpui::{
 };
 use std::{cell::RefCell, ops::Range, rc::Rc};
 use unicode_segmentation::UnicodeSegmentation;
+use vorkspace_ui::radius;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 struct Position {
@@ -763,7 +764,7 @@ impl TranscriptView {
                 .gap_2()
                 .h(px(32.))
                 .px_2p5()
-                .rounded(px(8.))
+                .rounded(px(radius::CONTAINER))
                 .text_size(px(13.))
                 .hover(|s| s.bg(content(0.05)))
                 .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())

@@ -5,6 +5,7 @@ use vorkspace_core::{
     response::{Target, TransferKind},
     transcript::Row,
 };
+use vorkspace_ui::radius;
 use vorkspace_ui::theme::*;
 
 pub(crate) enum Request {
@@ -65,7 +66,7 @@ pub(crate) fn button(
         .flex_shrink_0()
         .size(px(22.))
         .p(px(4.))
-        .rounded(px(6.))
+        .rounded(px(radius::CONTROL))
         .flex()
         .items_center()
         .justify_center()

@@ -5,6 +5,7 @@ use std::{
     time::SystemTime,
 };
 use vorkspace_core::agent::Decision;
+use vorkspace_ui::radius;
 use vorkspace_ui::theme::*;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -257,7 +258,7 @@ impl Render for ApprovalNotices {
                                                 .aria_label("Allow")
                                                 .cursor_pointer()
                                                 .flex_1()
-                                                .rounded_md()
+                                                .rounded(px(radius::CONTROL))
                                                 .px(px(10.))
                                                 .py_1()
                                                 .text_center()
@@ -285,7 +286,7 @@ impl Render for ApprovalNotices {
                                                 .aria_label("Deny")
                                                 .cursor_pointer()
                                                 .flex_1()
-                                                .rounded_md()
+                                                .rounded(px(radius::CONTROL))
                                                 .px(px(10.))
                                                 .py_1()
                                                 .text_center()

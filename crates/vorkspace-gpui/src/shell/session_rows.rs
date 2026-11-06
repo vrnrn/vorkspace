@@ -1,5 +1,6 @@
 //! Sidebar session rows, their hover previews and keyboard stepping.
 use super::*;
+use vorkspace_ui::radius;
 
 impl Shell {
     pub(super) fn close_preview(&mut self, cx: &mut Context<Self>) {
@@ -351,7 +352,7 @@ impl Shell {
                         .flex()
                         .items_center()
                         .gap_0p5()
-                        .rounded_sm()
+                        .rounded(px(radius::SMALL))
                         .bg(content(0.06))
                         .text_size(px(10.))
                         .text_color(content(0.5))
@@ -487,7 +488,7 @@ impl Shell {
             }))
             // Sidebar.tsx's `px-2` inside its 1px card border.
             .px(px(if nested { 7. } else { 9. }))
-            .rounded_md()
+            .rounded(px(radius::CONTROL))
             // The border is dashed for a saved draft. It overlays the row, so
             // the hover anchor still spans the whole card.
             .when(draft, |d| {
@@ -497,7 +498,7 @@ impl Shell {
                         .top_0()
                         .left_0()
                         .size_full()
-                        .rounded_md()
+                        .rounded(px(radius::CONTROL))
                         .border_1()
                         .border_dashed()
                         .border_color(content(if active { 0.3 } else { 0.25 })),
@@ -584,7 +585,7 @@ impl Shell {
             .flex()
             .items_center()
             .justify_center()
-            .rounded_md()
+            .rounded(px(radius::CONTROL))
             .opacity(if self.archiving.contains(&id) {
                 0.4
             } else {

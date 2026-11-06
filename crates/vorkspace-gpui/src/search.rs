@@ -22,6 +22,7 @@ use vorkspace_core::{
     transcript::Row,
 };
 use vorkspace_runtime::runtime::{Database, locked};
+use vorkspace_ui::radius;
 use vorkspace_ui::theme::*;
 
 pub(crate) enum Event {
@@ -416,7 +417,7 @@ impl Render for SearchView {
                         .map(|logo| {
                             img(std::path::PathBuf::from(logo))
                                 .size(px(14.))
-                                .rounded_sm()
+                                .rounded(px(radius::SMALL))
                                 .into_any_element()
                         })
                         .unwrap_or_else(|| icon("folder", 14.).into_any_element()),

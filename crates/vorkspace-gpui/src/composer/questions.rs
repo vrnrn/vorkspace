@@ -4,6 +4,7 @@ use gpui::{
     AnyElement, Context, Entity, EventEmitter, MouseButton, Role, Subscription, div, prelude::*, px,
 };
 use vorkspace_core::agent::Question;
+use vorkspace_ui::radius;
 use vorkspace_ui::theme::*;
 
 pub(crate) struct Answered {
@@ -142,7 +143,7 @@ impl Render for QuestionCard {
                             })
                             .aria_label(label.clone())
                             .aria_selected(selected)
-                            .rounded_md()
+                            .rounded(px(radius::CONTROL))
                             .px_2()
                             .py_1()
                             .border_1()
@@ -187,7 +188,7 @@ impl Render for QuestionCard {
                                 .mt_1()
                                 .px_2()
                                 .py_1()
-                                .rounded_md()
+                                .rounded(px(radius::CONTROL))
                                 .bg(content(0.05))
                                 .child(self.fields[ix].clone()),
                         )
@@ -203,7 +204,7 @@ impl Render for QuestionCard {
             .aria_label(self.request.title.clone())
             .mb_2()
             .p_3()
-            .rounded(px(12.))
+            .rounded(px(radius::SURFACE))
             .border_1()
             .border_color(content(0.15))
             .bg(content(0.04))
@@ -266,7 +267,7 @@ impl Render for QuestionCard {
                             .aria_label("Skip question")
                             .px_2()
                             .py_1()
-                            .rounded_md()
+                            .rounded(px(radius::CONTROL))
                             .bg(content(0.06))
                             .child("Skip")
                             .on_click(cx.listener(|this, _, _, cx| {
@@ -284,7 +285,7 @@ impl Render for QuestionCard {
                             .aria_label("Submit answers")
                             .px_2()
                             .py_1()
-                            .rounded_md()
+                            .rounded(px(radius::CONTROL))
                             .bg(content(if complete { 0.14 } else { 0.03 }))
                             .opacity(if complete { 1. } else { 0.4 })
                             .child("Submit answers")

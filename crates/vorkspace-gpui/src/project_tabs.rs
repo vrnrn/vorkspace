@@ -2,6 +2,7 @@
 use crate::panel_kit::RightTab;
 use gpui::{CursorStyle, MouseButton, Role, Stateful, Window, div, prelude::*, px};
 use vorkspace_ui::clock::Instant;
+use vorkspace_ui::radius;
 use vorkspace_ui::theme::*;
 
 const TAB_TEXT_SIZE: f32 = 12.;
@@ -94,7 +95,7 @@ pub(crate) fn tab_button(
     let ink = content(if selected { 1. } else { 0.5 });
     div()
         .h(px(24.))
-        .rounded_md()
+        .rounded(px(radius::CONTROL))
         .flex()
         .items_center()
         .bg(content(if selected { 0.1 } else { 0. }))
@@ -170,7 +171,7 @@ pub(crate) fn tab_button(
                                         .min_w(px(16.))
                                         .h(px(16.))
                                         .px(px(4.))
-                                        .rounded(px(4.))
+                                        .rounded(px(radius::SMALL))
                                         .bg(accent_color())
                                         .text_color(gpui::white())
                                         .text_size(px(10.))
