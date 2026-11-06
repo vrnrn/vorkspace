@@ -678,6 +678,37 @@ pub(crate) struct Shell {
     pub(crate) render_passes: usize,
 }
 impl Shell {
+    fn open_image(
+        &mut self,
+        open: &crate::image_lightbox::Open,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if let Some((old, _)) = &self.image_lightbox {
+            old.update(cx, |view, cx| view.reject_replacement(cx));
+            cx.stop_propagation();
+            return;
+        }
+        let owner = open.draft_session.and_then(|id| {
+            self.sessions.get(&id).cloned().or_else(|| {
+                self.bots
+                    .as_ref()
+                    .and_then(|bots| bots.read(cx).conversation_for_session(id, cx))
+            })
+        });
+        let owner = owner
+            .as_ref()
+            .map(crate::conversation::composer_features::annotation_owner);
+        let view =
+            cx.new(|cx| crate::image_lightbox::ImageLightbox::new(open.clone(), owner, window, cx));
+        let closed = cx.subscribe(&view, |this, _, _: &crate::image_lightbox::Closed, cx| {
+            this.image_lightbox = None;
+            cx.notify();
+        });
+        self.image_lightbox = Some((view, closed));
+        cx.notify();
+    }
+
     #[cfg(test)]
     pub(crate) fn new(
         store: Database,
@@ -2534,33 +2565,22 @@ impl Render for Shell {
             .aria_label("vorkspace Native")
             .key_context("Workspace")
             .track_focus(&self.focus)
+            .on_action(cx.listener(Self::open_image))
             .on_action(
-                cx.listener(|this, open: &crate::image_lightbox::Open, window, cx| {
-                    if let Some((old, _)) = &this.image_lightbox {
-                        old.update(cx, |view, cx| view.reject_replacement(cx));
-                        cx.stop_propagation();
-                        return;
-                    }
-                    let owner = open.draft_session.and_then(|id| {
-                        this.sessions.get(&id).cloned().or_else(|| {
-                            this.bots
-                                .as_ref()
-                                .and_then(|bots| bots.read(cx).conversation_for_session(id, cx))
-                        })
-                    });
-                    let owner = owner
-                        .as_ref()
-                        .map(crate::conversation::composer_features::annotation_owner);
-                    let view = cx.new(|cx| {
-                        crate::image_lightbox::ImageLightbox::new(open.clone(), owner, window, cx)
-                    });
-                    let closed =
-                        cx.subscribe(&view, |this, _, _: &crate::image_lightbox::Closed, cx| {
-                            this.image_lightbox = None;
-                            cx.notify();
-                        });
-                    this.image_lightbox = Some((view, closed));
-                    cx.notify();
+                cx.listener(|this, open: &crate::diagrams::Open, window, cx| {
+                    this.open_image(
+                        &crate::image_lightbox::Open {
+                            source: crate::image_lightbox::Source::Diagram {
+                                kind: open.kind,
+                                source: open.source.clone(),
+                                natural: open.natural,
+                            },
+                            alt: open.alt.clone(),
+                            draft_session: None,
+                        },
+                        window,
+                        cx,
+                    );
                 }),
             )
             .flex()

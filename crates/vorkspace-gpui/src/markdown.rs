@@ -1,4 +1,5 @@
 //! GPUI port of AgentMarkdown.tsx and its .agent-markdown CSS.
+use vorkspace_ui::radius;
 mod document;
 mod search;
 use crate::syntax::HighlightedDocument;
@@ -84,6 +85,7 @@ impl Tone {
 }
 const PART_BYTES: usize = 2048;
 const PART_LINES: usize = 24;
+const SVG_PREVIEW_LINES: usize = 5;
 
 #[derive(Clone)]
 pub(crate) struct Fence {
@@ -94,10 +96,11 @@ pub(crate) struct Fence {
     pub start_line: usize,
     pub numbered: bool,
     pub lines: Vec<Range<usize>>,
+    pub truncated: bool,
     pub key: u64,
 }
 impl Fence {
-    fn new(info: &str, code: &str) -> Self {
+    fn new(info: &str, code: &str, preview: bool) -> Self {
         let mut words = info.split_whitespace();
         let first = words.next().unwrap_or("");
         let mut language = first.to_owned();
@@ -135,12 +138,14 @@ impl Fence {
         if matches!(language.as_str(), "" | "text" | "plaintext" | "txt") {
             language = "javascript".into();
         }
-        let mut hash = DefaultHasher::new();
-        language.hash(&mut hash);
-        code.hash(&mut hash);
         let mut at = 0;
         let mut lines = Vec::new();
+        let mut truncated = false;
         for line in code.split_inclusive('\n') {
+            if preview && lines.len() == SVG_PREVIEW_LINES {
+                truncated = true;
+                break;
+            }
             let end = at + line.trim_end_matches(['\n', '\r']).len();
             lines.push(at..end);
             at += line.len();
@@ -148,6 +153,15 @@ impl Fence {
         if lines.is_empty() {
             lines.push(0..0);
         }
+        let mut hash = DefaultHasher::new();
+        language.hash(&mut hash);
+        // Appending hidden SVG source must not re-highlight its stable preview.
+        let visible = if preview {
+            &code[..lines.last().unwrap().end]
+        } else {
+            code
+        };
+        visible.hash(&mut hash);
         Self {
             code: code.to_owned().into(),
             language,
@@ -156,8 +170,13 @@ impl Fence {
             start_line,
             numbered: !info.contains("noLineNumbers"),
             lines,
+            truncated,
             key: hash.finish(),
         }
+    }
+
+    pub(crate) fn highlight_source(&self) -> &str {
+        &self.code[..self.lines.last().unwrap().end]
     }
 }
 
@@ -260,7 +279,10 @@ fn flatten(
             );
         }
         Block::CodeBlock { language, code, .. } => {
-            let fence = Arc::new(Fence::new(language.as_deref().unwrap_or(""), code));
+            let info = language.as_deref().unwrap_or("");
+            let preview = crate::diagrams::DiagramKind::for_language(info)
+                == Some(crate::diagrams::DiagramKind::Svg);
+            let fence = Arc::new(Fence::new(info, code, preview));
             for at in (0..fence.lines.len()).step_by(PART_LINES) {
                 add(
                     Part::Code {
@@ -581,7 +603,7 @@ fn rich_inline(
                     .min_h(px(24.))
                     .max_w_full()
                     .px(px(6.))
-                    .rounded(px(6.))
+                    .rounded(px(radius::CONTROL))
                     .bg(style
                         .search
                         .map(search::search_background)
@@ -833,18 +855,22 @@ pub(crate) fn body_selected(
             .child(div().w_full().h(px(1.)).bg(content(0.1)))
             .into_any_element(),
         Part::Diagram { kind, source } => {
+            let kind = *kind;
             let code = source.clone();
             body.child(crate::diagrams::diagram(
-                *kind,
+                kind,
                 source.clone(),
                 None,
                 move || {
+                    if kind == crate::diagrams::DiagramKind::Svg {
+                        return svg_source_preview(&code);
+                    }
                     // Until drawn, or if it cannot be: the source as written.
                     div()
                         .w_full()
                         .px_3()
                         .py_2()
-                        .rounded(px(10.))
+                        .rounded(px(radius::CONTAINER))
                         .bg(content(0.06))
                         .font_family(vorkspace_ui::fonts::FIXED_FONT)
                         .text_size(px(12.))
@@ -879,8 +905,8 @@ pub(crate) fn body_selected(
         } => body
             .id(id.clone())
             .overflow_x_scroll()
-            .rounded_t(px(if *header { 10. } else { 0. }))
-            .rounded_b(px(if *last { 10. } else { 0. }))
+            .rounded_t(px(if *header { radius::CONTAINER } else { 0. }))
+            .rounded_b(px(if *last { radius::CONTAINER } else { 0. }))
             .border_1()
             .border_color(content(0.1))
             .bg(content(0.06))
@@ -973,10 +999,12 @@ pub(crate) fn code_lines_selected(
         .max()
         .unwrap_or(0);
     div()
+        .relative()
         .w(px(longest as f32 * 7.3 + 48.))
         .min_w_full()
         .flex()
         .flex_col()
+        .when(fence.truncated, |d| d.child(code_fade(true)))
         .children(range.map(|ix| {
             let line = &fence.code[fence.lines[ix].clone()];
             let styles = highlighted
@@ -1029,6 +1057,78 @@ pub(crate) fn code_lines_selected(
                 .when(!fence.numbered, |d| d.pl(px(10.)))
                 .child(child)
         }))
+        .when(fence.truncated, |d| d.child(code_fade(false)))
+}
+
+fn code_fade(begin: bool) -> impl IntoElement {
+    gpui::canvas(
+        |_, _, _| {},
+        move |bounds, _, window, _| {
+            window.paint_layer(bounds, |window| {
+                window.paint_quad(gpui::fill(bounds, gpui::black()).border_color(
+                    gpui_apple::metal_renderer::edge_fade_marker(
+                        begin,
+                        0.,
+                        32. * window.scale_factor(),
+                    ),
+                ));
+            });
+        },
+    )
+    .absolute()
+    .top_0()
+    .left_0()
+    .size_full()
+}
+
+// Keep the bounded source card while the completed SVG rasterizes (or if it
+// cannot render), so closing a fence never flashes the full source into view.
+fn svg_source_preview(source: &str) -> AnyElement {
+    let fence = Fence::new("svg", source, true);
+    let code = fence.code.clone();
+    div()
+        .w_full()
+        .min_w_0()
+        .rounded(px(radius::CONTAINER))
+        .overflow_hidden()
+        .border_1()
+        .border_color(content(0.1))
+        .bg(content(0.06))
+        .child(
+            div()
+                .min_h(px(36.))
+                .px(px(10.))
+                .flex()
+                .items_center()
+                .gap_2()
+                .text_size(px(12.))
+                .text_color(content(0.65))
+                .child(crate::activity::file_icon("code.svg", 16.))
+                .child(div().flex_1().child("svg"))
+                .child(
+                    icon_button("copy-svg-source", "Copy SVG source", "copy").on_click(
+                        move |_, _, cx| {
+                            cx.write_to_clipboard(gpui::ClipboardItem::new_string(
+                                code.to_string(),
+                            ));
+                            cx.stop_propagation();
+                        },
+                    ),
+                ),
+        )
+        .child(
+            div()
+                .id("svg-source-preview")
+                .debug_selector(|| "svg-source-preview".into())
+                .overflow_x_scroll()
+                .w_full()
+                .py(px(10.))
+                .pr_2()
+                .border_t_1()
+                .border_color(content(0.1))
+                .child(code_lines(&fence, 0..fence.lines.len(), None, "", false)),
+        )
+        .into_any_element()
 }
 
 fn table_offset(part: &Part, row: usize, col: usize) -> usize {
@@ -1227,6 +1327,67 @@ mod diagram_tests {
             .flat_map(|block| rows(&block.block))
             .map(|row| row.part)
             .collect()
+    }
+
+    #[test]
+    fn growing_svg_previews_keep_five_lines_and_all_source() {
+        let first = "<svg>\n<title>café</title>\n<desc>Drawing</desc>\n<defs>\n<linearGradient>\n";
+        let short = parts(&format!("```SVG title=drawing.svg\n{first}"));
+        let Part::Code {
+            fence: before,
+            lines,
+        } = &short[0]
+        else {
+            panic!()
+        };
+        assert_eq!(lines.clone(), 0..5);
+        assert!(!before.truncated);
+        let source = format!("{first}{}", "<stop offset=\"1\"/>\n".repeat(100));
+        let long = parts(&format!("```SVG title=drawing.svg\n{source}"));
+        assert_eq!(
+            long.len(),
+            1,
+            "hidden source must not become more virtual rows"
+        );
+        let Part::Code { fence, lines } = &long[0] else {
+            panic!()
+        };
+        assert_eq!(lines.clone(), 0..5);
+        assert!(fence.truncated);
+        assert_eq!(
+            fence.code.as_ref(),
+            source,
+            "copy keeps the complete source"
+        );
+        assert_eq!(fence.highlight_source(), first.trim_end_matches('\n'));
+        assert_eq!(fence.key, before.key, "hidden appends reuse highlighting");
+        let done = parts(&format!(
+            "```svg\n{source}</linearGradient></defs></svg>\n```"
+        ));
+        assert!(
+            matches!(&done[0], Part::Diagram { kind: DiagramKind::Svg, source } if source.contains("<stop offset=\"1\"/>"))
+        );
+
+        // The clamp belongs to SVG previews, not ordinary code or Mermaid source.
+        for language in ["rust", "mermaid"] {
+            let code = parts(&format!("```{language}\n{source}"));
+            assert!(code.len() > 1);
+            assert!(matches!(&code[0], Part::Code { fence, .. } if !fence.truncated));
+        }
+        let nested = parts(&format!(
+            "> ```svg\n{}",
+            source
+                .lines()
+                .map(|line| format!("> {line}\n"))
+                .collect::<String>()
+        ));
+        assert!(
+            matches!(&nested[0], Part::Code { fence, lines } if fence.truncated && lines.end == 5)
+        );
+        let crlf = parts("```svg\r\n<svg>\r\n<title>☀</title>\r\n<defs>\r\n<g>\r\n<path/>\r\n</g>");
+        assert!(
+            matches!(&crlf[0], Part::Code { fence, lines } if fence.truncated && lines.end == 5)
+        );
     }
 
     #[test]

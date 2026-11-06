@@ -1,5 +1,6 @@
 //! Rendering one presentation row, including code blocks and activity phases.
 use super::*;
+use vorkspace_ui::radius;
 
 impl TranscriptView {
     pub(super) fn highlight(&mut self, fence: &Arc<Fence>, cx: &mut Context<Self>) {
@@ -32,8 +33,8 @@ impl TranscriptView {
         self.highlight_active = true;
         let epoch = self.highlight_epoch;
         let key = fence.key;
-        let bytes = fence.code.len();
-        let code = fence.code.to_string();
+        let code = fence.highlight_source().to_owned();
+        let bytes = code.len();
         let language = fence.language.clone();
         let task = cx.background_executor().spawn(async move {
             crate::syntax::highlight(HighlightRequest {
@@ -92,11 +93,14 @@ impl TranscriptView {
         });
         div()
             .relative()
+            .when(fence.truncated, |d| {
+                d.debug_selector(|| "svg-streaming-preview".into())
+            })
             .w_full()
             .min_w_0()
             .overflow_hidden()
-            .rounded_t(px(if first { 10. } else { 0. }))
-            .rounded_b(px(if last { 10. } else { 0. }))
+            .rounded_t(px(if first { radius::CONTAINER } else { 0. }))
+            .rounded_b(px(if last { radius::CONTAINER } else { 0. }))
             .border_x_1()
             .when(first, |d| d.border_t_1())
             .when(last, |d| d.border_b_1())

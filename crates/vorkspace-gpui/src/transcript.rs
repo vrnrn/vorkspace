@@ -7,6 +7,8 @@ mod bot_tests;
 mod card_tests;
 mod cards;
 pub(crate) mod dates;
+#[cfg(test)]
+mod diagram_tests;
 mod drafts;
 mod follow;
 #[cfg(test)]
@@ -1178,7 +1180,7 @@ impl Render for TranscriptView {
                         .text_size(px(12.)).line_height(px(16.)).text_color(content(0.8))
                         .hover(|s| s.text_color(content(1.)).bg(content(0.04)))
                         .child(canvas(|_, _, _| {}, |bounds, _, window, _| {
-                            window.paint_quad(gpui::fill(bounds, content(0.04)).corner_radii(px(15.)).border_color(
+                            window.paint_quad(gpui::fill(bounds, content(0.04)).corner_radii(bounds.size.height / 2.).border_color(
                                 gpui_apple::metal_renderer::backdrop_blur_marker(12. * window.scale_factor())));
                         }).absolute().top_0().left_0().size_full())
                         .child(icon("arrow-down", 14.).text_color(content(0.5)))

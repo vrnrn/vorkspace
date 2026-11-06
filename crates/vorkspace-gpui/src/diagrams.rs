@@ -2,8 +2,8 @@
 //! by Pele in QuickJS; Pele's CSS variables are resolved to the app's palette,
 //! then the SVG is rasterized off the main thread through GPUI's image assets.
 use gpui::{
-    AnyElement, App, Asset, EntityId, Global, Hsla, ImageCacheError, ImageSource, IntoElement,
-    ParentElement, RenderImage, SharedString, Styled, Window, div, img, prelude::*,
+    AnyElement, App, Asset, EntityId, Global, Hsla, ImageCacheError, IntoElement, ParentElement,
+    RenderImage, SharedString, Styled, Window, div, img, prelude::*,
 };
 use rquickjs::{Context, Function, Object, Runtime};
 use std::{
@@ -20,6 +20,17 @@ use vorkspace_ui::theme::*;
 pub(crate) enum DiagramKind {
     Svg,
     Mermaid,
+}
+
+/// The workspace owns presentation of an expanded diagram. Inline rendering
+/// only publishes this intent, so it does not depend on the image viewer.
+#[derive(Clone, Debug, PartialEq, gpui::Action)]
+#[action(namespace = diagrams, no_json)]
+pub(crate) struct Open {
+    pub kind: DiagramKind,
+    pub source: SharedString,
+    pub natural: gpui::Size<gpui::Pixels>,
+    pub alt: SharedString,
 }
 
 impl DiagramKind {
@@ -65,18 +76,7 @@ fn css(color: Hsla) -> String {
 impl Palette {
     /// The live appearance, read on the main thread.
     pub(crate) fn current() -> Self {
-        let light = is_light();
-        Self {
-            // Label masks need an opaque ground close to the pane.
-            bg: if light { "#ffffff" } else { "#1c1c1c" }.into(),
-            fg: css(content(0.9)),
-            muted: css(content(0.55)),
-            line: css(content(0.6)),
-            surface: if light { "#f3f3f3" } else { "#262626" }.into(),
-            surface_alt: if light { "#e8e8e8" } else { "#303030" }.into(),
-            border: css(content(0.3)),
-            accent: css(accent_color()),
-        }
+        PaletteSnapshot::current().colors()
     }
     fn get(&self, name: &str) -> Option<&str> {
         Some(match name {
@@ -90,6 +90,39 @@ impl Palette {
             "accent" | "series-1" => &self.accent,
             _ => return None,
         })
+    }
+}
+
+/// The theme inputs to an SVG, before formatting its CSS colors.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(crate) struct PaletteSnapshot {
+    light: bool,
+    ink: Hsla,
+    accent: Hsla,
+}
+
+impl PaletteSnapshot {
+    pub(crate) fn current() -> Self {
+        Self {
+            light: is_light(),
+            ink: content(1.),
+            accent: accent_color(),
+        }
+    }
+
+    pub(crate) fn colors(self) -> Palette {
+        let light = self.light;
+        Palette {
+            // Label masks need an opaque ground close to the pane.
+            bg: if light { "#ffffff" } else { "#1c1c1c" }.into(),
+            fg: css(self.ink.opacity(0.9)),
+            muted: css(self.ink.opacity(0.55)),
+            line: css(self.ink.opacity(0.6)),
+            surface: if light { "#f3f3f3" } else { "#262626" }.into(),
+            surface_alt: if light { "#e8e8e8" } else { "#303030" }.into(),
+            border: css(self.ink.opacity(0.3)),
+            accent: css(self.accent),
+        }
     }
 }
 
@@ -609,27 +642,79 @@ pub(crate) fn diagram(
         }
         .into()
     });
-    div()
-        .w_full()
-        .min_w_0()
-        .overflow_hidden()
-        .child(
-            img(ImageSource::Custom(Arc::new(
-                move |window: &mut Window, cx: &mut App| {
-                    let image = window.use_asset::<DiagramAsset>(&key, cx);
-                    if let Some(Ok(image)) = &image {
-                        retain(&key, image, window.current_view(), cx);
-                    }
-                    image
-                },
-            )))
-            .max_w_full()
-            .with_fallback(fallback)
-            .id(label.clone())
-            .role(gpui::Role::Image)
-            .aria_label(label),
-        )
-        .into_any_element()
+    Diagram {
+        key,
+        label,
+        fallback: Box::new(fallback),
+    }
+    .into_any_element()
+}
+
+#[derive(IntoElement)]
+struct Diagram {
+    key: DiagramKey,
+    label: SharedString,
+    fallback: Box<dyn Fn() -> AnyElement>,
+}
+
+impl gpui::RenderOnce for Diagram {
+    fn render(self, window: &mut Window, cx: &mut App) -> impl IntoElement {
+        let Some(Ok(image)) = window.use_asset::<DiagramAsset>(&self.key, cx) else {
+            return (self.fallback)();
+        };
+        retain(&self.key, &image, window.current_view(), cx);
+        let open = Open {
+            kind: self.key.0,
+            source: self.key.1,
+            natural: image.size(0).map(|side| gpui::px(side.0 as f32 / 2.)),
+            alt: self.label.clone(),
+        };
+        let click = open.clone();
+        // Pointer actions belong to this diagram's dispatch path, even when
+        // keyboard focus is elsewhere (or the window has no focused control).
+        let target = cx.focus_handle();
+        let click_target = target.clone();
+        div()
+            .id("diagram-frame")
+            .track_focus(&target)
+            .relative()
+            .w_full()
+            .min_w_0()
+            .overflow_hidden()
+            .child(
+                img(image)
+                    .id(self.label.clone())
+                    .debug_selector(|| "inline-diagram".into())
+                    .max_w_full()
+                    .role(gpui::Role::Image)
+                    .aria_label(self.label)
+                    .cursor_pointer()
+                    .on_mouse_down(gpui::MouseButton::Left, |_, window, cx| {
+                        window.prevent_default();
+                        cx.stop_propagation();
+                    })
+                    .on_click(move |event, window, cx| {
+                        if event.click_count() == 1 && !event.modifiers().shift {
+                            click_target.dispatch_action(&click, window, cx);
+                            cx.stop_propagation();
+                        }
+                    }),
+            )
+            .child(
+                icon_button("expand-diagram", "Expand diagram", "external-link")
+                    .debug_selector(|| "expand-diagram".into())
+                    .absolute()
+                    .top(gpui::px(8.))
+                    .right(gpui::px(8.))
+                    .bg(pane_fill())
+                    .on_mouse_down(gpui::MouseButton::Left, |_, _, cx| cx.stop_propagation())
+                    .on_click(move |_, window, cx| {
+                        target.dispatch_action(&open, window, cx);
+                        cx.stop_propagation();
+                    }),
+            )
+            .into_any_element()
+    }
 }
 
 #[cfg(test)]

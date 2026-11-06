@@ -3,6 +3,57 @@ use base64::Engine;
 use gpui::{TestAppContext, VisualTestContext, point};
 
 #[gpui::test]
+fn completed_svg_and_mermaid_open_the_shell_lightbox(cx: &mut TestAppContext) {
+    cx.update(crate::image_lightbox::bind);
+    let (window, _, active) = super::tests::window(cx);
+    let visual = &mut VisualTestContext::from_window(window.into(), cx);
+    for (language, source) in [
+        (
+            "svg",
+            r##"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 400 200"><rect width="400" height="200" fill="#4da3f5"/></svg>"##,
+        ),
+        ("mermaid", "flowchart LR\n A[Start] --> B[Finish]"),
+    ] {
+        window
+            .update(visual, |shell, _, cx| {
+                shell.sessions[&active].update(cx, |view, cx| {
+                    view.summary.has_messages = true;
+                    cx.notify();
+                });
+                let transcript = shell.sessions[&active].read(cx).transcript.clone();
+                transcript.update(cx, |view, cx| {
+                    view.patch(
+                        0,
+                        vec![vorkspace_core::transcript::Row {
+                            role: "assistant".into(),
+                            text: format!("```{language}\n{source}\n```"),
+                            first: true,
+                            sent_at: None,
+                        }],
+                        cx,
+                    )
+                });
+            })
+            .unwrap();
+        visual.run_until_parked();
+        visual.refresh().unwrap();
+        let expand = visual.debug_bounds("expand-diagram").unwrap();
+        visual.simulate_click(expand.center(), Default::default());
+        visual.run_until_parked();
+        visual.refresh().unwrap();
+        assert!(visual.debug_bounds("image-lightbox").is_some());
+        assert!(visual.debug_bounds("diagram-zoom-in").is_some());
+        visual.simulate_keystrokes("escape");
+        assert!(visual.debug_bounds("image-lightbox").is_none());
+        let image = visual.debug_bounds("inline-diagram").unwrap();
+        visual.simulate_click(image.center(), Default::default());
+        visual.run_until_parked();
+        assert!(visual.debug_bounds("image-lightbox").is_some());
+        visual.simulate_keystrokes("escape");
+    }
+}
+
+#[gpui::test]
 fn image_lightbox_opens_from_composer_and_sent_images_and_restores_focus(cx: &mut TestAppContext) {
     cx.update(|cx| {
         crate::input::bind(cx);
