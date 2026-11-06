@@ -594,26 +594,27 @@ impl TodoBoardView {
         self.details_item(self.details.as_ref()?)
     }
 
-    fn saved_details_key(&self, item: &TodoItem) -> Option<String> {
-        let key = self.details_key(&item.id)?;
-        if self.saved_details.contains_key(&key) {
-            return Some(key);
-        }
-        item.issue.as_ref()?;
+    fn saved_details_key(&self, item: &TodoItem, after: Option<&str>) -> Option<&String> {
         let prefix = self.details_key("")?;
-        // Leave other drafts under their original keys if two card IDs were
-        // editable before the publication receipt was visible to this view.
+        // Opening prefers the displayed card's draft. Switching advances by
+        // original ID and wraps, so every saved alias can be reached.
+        let wraps = |id: &str| after.map_or(id != item.id, |after| id <= after);
         self.saved_details
             .iter()
-            .filter_map(|(key, editor)| {
-                (key.starts_with(&prefix)
-                    && self
-                        .details_issue(editor)
-                        .is_some_and(|issue| issue.matches(item)))
-                .then_some(key)
+            .filter(|(key, editor)| {
+                key.starts_with(&prefix)
+                    && after != Some(editor.id.as_str())
+                    && (editor.id == item.id
+                        || self
+                            .details_issue(editor)
+                            .is_some_and(|issue| issue.matches(item)))
             })
-            .min()
-            .cloned()
+            .min_by(|(_, left), (_, right)| {
+                wraps(&left.id)
+                    .cmp(&wraps(&right.id))
+                    .then_with(|| left.id.cmp(&right.id))
+            })
+            .map(|(key, _)| key)
     }
 
     fn stash_details(&mut self) {
@@ -624,6 +625,40 @@ impl TodoBoardView {
         }
         self.show_dependency_choices = false;
         self.detail_editing = false;
+        self.confirm_retry = false;
+        self.confirm_discard = false;
+        self.confirm_cancel = false;
+    }
+
+    fn restore_details(&mut self, mut editor: DetailsEditor, cx: &mut Context<Self>) {
+        let text = editor.description.read(cx).content.clone();
+        editor.preview = cx.new(|cx| crate::markdown::Document::prose(&text, "No description", cx));
+        self.details = Some(editor);
+        cx.notify();
+    }
+
+    fn switch_details_draft(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.pending_changes > 0 {
+            return;
+        }
+        let Some(current) = self.details.as_ref() else {
+            return;
+        };
+        let Some(key) = self
+            .details_item(current)
+            .and_then(|item| self.saved_details_key(item, Some(&current.id)))
+            .cloned()
+        else {
+            return;
+        };
+        let Some(editor) = self.saved_details.remove(&key) else {
+            return;
+        };
+        self.stash_details();
+        self.detail_editing = true;
+        self.change_error = None;
+        self.restore_details(editor, cx);
+        window.focus(&self.detail_focus, cx);
     }
 
     fn open_details(&mut self, item: &TodoItem, cx: &mut Context<Self>) {
@@ -636,14 +671,10 @@ impl TodoBoardView {
             return;
         }
         self.stash_details();
-        if let Some(key) = self.saved_details_key(item)
-            && let Some(mut editor) = self.saved_details.remove(&key)
+        if let Some(key) = self.saved_details_key(item, None).cloned()
+            && let Some(editor) = self.saved_details.remove(&key)
         {
-            let text = editor.description.read(cx).content.clone();
-            editor.preview =
-                cx.new(|cx| crate::markdown::Document::prose(&text, "No description", cx));
-            self.details = Some(editor);
-            cx.notify();
+            self.restore_details(editor, cx);
             return;
         }
         let title = cx.new(|cx| {
@@ -754,9 +785,6 @@ impl TodoBoardView {
             url,
             preview,
         });
-        self.confirm_retry = false;
-        self.confirm_discard = false;
-        self.confirm_cancel = false;
         cx.notify();
     }
 
@@ -972,7 +1000,6 @@ impl TodoBoardView {
             cx.notify();
             return;
         }
-        let remote = item.issue.is_some();
         if !details.matches_revision(item) {
             self.change_error = Some(STALE_DETAILS.into());
             cx.notify();
@@ -984,6 +1011,15 @@ impl TodoBoardView {
             cx.notify();
             return;
         }
+        let input = Self::details_update_input(details, item, cx);
+        self.queue_detail_change(details.id.clone(), "todos.update", input, cx);
+    }
+
+    fn details_update_input(
+        details: &DetailsEditor,
+        item: &TodoItem,
+        cx: &App,
+    ) -> serde_json::Value {
         let title = details.title.read(cx).content.to_string();
         let description = details.description.read(cx).content.to_string();
         let attachments = Self::reference_lines(&details.attachments, cx);
@@ -994,10 +1030,25 @@ impl TodoBoardView {
             input["dependencies"] =
                 serde_json::json!(Self::dependency_values(&details.dependencies, cx));
         }
-        if !remote || !attachments.is_empty() {
+        if item.issue.is_none() {
             input["attachments"] = serde_json::json!(attachments);
+        } else if !attachments.is_empty() {
+            // The issue editor adds attachments. The GitHub update API takes
+            // an explicit replacement list when a description is supplied.
+            let mut retained = item
+                .attachments
+                .iter()
+                .filter(|url| url.starts_with("https://"))
+                .cloned()
+                .collect::<Vec<_>>();
+            for attachment in attachments {
+                if !retained.contains(&attachment) {
+                    retained.push(attachment);
+                }
+            }
+            input["attachments"] = serde_json::json!(retained);
         }
-        self.queue_detail_change(details.id.clone(), "todos.update", input, cx);
+        input
     }
 
     fn publish_details(&mut self, cx: &mut Context<Self>) {
@@ -1484,7 +1535,7 @@ impl TodoBoardView {
                             .on_click(cx.listener(|this, _, _, cx| this.save_details(cx))),
                         )
                         .when(!uncertain && !pending_edit && !editor.matches_revision(item), |d| {
-                            let label = if self.saved_details_key(item).is_some() {
+                            let label = if self.saved_details_key(item, None).is_some() {
                                 "Discard draft and open saved draft"
                             } else {
                                 "Discard draft and reload"

@@ -974,7 +974,7 @@ fn refreshed_issue_does_not_replace_the_editors_original_revision(cx: &mut TestA
 
 #[gpui::test]
 fn external_publication_preserves_open_and_stashed_task_drafts(cx: &mut TestAppContext) {
-    for stashed in [false, true] {
+    for (stashed, linked_draft) in [(false, true), (true, false), (true, true)] {
         let (window, store) = board_window(cx);
         let directory = tempfile::tempdir().unwrap();
         let board = TodoBoard::Project(directory.path().to_string_lossy().into_owned());
@@ -1027,7 +1027,7 @@ fn external_publication_preserves_open_and_stashed_task_drafts(cx: &mut TestAppC
         };
         window
             .update(visual, |view, window, cx| {
-                if !stashed {
+                if linked_draft {
                     // An earlier list can expose the issue before it sees
                     // the publication receipt. Retain that distinct draft too.
                     view.install_snapshot(service::BoardSnapshot::project(
@@ -1091,14 +1091,55 @@ fn external_publication_preserves_open_and_stashed_task_drafts(cx: &mut TestAppC
                 view.install_snapshot(snapshot);
                 if stashed {
                     view.present_details(&issue, window, cx);
+                }
+                if !(stashed && linked_draft) {
                     view.detail_editing = true;
                 }
                 assert_eq!(view.open_detail_item().unwrap().id, issue.id);
+                cx.notify();
+            })
+            .unwrap();
+        if stashed && linked_draft {
+            let assert_linked_draft = |view: &TodoBoardView, cx: &App| {
+                let editor = view.details.as_ref().unwrap();
+                assert_eq!(editor.id, issue.id);
+                assert!(editor.matches_revision(view.open_detail_item().unwrap()));
+                assert_eq!(
+                    editor.title.read(cx).content.as_ref(),
+                    "Earlier GitHub draft"
+                );
+            };
+            window
+                .update(visual, |view, _, cx| assert_linked_draft(view, cx))
+                .unwrap();
+            assert!(visual.debug_bounds("todo-details-edit").is_some());
+            assert!(visual.debug_bounds("todo-reload-details").is_none());
+            let switch = |visual: &mut gpui::VisualTestContext| {
+                let bounds = visual.debug_bounds("todo-switch-draft").unwrap();
+                visual.simulate_click(bounds.center(), Default::default());
+            };
+            switch(visual);
+            window
+                .update(visual, |view, _, cx| {
+                    assert!(view.detail_editing);
+                    assert_draft(view, cx);
+                })
+                .unwrap();
+            switch(visual);
+            window
+                .update(visual, |view, _, cx| assert_linked_draft(view, cx))
+                .unwrap();
+            assert!(visual.debug_bounds("todo-reload-details").is_none());
+            switch(visual);
+        }
+
+        window
+            .update(visual, |view, _, cx| {
                 assert_draft(view, cx);
                 view.save_details(cx);
                 assert_eq!(view.pending_changes, 0);
                 assert_eq!(view.change_error.as_deref(), Some(STALE_DETAILS));
-                if !stashed {
+                if linked_draft {
                     let key = view.details_key(&issue.id).unwrap();
                     assert_eq!(
                         view.saved_details[&key].title.read(cx).content.as_ref(),
