@@ -3456,13 +3456,9 @@ fn long_habit_draft_keeps_fields_and_schedule_inside_the_scrolling_page(cx: &mut
     let visual = &mut gpui::VisualTestContext::from_window(s.window.into(), cx);
     visual.run_until_parked();
     vorkspace_ui::clock::settle_animations(s.window, visual);
+    let draft_name = "A long but valid habit name that fills the narrow panel";
     s.manager.update(visual, |m, cx| {
-        m.fields["habit-name"].update(cx, |f, cx| {
-            f.set_text(
-                "A long but valid habit name that fills the narrow panel".into(),
-                cx,
-            )
-        });
+        m.fields["habit-name"].update(cx, |f, cx| f.set_text(draft_name.into(), cx));
         m.fields["habit-instructions"].update(cx, |f, cx| {
             f.set_text(
                 "Report useful updates on the current project.\n".repeat(65),
@@ -3474,6 +3470,15 @@ fn long_habit_draft_keeps_fields_and_schedule_inside_the_scrolling_page(cx: &mut
     });
     visual.run_until_parked();
     vorkspace_ui::clock::settle_animations(s.window, visual);
+    let project = visual.debug_bounds("classic-project-0").unwrap();
+    visual.simulate_click(project.center(), Default::default());
+    visual.run_until_parked();
+    assert_eq!(
+        s.manager
+            .read_with(visual, |m, cx| (m.route.clone(), m.value("habit-name", cx))),
+        (Some(Route::NewHabit), draft_name.into()),
+        "reselecting the current project preserves the open Habit draft"
+    );
     let body = visual.debug_bounds("bot-habit-editor").unwrap();
     let name = visual.debug_bounds("bot-habit-name-field").unwrap();
     let schedule = visual.debug_bounds("bot-habit-schedule").unwrap();
