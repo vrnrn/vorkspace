@@ -297,7 +297,7 @@ fn channel_settings_are_anchored_and_keep_the_conversation_and_draft_visible(
         crate::popover::bind(cx);
         crate::composer::composer_completion::bind(cx);
     });
-    let s = setup(cx);
+    let s = setup_with_channels(cx, true);
     let id = s.manager.update(cx, |m, cx| {
         let mut next = m.channels.state.clone();
         let id = next
@@ -314,12 +314,14 @@ fn channel_settings_are_anchored_and_keep_the_conversation_and_draft_visible(
         )
         .unwrap();
         m.commit_channels(next, cx).unwrap();
-        m.channels.open = true;
         m.channels.selected = Some(id.clone());
         cx.notify();
         id
     });
     let visual = &mut gpui::VisualTestContext::from_window(s.window.into(), cx);
+    s.window
+        .update(visual, |shell, w, cx| shell.open_classic_channels(w, cx))
+        .unwrap();
     for (width, height) in [(1400., 900.), (900., 650.)] {
         visual.simulate_resize(gpui::size(px(width), px(height)));
         visual.run_until_parked();
@@ -1141,7 +1143,7 @@ fn channel_receipts_survive_retry_and_unreadable_history_is_never_replaced(
 
 #[gpui::test]
 fn channels_keep_drafts_when_hidden_and_render_in_the_native_shell(cx: &mut TestAppContext) {
-    let s = setup(cx);
+    let s = setup_with_channels(cx, true);
     let visual = &mut gpui::VisualTestContext::from_window(s.window.into(), cx);
     s.manager.update(visual, |m, cx| {
         let result = m
@@ -1160,9 +1162,11 @@ fn channels_keep_drafts_when_hidden_and_render_in_the_native_shell(cx: &mut Test
             .save_setting(&key, "Keep this unsent draft")
             .unwrap();
         m.channels.selected = Some(id);
-        m.channels.open = true;
         cx.notify();
     });
+    s.window
+        .update(visual, |shell, w, cx| shell.open_classic_channels(w, cx))
+        .unwrap();
     visual.run_until_parked();
     visual.refresh().unwrap();
     s.manager.read_with(visual, |m, cx| {
@@ -1172,15 +1176,16 @@ fn channels_keep_drafts_when_hidden_and_render_in_the_native_shell(cx: &mut Test
             "Keep this unsent draft"
         );
     });
-    s.manager.update(visual, |m, cx| {
-        m.channels.open = false;
-        cx.notify();
-    });
+    s.window
+        .update(visual, |shell, w, cx| {
+            shell.select_project(s.project.clone(), w, cx);
+        })
+        .unwrap();
     visual.run_until_parked();
-    s.manager.update(visual, |m, cx| {
-        m.channels.open = true;
-        cx.notify();
-    });
+    assert!(visual.debug_bounds("channel-surface").is_none());
+    s.window
+        .update(visual, |shell, w, cx| shell.open_classic_channels(w, cx))
+        .unwrap();
     visual.run_until_parked();
     visual.refresh().unwrap();
     s.manager.read_with(visual, |m, cx| {
@@ -1195,7 +1200,7 @@ fn channels_keep_drafts_when_hidden_and_render_in_the_native_shell(cx: &mut Test
 #[gpui::test]
 fn channel_composer_fits_both_sizes_and_failed_sends_preserve_the_draft(cx: &mut TestAppContext) {
     cx.update(input::bind);
-    let s = setup(cx);
+    let s = setup_with_channels(cx, true);
     let id = s.manager.update(cx, |m, cx| {
         let mut next = m.channels.state.clone();
         let id = next
@@ -1212,7 +1217,6 @@ fn channel_composer_fits_both_sizes_and_failed_sends_preserve_the_draft(cx: &mut
         )
         .unwrap();
         m.commit_channels(next, cx).unwrap();
-        m.channels.open = true;
         m.channels.selected = Some(id.clone());
         // Keep this UI test local: admitted turns cannot start a provider.
         m.channels.loading.insert((id.clone(), s.id.clone()));
@@ -1220,6 +1224,9 @@ fn channel_composer_fits_both_sizes_and_failed_sends_preserve_the_draft(cx: &mut
         id
     });
     let visual = &mut gpui::VisualTestContext::from_window(s.window.into(), cx);
+    s.window
+        .update(visual, |shell, w, cx| shell.open_classic_channels(w, cx))
+        .unwrap();
     for (width, height) in [(1400., 900.), (900., 650.)] {
         visual.simulate_resize(gpui::size(px(width), px(height)));
         visual.run_until_parked();
@@ -1589,15 +1596,20 @@ fn a_closed_creation_window_rehomes_the_same_unsaved_bot(cx: &mut TestAppContext
 }
 
 fn setup(cx: &mut TestAppContext) -> Setup {
+    setup_with_channels(cx, false)
+}
+
+fn setup_with_channels(cx: &mut TestAppContext, channels: bool) -> Setup {
     let dir = std::env::temp_dir().join(format!("native-bots-{}", bot::new_id()));
     std::fs::create_dir_all(&dir).unwrap();
     let project = dir.to_string_lossy().to_string();
     let store = Arc::new(Mutex::new(Store::open(&dir.join("native.sqlite")).unwrap()));
     let db = store.clone();
     let cwd = project.clone();
+    let saved = channels.then(|| json!({"preferences": {"channels": true}}).to_string());
     let window = cx.update(|cx| {
         cx.open_window(Default::default(), |_, cx| {
-            cx.new(|cx| Shell::new(db, Vec::new(), cwd, None, cx))
+            cx.new(|cx| Shell::new(db, Vec::new(), cwd, saved, cx))
         })
         .unwrap()
     });
@@ -1630,6 +1642,21 @@ fn setup(cx: &mut TestAppContext) -> Setup {
         root,
         store,
     }
+}
+
+fn close_bot_pane(s: &Setup, cx: &mut TestAppContext) {
+    s.window
+        .update(cx, |shell, w, cx| {
+            let pane = shell.workspace.active.unwrap();
+            assert_eq!(
+                shell.workspace.app_panes[&pane].content,
+                crate::workspace::AppPane::Bot(s.id.clone())
+            );
+            shell.close(pane, w, cx);
+            assert!(shell.workspace.tab_of(pane).is_none());
+        })
+        .unwrap();
+    cx.run_until_parked();
 }
 
 #[gpui::test]
@@ -1786,6 +1813,7 @@ fn image_draft_owner_lookup_covers_bot_and_channel_views(cx: &mut TestAppContext
 #[gpui::test]
 fn saved_draft_outbox_identity_survives_restart_and_is_not_enqueued_twice(cx: &mut TestAppContext) {
     let s = setup(cx);
+    close_bot_pane(&s, cx);
     let draft = vorkspace_core::follow_up::Message {
         id: format!("draft-{}", bot::new_id()),
         text: "Send this once".into(),
@@ -1817,6 +1845,7 @@ fn saved_draft_outbox_identity_survives_restart_and_is_not_enqueued_twice(cx: &m
         }
     });
     cx.run_until_parked();
+    assert!(!s.manager.read_with(cx, |m, _| m.chats.contains_key(&s.id)));
     let db = Store::open(Path::new(&s.project).join("native.sqlite").as_path()).unwrap();
     let roster = Roster::load(&db).unwrap();
     let queued: Vec<_> = roster
@@ -4097,6 +4126,7 @@ fn a_queued_message_waits_for_the_running_turn_instead_of_steering(cx: &mut Test
 #[gpui::test]
 fn claimed_outbox_message_is_presented_as_uncertain_before_retry(cx: &mut TestAppContext) {
     let s = setup(cx);
+    close_bot_pane(&s, cx);
     let id = format!("uncertain-{}", bot::new_id());
     s.manager.update(cx, |manager, cx| {
         manager.chats.remove(&s.id);
@@ -4113,6 +4143,7 @@ fn claimed_outbox_message_is_presented_as_uncertain_before_retry(cx: &mut TestAp
         );
     });
     cx.run_until_parked();
+    assert!(!s.manager.read_with(cx, |m, _| m.chats.contains_key(&s.id)));
     let other = Store::open(&Path::new(&s.project).join("native.sqlite")).unwrap();
     let queued = Roster::load(&other)
         .unwrap()

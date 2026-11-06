@@ -733,10 +733,11 @@ impl Bots {
             .on_click(cx.listener(|this, _, window, cx| {
                 if this.channels.editing {
                     this.dismiss_channel_settings(window, cx);
+                    this.changed(cx);
                 } else {
-                    this.close_classic_channels(cx);
+                    let owner = this.owner.clone();
+                    window.defer(cx, move |window, cx| owner.close_channels(window, cx));
                 }
-                this.changed(cx);
             }));
         let mut form=div().w_full().max_w(px(520.)).flex().flex_col().gap_4()
             .child(div().text_size(px(if editing.is_some(){18.}else{22.})).font_weight(FontWeight::SEMIBOLD).child(if editing.is_some(){"Channel settings"}else{"New channel"}))

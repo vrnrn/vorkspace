@@ -1158,15 +1158,17 @@ impl Shell {
         cx.spawn(async move |this, cx| {
             let _ = this.update_in(cx, |this, window, cx| {
                 if this.navigation_revision == 0 {
-                    // Sidebar worktree selection resets at launch. A selected
-                    // app pane still owns the scope saved with its layout.
-                    let scoped_app = this.workspace.active.filter(|id| {
+                    // Sidebar worktree selection resets at launch. An active
+                    // app pane restores from its layout, while standalone
+                    // Channels use the saved active pane, not project recall.
+                    let saved_app = this.workspace.active.filter(|id| {
                         this.workspace.app_panes.get(id).is_some_and(|pane| {
-                            pane.content.project_scoped()
+                            (pane.content.project_scoped()
+                                || pane.content == crate::workspace::AppPane::Channels)
                                 && this.app_pane_available(&pane.content, cx)
                         })
                     });
-                    if let Some(id) = scoped_app {
+                    if let Some(id) = saved_app {
                         this.open(id, window, cx);
                     } else if !this.restore_scope_tab(window, cx) {
                         this.ensure_project_session(window, cx);
