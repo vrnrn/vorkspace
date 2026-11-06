@@ -26,7 +26,7 @@ Bots and Minions already have the commands they can use in their instructions. T
 
 With **Settings › Bots › Minions** enabled, a parent Bot can hire lasting team members with `minions.hire`, giving each a name, role and optional specialties. Hiring does not start a job or require picking a project. The parent checks `minions.list`, then reuses a member with `bots.send` for each new job. Its replies normally return automatically. The older `minions.spawn` shortcut hires a member and sends a first job together. These team actions belong to Bots; typing `/operator` in an ordinary session does not grant them.
 
-Members keep their own conversations but share their parent's instructions, saved memory, to-do board and current project assignments. They can talk only with their parent and siblings, directly or in a channel containing just that team. Unrelated Bots cannot message them or read their conversations. Ordinary Bots can still collaborate with each other as usual.
+Members keep their own conversations but share their parent's instructions, saved memory and current project assignments. Their to-dos belong to those projects. They can talk only with their parent and siblings, directly or in a channel containing just that team. Unrelated Bots cannot message them or read their conversations. Ordinary Bots can still collaborate with each other as usual.
 
 You can inspect a member's work and past conversations, but its conversation and team channels are read-only for you. Ask the parent Bot to send instructions. Minions cannot hire or fire other members, open more work sessions, or change their parent's personality or habits.
 

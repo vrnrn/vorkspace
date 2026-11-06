@@ -853,10 +853,10 @@ impl Service {
         Ok(updated)
     }
 }
-pub(super) fn run_git(root: &Path, args: &[&str]) -> Result<String, String> {
+pub(crate) fn run_git(root: &Path, args: &[&str]) -> Result<String, String> {
     run_command("git", root, args, true)
 }
-pub(super) fn run_gh(root: &Path, args: &[&str], allow_empty: bool) -> Result<String, String> {
+pub(crate) fn run_gh(root: &Path, args: &[&str], allow_empty: bool) -> Result<String, String> {
     run_command("gh", root, args, allow_empty)
 }
 fn run_command(

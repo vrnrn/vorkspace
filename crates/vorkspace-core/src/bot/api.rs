@@ -23,9 +23,15 @@ pub fn validate(action: &str, input: &Value) -> Result<(), String> {
         "notes.read" => "id",
         "notes.write" => "id title body tags",
         "todos.list" => "project",
-        "todos.add" => "title status project",
-        "todos.update" => "id title status before project",
+        "todos.add" => "title description attachments dependencies status github project",
+        "todos.update" => "id title description attachments dependencies status before project",
         "todos.remove" => "id project",
+        "todos.publish" | "todos.reconcile" => "id project",
+        "todos.retry" => "id project confirmNoIssue",
+        "todos.reconcileEdit" => "id project",
+        "todos.retryEdit" => "id project confirmNoEffect",
+        "todos.discardEdit" => "id project confirmChecked",
+        "todos.cancelPublish" => "id project confirmNoIssue",
         "minions.hire" => "name role specialties project",
         "minions.fire" => "minion",
         "minions.retry" | "minions.discard" => "minion messageId",
@@ -59,6 +65,10 @@ pub fn validate(action: &str, input: &Value) -> Result<(), String> {
             "existing",
             "enabled",
             "expectReply",
+            "github",
+            "confirmNoIssue",
+            "confirmNoEffect",
+            "confirmChecked",
         ]
         .contains(&key.as_str())
             && !value.is_boolean()
@@ -79,6 +89,10 @@ pub fn validate(action: &str, input: &Value) -> Result<(), String> {
                 "existing",
                 "enabled",
                 "expectReply",
+                "github",
+                "confirmNoIssue",
+                "confirmNoEffect",
+                "confirmChecked",
                 "before",
                 "limit",
                 "offset",
@@ -94,6 +108,8 @@ pub fn validate(action: &str, input: &Value) -> Result<(), String> {
                 "options",
                 "members",
                 "to",
+                "attachments",
+                "dependencies",
             ]
             .contains(&key.as_str()))
             && !value.is_string()
@@ -135,6 +151,35 @@ pub fn validate(action: &str, input: &Value) -> Result<(), String> {
         })
     }) {
         return Err("tags must be an array of up to 32 short strings".into());
+    }
+    for (key, limit) in [
+        ("attachments", crate::todos::MAX_ATTACHMENTS),
+        ("dependencies", crate::todos::MAX_DEPENDENCIES),
+    ] {
+        if input.get(key).is_some_and(|value| {
+            value.as_array().is_none_or(|values| {
+                values.len() > limit
+                    || values.iter().any(|value| {
+                        value
+                            .as_str()
+                            .is_none_or(|text| text.trim().is_empty() || text.len() > 4096)
+                    })
+            })
+        }) {
+            return Err(format!(
+                "{key} must be an array of up to {limit} nonempty references"
+            ));
+        }
+    }
+    if action.starts_with("todos.")
+        && input.get("status").is_some_and(|value| {
+            value
+                .as_str()
+                .and_then(crate::todos::TodoStatus::from_id)
+                .is_none()
+        })
+    {
+        return Err("status must be todo, inProgress, inReview or done".into());
     }
     if input.get("specialties").is_some_and(|v| {
         v.as_array().is_none_or(|a| {

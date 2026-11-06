@@ -37,9 +37,16 @@ notes.list {limit?,offset?}
 notes.read {id}
 notes.write {id?,title,body,tags?}
 todos.list {project?}
-todos.add {title,status?,project?}
-todos.update {id,title?,status?,before?,project?}
+todos.add {title,description?,attachments?,dependencies?,status?,github?,project?}
+todos.update {id,title?,description?,attachments?,dependencies?,status?,before?,project?}
 todos.remove {id,project?}
+todos.publish {id,project?}
+todos.reconcile {id,project?}
+todos.retry {id,confirmNoIssue,project?}
+todos.reconcileEdit {id,project?}
+todos.retryEdit {id,confirmNoEffect,project?}
+todos.discardEdit {id,confirmChecked,project?}
+todos.cancelPublish {id,confirmNoIssue,project?}
 minions.hire {name,role,specialties?,project?}
 minions.fire {minion}
 minions.list {}
@@ -75,7 +82,7 @@ fn help() -> String {
         "vorkspace app access\nUsage: vorkspace-gpui app ACTION --json '{{...}}' [--request-id ID]\nPass --input FILE or --input - to read a JSON object instead.\nActions:\n{ACTIONS}\n\
          Peer replies arrive in the sender's conversation after the recipient finishes. End your turn to allow queued replies to run.\n\
          worktrees.list reports dirty, merged, unpublishedCommits, sessions and removable for each worktree. worktrees.remove refuses uncommitted or unique work, ignored files tools can't regenerate, open terminals and unarchived sessions. A merged branch goes with it.\n\
-         To-do statuses are todo, inProgress and done. Bots use their own board unless project names an assigned project's board.\n\
+         To-do statuses are todo, inProgress, inReview and done. Bots use an assigned project board; include project when several are assigned. Local to-dos always work. A GitHub project also shows its issues; add with github:true or publish a local item explicitly. An uncertain GitHub create is never retried automatically: reconcile first, then retry only after checking GitHub and setting confirmNoIssue:true.\n\
          Minions are persistent team members. Reuse bots.send/bots.read and team-only channels for work; users cannot message Minions. minions.spawn is compatibility hire plus an initial peer task.\n\
          {COMMAND_NOTES}\n"
     )

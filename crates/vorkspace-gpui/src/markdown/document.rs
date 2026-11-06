@@ -1,4 +1,5 @@
 //! Native document layout shared by Notes and Meetings.
+use vorkspace_ui::radius;
 mod selection;
 
 use crate::markdown::{self, MarkdownRow, Part, Tone};
@@ -77,6 +78,11 @@ impl Document {
     }
 
     pub(crate) fn meeting(text: &str, cx: &mut Context<Self>) -> Self {
+        Self::prose(text, "No summary yet", cx)
+    }
+
+    /// Read-only prose from a provider or issue has no local file authority.
+    pub(crate) fn prose(text: &str, empty: &'static str, cx: &mut Context<Self>) -> Self {
         let rows = markdown_model::parse_full_hard_breaks(text)
             .blocks
             .iter()
@@ -104,7 +110,7 @@ impl Document {
                 Row::Markdown(row)
             })
             .collect();
-        Self::new(rows, "No summary yet", cx)
+        Self::new(rows, empty, cx)
     }
 
     fn new(rows: Vec<Row>, empty: &'static str, cx: &mut Context<Self>) -> Self {
@@ -255,7 +261,7 @@ impl Render for Document {
                                 .aria_label(alt.clone())
                                 .max_w_full()
                                 .max_h(px(640.))
-                                .rounded_md()
+                                .rounded(px(radius::CONTROL))
                                 .object_fit(gpui::ObjectFit::Contain),
                         )
                         .into_any_element(),
@@ -272,7 +278,7 @@ impl Render for Document {
                             Part::Code { fence, lines } => div()
                                 .id(id.clone())
                                 .overflow_x_scroll()
-                                .rounded(px(crate::controls::page::CARD_CORNER))
+                                .rounded(px(radius::CONTAINER))
                                 .border_1()
                                 .border_color(content(0.1))
                                 .bg(content(0.03))

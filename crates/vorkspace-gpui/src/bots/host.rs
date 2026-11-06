@@ -7,8 +7,6 @@ use vorkspace_core::{session_groups::Groups, time::now_ms};
 enum Effect {
     Card(Value),
     None,
-    /// A board changed; open views reload.
-    Todos,
     Start(Box<super::host_api::AppStart>),
     Groups(String, Groups),
 }
@@ -94,6 +92,7 @@ impl Bots {
             None
         };
         let store = self.store.clone();
+        let refresh_todos = call.action.starts_with("todos.") && call.action != "todos.list";
         let work = cx.background_executor().spawn(async move {
             match permit {
                 Some(permit) => permit.run(|| work(store)),
@@ -103,6 +102,11 @@ impl Bots {
         cx.spawn(async move |this, cx| {
             let result = work.await;
             let _ = this.update_in(cx, |this, window, cx| {
+                // Legacy migration and recovery receipts can commit before a
+                // later operation fails. Visible boards must see those writes.
+                if refresh_todos {
+                    crate::todos::changed(cx);
+                }
                 let result = match result {
                     Ok((value, Effect::Start(start))) => {
                         this.publish_start(call, bot_id, value, *start, window, cx);
@@ -113,7 +117,6 @@ impl Bots {
                 let result = result.map(|(value, effect)| {
                     match effect {
                         Effect::None => (),
-                        Effect::Todos => crate::todos::changed(cx),
                         Effect::Card(value) => {
                             this.hold_card(call.session, &bot_id, value);
                             this.save(cx);
@@ -568,14 +571,25 @@ impl Bots {
                     self.documents.remove(&id);self.html_documents.remove(&id);self.hold_card(call.session,&bot.id,json!({"id":bot::new_id(),"type":"document","documentId":id,"title":document.title,"summary":document.summary}));self.save(cx);Ok(json!(document))
                 }}}
             }
-            "todos.list"|"todos.add"|"todos.update"|"todos.remove"=>{
-                // Its own board, or an assigned project's.
-                let board=match input.get("project").and_then(Value::as_str){
-                    Some(path)=>match bot.project(Some(path)){Ok(p)=>vorkspace_core::todos::TodoBoard::Project(p),Err(e)=>{self.finish_call(call,Err(e),cx);return;}},
-                    None=>vorkspace_core::todos::TodoBoard::Bot(bot.id.clone()),
+            "todos.list"|"todos.add"|"todos.update"|"todos.remove"|"todos.publish"|"todos.reconcile"|"todos.retry"|"todos.reconcileEdit"|"todos.retryEdit"|"todos.discardEdit"|"todos.cancelPublish"=>{
+                let project=match bot.project(input.get("project").and_then(Value::as_str)){
+                    Ok(project)=>project,Err(error)=>{self.finish_call(call,Err(error),cx);return;}
                 };
-                let effect=if action=="todos.list"{Effect::None}else{Effect::Todos};
-                self.call_work(call,&actor.id,target,move|store|Ok((locked(&store)?.todo_action(&board,&action,&input)?,effect)),cx);return;
+                let board=vorkspace_core::todos::TodoBoard::Project(project.clone());
+                let bot_id=bot.id.clone();
+                let unambiguous=bot.projects.len()==1;
+                self.call_work(call,&actor.id,target,move|store|{
+                    // A one-project Bot's old board has one unambiguous owner.
+                    // Multiple-project legacy rows wait for an explicit move
+                    // from the To-dos page, not an incidental list request.
+                    if unambiguous && action!="todos.list" { locked(&store)?.assign_legacy_bot_todos(&bot_id,&project)?; }
+                    let mut result=crate::todos::todo_action(&store,&board,&action,&input)?;
+                    if unambiguous && action=="todos.list" {
+                        let legacy=locked(&store)?.list_todos(&vorkspace_core::todos::TodoBoard::Bot(bot_id.clone()))?;
+                        if let Some(object)=result.as_object_mut(){object.insert("legacyItems".into(),json!(legacy));}
+                    }
+                    Ok((result,Effect::None))
+                },cx);return;
             }
             "soul.read"|"soul.update"|"memory.read"|"memory.search"|"memory.add"|"memory.replace"|"memory.remove"|"habits.list"|"habits.add"|"habits.update"|"habits.run"|"habits.remove"|"notes.list"|"notes.read"|"notes.write"|"worktrees.list"|"worktrees.create"=>{
                 let caller=call.session;let projects=bot.projects.clone();
