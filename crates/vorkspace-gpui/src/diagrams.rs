@@ -2,8 +2,8 @@
 //! by Pele in QuickJS; Pele's CSS variables are resolved to the app's palette,
 //! then the SVG is rasterized off the main thread through GPUI's image assets.
 use gpui::{
-    AnyElement, App, Asset, EntityId, Global, Hsla, ImageCacheError, ImageSource, IntoElement,
-    ParentElement, RenderImage, SharedString, Styled, Window, div, img, prelude::*,
+    AnyElement, App, Asset, EntityId, Global, Hsla, ImageCacheError, IntoElement, ParentElement,
+    RenderImage, SharedString, Styled, Window, div, img, prelude::*,
 };
 use rquickjs::{Context, Function, Object, Runtime};
 use std::{
@@ -609,27 +609,82 @@ pub(crate) fn diagram(
         }
         .into()
     });
-    div()
-        .w_full()
-        .min_w_0()
-        .overflow_hidden()
-        .child(
-            img(ImageSource::Custom(Arc::new(
-                move |window: &mut Window, cx: &mut App| {
-                    let image = window.use_asset::<DiagramAsset>(&key, cx);
-                    if let Some(Ok(image)) = &image {
-                        retain(&key, image, window.current_view(), cx);
-                    }
-                    image
-                },
-            )))
-            .max_w_full()
-            .with_fallback(fallback)
-            .id(label.clone())
-            .role(gpui::Role::Image)
-            .aria_label(label),
-        )
-        .into_any_element()
+    Diagram {
+        key,
+        label,
+        fallback: Box::new(fallback),
+    }
+    .into_any_element()
+}
+
+#[derive(IntoElement)]
+struct Diagram {
+    key: DiagramKey,
+    label: SharedString,
+    fallback: Box<dyn Fn() -> AnyElement>,
+}
+
+impl gpui::RenderOnce for Diagram {
+    fn render(self, window: &mut Window, cx: &mut App) -> impl IntoElement {
+        let Some(Ok(image)) = window.use_asset::<DiagramAsset>(&self.key, cx) else {
+            return (self.fallback)();
+        };
+        retain(&self.key, &image, window.current_view(), cx);
+        let open = crate::image_lightbox::Open {
+            source: crate::image_lightbox::Source::Diagram {
+                kind: self.key.0,
+                source: self.key.1,
+                natural: image.size(0).map(|side| gpui::px(side.0 as f32 / 2.)),
+            },
+            alt: self.label.clone(),
+            draft_session: None,
+        };
+        let click = open.clone();
+        // Pointer actions belong to this diagram's dispatch path, even when
+        // keyboard focus is elsewhere (or the window has no focused control).
+        let target = cx.focus_handle();
+        let click_target = target.clone();
+        div()
+            .id("diagram-frame")
+            .track_focus(&target)
+            .relative()
+            .w_full()
+            .min_w_0()
+            .overflow_hidden()
+            .child(
+                img(image)
+                    .id(self.label.clone())
+                    .debug_selector(|| "inline-diagram".into())
+                    .max_w_full()
+                    .role(gpui::Role::Image)
+                    .aria_label(self.label)
+                    .cursor_pointer()
+                    .on_mouse_down(gpui::MouseButton::Left, |_, window, cx| {
+                        window.prevent_default();
+                        cx.stop_propagation();
+                    })
+                    .on_click(move |event, window, cx| {
+                        if event.click_count() == 1 && !event.modifiers().shift {
+                            click_target.dispatch_action(&click, window, cx);
+                            cx.stop_propagation();
+                        }
+                    }),
+            )
+            .child(
+                icon_button("expand-diagram", "Expand diagram", "external-link")
+                    .debug_selector(|| "expand-diagram".into())
+                    .absolute()
+                    .top(gpui::px(8.))
+                    .right(gpui::px(8.))
+                    .bg(pane_fill())
+                    .on_mouse_down(gpui::MouseButton::Left, |_, _, cx| cx.stop_propagation())
+                    .on_click(move |_, window, cx| {
+                        target.dispatch_action(&open, window, cx);
+                        cx.stop_propagation();
+                    }),
+            )
+            .into_any_element()
+    }
 }
 
 #[cfg(test)]

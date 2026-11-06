@@ -1,5 +1,7 @@
 //! Native port of `src/shared/ui/ImageLightbox.tsx`.
+use vorkspace_ui::radius;
 mod annotation;
+mod diagram;
 use gpui::{
     App, Bounds, BoxShadow, Context, CursorStyle, Entity, EventEmitter, FocusHandle, Focusable,
     Image, ImageFormat, ImgResourceLoader, KeyBinding, MouseButton, Pixels, Point, RenderImage,
@@ -12,7 +14,15 @@ use vorkspace_ui::theme::{black, icon, white};
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) enum Source {
     Path(PathBuf),
-    Embedded { data: Arc<str>, mime: SharedString },
+    Embedded {
+        data: Arc<str>,
+        mime: SharedString,
+    },
+    Diagram {
+        kind: crate::diagrams::DiagramKind,
+        source: SharedString,
+        natural: Size<Pixels>,
+    },
 }
 
 #[derive(Clone, Debug, PartialEq, gpui::Action)]
@@ -111,6 +121,7 @@ pub(crate) struct ImageLightbox {
     source: Source,
     alt: SharedString,
     image: Option<Arc<RenderImage>>,
+    diagram: Option<diagram::DiagramImage>,
     failed: bool,
     focus: FocusHandle,
     restore: Option<FocusHandle>,
@@ -203,6 +214,13 @@ impl ImageLightbox {
                 });
             })
             .detach();
+        } else if let Source::Diagram {
+            kind,
+            source,
+            natural,
+        } = &open.source
+        {
+            diagram::load(*kind, source.clone(), *natural, window, cx);
         } else if let Source::Embedded { data, mime } = &open.source {
             let data = data.clone();
             let format = ImageFormat::from_mime_type(mime).unwrap_or(ImageFormat::Png);
@@ -227,6 +245,7 @@ impl ImageLightbox {
             source: open.source,
             alt: open.alt,
             image: None,
+            diagram: None,
             failed: false,
             focus,
             restore,
@@ -470,7 +489,7 @@ impl ImageLightbox {
                         .left(px(-80.))
                         .w(px(220.))
                         .p(px(10.))
-                        .rounded_lg()
+                        .rounded(px(radius::SURFACE))
                         .bg(gpui::rgb(if vorkspace_ui::theme::is_light() {
                             0xf4f4f4
                         } else {
@@ -596,11 +615,15 @@ impl Render for ImageLightbox {
         if let Some(image) = &self.image {
             let natural = image.size(0);
             self.image_size = fitted_size(
-                size(px(natural.width.0 as f32), px(natural.height.0 as f32)),
+                self.diagram.as_ref().map_or_else(
+                    || size(px(natural.width.0 as f32), px(natural.height.0 as f32)),
+                    |diagram| diagram.natural,
+                ),
                 self.viewport,
             );
         }
         self.view = self.view.clamp(self.viewport, self.image_size);
+        self.refresh_diagram(window.scale_factor(), cx);
         let view = self.displayed_view().clamp(self.viewport, self.image_size);
         if self
             .transition
@@ -825,6 +848,9 @@ impl Render for ImageLightbox {
                                 .spread_radius(px(-12.)),
                         ])
                         .overflow_hidden()
+                        .when(self.diagram.is_some(), |d| {
+                            d.bg(vorkspace_ui::theme::pane_fill())
+                        })
                         .child(img(image).size_full())
                         .child({
                             let strokes = self.strokes.clone();
@@ -929,6 +955,9 @@ impl Render for ImageLightbox {
                         .child("Close saves · Esc discards unsaved edits"),
                 )
             })
+            .when(self.diagram.is_some(), |d| {
+                d.child(self.diagram_controls(cx))
+            })
             .child(
                 div()
                     .id("close-image-preview")
@@ -961,7 +990,9 @@ impl Render for ImageLightbox {
                             |bounds, _, window, _| {
                                 window.paint_quad(
                                     gpui::fill(bounds, gpui::transparent_black())
-                                        .corner_radii(px(18.))
+                                        .corner_radii(
+                                            bounds.size.width.min(bounds.size.height) / 2.,
+                                        )
                                         .border_color(
                                             gpui_apple::metal_renderer::backdrop_blur_marker(
                                                 12. * window.scale_factor(),
