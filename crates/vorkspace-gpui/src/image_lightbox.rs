@@ -184,6 +184,7 @@ impl ImageLightbox {
                 cx.notify();
             },
         );
+        let mut diagram = None;
         if owner.is_some()
             && let Source::Path(path) = &open.source
         {
@@ -214,13 +215,8 @@ impl ImageLightbox {
                 });
             })
             .detach();
-        } else if let Source::Diagram {
-            kind,
-            source,
-            natural,
-        } = &open.source
-        {
-            diagram::load(*kind, source.clone(), *natural, window, cx);
+        } else if matches!(&open.source, Source::Diagram { .. }) {
+            diagram = Some(diagram::DiagramImage::new(cx));
         } else if let Source::Embedded { data, mime } = &open.source {
             let data = data.clone();
             let format = ImageFormat::from_mime_type(mime).unwrap_or(ImageFormat::Png);
@@ -245,7 +241,7 @@ impl ImageLightbox {
             source: open.source,
             alt: open.alt,
             image: None,
-            diagram: None,
+            diagram,
             failed: false,
             focus,
             restore,
@@ -612,18 +608,22 @@ impl Render for ImageLightbox {
             }
         }
         self.viewport = window.viewport_size();
-        if let Some(image) = &self.image {
-            let natural = image.size(0);
-            self.image_size = fitted_size(
-                self.diagram.as_ref().map_or_else(
-                    || size(px(natural.width.0 as f32), px(natural.height.0 as f32)),
-                    |diagram| diagram.natural,
-                ),
-                self.viewport,
-            );
+        let natural = match &self.source {
+            Source::Diagram { natural, .. } => Some(*natural),
+            _ => self
+                .image
+                .as_ref()
+                .map(|image| image.size(0).map(|side| px(side.0 as f32))),
+        };
+        if let Some(natural) = natural {
+            self.image_size = fitted_size(natural, self.viewport);
         }
         self.view = self.view.clamp(self.viewport, self.image_size);
         self.refresh_diagram(window.scale_factor(), cx);
+        let diagram_background = self
+            .diagram
+            .as_ref()
+            .and_then(diagram::DiagramImage::background);
         let view = self.displayed_view().clamp(self.viewport, self.image_size);
         if self
             .transition
@@ -848,9 +848,7 @@ impl Render for ImageLightbox {
                                 .spread_radius(px(-12.)),
                         ])
                         .overflow_hidden()
-                        .when(self.diagram.is_some(), |d| {
-                            d.bg(vorkspace_ui::theme::pane_fill())
-                        })
+                        .when_some(diagram_background, |d, background| d.bg(background))
                         .child(img(image).size_full())
                         .child({
                             let strokes = self.strokes.clone();
@@ -955,7 +953,7 @@ impl Render for ImageLightbox {
                         .child("Close saves · Esc discards unsaved edits"),
                 )
             })
-            .when(self.diagram.is_some(), |d| {
+            .when(self.diagram.is_some() && self.image.is_some(), |d| {
                 d.child(self.diagram_controls(cx))
             })
             .child(

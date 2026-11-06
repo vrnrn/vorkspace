@@ -76,18 +76,7 @@ fn css(color: Hsla) -> String {
 impl Palette {
     /// The live appearance, read on the main thread.
     pub(crate) fn current() -> Self {
-        let light = is_light();
-        Self {
-            // Label masks need an opaque ground close to the pane.
-            bg: if light { "#ffffff" } else { "#1c1c1c" }.into(),
-            fg: css(content(0.9)),
-            muted: css(content(0.55)),
-            line: css(content(0.6)),
-            surface: if light { "#f3f3f3" } else { "#262626" }.into(),
-            surface_alt: if light { "#e8e8e8" } else { "#303030" }.into(),
-            border: css(content(0.3)),
-            accent: css(accent_color()),
-        }
+        PaletteSnapshot::current().colors()
     }
     fn get(&self, name: &str) -> Option<&str> {
         Some(match name {
@@ -101,6 +90,39 @@ impl Palette {
             "accent" | "series-1" => &self.accent,
             _ => return None,
         })
+    }
+}
+
+/// The theme inputs to an SVG, before formatting its CSS colors.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(crate) struct PaletteSnapshot {
+    light: bool,
+    ink: Hsla,
+    accent: Hsla,
+}
+
+impl PaletteSnapshot {
+    pub(crate) fn current() -> Self {
+        Self {
+            light: is_light(),
+            ink: content(1.),
+            accent: accent_color(),
+        }
+    }
+
+    pub(crate) fn colors(self) -> Palette {
+        let light = self.light;
+        Palette {
+            // Label masks need an opaque ground close to the pane.
+            bg: if light { "#ffffff" } else { "#1c1c1c" }.into(),
+            fg: css(self.ink.opacity(0.9)),
+            muted: css(self.ink.opacity(0.55)),
+            line: css(self.ink.opacity(0.6)),
+            surface: if light { "#f3f3f3" } else { "#262626" }.into(),
+            surface_alt: if light { "#e8e8e8" } else { "#303030" }.into(),
+            border: css(self.ink.opacity(0.3)),
+            accent: css(self.accent),
+        }
     }
 }
 

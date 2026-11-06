@@ -1,74 +1,37 @@
 //! Diagram zoom keeps one parsed vector and one raster, owned by the lightbox.
 use super::*;
-use crate::diagrams::{DiagramKind, Palette};
-use gpui::{DevicePixels, ParsedSvg, SvgSize};
+use crate::diagrams::PaletteSnapshot;
+use gpui::{DevicePixels, Hsla, ParsedSvg, SvgSize};
+use vorkspace_ui::theme::pane_fill;
 
+#[derive(Default)]
 pub(super) struct DiagramImage {
-    parsed: Arc<ParsedSvg>,
-    pub natural: Size<Pixels>,
-    width: i32,
+    raster: Option<DiagramRaster>,
+    failed: Option<(PaletteSnapshot, i32)>,
     rendering: bool,
 }
 
-pub(super) fn load(
-    kind: DiagramKind,
-    source: SharedString,
-    natural: Size<Pixels>,
-    window: &Window,
-    cx: &mut Context<ImageLightbox>,
-) {
-    let renderer = cx.svg_renderer();
-    let palette = Palette::current();
-    let width = raster_width(
-        fitted_size(natural, window.viewport_size()),
-        1.,
-        window.scale_factor(),
-        natural,
-    );
-    let work = cx.background_executor().spawn(async move {
-        let svg = crate::diagrams::prepare(kind, &source, &palette)?;
-        let parsed = renderer
-            .parse_untrusted_svg(svg.as_bytes())
-            .map_err(|e| e.to_string())?;
-        let image = renderer
-            .render_parsed(
-                &parsed,
-                SvgSize::Size(size(DevicePixels(width), DevicePixels(1))),
-            )
-            .map_err(|e| e.to_string())?;
-        Ok::<_, String>((
-            DiagramImage {
-                parsed: Arc::new(parsed),
-                natural,
-                width,
-                rendering: false,
-            },
-            image,
-        ))
-    });
-    cx.spawn(async move |this, cx| {
-        let result = work.await;
-        let _ = this.update(cx, |this, cx| {
-            if this.cancelled {
-                return;
+struct DiagramRaster {
+    palette: PaletteSnapshot,
+    parsed: Arc<ParsedSvg>,
+    width: i32,
+    background: Hsla,
+}
+
+impl DiagramImage {
+    pub(super) fn new(cx: &mut Context<ImageLightbox>) -> Self {
+        cx.on_release(|this, cx| {
+            if let Some(image) = this.image.take() {
+                cx.drop_image(image, None);
             }
-            match result {
-                Ok((diagram, image)) => {
-                    this.diagram = Some(diagram);
-                    this.image = Some(image);
-                }
-                Err(_) => this.failed = true,
-            }
-            cx.notify();
-        });
-    })
-    .detach();
-    cx.on_release(|this, cx| {
-        if let Some(image) = this.image.take() {
-            cx.drop_image(image, None);
-        }
-    })
-    .detach();
+        })
+        .detach();
+        Self::default()
+    }
+
+    pub(super) fn background(&self) -> Option<Hsla> {
+        self.raster.as_ref().map(|raster| raster.background)
+    }
 }
 
 // At most 64 MiB of RGBA pixels, also within the renderer's texture limit.
@@ -90,26 +53,62 @@ fn raster_width(
 
 impl ImageLightbox {
     pub(super) fn refresh_diagram(&mut self, device_scale: f32, cx: &mut Context<Self>) {
-        let Some(diagram) = &mut self.diagram else {
+        let (
+            Some(diagram),
+            Source::Diagram {
+                kind,
+                source,
+                natural,
+            },
+        ) = (&mut self.diagram, &self.source)
+        else {
             return;
         };
-        let width = raster_width(
-            self.image_size,
-            self.view.scale,
-            device_scale,
-            diagram.natural,
-        );
-        if self.cancelled || diagram.rendering || width <= diagram.width {
+        if self.cancelled {
+            return;
+        }
+        let palette = PaletteSnapshot::current();
+        let width = raster_width(self.image_size, self.view.scale, device_scale, *natural);
+        let mut raster = diagram
+            .raster
+            .as_mut()
+            .filter(|raster| raster.palette == palette);
+        // Keep the old diagram and its backdrop together while a new palette
+        // renders. Other pane styling can update without reparsing the SVG.
+        if let Some(raster) = &mut raster {
+            raster.background = pane_fill();
+        }
+        diagram.failed = diagram.failed.filter(|(failed, _)| *failed == palette);
+        if diagram.rendering
+            || raster.as_ref().is_some_and(|raster| raster.width >= width)
+            || diagram.failed.is_some_and(|(_, failed)| failed >= width)
+        {
             return;
         }
         diagram.rendering = true;
-        let parsed = diagram.parsed.clone();
+        let parsed = raster.map(|raster| raster.parsed.clone());
+        let kind = *kind;
+        let source = source.clone();
         let renderer = cx.svg_renderer();
         let work = cx.background_executor().spawn(async move {
-            renderer.render_parsed(
-                &parsed,
-                SvgSize::Size(size(DevicePixels(width), DevicePixels(1))),
-            )
+            let parsed = match parsed {
+                Some(parsed) => parsed,
+                None => {
+                    let svg = crate::diagrams::prepare(kind, &source, &palette.colors())?;
+                    Arc::new(
+                        renderer
+                            .parse_untrusted_svg(svg.as_bytes())
+                            .map_err(|e| e.to_string())?,
+                    )
+                }
+            };
+            let image = renderer
+                .render_parsed(
+                    &parsed,
+                    SvgSize::Size(size(DevicePixels(width), DevicePixels(1))),
+                )
+                .map_err(|e| e.to_string())?;
+            Ok::<_, String>((parsed, image))
         });
         cx.spawn(async move |this, cx| {
             let result = work.await;
@@ -121,15 +120,29 @@ impl ImageLightbox {
                     return;
                 };
                 diagram.rendering = false;
-                // A failed resolution keeps the usable image and is not retried
-                // on every frame. Zoom/resize can request a higher resolution.
-                diagram.width = width;
-                if let Ok(image) = result
-                    && let Some(old) = this.image.replace(image)
-                {
-                    cx.drop_image(old, None);
+                if PaletteSnapshot::current() == palette {
+                    match result {
+                        Ok((parsed, image)) => {
+                            diagram.raster = Some(DiagramRaster {
+                                palette,
+                                parsed,
+                                width,
+                                background: pane_fill(),
+                            });
+                            diagram.failed = None;
+                            this.failed = false;
+                            if let Some(old) = this.image.replace(image) {
+                                cx.drop_image(old, None);
+                            }
+                        }
+                        Err(_) => {
+                            // Retry only for a new palette or higher resolution.
+                            diagram.failed = Some((palette, width));
+                            this.failed = this.image.is_none();
+                        }
+                    }
                 }
-                // One job at a time: a newer zoom is picked up by the next draw.
+                // A newer palette or larger zoom is picked up by the next draw.
                 cx.notify();
             });
         })
@@ -198,6 +211,57 @@ impl ImageLightbox {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::diagrams::DiagramKind;
+    use gpui::{TestAppContext, VisualTestContext, WindowBounds, WindowHandle, WindowOptions};
+    use vorkspace_ui::{preferences::Preferences, theme::configure};
+
+    const DIAGRAMS: [(DiagramKind, &str); 2] = [
+        (
+            DiagramKind::Svg,
+            r#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 800 400"><rect width="800" height="400" fill="currentColor"/></svg>"#,
+        ),
+        (
+            DiagramKind::Mermaid,
+            "flowchart LR\n A[Start] --> B[Finish]",
+        ),
+    ];
+
+    fn open_diagram(
+        kind: DiagramKind,
+        source: &str,
+        cx: &mut TestAppContext,
+    ) -> WindowHandle<ImageLightbox> {
+        cx.update(|cx| {
+            cx.open_window(
+                WindowOptions {
+                    window_bounds: Some(WindowBounds::Windowed(Bounds::new(
+                        point(px(0.), px(0.)),
+                        size(px(720.), px(420.)),
+                    ))),
+                    ..Default::default()
+                },
+                |window, cx| {
+                    cx.new(|cx| {
+                        ImageLightbox::new(
+                            Open {
+                                source: Source::Diagram {
+                                    kind,
+                                    source: source.to_owned().into(),
+                                    natural: size(px(800.), px(400.)),
+                                },
+                                alt: "Diagram".into(),
+                                draft_session: None,
+                            },
+                            None,
+                            window,
+                            cx,
+                        )
+                    })
+                },
+            )
+            .unwrap()
+        })
+    }
 
     #[test]
     fn zoom_rasters_are_bounded_by_pixels_and_texture_dimensions() {
@@ -218,49 +282,18 @@ mod tests {
     }
 
     #[gpui::test]
-    fn svg_and_mermaid_zoom_replace_pixels_without_resetting_the_view(
-        cx: &mut gpui::TestAppContext,
-    ) {
+    fn svg_and_mermaid_zoom_replace_pixels_without_resetting_the_view(cx: &mut TestAppContext) {
         cx.update(bind);
-        for (kind, source) in [
-            (
-                DiagramKind::Svg,
-                r##"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 800 400"><rect width="800" height="400" fill="#4da3f5"/></svg>"##,
-            ),
-            (
-                DiagramKind::Mermaid,
-                "flowchart LR\n A[Start] --> B[Finish]",
-            ),
-        ] {
-            let window = cx.update(|cx| {
-                cx.open_window(Default::default(), |window, cx| {
-                    cx.new(|cx| {
-                        ImageLightbox::new(
-                            Open {
-                                source: Source::Diagram {
-                                    kind,
-                                    source: source.into(),
-                                    natural: size(px(800.), px(400.)),
-                                },
-                                alt: "Diagram".into(),
-                                draft_session: None,
-                            },
-                            None,
-                            window,
-                            cx,
-                        )
-                    })
-                })
-                .unwrap()
-            });
-            let visual = &mut gpui::VisualTestContext::from_window(window.into(), cx);
+        for (kind, source) in DIAGRAMS {
+            let window = open_diagram(kind, source, cx);
+            let visual = &mut VisualTestContext::from_window(window.into(), cx);
             visual.run_until_parked();
             visual.refresh().unwrap();
             let (parsed, original_width) = window
                 .update(visual, |view, _, _| {
-                    let diagram = view.diagram.as_ref().expect("loaded vector");
+                    let raster = view.diagram.as_ref().unwrap().raster.as_ref().unwrap();
                     assert!(view.image.is_some());
-                    (diagram.parsed.clone(), diagram.width)
+                    (raster.parsed.clone(), raster.width)
                 })
                 .unwrap();
             let zoom = visual.debug_bounds("diagram-zoom-in").unwrap();
@@ -271,11 +304,12 @@ mod tests {
                 .update(visual, |view, _, _| {
                     assert_eq!(view.view.scale, KEY_ZOOM_STEP);
                     let diagram = view.diagram.as_ref().unwrap();
+                    let raster = diagram.raster.as_ref().unwrap();
                     assert!(
-                        Arc::ptr_eq(&parsed, &diagram.parsed),
+                        Arc::ptr_eq(&parsed, &raster.parsed),
                         "zoom reuses the parsed vector"
                     );
-                    assert!(diagram.width > original_width);
+                    assert!(raster.width > original_width);
                     assert!(!diagram.rendering);
                 })
                 .unwrap();
@@ -284,6 +318,86 @@ mod tests {
             window
                 .update(visual, |view, window, _| {
                     assert_eq!(view.view, View::IDENTITY);
+                    window.remove_window();
+                })
+                .unwrap();
+        }
+    }
+
+    #[gpui::test]
+    fn open_diagram_follows_the_palette_and_preserves_zoom_and_pan(cx: &mut TestAppContext) {
+        let preferences = Preferences {
+            theme: "system".into(),
+            ..Default::default()
+        };
+        let camera = View {
+            scale: 2.,
+            x: 80.,
+            y: -30.,
+        };
+        for (kind, source) in DIAGRAMS {
+            configure(&preferences, false, true);
+            let window = open_diagram(kind, source, cx);
+            let visual = &mut VisualTestContext::from_window(window.into(), cx);
+            visual.run_until_parked();
+            window
+                .update(visual, |view, _, cx| view.set_view(camera, cx))
+                .unwrap();
+            visual.run_until_parked();
+            let (dark, dark_background) = window
+                .update(visual, |view, _, _| {
+                    assert_eq!(view.view, camera);
+                    (
+                        view.image.clone().unwrap(),
+                        view.diagram.as_ref().unwrap().background().unwrap(),
+                    )
+                })
+                .unwrap();
+
+            let draw = |window: &mut Window, cx: &mut App| {
+                window.refresh();
+                window.draw(cx).clear(cx);
+            };
+            configure(&preferences, true, true);
+            visual.update(draw);
+            window
+                .update(visual, |view, _, _| {
+                    let diagram = view.diagram.as_ref().unwrap();
+                    assert!(diagram.rendering);
+                    assert_eq!(diagram.background(), Some(dark_background));
+                    assert_eq!(view.image.as_ref().unwrap().id, dark.id);
+                })
+                .unwrap();
+            visual.run_until_parked();
+            let light = window
+                .update(visual, |view, _, _| {
+                    assert_eq!(view.view, camera);
+                    let diagram = view.diagram.as_ref().unwrap();
+                    assert_eq!(diagram.background(), Some(pane_fill()));
+                    assert_ne!(diagram.background(), Some(dark_background));
+                    let light = view.image.as_ref().unwrap();
+                    assert_eq!(light.size(0), dark.size(0));
+                    assert!(light.as_bytes(0) != dark.as_bytes(0), "{kind:?}");
+                    light.id
+                })
+                .unwrap();
+
+            // Start a dark render, then restore the light palette before the
+            // executor runs. The stale raster must never replace these pixels.
+            configure(&preferences, false, true);
+            visual.update(draw);
+            window
+                .update(visual, |view, _, _| {
+                    assert!(view.diagram.as_ref().unwrap().rendering);
+                })
+                .unwrap();
+            configure(&preferences, true, true);
+            visual.run_until_parked();
+            window
+                .update(visual, |view, window, _| {
+                    assert_eq!(view.view, camera);
+                    assert_eq!(view.image.as_ref().unwrap().id, light);
+                    assert!(!view.diagram.as_ref().unwrap().rendering);
                     window.remove_window();
                 })
                 .unwrap();
