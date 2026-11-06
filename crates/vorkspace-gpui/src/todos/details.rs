@@ -101,6 +101,27 @@ impl TodoBoardView {
                                     .text_color(gpui::rgb(0xe5484d))
                                     .child(error.clone())
                             }))
+                            .when(
+                                self.saved_details_key(item, Some(&editor.id)).is_some(),
+                                |d| {
+                                    d.child(
+                                        div().px_3().py_2().flex_shrink_0().child(
+                                            labeled_secondary(
+                                                "todo-switch-draft",
+                                                "Keep draft and switch",
+                                                false,
+                                                self.pending_changes > 0,
+                                            )
+                                            .debug_selector(|| "todo-switch-draft".into())
+                                            .on_click(
+                                                cx.listener(|this, _, window, cx| {
+                                                    this.switch_details_draft(window, cx);
+                                                }),
+                                            ),
+                                        ),
+                                    )
+                                },
+                            )
                             .child(body),
                     ),
                 )

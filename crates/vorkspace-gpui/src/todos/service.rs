@@ -754,6 +754,45 @@ mod tests {
     }
 
     #[gpui::test]
+    fn issue_details_submit_existing_and_new_links_with_a_rewritten_body(
+        cx: &mut gpui::TestAppContext,
+    ) {
+        use super::super::TodoBoardView;
+        let hosted = "https://github.com/user-attachments/assets/receipt";
+        let retained = "https://example.com/old";
+        let added = "https://example.com/new";
+        let mut issue = remote_snapshot("example/project", 7, &json!({"title":"Task"}));
+        issue.description = format!("Old details\n\n[Attachment](<{retained}>)\n\n![]({hosted})");
+        issue.attachments = vec![retained.into(), hosted.into()];
+        let database = std::sync::Arc::new(std::sync::Mutex::new(
+            Store::open(Path::new(":memory:")).unwrap(),
+        ));
+        let view = cx.new(|cx| TodoBoardView::new(database, false, cx));
+        view.update(cx, |view, cx| {
+            view.open_details(&issue, cx);
+            let editor = view.details.as_ref().unwrap();
+            editor
+                .description
+                .update(cx, |input, cx| input.set_text("New issue body".into(), cx));
+            let body_only = TodoBoardView::details_update_input(editor, &issue, cx);
+            assert_eq!(body_only["description"], "New issue body");
+            assert!(body_only.get("attachments").is_none());
+            for link in [retained, added] {
+                view.details
+                    .as_ref()
+                    .unwrap()
+                    .url
+                    .update(cx, |input, cx| input.set_text(link.into(), cx));
+                view.add_attachment_url(cx);
+            }
+            let editor = view.details.as_ref().unwrap();
+            let patch = TodoBoardView::details_update_input(editor, &issue, cx);
+            assert_eq!(patch["description"], "New issue body");
+            assert_eq!(patch["attachments"], json!([retained, hosted, added]));
+        });
+    }
+
+    #[gpui::test]
     fn dependency_selection_keeps_same_number_issues_distinct_after_origin_changes(
         cx: &mut gpui::TestAppContext,
     ) {
