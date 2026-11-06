@@ -229,6 +229,29 @@ impl Shell {
             .cloned()
             .collect()
     }
+
+    pub(super) fn prune_deleted_bot_tabs(&mut self, cx: &App) -> bool {
+        let Some(bots) = self.bots.as_ref().map(|bots| bots.read(cx)) else {
+            return false;
+        };
+        // An unavailable roster is not an empty roster. Visibility preferences
+        // also do not delete a Bot or its saved tabs.
+        if !bots.roster_loaded {
+            return false;
+        }
+        let keep = |tab: &TitleTab| !matches!(tab, TitleTab::Bot { id, .. } if bots.roster.get(id).is_none());
+        let before = (
+            self.workspace.title_order.len(),
+            self.workspace.scope_focus.len(),
+        );
+        self.workspace.title_order.retain(&keep);
+        self.workspace.scope_focus.retain(|_, tab| keep(tab));
+        before
+            != (
+                self.workspace.title_order.len(),
+                self.workspace.scope_focus.len(),
+            )
+    }
     pub(super) fn active_title_tab(&self, cx: &App) -> Option<TitleTab> {
         if let Some(active) = self.active_terminal_tab {
             return self
