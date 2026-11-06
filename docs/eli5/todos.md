@@ -1,0 +1,13 @@
+# To-dos, explained simply
+
+Every project has a to-do board that works on its own. You can use it even if the project is not on GitHub or you are offline. Each task can hold a title, a description, attachments, and links to work it depends on. Move tasks through **To do**, **In progress**, **In review**, and **Done**.
+
+If the project is connected to a GitHub repository, its issues also appear on the same board. Open an issue's details to change it or open it on GitHub. A local task stays local until you choose **Publish to GitHub**. Closing a GitHub issue puts it in Done; deleting a local task removes that local task. Your local tasks remain available when GitHub cannot be reached.
+
+Use **Create task** at the bottom right to add a task. Type a title and press Enter; Escape or Cancel keeps the draft for later. Done has a green check icon. Cards show the title, the first three lines of the description, and links to dependencies. Click a card to read its full details in an overlay, with the board still behind it. Choose **Edit** to make changes. Close the overlay, press Escape or click outside to return to the board. The contents scroll, with actions kept in view. Drag cards between columns or change their status in the details. Click a dependency to read the related task. Use **Add files** or **Add link**, and pick dependencies by task title. GitHub uploads accept images and videos inside the project; HTTPS links can be added to an issue. Issue dependencies use GitHub's built-in blocked-by links, even across repositories. If GitHub only supplies part of an issue's dependency list, the form shows a note and leaves those links unchanged while you edit other fields. A local task can keep a file path or a web link as an attachment. Your unfinished detail edits stay in the board if you close the form or look at another task. The board shows a muted note if it reaches the latest 500 GitHub issues, or an error if GitHub cannot load; your local work remains available.
+
+If creating a GitHub issue has an uncertain result, the draft stays on the board. **Check for created issue** looks for it without creating another one. You can retry or keep it as a local task only after checking GitHub yourself and confirming that no issue was created.
+
+Bots and their Minions work on project to-dos. A Bot assigned to several projects must say which project it means. Older saved Bot tasks are moved to a chosen project without losing their contents. The To-dos page offers a **Move here** action when old Bot tasks still need a project.
+
+See the [technical guide](../todos.md) for status labels, CLI actions and storage rules.

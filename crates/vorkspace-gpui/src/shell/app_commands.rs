@@ -488,10 +488,10 @@ impl Shell {
                     Ok((result, Effect::None))
                 }, cx); return;
             }
-            "todos.list" | "todos.add" | "todos.update" | "todos.remove" => {
+            "todos.list" | "todos.add" | "todos.update" | "todos.remove" | "todos.publish" | "todos.reconcile" | "todos.retry" | "todos.reconcileEdit" | "todos.retryEdit" | "todos.discardEdit" | "todos.cancelPublish" => {
                 let board = vorkspace_core::todos::TodoBoard::Project(project.clone());
                 let effect = if action == "todos.list" { Effect::None } else { Effect::Todos };
-                self.app_background(call, move |store| Ok((locked(&store)?.todo_action(&board, &action, &input)?, effect)), cx); return;
+                self.app_background(call, move |store| Ok((crate::todos::todo_action(&store, &board, &action, &input)?, effect)), cx); return;
             }
             "folders.move" => {
                 let id = match session_id(&input, &self.store) { Ok(id) => id, Err(e) => { self.finish_app_call(call, Err(e)); return; } };

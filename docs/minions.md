@@ -28,7 +28,7 @@ A member is a `Bot` in the persisted roster with optional `Bot.minion` metadata:
 
 `Roster::effective_bot` constructs an execution snapshot with current parent projects and team context. `Bot::storage_id` and `Roster::storage_owner` select the shared owner. Turns use the existing Bot executor, durable outbox, submission receipts and bounded peer/channel queues. Runtime loads shared soul and memory through the parent storage ID and sends role, specialties, active teammates and project scope as context. Context is resent when it changes or a fresh provider thread needs it.
 
-`memory.*` addresses the parent's memory. `todos.*` addresses the parent's board unless `project` selects one of its assigned project boards. Notes and project-session/worktree reads use the parent's assigned project scope. Minions may also use `models.list`, `soul.read`, `artifacts.list/read`, `minions.list`, and the team communication actions. They cannot hire or fire members, start or control sessions, create worktrees, change soul or manage habits. Provider execution still uses the selected access policy.
+`memory.*` addresses the parent's memory. `todos.*` addresses an assigned project board; `project` is required when the parent has several projects. Notes and project-session/worktree reads use the parent's assigned project scope. Minions may also use `models.list`, `soul.read`, `artifacts.list/read`, `minions.list`, and the team communication actions. They cannot hire or fire members, start or control sessions, create worktrees, change soul or manage habits. Provider execution still uses the selected access policy.
 
 ## Team-only communication
 

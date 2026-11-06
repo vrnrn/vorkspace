@@ -1,18 +1,23 @@
-//! A very simple to-do board: To do, In progress and Done. The same view
-//! serves a project's sidebar, a Bot's details and the To-dos page; narrow
-//! hosts stack the columns, the page lays them side by side.
+//! Project and personal to-do boards. A project may also show its GitHub
+//! issues; each local or linked item retains its own authority.
 use crate::{
     controls::page,
     input::{self, Input},
     popover::{Anchor, AnchorSlot, popover},
 };
 use gpui::{
-    App, Context, Entity, FocusHandle, Focusable, FontWeight, Global, MouseButton, Role,
-    SharedString, Subscription, Window, div, prelude::*, px,
+    App, Context, Div, ElementId, Entity, FocusHandle, Focusable, FontWeight, Global, MouseButton,
+    Role, SharedString, Stateful, Subscription, Window, div, prelude::*, px,
 };
 use vorkspace_core::todos::{TodoBoard, TodoItem, TodoStatus};
 use vorkspace_runtime::runtime::{Database, locked};
+use vorkspace_ui::radius;
 use vorkspace_ui::theme::*;
+mod cards;
+mod creation;
+mod details;
+mod service;
+pub(crate) use service::action as todo_action;
 
 /// Bumped after any board changes, so every open view of it reloads.
 #[derive(Default)]
@@ -24,8 +29,26 @@ pub(crate) fn changed(cx: &mut App) {
     cx.set_global(TodoRevision(next));
 }
 
-type ChangeWork =
-    Box<dyn FnOnce(&vorkspace_core::store::Store, &TodoBoard) -> Result<(), String> + Send>;
+fn labeled_primary(
+    id: impl Into<ElementId>,
+    label: impl Into<SharedString>,
+    disabled: bool,
+) -> Stateful<Div> {
+    let label = label.into();
+    page::primary(id, label.clone(), disabled).child(label)
+}
+
+fn labeled_secondary(
+    id: impl Into<ElementId>,
+    label: impl Into<SharedString>,
+    danger: bool,
+    disabled: bool,
+) -> Stateful<Div> {
+    let label = label.into();
+    page::secondary(id, label.clone(), danger, disabled).child(label)
+}
+
+type ChangeWork = Box<dyn FnOnce(&Database, &TodoBoard) -> Result<(), String> + Send>;
 
 /// A store change waiting its turn. A view's changes run one at a time, in
 /// the order they were made, so a later click can't be overwritten by an
@@ -35,6 +58,22 @@ struct Change {
     work: ChangeWork,
     /// A submitted draft to put back if the change fails.
     draft: Option<String>,
+    saved_details: Option<SavedDetails>,
+}
+
+struct SavedDetails {
+    id: String,
+}
+
+#[derive(Clone)]
+struct DetailsEditor {
+    id: String,
+    title: Entity<Input>,
+    description: Entity<Input>,
+    attachments: Entity<Input>,
+    dependencies: Entity<Input>,
+    url: Entity<Input>,
+    preview: Entity<crate::markdown::Document>,
 }
 
 #[derive(Clone)]
@@ -49,7 +88,7 @@ impl Render for DraggedTodo {
             .max_w(px(240.))
             .px_2()
             .py_1()
-            .rounded_md()
+            .rounded(px(radius::CONTROL))
             .bg(pane_fill())
             .border_1()
             .border_color(page::divider())
@@ -64,13 +103,15 @@ pub(crate) struct TodoBoardView {
     store: Database,
     board: Option<TodoBoard>,
     items: Vec<TodoItem>,
-    loaded: bool,
     /// Guards against an older load landing after a newer one.
     generation: u64,
     /// The last load's failure.
     error: Option<String>,
+    github_notice: Option<String>,
+    github_repo: Option<String>,
     /// The last change's failure; a reload doesn't clear it.
     change_error: Option<String>,
+    board_errors: std::collections::HashMap<String, String>,
     changes: async_channel::Sender<Change>,
     /// Changes sent and not yet finished. Loads wait for them to finish, so
     /// a reload between two changes can't show the first undoing the second.
@@ -78,20 +119,31 @@ pub(crate) struct TodoBoardView {
     /// Side-by-side columns; otherwise stacked.
     columns: bool,
     draft: Entity<Input>,
-    editing: Option<(String, Entity<Input>)>,
+    create_open: bool,
+    create_anchor: AnchorSlot,
+    create_focus: FocusHandle,
+    detail_focus: FocusHandle,
+    detail_return_focus: Option<FocusHandle>,
+    detail_editing: bool,
+    details: Option<DetailsEditor>,
+    saved_details: std::collections::HashMap<String, DetailsEditor>,
+    show_dependency_choices: bool,
+    confirm_retry: bool,
+    confirm_discard: bool,
+    confirm_cancel: bool,
     _subscriptions: Vec<Subscription>,
 }
 
 impl Focusable for TodoBoardView {
-    fn focus_handle(&self, cx: &App) -> FocusHandle {
-        self.draft.focus_handle(cx)
+    fn focus_handle(&self, _: &App) -> FocusHandle {
+        self.create_focus.clone()
     }
 }
 
 impl TodoBoardView {
     pub(crate) fn new(store: Database, columns: bool, cx: &mut Context<Self>) -> Self {
         let draft =
-            cx.new(|cx| Input::field("New to-do", "Add a to-do…", page::secondary_ink(), cx));
+            cx.new(|cx| Input::field("Task title", "Task title", page::secondary_ink(), cx));
         let subscriptions = vec![
             cx.subscribe(&draft, |this, _, _: &input::Submitted, cx| this.add(cx)),
             cx.observe_global::<TodoRevision>(|this, cx| this.refresh(cx)),
@@ -101,15 +153,24 @@ impl TodoBoardView {
         // it is empty and the view is gone.
         let worker_store = store.clone();
         cx.spawn(async move |this, cx| {
-            while let Ok(Change { board, work, draft }) = queue.recv().await {
+            while let Ok(Change {
+                board,
+                work,
+                draft,
+                saved_details,
+            }) = queue.recv().await
+            {
                 let store = worker_store.clone();
+                let changed_board = board.clone();
                 let result = cx
                     .background_executor()
-                    .spawn(async move { work(&*locked(&store)?, &board) })
+                    .spawn(async move { work(&store, &board) })
                     .await;
                 let idle = queue.is_empty();
                 cx.update(|cx| {
-                    let _ = this.update(cx, |this, cx| this.finish_change(result, draft, cx));
+                    let _ = this.update(cx, |this, cx| {
+                        this.finish_change(result, draft, &changed_board, saved_details, cx)
+                    });
                     if idle {
                         changed(cx);
                     }
@@ -121,15 +182,28 @@ impl TodoBoardView {
             store,
             board: None,
             items: Vec::new(),
-            loaded: false,
             generation: 0,
             error: None,
+            github_notice: None,
+            github_repo: None,
             change_error: None,
+            board_errors: Default::default(),
             changes,
             pending_changes: 0,
             columns,
             draft,
-            editing: None,
+            create_open: false,
+            create_anchor: AnchorSlot::default(),
+            create_focus: cx.focus_handle(),
+            detail_focus: cx.focus_handle(),
+            detail_return_focus: None,
+            detail_editing: false,
+            details: None,
+            saved_details: Default::default(),
+            show_dependency_choices: false,
+            confirm_retry: false,
+            confirm_discard: false,
+            confirm_cancel: false,
             _subscriptions: subscriptions,
         }
     }
@@ -138,7 +212,6 @@ impl TodoBoardView {
         self.board.as_ref()
     }
 
-    /// Open items, once the board has loaded.
     pub(crate) fn open_count(&self) -> Option<usize> {
         self.loaded.then(|| {
             self.items
@@ -157,12 +230,22 @@ impl TodoBoardView {
         if self.board == board {
             return;
         }
-        self.commit_edit(cx);
+        self.stash_details();
+        self.create_open = false;
+        if let Some(error) = self.change_error.take()
+            && let Some(old_board) = self.board.as_ref()
+        {
+            self.board_errors.insert(old_board.key(), error);
+        }
         self.board = board;
         self.items.clear();
-        self.loaded = false;
         self.error = None;
-        self.change_error = None;
+        self.github_notice = None;
+        self.github_repo = None;
+        self.change_error = self
+            .board
+            .as_ref()
+            .and_then(|board| self.board_errors.remove(&board.key()));
         self.refresh(cx);
         cx.notify();
     }
@@ -180,18 +263,19 @@ impl TodoBoardView {
         let store = self.store.clone();
         let work = cx
             .background_executor()
-            .spawn(async move { locked(&store)?.list_todos(&board) });
+            .spawn(async move { service::list(&store, &board) });
         cx.spawn(async move |this, cx| {
             let result = work.await;
             let _ = this.update(cx, |this, cx| {
                 if this.generation != generation {
                     return;
                 }
-                this.loaded = true;
                 match result {
-                    Ok(items) => {
-                        this.items = items;
-                        this.error = None;
+                    Ok(snapshot) => {
+                        this.items = snapshot.items;
+                        this.error = snapshot.github_error;
+                        this.github_notice = snapshot.github_notice;
+                        this.github_repo = snapshot.github_repo;
                     }
                     Err(error) => this.error = Some(error),
                 }
@@ -205,49 +289,78 @@ impl TodoBoardView {
     /// earlier ones; every view reloads once the queue is empty.
     fn change(
         &mut self,
-        work: impl FnOnce(&vorkspace_core::store::Store, &TodoBoard) -> Result<(), String>
-        + Send
-        + 'static,
+        work: impl FnOnce(&Database, &TodoBoard) -> Result<(), String> + Send + 'static,
         cx: &mut Context<Self>,
     ) {
-        self.queue_change(work, None, cx);
+        self.queue_change(work, None, None, cx);
     }
 
     fn queue_change(
         &mut self,
-        work: impl FnOnce(&vorkspace_core::store::Store, &TodoBoard) -> Result<(), String>
-        + Send
-        + 'static,
+        work: impl FnOnce(&Database, &TodoBoard) -> Result<(), String> + Send + 'static,
         draft: Option<String>,
+        saved_details: Option<SavedDetails>,
         cx: &mut Context<Self>,
-    ) {
+    ) -> bool {
         let Some(board) = self.board.clone() else {
-            return;
+            return false;
         };
         let change = Change {
             board,
             work: Box::new(work),
             draft,
+            saved_details,
         };
         if self.changes.try_send(change).is_err() {
-            return;
+            return false;
         }
         self.pending_changes += 1;
         // A load already under way predates this change.
         self.generation += 1;
         self.change_error = None;
         cx.notify();
+        true
     }
 
     fn finish_change(
         &mut self,
         result: Result<(), String>,
         draft: Option<String>,
+        board: &TodoBoard,
+        saved_details: Option<SavedDetails>,
         cx: &mut Context<Self>,
     ) {
         self.pending_changes = self.pending_changes.saturating_sub(1);
+        if let Some(saved) = saved_details {
+            let key = format!("{}\0{}", board.key(), saved.id);
+            if result.is_ok() {
+                if self.board.as_ref() == Some(board)
+                    && self
+                        .details
+                        .as_ref()
+                        .is_some_and(|editor| editor.id == saved.id)
+                {
+                    self.details = None;
+                }
+                self.saved_details.remove(&key);
+                cx.notify();
+            } else {
+                let editor = self
+                    .details
+                    .as_ref()
+                    .filter(|editor| editor.id == saved.id)
+                    .or_else(|| self.saved_details.get(&key));
+                if let Some(editor) = editor {
+                    Self::set_details_read_only(editor, false, cx);
+                }
+            }
+        }
         if let Err(error) = result {
-            self.change_error = Some(error);
+            if self.board.as_ref() == Some(board) {
+                self.change_error = Some(error);
+            } else {
+                self.board_errors.insert(board.key(), error);
+            }
             // Put the submission back unless something newer was typed.
             if let Some(title) = draft
                 && self.draft.read(cx).content.is_empty()
@@ -255,6 +368,18 @@ impl TodoBoardView {
                 self.draft.update(cx, |input, cx| input.set_text(title, cx));
             }
             cx.notify();
+        }
+    }
+
+    fn set_details_read_only(editor: &DetailsEditor, read_only: bool, cx: &mut Context<Self>) {
+        for input in [
+            &editor.title,
+            &editor.description,
+            &editor.attachments,
+            &editor.dependencies,
+            &editor.url,
+        ] {
+            input.update(cx, |input, _| input.set_read_only(read_only));
         }
     }
 
@@ -269,26 +394,56 @@ impl TodoBoardView {
             cx.notify();
             return;
         }
-        self.draft
-            .update(cx, |draft, cx| draft.set_text(String::new(), cx));
-        self.queue_change(
+        if self.queue_change(
             {
                 let title = title.clone();
-                move |store, board| store.add_todo(board, &title, TodoStatus::Todo).map(|_| ())
+                move |store, board| {
+                    service::action(
+                        store,
+                        board,
+                        "todos.add",
+                        &serde_json::json!({"title":title}),
+                    )
+                    .map(|_| ())
+                }
             },
             Some(title),
+            None,
             cx,
-        );
+        ) {
+            self.draft
+                .update(cx, |draft, cx| draft.set_text(String::new(), cx));
+            self.create_open = false;
+        }
     }
 
     fn advance(&mut self, id: String, status: TodoStatus, cx: &mut Context<Self>) {
+        if self.items.iter().any(|item| {
+            item.id == id
+                && (item.pending_edit.is_some()
+                    || matches!(
+                        item.sync,
+                        vorkspace_core::todos::TodoSync::Pending
+                            | vorkspace_core::todos::TodoSync::Uncertain
+                    ))
+        }) {
+            return;
+        }
         // Show the new status at once; the reload confirms it.
         if let Some(item) = self.items.iter_mut().find(|item| item.id == id) {
             item.status = status.next();
             cx.notify();
         }
         self.change(
-            move |store, board| store.move_todo(board, &id, status.next(), None).map(|_| ()),
+            move |store, board| {
+                service::action(
+                    store,
+                    board,
+                    "todos.update",
+                    &serde_json::json!({"id":id,"status":status.next().id()}),
+                )
+                .map(|_| ())
+            },
             cx,
         );
     }
@@ -302,62 +457,966 @@ impl TodoBoardView {
     ) {
         if self.board.as_ref().map(TodoBoard::key) != Some(dragged.board.clone())
             || before.as_deref() == Some(dragged.id.as_str())
+            || self.items.iter().any(|item| {
+                item.id == dragged.id
+                    && (item.pending_edit.is_some()
+                        || matches!(
+                            item.sync,
+                            vorkspace_core::todos::TodoSync::Pending
+                                | vorkspace_core::todos::TodoSync::Uncertain
+                        ))
+            })
         {
             return;
         }
         let id = dragged.id.clone();
+        let remote = self
+            .items
+            .iter()
+            .any(|item| item.id == id && item.issue.is_some());
         self.change(
             move |store, board| {
-                store
-                    .move_todo(board, &id, status, before.as_deref())
-                    .map(|_| ())
+                let mut input = serde_json::json!({"id":id,"status":status.id()});
+                if !remote && let Some(before) = before {
+                    input["before"] = before.into();
+                }
+                service::action(store, board, "todos.update", &input).map(|_| ())
             },
             cx,
         );
     }
 
     fn delete(&mut self, id: String, cx: &mut Context<Self>) {
-        self.items.retain(|item| item.id != id);
-        cx.notify();
-        self.change(move |store, board| store.delete_todo(board, &id), cx);
-    }
-
-    fn begin_edit(&mut self, item: &TodoItem, window: &mut Window, cx: &mut Context<Self>) {
-        self.commit_edit(cx);
-        let input = cx.new(|cx| {
-            let mut input = Input::field("Rename to-do", "To-do", page::secondary_ink(), cx);
-            input.set_text(item.title.clone(), cx);
-            input
-        });
-        self._subscriptions
-            .push(cx.subscribe(&input, |this, _, _: &input::Submitted, cx| {
-                this.commit_edit(cx)
-            }));
-        window.focus(&input.focus_handle(cx), cx);
-        self.editing = Some((item.id.clone(), input));
-        cx.notify();
-    }
-
-    fn commit_edit(&mut self, cx: &mut Context<Self>) {
-        let Some((id, input)) = self.editing.take() else {
+        if self.items.iter().any(|item| {
+            item.id == id
+                && (item.pending_edit.is_some()
+                    || matches!(
+                        item.sync,
+                        vorkspace_core::todos::TodoSync::Pending
+                            | vorkspace_core::todos::TodoSync::Uncertain
+                    ))
+        }) {
             return;
-        };
-        let title = input.read(cx).content.to_string();
-        cx.notify();
-        let unchanged = self
+        }
+        let remote = self
             .items
             .iter()
-            .any(|item| item.id == id && item.title == title.trim());
-        if title.trim().is_empty() || unchanged {
-            return;
+            .any(|item| item.id == id && item.issue.is_some());
+        if remote {
+            if let Some(item) = self.items.iter_mut().find(|item| item.id == id) {
+                item.status = TodoStatus::Done;
+            }
+        } else {
+            self.items.retain(|item| item.id != id);
         }
-        if let Some(item) = self.items.iter_mut().find(|item| item.id == id) {
-            item.title = title.trim().into();
-        }
+        cx.notify();
         self.change(
-            move |store, board| store.rename_todo(board, &id, &title).map(|_| ()),
+            move |store, board| {
+                service::action(store, board, "todos.remove", &serde_json::json!({"id":id}))
+                    .map(|_| ())
+            },
             cx,
         );
+    }
+
+    fn details_key(&self, id: &str) -> Option<String> {
+        Some(format!("{}\0{id}", self.board.as_ref()?.key()))
+    }
+
+    fn stash_details(&mut self) {
+        if let Some(editor) = self.details.take()
+            && let Some(key) = self.details_key(&editor.id)
+        {
+            self.saved_details.insert(key, editor);
+        }
+        self.show_dependency_choices = false;
+        self.detail_editing = false;
+    }
+
+    fn open_details(&mut self, item: &TodoItem, cx: &mut Context<Self>) {
+        if self
+            .details
+            .as_ref()
+            .is_some_and(|details| details.id == item.id)
+        {
+            return;
+        }
+        self.stash_details();
+        if let Some(key) = self.details_key(&item.id)
+            && let Some(mut editor) = self.saved_details.remove(&key)
+        {
+            let text = editor.description.read(cx).content.clone();
+            editor.preview =
+                cx.new(|cx| crate::markdown::Document::prose(&text, "No description", cx));
+            self.details = Some(editor);
+            cx.notify();
+            return;
+        }
+        let title = cx.new(|cx| {
+            let mut input = Input::field("To-do title", "Title", page::secondary_ink(), cx);
+            input.set_text(
+                item.pending_edit
+                    .as_ref()
+                    .and_then(|edit| edit.input.get("title").and_then(serde_json::Value::as_str))
+                    .unwrap_or(&item.title)
+                    .to_string(),
+                cx,
+            );
+            input.select_range(0..0, cx);
+            input
+        });
+        let description = cx.new(|cx| {
+            let mut input = Input::multiline_field("To-do description", "Describe the work", cx);
+            input.set_text(
+                item.pending_edit
+                    .as_ref()
+                    .and_then(|edit| {
+                        edit.input
+                            .get("description")
+                            .and_then(serde_json::Value::as_str)
+                    })
+                    .unwrap_or(&item.description)
+                    .to_string(),
+                cx,
+            );
+            input
+        });
+        let attachments = cx.new(|cx| {
+            let mut input =
+                Input::multiline_field("Attachments", "One project file path or URL per line", cx);
+            let pending = item
+                .pending_edit
+                .as_ref()
+                .and_then(|edit| {
+                    edit.input
+                        .get("attachments")
+                        .and_then(serde_json::Value::as_array)
+                })
+                .map(|values| {
+                    values
+                        .iter()
+                        .filter_map(serde_json::Value::as_str)
+                        .collect::<Vec<_>>()
+                        .join("\n")
+                });
+            if let Some(pending) = pending {
+                input.set_text(pending, cx);
+            } else if item.issue.is_none() {
+                input.set_text(item.attachments.join("\n"), cx);
+            }
+            input
+        });
+        let dependencies = cx.new(|cx| {
+            let mut input = Input::field(
+                "Dependencies",
+                "Issue numbers or local IDs, separated by commas",
+                page::secondary_ink(),
+                cx,
+            );
+            let pending = item
+                .pending_edit
+                .as_ref()
+                .and_then(|edit| {
+                    edit.input
+                        .get("dependencies")
+                        .and_then(serde_json::Value::as_array)
+                })
+                .map(|values| {
+                    values
+                        .iter()
+                        .filter_map(serde_json::Value::as_str)
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                });
+            input.set_text(pending.unwrap_or_else(|| item.dependencies.join(", ")), cx);
+            input
+        });
+        let url = cx.new(|cx| {
+            Input::field(
+                "Attachment URL",
+                "Paste an HTTPS link",
+                page::secondary_ink(),
+                cx,
+            )
+        });
+        self._subscriptions
+            .push(cx.subscribe(&url, |this, _, _: &input::Submitted, cx| {
+                this.add_attachment_url(cx)
+            }));
+        let text = description.read(cx).content.clone();
+        let preview = cx.new(|cx| crate::markdown::Document::prose(&text, "No description", cx));
+        self.details = Some(DetailsEditor {
+            id: item.id.clone(),
+            title,
+            description,
+            attachments,
+            dependencies,
+            url,
+            preview,
+        });
+        self.confirm_retry = false;
+        self.confirm_discard = false;
+        self.confirm_cancel = false;
+        cx.notify();
+    }
+
+    fn reference_lines(input: &Entity<Input>, cx: &App) -> Vec<String> {
+        input
+            .read(cx)
+            .content
+            .lines()
+            .map(str::trim)
+            .filter(|line| !line.is_empty())
+            .map(str::to_owned)
+            .collect()
+    }
+
+    fn dependency_values(input: &Entity<Input>, cx: &App) -> Vec<String> {
+        input
+            .read(cx)
+            .content
+            .split(',')
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(str::to_owned)
+            .collect()
+    }
+
+    fn dependency_ref(item: &TodoItem) -> String {
+        item.issue
+            .as_ref()
+            .map(|issue| format!("#{}", issue.number))
+            .unwrap_or_else(|| item.id.clone())
+    }
+
+    fn dependency_label(&self, reference: &str) -> String {
+        self.dependency_item(reference)
+            .map(|item| {
+                if let Some(issue) = &item.issue {
+                    format!("#{} · {}", issue.number, item.title)
+                } else {
+                    item.title.clone()
+                }
+            })
+            .unwrap_or_else(|| {
+                if let Some(path) = reference.strip_prefix("https://github.com/") {
+                    format!("GitHub issue {path}")
+                } else if reference.starts_with("https://") {
+                    reference.to_string()
+                } else if reference.starts_with('#') {
+                    format!("Issue {reference}")
+                } else {
+                    "Unavailable task".into()
+                }
+            })
+    }
+
+    fn toggle_dependency(&mut self, reference: String, cx: &mut Context<Self>) {
+        if self.pending_changes > 0 {
+            return;
+        }
+        let Some(editor) = self.details.as_ref() else {
+            return;
+        };
+        if self
+            .items
+            .iter()
+            .find(|item| item.id == editor.id)
+            .and_then(|item| item.issue.as_ref())
+            .is_some_and(|issue| issue.dependencies_truncated)
+        {
+            return;
+        }
+        let mut values = Self::dependency_values(&editor.dependencies, cx);
+        if let Some(index) = values.iter().position(|value| value == &reference) {
+            values.remove(index);
+        } else {
+            values.push(reference);
+        }
+        editor
+            .dependencies
+            .update(cx, |input, cx| input.set_text(values.join(", "), cx));
+        cx.notify();
+    }
+
+    fn append_attachment(&mut self, reference: String, cx: &mut Context<Self>) {
+        if self.pending_changes > 0 {
+            return;
+        }
+        let Some(editor) = self.details.as_ref() else {
+            return;
+        };
+        let mut values = Self::reference_lines(&editor.attachments, cx);
+        if !values.contains(&reference) {
+            values.push(reference);
+            editor
+                .attachments
+                .update(cx, |input, cx| input.set_text(values.join("\n"), cx));
+            cx.notify();
+        }
+    }
+
+    fn remove_attachment(&mut self, index: usize, cx: &mut Context<Self>) {
+        if self.pending_changes > 0 {
+            return;
+        }
+        let Some(editor) = self.details.as_ref() else {
+            return;
+        };
+        let mut values = Self::reference_lines(&editor.attachments, cx);
+        if index < values.len() {
+            values.remove(index);
+            editor
+                .attachments
+                .update(cx, |input, cx| input.set_text(values.join("\n"), cx));
+            cx.notify();
+        }
+    }
+
+    fn add_attachment_url(&mut self, cx: &mut Context<Self>) {
+        if self.pending_changes > 0 {
+            return;
+        }
+        let Some(editor) = self.details.as_ref() else {
+            return;
+        };
+        let value = editor.url.read(cx).content.trim().to_string();
+        if !value.starts_with("https://") || value.chars().any(char::is_whitespace) {
+            self.change_error = Some("Use a complete HTTPS attachment URL".into());
+            cx.notify();
+            return;
+        }
+        editor
+            .url
+            .update(cx, |input, cx| input.set_text(String::new(), cx));
+        self.append_attachment(value, cx);
+    }
+
+    fn add_attachment_files(&mut self, cx: &mut Context<Self>) {
+        if self.pending_changes > 0 {
+            return;
+        }
+        let Some(editor) = self.details.as_ref() else {
+            return;
+        };
+        let id = editor.id.clone();
+        let board = self.board.clone();
+        let picker = cx.prompt_for_paths(gpui::PathPromptOptions {
+            files: true,
+            directories: false,
+            multiple: true,
+            prompt: Some("Add task attachments".into()),
+        });
+        cx.spawn(async move |this, cx| {
+            if let Ok(Ok(Some(paths))) = picker.await {
+                let _ = this.update(cx, |this, cx| {
+                    if this.pending_changes == 0
+                        && this.board == board
+                        && this.details.as_ref().is_some_and(|d| d.id == id)
+                    {
+                        for path in paths {
+                            this.append_attachment(path.to_string_lossy().into_owned(), cx);
+                        }
+                    }
+                });
+            }
+        })
+        .detach();
+    }
+
+    fn save_details(&mut self, cx: &mut Context<Self>) {
+        if self.pending_changes > 0 {
+            return;
+        }
+        let Some(details) = self.details.as_ref() else {
+            return;
+        };
+        let id = details.id.clone();
+        let Some(item) = self.items.iter().find(|item| item.id == id) else {
+            return;
+        };
+        if item.pending_edit.is_some()
+            || matches!(
+                item.sync,
+                vorkspace_core::todos::TodoSync::Pending
+                    | vorkspace_core::todos::TodoSync::Uncertain
+            )
+        {
+            self.change_error =
+                Some("Reconcile the pending GitHub change before editing this to-do".into());
+            cx.notify();
+            return;
+        }
+        let remote = item.issue.is_some();
+        let title = details.title.read(cx).content.to_string();
+        let description = details.description.read(cx).content.to_string();
+        let attachments = details
+            .attachments
+            .read(cx)
+            .content
+            .lines()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(str::to_owned)
+            .collect::<Vec<_>>();
+        let dependencies = details
+            .dependencies
+            .read(cx)
+            .content
+            .split(',')
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(str::to_owned)
+            .collect::<Vec<_>>();
+        let saved_details = SavedDetails { id: id.clone() };
+        let mut input = serde_json::json!({"id":id,"title":title,"description":description});
+        if !item
+            .issue
+            .as_ref()
+            .is_some_and(|issue| issue.dependencies_truncated)
+        {
+            input["dependencies"] = serde_json::json!(dependencies);
+        }
+        if remote {
+            input["expectedUpdatedAt"] = serde_json::json!(item.updated_at);
+        }
+        if !remote || !attachments.is_empty() {
+            input["attachments"] = serde_json::json!(attachments);
+        }
+        let queued = self.queue_change(
+            move |store, board| service::action(store, board, "todos.update", &input).map(|_| ()),
+            None,
+            Some(saved_details),
+            cx,
+        );
+        if queued && let Some(editor) = self.details.as_ref() {
+            Self::set_details_read_only(editor, true, cx);
+        }
+    }
+
+    fn detail_action(&mut self, action: &'static str, cx: &mut Context<Self>) {
+        if self.pending_changes > 0 {
+            return;
+        }
+        let Some(details) = self.details.as_ref() else {
+            return;
+        };
+        let id = details.id.clone();
+        self.change(
+            move |store, board| {
+                service::action(store, board, action, &serde_json::json!({"id":id})).map(|_| ())
+            },
+            cx,
+        );
+    }
+
+    fn retry_detail(&mut self, cx: &mut Context<Self>) {
+        if self.pending_changes > 0 {
+            return;
+        }
+        if !self.confirm_retry {
+            self.confirm_retry = true;
+            cx.notify();
+            return;
+        }
+        let Some(details) = self.details.as_ref() else {
+            return;
+        };
+        let id = details.id.clone();
+        let edit = self
+            .items
+            .iter()
+            .any(|item| item.id == id && item.pending_edit.is_some());
+        self.confirm_retry = false;
+        self.change(
+            move |store, board| {
+                let (action, input) = if edit {
+                    (
+                        "todos.retryEdit",
+                        serde_json::json!({"id":id,"confirmNoEffect":true}),
+                    )
+                } else {
+                    (
+                        "todos.retry",
+                        serde_json::json!({"id":id,"confirmNoIssue":true}),
+                    )
+                };
+                service::action(store, board, action, &input).map(|_| ())
+            },
+            cx,
+        );
+    }
+
+    fn reconcile_detail(&mut self, cx: &mut Context<Self>) {
+        if self.pending_changes > 0 {
+            return;
+        }
+        let Some(details) = self.details.as_ref() else {
+            return;
+        };
+        let id = details.id.clone();
+        let edit = self
+            .items
+            .iter()
+            .any(|item| item.id == id && item.pending_edit.is_some());
+        self.change(
+            move |store, board| {
+                service::action(
+                    store,
+                    board,
+                    if edit {
+                        "todos.reconcileEdit"
+                    } else {
+                        "todos.reconcile"
+                    },
+                    &serde_json::json!({"id":id}),
+                )
+                .map(|_| ())
+            },
+            cx,
+        );
+    }
+
+    fn discard_detail(&mut self, cx: &mut Context<Self>) {
+        if self.pending_changes > 0 {
+            return;
+        }
+        if !self.confirm_discard {
+            self.confirm_discard = true;
+            cx.notify();
+            return;
+        }
+        let Some(details) = self.details.as_ref() else {
+            return;
+        };
+        let id = details.id.clone();
+        self.confirm_discard = false;
+        self.change(
+            move |store, board| {
+                service::action(
+                    store,
+                    board,
+                    "todos.discardEdit",
+                    &serde_json::json!({"id":id,"confirmChecked":true}),
+                )
+                .map(|_| ())
+            },
+            cx,
+        );
+    }
+
+    fn cancel_publish_detail(&mut self, cx: &mut Context<Self>) {
+        if self.pending_changes > 0 {
+            return;
+        }
+        if !self.confirm_cancel {
+            self.confirm_cancel = true;
+            cx.notify();
+            return;
+        }
+        let Some(details) = self.details.as_ref() else {
+            return;
+        };
+        let id = details.id.clone();
+        self.confirm_cancel = false;
+        self.change(
+            move |store, board| {
+                service::action(
+                    store,
+                    board,
+                    "todos.cancelPublish",
+                    &serde_json::json!({"id":id,"confirmNoIssue":true}),
+                )
+                .map(|_| ())
+            },
+            cx,
+        );
+    }
+
+    fn editor_panel(&self, cx: &mut Context<Self>) -> Option<gpui::AnyElement> {
+        let editor = self.details.as_ref()?;
+        let item = self.items.iter().find(|item| item.id == editor.id)?;
+        let remote = item.issue.is_some();
+        let issue = item.issue.clone();
+        let can_publish = matches!(self.board, Some(TodoBoard::Project(_)))
+            && self.github_repo.is_some()
+            && item.sync == vorkspace_core::todos::TodoSync::Local;
+        let uncertain = matches!(
+            item.sync,
+            vorkspace_core::todos::TodoSync::Pending | vorkspace_core::todos::TodoSync::Uncertain
+        );
+        let pending_edit = item.pending_edit.is_some();
+        let dependencies_truncated = item
+            .issue
+            .as_ref()
+            .is_some_and(|issue| issue.dependencies_truncated);
+        let attachment_refs = Self::reference_lines(&editor.attachments, cx);
+        let selected_dependencies = Self::dependency_values(&editor.dependencies, cx);
+        let dependency_choices = self
+            .items
+            .iter()
+            .filter(|candidate| candidate.id != item.id && (!remote || candidate.issue.is_some()))
+            .map(|candidate| {
+                (
+                    Self::dependency_ref(candidate),
+                    self.dependency_label(&Self::dependency_ref(candidate)),
+                )
+            })
+            .collect::<Vec<_>>();
+        Some(
+            div()
+                .id("todo-details")
+                .debug_selector(|| "todo-details".into())
+                .flex_1()
+                .w_full()
+                .min_w_0()
+                .min_h_0()
+                .flex()
+                .flex_col()
+                .child(
+                    div()
+                        .h(px(52.))
+                        .px_3()
+                        .flex_shrink_0()
+                        .flex()
+                        .items_center()
+                        .gap_2()
+                        .border_b_1()
+                        .border_color(page::divider())
+                        .child(
+                            labeled_secondary("todo-details-close", "Close", false, false)
+                                .debug_selector(|| "todo-details-close".into())
+                                .flex_shrink_0()
+                                .on_click(cx.listener(|this, _, window, cx| {
+                                    this.dismiss_details(window, cx);
+                                })),
+                        )
+                        .child(
+                            div()
+                                .flex_1()
+                                .min_w_0()
+                                .truncate()
+                                .text_size(px(page::META_SIZE))
+                                .text_color(page::secondary_ink())
+                                .child(if let Some(issue) = &issue {
+                                    if pending_edit {
+                                        format!("GitHub issue #{} · edit unconfirmed", issue.number)
+                                    } else {
+                                        format!("GitHub issue #{}", issue.number)
+                                    }
+                                } else if uncertain {
+                                    format!(
+                                        "GitHub creation unconfirmed · check {}",
+                                        item.pending_repo
+                                            .as_deref()
+                                            .unwrap_or("the original repository")
+                                    )
+                                } else {
+                                    "Local project to-do".into()
+                                }),
+                        )
+                        .when_some(issue.clone(), |d, issue| {
+                            d.child(
+                                labeled_secondary("todo-open-issue", "Open on GitHub", false, false)
+                                    .flex_shrink_0()
+                                    .on_click(move |_, _, cx| cx.open_url(&issue.url)),
+                            )
+                        }),
+                )
+                .child(
+                    div()
+                        .id("todo-details-scroll")
+                        .debug_selector(|| "todo-details-scroll".into())
+                        .flex_1()
+                        .min_h_0()
+                        .overflow_y_scroll()
+                        .px_3()
+                        .py_3()
+                        .child(
+                            div()
+                                .w_full()
+                                .max_w(px(760.))
+                                .mx_auto()
+                                .flex()
+                                .flex_col()
+                                .gap_3()
+                                .child(page::label().child("Title"))
+                                .child(page::field_frame().w_full().child(
+                                    div().flex_1().min_w_0().child(editor.title.clone()),
+                                ))
+                                .child(page::label().child("Description"))
+                                .child(
+                                    page::field_frame()
+                                        .h_auto()
+                                        .min_h(px(140.))
+                                        .items_start()
+                                        .py_2()
+                                        .child(div().flex_1().min_w_0().child(editor.description.clone())),
+                                )
+                                .child(page::label().child("Attachments"))
+                .children(
+                    attachment_refs
+                        .iter()
+                        .enumerate()
+                        .map(|(index, reference)| {
+                            div()
+                                .flex()
+                                .items_center()
+                                .gap_2()
+                                .child(
+                                    div()
+                                        .flex_1()
+                                        .min_w_0()
+                                        .truncate()
+                                        .text_size(px(page::META_SIZE))
+                                        .child(reference.clone()),
+                                )
+                                .child(
+                                    page::icon_action(
+                                        SharedString::from(format!(
+                                            "todo-attachment-remove-{index}"
+                                        )),
+                                        "Remove attachment",
+                                        true,
+                                    )
+                                    .child(icon("close", page::ICON_SIZE))
+                                    .on_click(cx.listener(
+                                        move |this, _, _, cx| this.remove_attachment(index, cx),
+                                    )),
+                                )
+                        }),
+                )
+                .child(
+                    div()
+                        .flex()
+                        .flex_wrap()
+                        .items_center()
+                        .gap_2()
+                        .child(
+                            labeled_secondary("todo-add-files", "Add files…", false, false)
+                                .debug_selector(|| "todo-add-files".into())
+                                .flex_shrink_0()
+                                .on_click(cx.listener(|this, _, _, cx| this.add_attachment_files(cx))),
+                        )
+                        .child(
+                            page::field_frame()
+                                .flex_grow(1.)
+                                .flex_shrink(1.)
+                                .flex_basis(px(180.))
+                                .min_w(px(150.))
+                                .max_w(px(320.))
+                                .child(div().flex_1().min_w_0().child(editor.url.clone())),
+                        )
+                        .child(
+                            labeled_secondary("todo-add-url", "Add link", false, false)
+                                .debug_selector(|| "todo-add-url".into())
+                                .flex_shrink_0()
+                                .on_click(cx.listener(|this, _, _, cx| this.add_attachment_url(cx))),
+                        ),
+                )
+                .when(remote && !item.attachments.is_empty(), |d| {
+                    d.child(div().flex().flex_col().gap_1().children(
+                        item.attachments.iter().enumerate().map(|(index, url)| {
+                            let url = url.clone();
+                            labeled_secondary(
+                                SharedString::from(format!("todo-existing-attachment-{index}")),
+                                format!("Open GitHub attachment {}", index + 1),
+                                false,
+                                false,
+                            )
+                            .on_click(move |_, _, cx| cx.open_url(&url))
+                        }),
+                    ))
+                })
+                .child(div().text_size(px(page::META_SIZE)).child("Depends on"))
+                .children(
+                    selected_dependencies
+                        .iter()
+                        .enumerate()
+                        .map(|(index, reference)| {
+                            let reference = reference.clone();
+                            div()
+                                .id(SharedString::from(format!("todo-selected-dependency-{index}")))
+                                .flex()
+                                .items_start()
+                                .gap_2()
+                                .px_2()
+                                .py_1()
+                                .rounded(px(radius::CONTROL))
+                                .bg(content(0.05))
+                                .child(div().flex_1().min_w_0().text_size(px(page::LABEL_SIZE)).child(self.dependency_label(&reference)))
+                                .when(!dependencies_truncated, |d| {
+                                    d.child(page::icon_action(
+                                        SharedString::from(format!("todo-remove-dependency-{index}")),
+                                        "Remove dependency",
+                                        true,
+                                    )
+                                    .child(icon("close", page::ICON_SIZE))
+                                    .on_click(cx.listener(move |this, _, _, cx| this.toggle_dependency(reference.clone(), cx))))
+                                })
+                        }),
+                )
+                .when(dependencies_truncated, |d| {
+                    d.child(page::meta().child("Additional dependencies are on GitHub. Edit dependency links there."))
+                })
+                .when(!dependencies_truncated, |d| {
+                    d.child(
+                        labeled_secondary(
+                            "todo-choose-dependency",
+                            if self.show_dependency_choices {
+                                "Hide task choices"
+                            } else {
+                                "Add dependency…"
+                            },
+                            false,
+                            false,
+                        )
+                        .on_click(cx.listener(|this, _, _, cx| {
+                            this.show_dependency_choices = !this.show_dependency_choices;
+                            cx.notify();
+                        })),
+                    )
+                })
+                .when(self.show_dependency_choices && !dependencies_truncated, |d| {
+                    d.child(
+                        div()
+                            .id("todo-dependency-choices")
+                            .max_h(px(150.))
+                            .overflow_y_scroll()
+                            .flex()
+                            .flex_col()
+                            .gap_1()
+                            .children(dependency_choices.iter().enumerate().map(
+                                |(index, (reference, label))| {
+                                    let reference = reference.clone();
+                                    let selected = selected_dependencies.contains(&reference);
+                                    labeled_secondary(
+                                        SharedString::from(format!(
+                                            "todo-dependency-choice-{index}"
+                                        )),
+                                        format!("{} {label}", if selected { "✓" } else { "+" }),
+                                        false,
+                                        false,
+                                    )
+                                    .on_click(cx.listener(
+                                        move |this, _, _, cx| {
+                                            this.toggle_dependency(reference.clone(), cx)
+                                        },
+                                    ))
+                                },
+                            ))
+                            .when(dependency_choices.is_empty(), |d| {
+                                d.child("No other tasks on this board")
+                            }),
+                    )
+                })
+                            ),
+                )
+                .child(
+                    div()
+                        .id("todo-details-footer")
+                        .debug_selector(|| "todo-details-footer".into())
+                        .flex_shrink_0()
+                        .border_t_1()
+                        .border_color(page::divider())
+                        .px_3()
+                        .py_2()
+                        .child(
+                            div()
+                                .w_full()
+                                .max_w(px(760.))
+                                .mx_auto()
+                                .flex()
+                                .flex_wrap()
+                                .gap_2()
+                        .child(
+                            labeled_primary(
+                                "todo-details-save",
+                                "Save",
+                                self.pending_changes > 0 || pending_edit || uncertain,
+                            )
+                            .debug_selector(|| "todo-details-save".into())
+                            .on_click(cx.listener(|this, _, _, cx| this.save_details(cx))),
+                        )
+                        .when(can_publish, |d| {
+                            d.child(
+                                labeled_secondary(
+                                    "todo-publish",
+                                    "Publish to GitHub",
+                                    false,
+                                    self.pending_changes > 0,
+                                )
+                                .on_click(cx.listener(
+                                    |this, _, _, cx| this.detail_action("todos.publish", cx),
+                                )),
+                            )
+                        })
+                        .when(uncertain || pending_edit, |d| {
+                            d.child(
+                                labeled_secondary(
+                                    "todo-reconcile",
+                                    if pending_edit {
+                                        "Check issue for edit"
+                                    } else {
+                                        "Check for created issue"
+                                    },
+                                    false,
+                                    self.pending_changes > 0,
+                                )
+                                .on_click(cx.listener(|this, _, _, cx| this.reconcile_detail(cx))),
+                            )
+                        })
+                        .when(uncertain || pending_edit, |d| {
+                            d.child(
+                                labeled_secondary(
+                                    "todo-retry",
+                                    if self.confirm_retry {
+                                        "I checked GitHub: retry"
+                                    } else {
+                                        "Retry after checking GitHub"
+                                    },
+                                    false,
+                                    self.pending_changes > 0,
+                                )
+                                .on_click(cx.listener(|this, _, _, cx| this.retry_detail(cx))),
+                            )
+                        })
+                        .when(uncertain, |d| {
+                            d.child(
+                                labeled_secondary(
+                                    "todo-cancel-publish",
+                                    if self.confirm_cancel {
+                                        "I checked: keep local"
+                                    } else {
+                                        "Keep as local task"
+                                    },
+                                    false,
+                                    self.pending_changes > 0,
+                                )
+                                .on_click(
+                                    cx.listener(|this, _, _, cx| this.cancel_publish_detail(cx)),
+                                ),
+                            )
+                        })
+                        .when(pending_edit, |d| {
+                            d.child(
+                                labeled_secondary(
+                                    "todo-discard-edit",
+                                    if self.confirm_discard {
+                                        "I checked: discard draft"
+                                    } else {
+                                        "Discard saved edit"
+                                    },
+                                    true,
+                                    self.pending_changes > 0,
+                                )
+                                .on_click(cx.listener(|this, _, _, cx| this.discard_detail(cx))),
+                            )
+                        }),
+                        ),
+                )
+                .into_any_element(),
+        )
     }
 
     fn status_mark(status: TodoStatus) -> gpui::AnyElement {
@@ -371,119 +1430,13 @@ impl TodoBoardView {
             TodoStatus::InProgress => icon("circle-dot", 15.)
                 .text_color(accent_color())
                 .into_any_element(),
+            TodoStatus::InReview => icon("eye", 15.)
+                .text_color(accent_color())
+                .into_any_element(),
             TodoStatus::Done => icon("check-circle", 15.)
-                .text_color(page::secondary_ink())
+                .text_color(vorkspace_ui::theme::status(StatusColor::Success, 1.))
                 .into_any_element(),
         }
-    }
-
-    fn row(&self, item: &TodoItem, cx: &mut Context<Self>) -> gpui::AnyElement {
-        let id = item.id.clone();
-        let status = item.status;
-        let board = self.board.as_ref().map(TodoBoard::key).unwrap_or_default();
-        let editing = self
-            .editing
-            .as_ref()
-            .filter(|(editing, _)| *editing == item.id)
-            .map(|(_, input)| input.clone());
-        let done = status == TodoStatus::Done;
-        let dragged = DraggedTodo {
-            board,
-            id: id.clone(),
-            title: item.title.clone().into(),
-        };
-        let before = id.clone();
-        div()
-            .id(SharedString::from(format!("todo-{}", item.id)))
-            .debug_selector({
-                let id = item.id.clone();
-                move || format!("todo-{id}")
-            })
-            .group("todo-row")
-            .role(Role::ListItem)
-            .aria_label(SharedString::from(format!(
-                "{}, {}",
-                item.title,
-                status.label()
-            )))
-            .min_h(px(36.))
-            .px_1()
-            .flex()
-            .items_center()
-            .gap_2()
-            .rounded_md()
-            .hover(|s| s.bg(content(0.05)))
-            .drag_over::<DraggedTodo>(|s, _, _, _| s.bg(content(0.08)))
-            .on_drop(cx.listener(move |this, dragged: &DraggedTodo, _, cx| {
-                this.move_to(dragged, status, Some(before.clone()), cx)
-            }))
-            .on_drag(dragged, |dragged, _, _, cx| cx.new(|_| dragged.clone()))
-            .child(
-                page::icon_action(
-                    SharedString::from(format!("todo-status-{}", item.id)),
-                    format!("Move to {}", status.next().label()),
-                    true,
-                )
-                .debug_selector({
-                    let id = item.id.clone();
-                    move || format!("todo-status-{id}")
-                })
-                .child(Self::status_mark(status))
-                .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
-                .on_click(cx.listener({
-                    let id = id.clone();
-                    move |this, _, _, cx| {
-                        cx.stop_propagation();
-                        this.advance(id.clone(), status, cx)
-                    }
-                })),
-            )
-            .child(match editing {
-                Some(input) => div().flex_1().min_w_0().child(input).into_any_element(),
-                None => div()
-                    .id(SharedString::from(format!("todo-title-{}", item.id)))
-                    .flex_1()
-                    .min_w_0()
-                    .py_1()
-                    .text_size(px(page::LABEL_SIZE))
-                    .line_height(px(page::LABEL_LINE))
-                    .text_color(if done {
-                        page::secondary_ink()
-                    } else {
-                        content(1.)
-                    })
-                    .when(done, |d| d.line_through())
-                    .child(item.title.clone())
-                    .on_mouse_down(
-                        MouseButton::Left,
-                        cx.listener({
-                            let item = item.clone();
-                            move |this, event: &gpui::MouseDownEvent, window, cx| {
-                                if event.click_count == 2 {
-                                    this.begin_edit(&item, window, cx)
-                                }
-                            }
-                        }),
-                    )
-                    .into_any_element(),
-            })
-            .child(
-                page::icon_action(
-                    SharedString::from(format!("todo-delete-{}", item.id)),
-                    "Delete to-do",
-                    true,
-                )
-                .opacity(0.)
-                .group_hover("todo-row", |s| s.opacity(1.))
-                .focus_visible(|s| s.opacity(1.).bg(content(0.15)).border_color(accent_color()))
-                .child(icon("close", page::ICON_SIZE))
-                .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
-                .on_click(cx.listener(move |this, _, _, cx| {
-                    cx.stop_propagation();
-                    this.delete(id.clone(), cx)
-                })),
-            )
-            .into_any_element()
     }
 
     fn column(&self, status: TodoStatus, cx: &mut Context<Self>) -> gpui::Stateful<gpui::Div> {
@@ -501,10 +1454,10 @@ impl TodoBoardView {
             .aria_label(status.label())
             .flex()
             .flex_col()
-            .gap_px()
+            .gap_2()
             .min_w_0()
             .min_h(px(64.))
-            .rounded(px(page::CARD_CORNER))
+            .rounded(px(radius::SURFACE))
             .drag_over::<DraggedTodo>(|s, _, _, _| s.bg(content(0.04)))
             .on_drop(cx.listener(move |this, dragged: &DraggedTodo, _, cx| {
                 this.move_to(dragged, status, None, cx)
@@ -519,6 +1472,7 @@ impl TodoBoardView {
                     .text_size(px(page::META_SIZE))
                     .font_weight(FontWeight::MEDIUM)
                     .text_color(page::secondary_ink())
+                    .child(Self::status_mark(status))
                     .child(status.label())
                     .child(div().child(count.to_string())),
             )
@@ -533,6 +1487,7 @@ impl TodoBoardView {
                         .child(match status {
                             TodoStatus::Todo => "Nothing to do",
                             TodoStatus::InProgress => "Nothing in progress",
+                            TodoStatus::InReview => "Nothing in review",
                             TodoStatus::Done => "Nothing done yet",
                         }),
                 )
@@ -542,73 +1497,78 @@ impl TodoBoardView {
 
 impl Render for TodoBoardView {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let narrow = page::narrow(window);
-        let columns = self.columns && !narrow;
-        let padding = if self.columns {
-            page::detail_padding(narrow)
-        } else {
-            px(8.)
-        };
+        if !self.create_open && self.draft.focus_handle(cx).is_focused(window) {
+            window.focus(&self.create_focus, cx);
+        }
+        if self.details.is_none()
+            && let Some(focus) = self.detail_return_focus.take()
+            && (window.focused(cx).is_none() || self.detail_focus.contains_focused(window, cx))
+        {
+            window.focus(&focus, cx);
+        }
+        // Flex wrapping follows this pane's actual width, including when it
+        // is tiled inside a much wider window. Sidebar boards stay stacked.
+        let padding = px(8.);
         let body = div()
             .id("todo-board-columns")
+            .debug_selector(|| "todo-board-columns".into())
             .flex_1()
             .min_h_0()
             .overflow_y_scroll()
             .px(padding)
-            .pb(padding)
+            .pt(padding)
+            // Let the last cards scroll clear of the floating create button.
+            .pb(px(68.))
             .map(|d| {
-                if columns {
-                    d.flex().items_start().gap_3()
+                if self.columns {
+                    d.flex().flex_wrap().items_start().gap_3()
                 } else {
                     d.flex().flex_col().gap_2()
                 }
             })
             .children(TodoStatus::ALL.into_iter().map(|status| {
-                self.column(status, cx).when(columns, |d| {
-                    d.flex_1()
-                        .p_2()
-                        .bg(content(0.02))
-                        .border_1()
-                        .border_color(page::divider())
+                self.column(status, cx).when(self.columns, |d| {
+                    d.flex_grow(1.)
+                        .flex_shrink(0.)
+                        .flex_basis(px(176.))
+                        .min_w(px(176.))
                 })
             }));
-        div()
+        let root = div()
             .id("todo-board")
             .debug_selector(|| "todo-board".into())
+            .relative()
             .size_full()
             .min_h_0()
             .flex()
-            .flex_col()
-            .child(
+            .flex_col();
+        let error = self
+            .change_error
+            .clone()
+            .or(self.error.clone())
+            .map(|error| {
                 div()
-                    .h(px(page::CONTROL_HEIGHT))
-                    .flex_shrink_0()
-                    .px_2()
-                    .mx(padding)
-                    .my_3()
-                    .flex()
-                    .items_center()
-                    .gap_2()
-                    .rounded_md()
-                    .border_1()
-                    .border_color(page::divider())
-                    .child(icon("plus", page::ICON_SIZE))
-                    .child(div().flex_1().min_w_0().child(self.draft.clone())),
-            )
-            .children(
-                self.change_error
-                    .clone()
-                    .or(self.error.clone())
-                    .map(|error| {
-                        div()
-                            .px_3()
-                            .pb_2()
-                            .text_size(px(12.))
-                            .text_color(gpui::rgb(0xe5484d))
-                            .child(error)
-                    }),
-            )
+                    .px_3()
+                    .py_2()
+                    .text_size(px(12.))
+                    .text_color(gpui::rgb(0xe5484d))
+                    .child(error)
+            });
+        root.children(error)
+            .children(self.github_notice.clone().map(|notice| {
+                div()
+                    .id("todo-github-notice")
+                    .px_3()
+                    .pb_2()
+                    .text_size(px(page::META_SIZE))
+                    .text_color(page::secondary_ink())
+                    .child(notice)
+            }))
             .child(body)
+            .child(self.create_button(cx))
+            .children(self.create_popover(cx))
+            .children(self.details_overlay(window, cx))
+            .into_any_element()
     }
 }
 
@@ -619,12 +1579,20 @@ pub(crate) struct BoardChoice {
     pub label: String,
 }
 
+#[derive(Clone)]
+struct LegacyTasks {
+    id: String,
+    label: String,
+    count: usize,
+    projects: Vec<String>,
+}
+
 impl BoardChoice {
     fn group(&self) -> &'static str {
         match self.board {
             TodoBoard::Personal => "",
             TodoBoard::Project(_) => "Projects",
-            TodoBoard::Bot(_) => "Bots",
+            TodoBoard::Bot(_) => "",
         }
     }
 }
@@ -633,13 +1601,15 @@ pub(crate) enum PageEvent {
     Close,
 }
 
-/// The left sidebar's To-dos page: the personal board, or any project's or
-/// Bot's, picked from a dropdown.
+/// The left sidebar's To-dos page: the personal board or a project board,
+/// picked from a dropdown.
 pub(crate) struct TodosPage {
     store: Database,
     board: Entity<TodoBoardView>,
     choices: Vec<BoardChoice>,
     open_counts: std::collections::HashMap<String, usize>,
+    legacy: Vec<LegacyTasks>,
+    assign_error: Option<String>,
     anchor: AnchorSlot,
     picker_open: bool,
     _subscriptions: Vec<Subscription>,
@@ -669,6 +1639,8 @@ impl TodosPage {
                 label: "Personal".into(),
             }],
             open_counts: Default::default(),
+            legacy: Vec::new(),
+            assign_error: None,
             anchor: AnchorSlot::default(),
             picker_open: false,
             _subscriptions: subscriptions,
@@ -677,10 +1649,10 @@ impl TodosPage {
         page
     }
 
-    /// Projects and Bots, after the personal board. A board that disappears
+    /// Projects, after the personal board. A board that disappears
     /// falls back to the personal one.
     pub(crate) fn set_choices(&mut self, mut choices: Vec<BoardChoice>, cx: &mut Context<Self>) {
-        choices.retain(|choice| choice.board != TodoBoard::Personal);
+        choices.retain(|choice| matches!(choice.board, TodoBoard::Project(_)));
         choices.insert(
             0,
             BoardChoice {
@@ -709,18 +1681,123 @@ impl TodosPage {
 
     fn load_counts(&mut self, cx: &mut Context<Self>) {
         let store = self.store.clone();
-        let work = cx
-            .background_executor()
-            .spawn(async move { locked(&store)?.open_todo_counts() });
+        let work = cx.background_executor().spawn(async move {
+            let store = locked(&store)?;
+            let counts = store.open_todo_counts()?;
+            let legacy = store.legacy_bot_todo_counts()?;
+            let roster = vorkspace_core::bot::Roster::load(&store).ok();
+            let legacy = legacy
+                .into_iter()
+                .map(|(id, count)| {
+                    let bot = roster.as_ref().and_then(|roster| roster.get(&id));
+                    LegacyTasks {
+                        label: bot
+                            .map(|bot| bot.name.clone())
+                            .unwrap_or_else(|| format!("Former Bot {id}")),
+                        projects: bot.map(|bot| bot.projects.clone()).unwrap_or_default(),
+                        id,
+                        count,
+                    }
+                })
+                .collect::<Vec<_>>();
+            Ok::<_, String>((counts, legacy))
+        });
         cx.spawn(async move |this, cx| {
-            if let Ok(counts) = work.await {
+            if let Ok((counts, legacy)) = work.await {
                 let _ = this.update(cx, |this, cx| {
                     this.open_counts = counts;
+                    this.legacy = legacy;
                     cx.notify();
                 });
             }
         })
         .detach();
+    }
+
+    fn assign_legacy(&mut self, id: String, project: String, cx: &mut Context<Self>) {
+        self.assign_error = None;
+        let store = self.store.clone();
+        let work = cx
+            .background_executor()
+            .spawn(async move { locked(&store)?.assign_legacy_bot_todos(&id, &project) });
+        cx.spawn(async move |this, cx| {
+            let result = work.await;
+            let _ = this.update(cx, |this, cx| {
+                match result {
+                    Ok(_) => {
+                        changed(cx);
+                        this.load_counts(cx);
+                    }
+                    Err(error) => this.assign_error = Some(error),
+                }
+                cx.notify();
+            });
+        })
+        .detach();
+    }
+
+    fn legacy_panel(&self, cx: &mut Context<Self>) -> Option<gpui::AnyElement> {
+        let Some(TodoBoard::Project(project)) = self.selected(cx) else {
+            return None;
+        };
+        let rows = self
+            .legacy
+            .iter()
+            .filter(|legacy| {
+                legacy.projects.is_empty()
+                    || legacy.projects.iter().any(|path| {
+                        vorkspace_core::files::path_key(path)
+                            == vorkspace_core::files::path_key(&project)
+                    })
+            })
+            .enumerate()
+            .map(|(ix, legacy)| {
+                let id = legacy.id.clone();
+                let project = project.clone();
+                div()
+                    .flex()
+                    .items_center()
+                    .gap_2()
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_w_0()
+                            .truncate()
+                            .child(format!("{} · {} saved task(s)", legacy.label, legacy.count)),
+                    )
+                    .child(
+                        labeled_secondary(("todo-assign-legacy", ix), "Move here", false, false)
+                            .on_click(cx.listener(move |this, _, _, cx| {
+                                this.assign_legacy(id.clone(), project.clone(), cx)
+                            })),
+                    )
+                    .into_any_element()
+            })
+            .collect::<Vec<_>>();
+        if rows.is_empty() {
+            return None;
+        }
+        Some(
+            div()
+                .mx_3()
+                .mt_2()
+                .p_2()
+                .rounded(px(radius::CONTROL))
+                .border_1()
+                .border_color(page::divider())
+                .flex()
+                .flex_col()
+                .gap_2()
+                .text_size(px(page::META_SIZE))
+                .child("Saved Bot tasks need a project")
+                .children(rows)
+                .children(
+                    self.assign_error
+                        .clone()
+                        .map(|error| div().text_color(gpui::rgb(0xe5484d)).child(error)),
+                )
+                .into_any_element(),
+        )
     }
 
     fn label(&self, cx: &App) -> String {
@@ -763,7 +1840,7 @@ impl TodosPage {
                     .aria_selected(current)
                     .px_2()
                     .py_1p5()
-                    .rounded_md()
+                    .rounded(px(radius::CONTROL))
                     .flex()
                     .items_center()
                     .gap_2()
@@ -851,6 +1928,7 @@ impl Render for TodosPage {
                         })),
                 ),
             )
+            .when_some(self.legacy_panel(cx), |d, panel| d.child(panel))
             .child(div().flex_1().min_h_0().child(self.board.clone()))
             .when(self.picker_open, |d| d.child(self.picker(cx)))
     }

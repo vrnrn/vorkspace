@@ -4,7 +4,7 @@ Minions are lasting members of a Bot's team. Turn on the experimental feature in
 
 The parent uses `minions.hire` to choose a name, role and optional specialties. Hiring does not start a job or require choosing a project. The parent checks its team with `minions.list`, then sends work with `bots.send`. A member keeps its own conversation, so later jobs can build on earlier work. Replies normally come back automatically; the parent does not need to keep checking. `minions.spawn` is an older shortcut that hires someone and sends a first job together.
 
-Members share their parent's personality instructions, saved memory and to-do board. If one saves a useful fact, the parent and siblings can read it. They follow the parent's current project assignments, while keeping their own names and message histories.
+Members share their parent's personality instructions and saved memory. Their to-dos live on the assigned project boards, so the parent and siblings can work on the same tasks. If one saves a useful fact, the parent and siblings can read it. They follow the parent's current project assignments, while keeping their own names and message histories.
 
 Only a member's parent and siblings can communicate with it. They can exchange direct messages or use a channel containing just their team. Members cannot contact unrelated Bots or join their channels. Conversations between ordinary top-level Bots still work as usual.
 

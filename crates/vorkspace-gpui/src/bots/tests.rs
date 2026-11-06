@@ -4625,7 +4625,9 @@ fn minion_actor_keeps_team_identity_but_uses_parent_storage_and_rejects_foreign_
     assert_eq!(
         locked(&s.store)
             .unwrap()
-            .list_todos(&vorkspace_core::todos::TodoBoard::Bot(s.id.clone()))
+            .list_todos(&vorkspace_core::todos::TodoBoard::Project(
+                s.project.clone()
+            ))
             .unwrap()
             .len(),
         1
@@ -5010,4 +5012,55 @@ fn todo_badge_counts_without_opening_the_board(cx: &mut TestAppContext) {
     cx.update(crate::todos::changed);
     cx.run_until_parked();
     restored.read_with(cx, |m, cx| assert_eq!(m.open_todos(&s.id, cx), 2));
+}
+
+#[gpui::test]
+fn legacy_bot_tasks_move_to_an_assigned_project_without_losing_identity(cx: &mut TestAppContext) {
+    let s = setup(cx);
+    let board = vorkspace_core::todos::TodoBoard::Bot(s.id.clone());
+    let saved = locked(&s.store)
+        .unwrap()
+        .add_todo(&board, "Persisted", vorkspace_core::todos::TodoStatus::Todo)
+        .unwrap();
+    let listed = call_as(
+        &s,
+        s.session,
+        "legacy-todo-list",
+        "todos.list",
+        json!({}),
+        cx,
+    )
+    .unwrap();
+    assert_eq!(listed["items"].as_array().unwrap().len(), 0);
+    assert_eq!(listed["legacyItems"][0]["id"], saved.id);
+    assert_eq!(
+        locked(&s.store).unwrap().list_todos(&board).unwrap()[0].id,
+        saved.id
+    );
+    call_as(
+        &s,
+        s.session,
+        "legacy-todo-add",
+        "todos.add",
+        json!({"title":"New project task"}),
+        cx,
+    )
+    .unwrap();
+    assert!(
+        locked(&s.store)
+            .unwrap()
+            .list_todos(&board)
+            .unwrap()
+            .is_empty()
+    );
+    assert_eq!(
+        locked(&s.store)
+            .unwrap()
+            .list_todos(&vorkspace_core::todos::TodoBoard::Project(
+                s.project.clone()
+            ))
+            .unwrap()[0]
+            .id,
+        saved.id
+    );
 }
