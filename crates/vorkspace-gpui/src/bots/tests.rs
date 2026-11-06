@@ -3123,13 +3123,15 @@ fn bot_details_share_the_original_titlebar_and_project_tools_use_the_same_edge(
         .unwrap();
     let visual = &mut gpui::VisualTestContext::from_window(s.window.into(), cx);
     visual.run_until_parked();
+    vorkspace_ui::clock::settle_animations(s.window, visual);
     let panel = visual.debug_bounds("right-panel-frame").unwrap();
     let tabs = visual.debug_bounds("bot-overview-tabs").unwrap();
     let toggle = visual.debug_bounds("toggle-right-panel").unwrap();
-    assert!(
-        visual.debug_bounds("title-tab-strip").is_none(),
-        "a Bot is a sidebar page, without session tabs"
-    );
+    let strip = visual.debug_bounds("title-tab-strip").unwrap();
+    let bot_tab = Box::leak(format!("bot-title-tab-{}", s.id).into_boxed_str());
+    let session_tab = Box::leak(format!("title-tab-{session}").into_boxed_str());
+    assert_eq!(visual.debug_bounds(bot_tab).unwrap().top(), strip.top());
+    assert_eq!(visual.debug_bounds(session_tab).unwrap().top(), strip.top());
     assert_eq!(tabs.top(), panel.top());
     assert_eq!(tabs.size.height, px(TITLE_BAR_HEIGHT));
     assert_eq!(tabs.left(), panel.left() + px(6.));
@@ -3155,10 +3157,10 @@ fn bot_details_share_the_original_titlebar_and_project_tools_use_the_same_edge(
         visual.debug_bounds("sidebar-frame").is_none(),
         "a Bot owns the main surface beside the project rail"
     );
-    // The project row returns to its tabs.
-    let project = visual.debug_bounds("classic-project-0").unwrap();
-    visual.simulate_click(project.center(), Default::default());
+    let session_bounds = visual.debug_bounds(session_tab).unwrap();
+    visual.simulate_click(session_bounds.center(), Default::default());
     visual.run_until_parked();
+    vorkspace_ui::clock::settle_animations(s.window, visual);
     let rail = visual.debug_bounds("classic-project-rail").unwrap();
     let sidebar = visual.debug_bounds("sidebar-frame").unwrap();
     assert_eq!(
@@ -3173,17 +3175,18 @@ fn bot_details_share_the_original_titlebar_and_project_tools_use_the_same_edge(
     assert!(visual.debug_bounds("right-panel-frame").is_none());
     assert!(visual.debug_bounds("toggle-right-panel").is_none());
     s.window
-        .update(visual, |shell, window, cx| {
+        .update(visual, |shell, _, _| {
             assert_eq!(shell.workspace.active, Some(session));
             assert!(
                 shell.workspace.right_panel_open,
                 "leaving the Bot retains its details preference"
             );
-            s.manager
-                .update(cx, |manager, cx| manager.open(&s.id, window, cx));
         })
         .unwrap();
+    let bot_bounds = visual.debug_bounds(bot_tab).unwrap();
+    visual.simulate_click(bot_bounds.center(), Default::default());
     visual.run_until_parked();
+    vorkspace_ui::clock::settle_animations(s.window, visual);
     assert_eq!(visual.debug_bounds("toggle-right-panel").unwrap(), toggle);
     assert_eq!(visual.debug_bounds("right-panel-frame").unwrap(), panel);
 }
@@ -3373,9 +3376,9 @@ fn opening_a_session_card_preserves_preview_state_when_returning_to_the_original
         visual,
         |manager, _| matches!(manager.route,Some(Route::Session(id)) if id==session)
     ));
-    // The project row returns to its tabs.
-    let project = visual.debug_bounds("classic-project-0").unwrap();
-    visual.simulate_click(project.center(), Default::default());
+    let session_tab = Box::leak(format!("title-tab-{session}").into_boxed_str());
+    let session_bounds = visual.debug_bounds(session_tab).unwrap();
+    visual.simulate_click(session_bounds.center(), Default::default());
     visual.run_until_parked();
     vorkspace_ui::clock::settle_animations(s.window, visual);
     let rail = visual.debug_bounds("classic-project-rail").unwrap();
@@ -3413,10 +3416,11 @@ fn opening_a_session_card_preserves_preview_state_when_returning_to_the_original
                     .focus_handle(cx)
                     .contains_focused(window, cx)
             );
-            s.manager
-                .update(cx, |manager, cx| manager.open(&s.id, window, cx));
         })
         .unwrap();
+    let bot_tab = Box::leak(format!("bot-title-tab-{}", s.id).into_boxed_str());
+    let bot_bounds = visual.debug_bounds(bot_tab).unwrap();
+    visual.simulate_click(bot_bounds.center(), Default::default());
     visual.run_until_parked();
     vorkspace_ui::clock::settle_animations(s.window, visual);
     assert_eq!(visual.debug_bounds("right-panel-frame").unwrap(), details);
@@ -3452,13 +3456,9 @@ fn long_habit_draft_keeps_fields_and_schedule_inside_the_scrolling_page(cx: &mut
     let visual = &mut gpui::VisualTestContext::from_window(s.window.into(), cx);
     visual.run_until_parked();
     vorkspace_ui::clock::settle_animations(s.window, visual);
+    let draft_name = "A long but valid habit name that fills the narrow panel";
     s.manager.update(visual, |m, cx| {
-        m.fields["habit-name"].update(cx, |f, cx| {
-            f.set_text(
-                "A long but valid habit name that fills the narrow panel".into(),
-                cx,
-            )
-        });
+        m.fields["habit-name"].update(cx, |f, cx| f.set_text(draft_name.into(), cx));
         m.fields["habit-instructions"].update(cx, |f, cx| {
             f.set_text(
                 "Report useful updates on the current project.\n".repeat(65),
@@ -3470,6 +3470,15 @@ fn long_habit_draft_keeps_fields_and_schedule_inside_the_scrolling_page(cx: &mut
     });
     visual.run_until_parked();
     vorkspace_ui::clock::settle_animations(s.window, visual);
+    let project = visual.debug_bounds("classic-project-0").unwrap();
+    visual.simulate_click(project.center(), Default::default());
+    visual.run_until_parked();
+    assert_eq!(
+        s.manager
+            .read_with(visual, |m, cx| (m.route.clone(), m.value("habit-name", cx))),
+        (Some(Route::NewHabit), draft_name.into()),
+        "reselecting the current project preserves the open Habit draft"
+    );
     let body = visual.debug_bounds("bot-habit-editor").unwrap();
     let name = visual.debug_bounds("bot-habit-name-field").unwrap();
     let schedule = visual.debug_bounds("bot-habit-schedule").unwrap();
