@@ -1,8 +1,10 @@
 //! Pane admission, splitting, focus movement, drag placement and sash resizing.
 use super::*;
+use vorkspace_core::files::path_key;
 
 // A proposed detached review does not have a layout ID yet.
 const REVIEW_PLACEMENT_PLACEHOLDER: i64 = i64::MIN;
+const SPLIT_PROJECT_MISMATCH: &str = "Choose a pane in this layout's project before splitting.";
 
 impl Shell {
     /// A click anywhere in a pane focuses it (PaneTree's onFocus).
@@ -183,14 +185,21 @@ impl Shell {
     /// cmd-d / shift-cmd-d: a new session beside the focused pane, with the
     /// focused session's provider.
     pub(super) fn split_session(&mut self, dir: SplitDir, cx: &mut Context<Self>) {
-        if self.workspace.active.is_none() {
+        let Some(focused) = self.workspace.active else {
             return;
-        }
-        let focused = self.workspace.active.unwrap();
+        };
         let Some(tab) = self.workspace.tab_of(focused) else {
             return;
         };
         let before = self.workspace.layout(tab);
+        let Some((project, path)) = self.pane_execution_scope(focused, cx) else {
+            return;
+        };
+        if !self.split_project_fits(&before, project, cx) {
+            self.error = Some(SPLIT_PROJECT_MISMATCH.into());
+            cx.notify();
+            return;
+        }
         if !self.split_allowed(&before, focused, dir, i64::MAX) {
             self.reject_pane_placement(cx);
             return;
@@ -204,15 +213,18 @@ impl Shell {
                 |s| Kind::from_id(&s.read(cx).summary.provider),
             );
         let navigation_revision = self.navigation_revision;
-        let target = self.workspace.active;
+        let target = Some(focused);
         let store = self.store.clone();
-        let cwd = self.workspace.project.clone();
-        let worktree = target.and_then(|id| {
-            let path = self.session_working_copy(id, cx);
-            (path != cwd).then(|| crate::git_tools::worktree_switcher::WorktreeFocus {
+        let cwd = project.to_owned();
+        let worktree = (path_key(path) != path_key(project)).then(|| {
+            crate::git_tools::worktree_switcher::WorktreeFocus {
                 path: path.into(),
-                branch: self.worktree_focus.get(&cwd).and_then(|f| f.branch.clone()),
-            })
+                branch: self
+                    .worktree_focus
+                    .get(project)
+                    .filter(|focus| path_key(&focus.path) == path_key(path))
+                    .and_then(|focus| focus.branch.clone()),
+            }
         });
         let worktree_cwd = worktree.as_ref().map(|f| f.path.clone());
         let work = cx.background_executor().spawn(async move {
@@ -247,6 +259,15 @@ impl Shell {
         })
         .detach();
     }
+
+    fn split_project_fits(&self, layout: &PaneNode, project: &str, cx: &App) -> bool {
+        let project = path_key(project);
+        layout.leaf_ids().into_iter().all(|id| {
+            self.pane_layout_anchor(id, cx)
+                .is_none_or(|(owner, _)| path_key(owner) == project)
+        })
+    }
+
     pub(super) fn finish_split_creation(
         &mut self,
         summary: Session,
@@ -257,6 +278,7 @@ impl Shell {
     ) {
         let (target, navigation_revision, dir) = request;
         let id = summary.id;
+        let project = summary.cwd.clone();
         self.add(summary, cx);
         self.seed_worktree(id, worktree, cx);
         self.order.retain(|s| *s != id);
@@ -279,18 +301,36 @@ impl Shell {
             return;
         };
         let layout = self.workspace.layout(tab);
-        if !self.split_allowed(&layout, target, dir, id) {
+        let compatible = self.split_project_fits(&layout, &project, cx);
+        let fits = self.split_allowed(&layout, target, dir, id);
+        let before = if compatible && fits {
+            let before = self.active_leaves();
+            self.workspace.split(id, dir);
+            Some(before)
+        } else {
             self.workspace.open(id);
-            self.activate_session(id, window, cx);
-            self.reject_pane_placement(cx);
-            return;
+            None
+        };
+        // A standalone terminal can be reached from another project's rail.
+        // Its new session makes the resulting layout project-bound.
+        if path_key(&project) != path_key(&self.workspace.project) {
+            if let Some(tab) = self.workspace.tab_of(id) {
+                self.workspace.tab_workspaces.remove(&tab);
+            }
+            self.restore_app_layout_scope(id, cx);
         }
-        let before = self.active_leaves();
-        self.workspace.split(id, dir);
-        self.fit_active_pane_width();
-        self.begin_pane_motion(before);
-        self.fit_sidebar(cx);
+        if let Some(before) = before {
+            self.fit_active_pane_width();
+            self.begin_pane_motion(before);
+            self.fit_sidebar(cx);
+        }
         self.activate_session(id, window, cx);
+        if !compatible {
+            self.error = Some(SPLIT_PROJECT_MISMATCH.into());
+            cx.notify();
+        } else if !fits {
+            self.reject_pane_placement(cx);
+        }
     }
     pub(super) fn focus_neighbor(
         &mut self,

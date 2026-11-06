@@ -244,6 +244,9 @@ fn reopening_a_mixed_app_layout_restores_scope_and_cli_rejects_foreign_siblings(
     window
         .update(cx, |shell, w, cx| {
             shell.sessions[&other].update(cx, |view, cx| view.enable_mode("operator", cx));
+            shell.open(other, w, cx);
+            shell.open_notes(w, cx);
+            let notes = shell.workspace.active.unwrap();
             shell.open(session, w, cx);
             let project = shell.workspace.project.clone();
             let worktree = format!("{project}/tree");
@@ -258,8 +261,6 @@ fn reopening_a_mixed_app_layout_restores_scope_and_cli_rejects_foreign_siblings(
                 .workspace
                 .tab_workspaces
                 .insert(session, worktree.clone());
-            shell.open_notes(w, cx);
-            let notes = shell.workspace.active.unwrap();
             shell.workspace.place(notes, session, Edge::Right);
             shell.select_project("/work/another-project".into(), w, cx);
             let before = shell.workspace.active;
@@ -279,6 +280,9 @@ fn reopening_a_mixed_app_layout_restores_scope_and_cli_rejects_foreign_siblings(
             assert_eq!(shell.workspace.active, Some(notes));
             assert_eq!(shell.workspace.project, project);
             assert_eq!(shell.working_copy(), worktree);
+            assert_eq!(shell.session_working_copy(notes, cx), worktree);
+            shell.record_worktree_session(notes, cx);
+            assert_eq!(shell.workspace.tab_workspaces[&session], worktree);
             assert!(
                 shell
                     .visible_tabs(cx)
@@ -482,6 +486,70 @@ fn disabling_a_feature_keeps_its_session_sibling_and_draft(cx: &mut TestAppConte
             assert_eq!(shell.note_tabs[&note], editor);
         })
         .unwrap();
+}
+
+#[gpui::test]
+fn disabled_channels_stay_unavailable_in_a_restored_mixed_tab(cx: &mut TestAppContext) {
+    let (window, _, session) = window(cx);
+    let visual = &mut gpui::VisualTestContext::from_window(window.into(), cx);
+    let channels = window
+        .update(visual, |shell, w, cx| {
+            shell.workspace.preferences.channels = true;
+            shell.apply_preferences(cx);
+            shell.open_classic_channels(w, cx);
+            let channels = shell.workspace.active.unwrap();
+            shell.workspace.place(channels, session, Edge::Right);
+            shell.open(channels, w, cx);
+            channels
+        })
+        .unwrap();
+    visual.run_until_parked();
+    assert!(visual.debug_bounds("channel-surface").is_some());
+    window
+        .update(visual, |shell, _, cx| {
+            shell.workspace.preferences.channels = false;
+            shell.apply_preferences(cx);
+            shell.persist(cx);
+        })
+        .unwrap();
+    visual.run_until_parked();
+    assert!(visual.debug_bounds("channel-surface").is_none());
+    let (store, summaries, project, saved) = window
+        .update(visual, |shell, _, _| {
+            let store = locked(&shell.store).unwrap();
+            (
+                shell.store.clone(),
+                store.sessions().unwrap(),
+                shell.workspace.project.clone(),
+                store.ui_state().unwrap(),
+            )
+        })
+        .unwrap();
+    let restored = cx.update(|cx| {
+        cx.open_window(Default::default(), |_, cx| {
+            cx.new(|cx| Shell::new(store, summaries, project, saved, cx))
+        })
+        .unwrap()
+    });
+    let visual = &mut gpui::VisualTestContext::from_window(restored.into(), cx);
+    visual.run_until_parked();
+    assert!(visual.debug_bounds("channel-surface").is_none());
+    restored
+        .update(visual, |shell, w, cx| {
+            assert!(shell.workspace.preferences.bots);
+            assert!(!shell.workspace.preferences.channels);
+            assert_eq!(
+                shell.workspace.layout(session).leaf_ids(),
+                [session, channels]
+            );
+            assert!(!shell.bot_manager().read(cx).classic_channels_open());
+            shell.workspace.preferences.channels = true;
+            shell.apply_preferences(cx);
+            shell.open(channels, w, cx);
+        })
+        .unwrap();
+    visual.run_until_parked();
+    assert!(visual.debug_bounds("channel-surface").is_some());
 }
 
 #[gpui::test]

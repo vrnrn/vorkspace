@@ -115,8 +115,7 @@ impl Shell {
                 Some(AppPane::Search) => {
                     let cwd = self
                         .app_layout_scope(leaf, cx)
-                        .map(|(_, worktree)| worktree);
-                    let cwd = cwd.as_deref().unwrap_or_else(|| self.working_copy());
+                        .map_or_else(|| self.working_copy(), |(_, worktree)| worktree);
                     self.app_search
                         .as_ref()
                         .or(self.parked_search.as_ref())
@@ -215,7 +214,10 @@ impl Shell {
     /// A global resource may be tiled beside a project-bound leaf. Restore that
     /// layout's project and working copy before configuring the resource view.
     pub(super) fn restore_app_layout_scope(&mut self, pane: i64, cx: &App) {
-        let Some((project, worktree)) = self.app_layout_scope(pane, cx) else {
+        let Some((project, worktree)) = self
+            .app_layout_scope(pane, cx)
+            .map(|(project, worktree)| (project.to_owned(), worktree.to_owned()))
+        else {
             return;
         };
         self.workspace.project = project.clone();
@@ -238,31 +240,27 @@ impl Shell {
         }
     }
 
-    fn app_layout_scope(&self, pane: i64, cx: &App) -> Option<(String, String)> {
+    pub(super) fn app_layout_scope<'a>(
+        &'a self,
+        pane: i64,
+        cx: &'a App,
+    ) -> Option<(&'a str, &'a str)> {
         let tab = self.workspace.tab_of(pane).unwrap_or(pane);
         self.workspace
             .layout(tab)
             .leaf_ids()
             .into_iter()
             .find_map(|id| {
-                if let Some(owner) = self.workspace.session_for_pane(id) {
-                    if !self.session_summaries.contains_key(&owner) {
-                        return None;
-                    }
-                    let project = self.session_metadata(owner, cx).summary.cwd.clone();
-                    let worktree = self
-                        .workspace
+                let (project, worktree) = self.pane_layout_anchor(id, cx)?;
+                let worktree = if self.workspace.session_for_pane(id).is_some() {
+                    self.workspace
                         .tab_workspaces
                         .get(&tab)
-                        .cloned()
-                        .unwrap_or_else(|| self.session_working_copy(id, cx).to_owned());
-                    return Some((project, worktree));
-                }
-                self.workspace
-                    .app_panes
-                    .get(&id)
-                    .filter(|state| state.content.project_scoped())
-                    .map(|state| (state.project.clone(), state.worktree.clone()))
+                        .map_or(worktree, String::as_str)
+                } else {
+                    worktree
+                };
+                Some((project, worktree))
             })
     }
 
@@ -415,7 +413,9 @@ impl Shell {
                         .as_ref()
                         .is_some_and(|m| m.read(cx).roster.get(id).is_some())
             }
-            AppPane::Channels => self.workspace.preferences.bots,
+            AppPane::Channels => {
+                self.workspace.preferences.bots && self.workspace.preferences.channels
+            }
             AppPane::App(AppView::Notes) | AppPane::Note(_) => self.workspace.preferences.notes,
             AppPane::App(AppView::Todos) => self.workspace.preferences.todos,
             AppPane::App(AppView::Connector(provider)) => {
