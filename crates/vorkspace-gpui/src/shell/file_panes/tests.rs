@@ -105,8 +105,10 @@ fn check_bot_file_link(cx: &mut TestAppContext, width: f32, tiled: bool) {
                 input.replace_text_in_range(None, "unsaved", w, cx)
             });
             shell.open(bot, w, cx);
-            shell.close_pane(pane, w, cx);
-            assert_eq!(shell.workspace.tab_of(pane), None);
+            assert!(
+                chat.read(cx).input.focus_handle(cx).is_focused(w),
+                "opening the Bot requests composer focus (tiled={tiled})"
+            );
             (pane, editor)
         })
         .unwrap();
@@ -124,6 +126,13 @@ fn check_bot_file_link(cx: &mut TestAppContext, width: f32, tiled: bool) {
                 restored.read(cx).input.read(cx).content.as_ref(),
                 "Keep my Bot draft"
             );
+            assert!(
+                restored.read(cx).input.focus_handle(cx).is_focused(w),
+                "the returning Bot composer receives focus (tiled={tiled}, focused={:?})",
+                w.focused(cx)
+            );
+            shell.close_pane(pane, w, cx);
+            assert_eq!(shell.workspace.tab_of(pane), None);
             assert!(restored.read(cx).input.focus_handle(cx).is_focused(w));
             w.dispatch_action(Box::new(crate::file_link::OpenPath(path.clone())), cx);
         })

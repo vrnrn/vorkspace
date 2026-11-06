@@ -593,7 +593,8 @@ impl Shell {
         };
         // Tabs begin after the project rail and its optional left sidebar.
         let lead = if self.workspace.classic_layout {
-            self.classic_rail_width() + sidebar + self.strip_lead(window)
+            let divider = if sidebar > 0. { 1. } else { 0. };
+            self.classic_rail_width() + sidebar + divider + self.strip_lead(window)
         } else {
             self.navigation_width(window)
         };

@@ -1157,8 +1157,20 @@ impl Shell {
         this.initialize_automations(cx);
         cx.spawn(async move |this, cx| {
             let _ = this.update_in(cx, |this, window, cx| {
-                if this.navigation_revision == 0 && !this.restore_scope_tab(window, cx) {
-                    this.ensure_project_session(window, cx);
+                if this.navigation_revision == 0 {
+                    // Sidebar worktree selection resets at launch. A selected
+                    // app pane still owns the scope saved with its layout.
+                    let scoped_app = this.workspace.active.filter(|id| {
+                        this.workspace.app_panes.get(id).is_some_and(|pane| {
+                            pane.content.project_scoped()
+                                && this.app_pane_available(&pane.content, cx)
+                        })
+                    });
+                    if let Some(id) = scoped_app {
+                        this.open(id, window, cx);
+                    } else if !this.restore_scope_tab(window, cx) {
+                        this.ensure_project_session(window, cx);
+                    }
                 }
                 this.persist(cx);
             });
@@ -2394,10 +2406,18 @@ impl Render for Shell {
                     // Cached editors and previews can outlive their rendered pane.
                     // Recover as soon as its focus node leaves the tree, including
                     // close paths without a Window in their original event.
-                    let target = window
-                        .focus_lost_restore_target(cx)
-                        .unwrap_or_else(|| this.focus.clone());
-                    window.focus(&target, cx);
+                    let target = window.focus_lost_restore_target(cx);
+                    if target.as_ref().is_none_or(|target| target == &this.focus)
+                        && this.workspace.active.is_some_and(|id| {
+                            this.workspace.app_panes.get(&id).is_some_and(|pane| {
+                                matches!(pane.content, crate::workspace::AppPane::Bot(_))
+                            })
+                        })
+                    {
+                        this.focus_active(window, cx);
+                    } else {
+                        window.focus(&target.unwrap_or_else(|| this.focus.clone()), cx);
+                    }
                 }));
             self.window_active = window.is_window_active();
             self.observations
