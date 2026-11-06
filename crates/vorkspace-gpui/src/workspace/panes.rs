@@ -144,11 +144,10 @@ impl Workspace {
 
     pub fn counts_toward_pane_limit(&self, id: i64) -> bool {
         !self.review_owners.contains_key(&id)
-            && (id >= 0
-                || self
-                    .app_panes
-                    .get(&id)
-                    .is_some_and(|pane| pane.content != AppPane::Review))
+            && self
+                .app_panes
+                .get(&id)
+                .is_none_or(|pane| pane.content != AppPane::Review)
     }
 
     /// Only saved title entries can open standalone app tabs. A scope's last
