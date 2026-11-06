@@ -41,7 +41,10 @@ fn queue_entrances_slide_above_a_stationary_composer_for_the_first_and_later_mes
         .unwrap();
     let visual = &mut VisualTestContext::from_window(window.into(), cx);
     let bounds = |visual: &mut VisualTestContext| {
-        visual.refresh().unwrap();
+        visual.update(|window, cx| {
+            window.refresh();
+            window.draw(cx).clear(cx);
+        });
         let queue_top = window
             .update(visual, |view, _, _| {
                 view.composer_anchor.get().unwrap().top()
