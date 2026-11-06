@@ -585,7 +585,81 @@ pub(crate) fn action(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use gpui::AppContext;
     use vorkspace_core::store::Store;
+
+    #[gpui::test]
+    fn published_dependency_stays_openable_online_offline_and_after_reopen(
+        cx: &mut gpui::TestAppContext,
+    ) {
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().join("tasks.sqlite");
+        let board = TodoBoard::Project("/dependency-test".into());
+        let store = Store::open(&path).unwrap();
+        let dependency = store
+            .add_todo(&board, "Dependency", TodoStatus::Todo)
+            .unwrap();
+        let task = store
+            .add_todo_with_details(
+                &board,
+                "Dependent task",
+                TodoStatus::Todo,
+                "",
+                &[],
+                &[dependency.id.clone()],
+            )
+            .unwrap();
+        let view = cx.new(|cx| {
+            super::super::TodoBoardView::new(
+                std::sync::Arc::new(std::sync::Mutex::new(
+                    Store::open(Path::new(":memory:")).unwrap(),
+                )),
+                false,
+                cx,
+            )
+        });
+        let check = |items: Vec<TodoItem>, expected: &str, cx: &mut gpui::TestAppContext| {
+            view.update(cx, |view, _| {
+                view.items = items;
+                let task = view.items.iter().find(|item| item.id == task.id).unwrap();
+                let linked = view
+                    .dependency_item(&task.dependencies[0])
+                    .expect("dependency is openable");
+                assert_eq!(linked.id, expected);
+                assert_eq!(linked.title, "Dependency");
+            });
+        };
+        check(store.list_todos(&board).unwrap(), &dependency.id, cx);
+        store
+            .begin_todo_publish(&board, &dependency.id, "test/project")
+            .unwrap();
+        let remote = remote_snapshot("test/project", 12, &json!({"title":"Dependency"}));
+        store
+            .finish_todo_publish(&board, &dependency.id, &remote)
+            .unwrap();
+        let saved = store.get_todo(&board, &task.id).unwrap().unwrap();
+        assert_eq!(
+            saved.dependencies,
+            [remote.issue.as_ref().unwrap().url.clone()]
+        );
+        assert!(
+            saved.updated_at > task.updated_at,
+            "an open editor detects the changed link"
+        );
+        check(
+            merge_remote(store.list_todos(&board).unwrap(), vec![remote.clone()]),
+            &remote.id,
+            cx,
+        );
+        drop(store);
+        let store = Store::open(&path).unwrap();
+        check(store.list_todos(&board).unwrap(), &dependency.id, cx);
+        check(
+            merge_remote(store.list_todos(&board).unwrap(), vec![remote.clone()]),
+            &remote.id,
+            cx,
+        );
+    }
 
     #[test]
     fn matched_create_keeps_reconciliation_and_initial_status() {

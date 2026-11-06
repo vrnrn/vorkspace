@@ -526,6 +526,11 @@ impl Store {
             .as_ref()
             .ok_or("Created issue has no identity")?;
         let draft = self.get_todo(board, id)?.ok_or("To-do not found")?;
+        let dependents = self
+            .list_todos(board)?
+            .into_iter()
+            .filter(|item| item.dependencies.iter().any(|dependency| dependency == id))
+            .collect::<Vec<_>>();
         let follow_up = (draft.status != remote.status).then(|| TodoRemoteEdit {
             attempt_id: uuid::Uuid::new_v4().to_string(),
             input: serde_json::json!({"id":remote.id,"status":draft.status.id()}),
@@ -546,6 +551,30 @@ impl Store {
             return Err(
                 "The submitted to-do changed; reconcile its GitHub issue before continuing".into(),
             );
+        }
+        // The remote list replaces the local card identity. Publish its
+        // incoming links in the same transaction so they resolve against both
+        // the remote issue and the retained local receipt when offline.
+        for mut dependent in dependents {
+            for reference in &mut dependent.dependencies {
+                if reference == id {
+                    *reference = issue.url.clone();
+                }
+            }
+            let mut seen = std::collections::HashSet::new();
+            dependent
+                .dependencies
+                .retain(|reference| seen.insert(reference.clone()));
+            tx.execute(
+                "UPDATE todo_items SET dependencies=?1,updated_at=?2 WHERE board=?3 AND id=?4",
+                params![
+                    serde_json::to_string(&dependent.dependencies).map_err(|e| e.to_string())?,
+                    now_millis().max(dependent.updated_at.saturating_add(1)),
+                    board.key(),
+                    dependent.id
+                ],
+            )
+            .map_err(|e| e.to_string())?;
         }
         tx.commit().map_err(|e| e.to_string())?;
         Ok(follow_up)

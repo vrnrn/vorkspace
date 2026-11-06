@@ -5015,6 +5015,42 @@ fn todo_badge_counts_without_opening_the_board(cx: &mut TestAppContext) {
 }
 
 #[gpui::test]
+fn failed_bot_todo_command_refreshes_committed_legacy_migration(cx: &mut TestAppContext) {
+    let s = setup(cx);
+    let legacy = vorkspace_core::todos::TodoBoard::Bot(s.id.clone());
+    let board = vorkspace_core::todos::TodoBoard::Project(s.project.clone());
+    let saved = locked(&s.store)
+        .unwrap()
+        .add_todo(
+            &legacy,
+            "Keep this task",
+            vorkspace_core::todos::TodoStatus::Todo,
+        )
+        .unwrap();
+    let view = cx.new(|cx| crate::todos::TodoBoardView::new(s.store.clone(), false, cx));
+    view.update(cx, |view, cx| view.set_board(Some(board), cx));
+    cx.run_until_parked();
+    view.read_with(cx, |view, _| assert!(view.items().is_empty()));
+    let result = call_as(
+        &s,
+        s.session,
+        "failed-todo-after-migration",
+        "todos.update",
+        json!({"id":"missing-task","title":"Cannot update this"}),
+        cx,
+    );
+    assert!(result.is_err(), "the original command failure is returned");
+    assert!(
+        locked(&s.store)
+            .unwrap()
+            .list_todos(&legacy)
+            .unwrap()
+            .is_empty()
+    );
+    view.read_with(cx, |view, _| assert_eq!(view.items()[0].id, saved.id));
+}
+
+#[gpui::test]
 fn legacy_bot_tasks_move_to_an_assigned_project_without_losing_identity(cx: &mut TestAppContext) {
     let s = setup(cx);
     let board = vorkspace_core::todos::TodoBoard::Bot(s.id.clone());
