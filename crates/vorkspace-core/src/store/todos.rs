@@ -33,6 +33,7 @@ pub fn ensure_schema(conn: &Connection) -> rusqlite::Result<()> {
            id TEXT NOT NULL,
            snapshot_json TEXT NOT NULL,
            input_json TEXT NOT NULL,
+           attempt_id TEXT NOT NULL,
            phase TEXT NOT NULL CHECK(phase IN ('pending','uncertain')),
            updated_at INTEGER NOT NULL,
            PRIMARY KEY(board,id)
@@ -60,6 +61,20 @@ pub fn ensure_schema(conn: &Connection) -> rusqlite::Result<()> {
             ))?;
         }
     }
+    let mut statement = conn.prepare("PRAGMA table_info(todo_remote_edits)")?;
+    let columns = statement
+        .query_map([], |row| row.get::<_, String>(1))?
+        .collect::<Result<Vec<_>, _>>()?;
+    drop(statement);
+    if !columns.iter().any(|name| name == "attempt_id") {
+        conn.execute_batch(
+            "ALTER TABLE todo_remote_edits ADD COLUMN attempt_id TEXT NOT NULL DEFAULT '';",
+        )?;
+    }
+    conn.execute(
+        "UPDATE todo_remote_edits SET attempt_id=lower(hex(randomblob(16))) WHERE attempt_id=''",
+        [],
+    )?;
     Ok(())
 }
 
@@ -504,23 +519,26 @@ impl Store {
         board: &TodoBoard,
         id: &str,
         remote: &TodoItem,
-    ) -> Result<Option<serde_json::Value>, String> {
+    ) -> Result<Option<TodoRemoteEdit>, String> {
         self.todo_schema()?;
         let issue = remote
             .issue
             .as_ref()
             .ok_or("Created issue has no identity")?;
         let draft = self.get_todo(board, id)?.ok_or("To-do not found")?;
-        let follow_up = (draft.status != remote.status)
-            .then(|| serde_json::json!({"id":remote.id,"status":draft.status.id()}));
+        let follow_up = (draft.status != remote.status).then(|| TodoRemoteEdit {
+            attempt_id: uuid::Uuid::new_v4().to_string(),
+            input: serde_json::json!({"id":remote.id,"status":draft.status.id()}),
+            phase: TodoSync::Pending,
+        });
         let tx = self
             .conn
             .unchecked_transaction()
             .map_err(|e| e.to_string())?;
         if let Some(patch) = &follow_up {
             tx.execute(
-                "INSERT INTO todo_remote_edits(board,id,snapshot_json,input_json,phase,updated_at) VALUES(?1,?2,?3,?4,'pending',?5)",
-                params![board.key(), remote.id, serde_json::to_string(remote).map_err(|e|e.to_string())?, patch.to_string(), now_millis()],
+                "INSERT INTO todo_remote_edits(board,id,snapshot_json,input_json,phase,updated_at,attempt_id) VALUES(?1,?2,?3,?4,'pending',?5,?6)",
+                params![board.key(), remote.id, serde_json::to_string(remote).map_err(|e|e.to_string())?, patch.input.to_string(), now_millis(), patch.attempt_id],
             ).map_err(|e| e.to_string())?;
         }
         let changed = tx.execute("UPDATE todo_items SET sync='synced',issue=?1,pending_repo=NULL,updated_at=?2 WHERE board=?3 AND id=?4 AND sync IN ('pending','uncertain')", params![serde_json::to_string(issue).map_err(|e|e.to_string())?, now_millis(), board.key(), id]).map_err(|e|e.to_string())?;
@@ -619,34 +637,52 @@ impl Store {
         board: &TodoBoard,
         snapshot: &TodoItem,
         input: &serde_json::Value,
-    ) -> Result<(), String> {
+    ) -> Result<String, String> {
         self.todo_schema()?;
         if !matches!(board, TodoBoard::Project(_)) || snapshot.issue.is_none() || !input.is_object()
         {
             return Err("Invalid GitHub to-do edit".into());
         }
-        self.conn.execute("INSERT INTO todo_remote_edits(board,id,snapshot_json,input_json,phase,updated_at) VALUES(?1,?2,?3,?4,'pending',?5)", params![board.key(), snapshot.id, serde_json::to_string(snapshot).map_err(|e|e.to_string())?, input.to_string(), now_millis()]).map_err(|error| {
+        let attempt = uuid::Uuid::new_v4().to_string();
+        self.conn.execute("INSERT INTO todo_remote_edits(board,id,snapshot_json,input_json,phase,updated_at,attempt_id) VALUES(?1,?2,?3,?4,'pending',?5,?6)", params![board.key(), snapshot.id, serde_json::to_string(snapshot).map_err(|e|e.to_string())?, input.to_string(), now_millis(), attempt]).map_err(|error| {
             if matches!(error, rusqlite::Error::SqliteFailure(ref failure, _) if failure.code == rusqlite::ErrorCode::ConstraintViolation) {
                 "This issue has an unresolved edit; reconcile it before changing it again".into()
             } else { error.to_string() }
         })?;
+        Ok(attempt)
+    }
+
+    pub fn uncertain_remote_todo_edit(
+        &self,
+        board: &TodoBoard,
+        id: &str,
+        attempt: &str,
+    ) -> Result<(), String> {
+        self.todo_schema()?;
+        let changed = self.conn.execute("UPDATE todo_remote_edits SET phase='uncertain',updated_at=?1 WHERE board=?2 AND id=?3 AND attempt_id=?4", params![now_millis(), board.key(), id, attempt]).map_err(|e|e.to_string())?;
+        if changed != 1 {
+            return Err("The GitHub edit attempt changed before completion".into());
+        }
         Ok(())
     }
 
-    pub fn uncertain_remote_todo_edit(&self, board: &TodoBoard, id: &str) -> Result<(), String> {
+    pub fn clear_remote_todo_edit(
+        &self,
+        board: &TodoBoard,
+        id: &str,
+        attempt: &str,
+    ) -> Result<(), String> {
         self.todo_schema()?;
-        self.conn.execute("UPDATE todo_remote_edits SET phase='uncertain',updated_at=?1 WHERE board=?2 AND id=?3", params![now_millis(), board.key(), id]).map_err(|e|e.to_string())?;
-        Ok(())
-    }
-
-    pub fn clear_remote_todo_edit(&self, board: &TodoBoard, id: &str) -> Result<(), String> {
-        self.todo_schema()?;
-        self.conn
+        let changed = self
+            .conn
             .execute(
-                "DELETE FROM todo_remote_edits WHERE board=?1 AND id=?2",
-                params![board.key(), id],
+                "DELETE FROM todo_remote_edits WHERE board=?1 AND id=?2 AND attempt_id=?3",
+                params![board.key(), id, attempt],
             )
             .map_err(|e| e.to_string())?;
+        if changed != 1 {
+            return Err("The GitHub edit attempt changed before completion".into());
+        }
         Ok(())
     }
 
@@ -654,44 +690,53 @@ impl Store {
         &self,
         board: &TodoBoard,
         id: &str,
-    ) -> Result<serde_json::Value, String> {
+        expected_attempt: &str,
+    ) -> Result<TodoRemoteEdit, String> {
         self.todo_schema()?;
         let tx = self
             .conn
             .unchecked_transaction()
             .map_err(|e| e.to_string())?;
-        let (input,phase,updated_at): (String,String,i64) = tx.query_row("SELECT input_json,phase,updated_at FROM todo_remote_edits WHERE board=?1 AND id=?2 AND phase IN ('pending','uncertain')", params![board.key(), id], |row| Ok((row.get(0)?,row.get(1)?,row.get(2)?))).optional().map_err(|e|e.to_string())?.ok_or("No pending edit to retry")?;
+        let (input,phase,updated_at): (String,String,i64) = tx.query_row("SELECT input_json,phase,updated_at FROM todo_remote_edits WHERE board=?1 AND id=?2 AND attempt_id=?3 AND phase IN ('pending','uncertain')", params![board.key(), id, expected_attempt], |row| Ok((row.get(0)?,row.get(1)?,row.get(2)?))).optional().map_err(|e|e.to_string())?.ok_or("The pending edit changed before retry")?;
         if phase == "pending" && now_millis().saturating_sub(updated_at) < 180_000 {
             return Err("This GitHub edit may still be running; wait before retrying and check the issue again".into());
         }
-        let changed = tx.execute("UPDATE todo_remote_edits SET phase='pending',updated_at=?1 WHERE board=?2 AND id=?3 AND phase IN ('pending','uncertain')", params![now_millis(), board.key(), id]).map_err(|e|e.to_string())?;
+        let attempt_id = uuid::Uuid::new_v4().to_string();
+        let input = serde_json::from_str(&input).map_err(|e| e.to_string())?;
+        let changed = tx.execute("UPDATE todo_remote_edits SET phase='pending',updated_at=?1,attempt_id=?2 WHERE board=?3 AND id=?4 AND attempt_id=?5", params![now_millis(), attempt_id, board.key(), id, expected_attempt]).map_err(|e|e.to_string())?;
         if changed != 1 {
             return Err("The edit changed before its retry was admitted".into());
         }
         tx.commit().map_err(|e| e.to_string())?;
-        serde_json::from_str(&input).map_err(|e| e.to_string())
+        Ok(TodoRemoteEdit {
+            attempt_id,
+            input,
+            phase: TodoSync::Pending,
+        })
     }
 
     pub fn pending_remote_todo_edits(&self, board: &TodoBoard) -> Result<Vec<TodoItem>, String> {
         self.todo_schema()?;
-        let mut statement = self.conn.prepare("SELECT snapshot_json,input_json,phase FROM todo_remote_edits WHERE board=?1 ORDER BY updated_at,id").map_err(|e|e.to_string())?;
+        let mut statement = self.conn.prepare("SELECT snapshot_json,input_json,phase,attempt_id FROM todo_remote_edits WHERE board=?1 ORDER BY updated_at,id").map_err(|e|e.to_string())?;
         let rows = statement
             .query_map([board.key()], |row| {
                 Ok((
                     row.get::<_, String>(0)?,
                     row.get::<_, String>(1)?,
                     row.get::<_, String>(2)?,
+                    row.get::<_, String>(3)?,
                 ))
             })
             .map_err(|e| e.to_string())?
             .collect::<Result<Vec<_>, _>>()
             .map_err(|e| e.to_string())?;
         rows.into_iter()
-            .map(|(snapshot, input, phase)| {
+            .map(|(snapshot, input, phase, attempt_id)| {
                 let mut item: TodoItem =
                     serde_json::from_str(&snapshot).map_err(|e| e.to_string())?;
                 let input = serde_json::from_str(&input).map_err(|e| e.to_string())?;
                 item.pending_edit = Some(TodoRemoteEdit {
+                    attempt_id,
                     input,
                     phase: if phase == "pending" {
                         TodoSync::Pending
@@ -1088,14 +1133,14 @@ mod tests {
             .finish_todo_publish(&board, &local.id, &remote)
             .unwrap()
             .unwrap();
-        assert_eq!(follow_up["status"], "inReview");
+        assert_eq!(follow_up.input["status"], "inReview");
         let linked = store.get_todo(&board, &local.id).unwrap().unwrap();
         assert_eq!(linked.sync, TodoSync::Synced);
         assert_eq!(linked.pending_repo, None);
         assert_eq!(linked.issue.unwrap().number, 17);
         let pending = store.pending_remote_todo_edits(&board).unwrap();
         assert_eq!(pending.len(), 1);
-        assert_eq!(pending[0].pending_edit.as_ref().unwrap().input, follow_up);
+        assert_eq!(pending[0].pending_edit.as_ref().unwrap(), &follow_up);
     }
 
     #[test]
@@ -1118,7 +1163,7 @@ mod tests {
                 labels: vec![],
                 dependencies_truncated: false,
             });
-            store
+            let attempt = store
                 .begin_remote_todo_edit(
                     &board,
                     &snapshot,
@@ -1128,7 +1173,9 @@ mod tests {
             assert!(store
                 .begin_remote_todo_edit(&board, &snapshot, &json!({"status":"done"}))
                 .is_err());
-            store.uncertain_remote_todo_edit(&board, id).unwrap();
+            store
+                .uncertain_remote_todo_edit(&board, id, &attempt)
+                .unwrap();
         }
         let store = Store::open(&path).unwrap();
         let saved = store.pending_remote_todo_edits(&board).unwrap();
@@ -1142,11 +1189,20 @@ mod tests {
             saved[0].pending_edit.as_ref().unwrap().phase,
             TodoSync::Uncertain
         );
-        assert_eq!(
-            store.retry_remote_todo_edit(&board, id).unwrap()["description"],
-            "Keep the draft"
-        );
-        store.clear_remote_todo_edit(&board, id).unwrap();
+        let original = &saved[0].pending_edit.as_ref().unwrap().attempt_id;
+        let retried = store.retry_remote_todo_edit(&board, id, original).unwrap();
+        assert_eq!(retried.input["description"], "Keep the draft");
+        assert_ne!(&retried.attempt_id, original);
+        assert!(store.clear_remote_todo_edit(&board, id, original).is_err());
+        assert!(store
+            .uncertain_remote_todo_edit(&board, id, original)
+            .is_err());
+        assert!(store.retry_remote_todo_edit(&board, id, original).is_err());
+        let current = store.pending_remote_todo_edits(&board).unwrap();
+        assert_eq!(current[0].pending_edit.as_ref().unwrap(), &retried);
+        store
+            .clear_remote_todo_edit(&board, id, &retried.attempt_id)
+            .unwrap();
         assert!(store.pending_remote_todo_edits(&board).unwrap().is_empty());
     }
 

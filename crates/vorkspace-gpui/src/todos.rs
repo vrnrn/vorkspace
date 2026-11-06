@@ -68,6 +68,8 @@ struct SavedDetails {
 #[derive(Clone)]
 struct DetailsEditor {
     id: String,
+    revision: i64,
+    dependencies_complete: bool,
     title: Entity<Input>,
     description: Entity<Input>,
     attachments: Entity<Input>,
@@ -103,6 +105,7 @@ pub(crate) struct TodoBoardView {
     store: Database,
     board: Option<TodoBoard>,
     items: Vec<TodoItem>,
+    loaded: bool,
     /// Guards against an older load landing after a newer one.
     generation: u64,
     /// The last load's failure.
@@ -182,6 +185,7 @@ impl TodoBoardView {
             store,
             board: None,
             items: Vec::new(),
+            loaded: false,
             generation: 0,
             error: None,
             github_notice: None,
@@ -239,6 +243,7 @@ impl TodoBoardView {
         }
         self.board = board;
         self.items.clear();
+        self.loaded = false;
         self.error = None;
         self.github_notice = None;
         self.github_repo = None;
@@ -272,6 +277,7 @@ impl TodoBoardView {
                 }
                 match result {
                     Ok(snapshot) => {
+                        this.loaded = true;
                         this.items = snapshot.items;
                         this.error = snapshot.github_error;
                         this.github_notice = snapshot.github_notice;
@@ -647,6 +653,11 @@ impl TodoBoardView {
         let preview = cx.new(|cx| crate::markdown::Document::prose(&text, "No description", cx));
         self.details = Some(DetailsEditor {
             id: item.id.clone(),
+            revision: item.updated_at,
+            dependencies_complete: !item
+                .issue
+                .as_ref()
+                .is_some_and(|issue| issue.dependencies_truncated),
             title,
             description,
             attachments,
@@ -848,6 +859,11 @@ impl TodoBoardView {
             return;
         }
         let remote = item.issue.is_some();
+        if remote && item.updated_at != details.revision {
+            self.change_error = Some("This issue changed while you were editing. Your draft is preserved; reload details before saving.".into());
+            cx.notify();
+            return;
+        }
         let title = details.title.read(cx).content.to_string();
         let description = details.description.read(cx).content.to_string();
         let attachments = details
@@ -870,15 +886,11 @@ impl TodoBoardView {
             .collect::<Vec<_>>();
         let saved_details = SavedDetails { id: id.clone() };
         let mut input = serde_json::json!({"id":id,"title":title,"description":description});
-        if !item
-            .issue
-            .as_ref()
-            .is_some_and(|issue| issue.dependencies_truncated)
-        {
+        if details.dependencies_complete {
             input["dependencies"] = serde_json::json!(dependencies);
         }
         if remote {
-            input["expectedUpdatedAt"] = serde_json::json!(item.updated_at);
+            input["expectedUpdatedAt"] = serde_json::json!(details.revision);
         }
         if !remote || !attachments.is_empty() {
             input["attachments"] = serde_json::json!(attachments);
@@ -1338,6 +1350,21 @@ impl TodoBoardView {
                             .debug_selector(|| "todo-details-save".into())
                             .on_click(cx.listener(|this, _, _, cx| this.save_details(cx))),
                         )
+                        .when(remote && item.updated_at != editor.revision, |d| {
+                            d.child(
+                                labeled_secondary("todo-reload-details", "Discard draft and reload", false, self.pending_changes > 0)
+                                    .debug_selector(|| "todo-reload-details".into())
+                                    .on_click(cx.listener(|this, _, _, cx| {
+                                        if this.pending_changes > 0 { return; }
+                                        let Some(id) = this.details.as_ref().map(|editor| editor.id.clone()) else { return; };
+                                        let Some(item) = this.items.iter().find(|item| item.id == id).cloned() else { return; };
+                                        this.details = None;
+                                        if let Some(key) = this.details_key(&id) { this.saved_details.remove(&key); }
+                                        this.change_error = None;
+                                        this.open_details(&item, cx);
+                                    })),
+                            )
+                        })
                         .when(can_publish, |d| {
                             d.child(
                                 labeled_secondary(

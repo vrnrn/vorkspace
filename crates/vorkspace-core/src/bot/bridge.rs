@@ -1,16 +1,15 @@
 //! Session-scoped local app access. Provider children inherit only their own
 //! capability; all requests are checked again against the Bot's project list.
 use serde::{Deserialize, Serialize};
-use serde_json::{Value, json};
+use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 use std::{
     collections::HashMap,
     io::{BufRead, BufReader, Read, Write},
     net::{SocketAddr, TcpListener, TcpStream},
     sync::{
-        Arc,
         atomic::{AtomicBool, AtomicUsize, Ordering},
-        mpsc,
+        mpsc, Arc,
     },
     time::Duration,
 };
@@ -419,12 +418,10 @@ mod capability_tests {
         let (server, rx) = Server::start().unwrap();
         let credential = server.environment(7)["VORKSPACE_APP_TOKEN"].clone();
         assert_ne!(credential, server.environment(8)["VORKSPACE_APP_TOKEN"]);
-        assert!(
-            send(&server, 8, credential.clone())
-                .join()
-                .unwrap()
-                .is_none()
-        );
+        assert!(send(&server, 8, credential.clone())
+            .join()
+            .unwrap()
+            .is_none());
         assert!(rx.try_recv().is_err());
         let request = send(&server, 7, credential);
         let call = dispatched(&rx);

@@ -277,36 +277,28 @@ mod tests {
     }
     #[test]
     fn validates_before_mutation() {
-        assert!(
-            validate(
-                "minions.hire",
-                &json!({"name":"Scout","role":"Review","specialties":["Rust"]})
-            )
-            .is_ok()
-        );
-        assert!(
-            validate(
-                "minions.hire",
-                &json!({"name":"Scout","role":"Review","specialties":"Rust"})
-            )
-            .is_err()
-        );
-        assert!(
-            validate(
-                "minions.hire",
-                &json!({"name":"Scout","role":"Review","specialties":[""]})
-            )
-            .is_err()
-        );
+        assert!(validate(
+            "minions.hire",
+            &json!({"name":"Scout","role":"Review","specialties":["Rust"]})
+        )
+        .is_ok());
+        assert!(validate(
+            "minions.hire",
+            &json!({"name":"Scout","role":"Review","specialties":"Rust"})
+        )
+        .is_err());
+        assert!(validate(
+            "minions.hire",
+            &json!({"name":"Scout","role":"Review","specialties":[""]})
+        )
+        .is_err());
         assert!(validate("minions.fire", &json!({"minion":"scout"})).is_ok());
         assert!(!is_read_only("minions.hire") && !is_read_only("minions.fire"));
-        assert!(
-            validate(
-                "bots.send",
-                &json!({"to":"Beta","message":"Review","expectReply":true})
-            )
-            .is_ok()
-        );
+        assert!(validate(
+            "bots.send",
+            &json!({"to":"Beta","message":"Review","expectReply":true})
+        )
+        .is_ok());
         assert!(validate("bots.send", &json!({"to":["Beta"],"message":"Review"})).is_err());
         assert!(validate("bots.send", &json!({"to":"Beta","expectReply":"true"})).is_err());
         assert!(
@@ -315,13 +307,11 @@ mod tests {
         assert!(validate("sessions.start", &json!({"prompt":"x","draft":"false"})).is_err());
         assert!(validate("sessions.delete", &json!({"sessionId":1,"force":true})).is_err());
         assert!(validate("sessions.start", &json!({"runtimeMode":"unsafe"})).is_err());
-        assert!(
-            validate(
-                "sessions.start",
-                &json!({"prompt":"x","project":"/code","draft":true})
-            )
-            .is_ok()
-        );
+        assert!(validate(
+            "sessions.start",
+            &json!({"prompt":"x","project":"/code","draft":true})
+        )
+        .is_ok());
     }
     #[test]
     fn before_is_a_todo_id_or_a_page_cursor_by_action() {
