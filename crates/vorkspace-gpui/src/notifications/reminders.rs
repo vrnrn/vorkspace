@@ -258,7 +258,7 @@ impl Render for View {
                             .border_color(content(0.1))
                             .px_3()
                             .py(px(10.))
-                            .child(icon("clock", 14.).text_color(gpui::rgb(0xffb900)))
+                            .child(icon("clock", 14.).text_color(vorkspace_ui::theme::warning()))
                             .child(
                                 div()
                                     .flex_1()

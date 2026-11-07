@@ -143,9 +143,9 @@ impl Bots {
                 .max(loaded.len() as f32 / memory::MAX_BYTES as f32)
                 .min(1.);
             let tone = if dropped > 0 {
-                gpui::Hsla::from(rgb(0xfb2c36)).opacity(0.7)
+                vorkspace_ui::theme::danger().opacity(0.7)
             } else if share >= 0.8 {
-                gpui::Hsla::from(rgb(0xffb900)).opacity(0.7)
+                vorkspace_ui::theme::warning().opacity(0.7)
             } else {
                 content(0.3)
             };

@@ -1,9 +1,9 @@
 //! Dismissible app errors use the same glass card as pending approvals.
-use gpui::{Div, FontWeight, Hsla, Role, Stateful, div, prelude::*, px, rgb};
+use gpui::{Div, FontWeight, Hsla, Role, Stateful, div, prelude::*, px};
 use vorkspace_ui::theme::*;
 
 pub(crate) fn card(id: &'static str, message: String, dismiss: impl IntoElement) -> Stateful<Div> {
-    let rose: Hsla = rgb(0xf43f5e).into();
+    let rose: Hsla = vorkspace_ui::theme::danger();
     let mut border = rose;
     border.a = 0.22;
     let mut tint = rose;

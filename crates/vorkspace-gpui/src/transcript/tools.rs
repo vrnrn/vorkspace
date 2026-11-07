@@ -1,6 +1,6 @@
 //! Compact semantic tool captions with clickable file targets.
 use super::{TranscriptView, tasks};
-use gpui::{Animation, AnimationExt, AnyElement, Context, Div, Role, div, prelude::*, px, rgb};
+use gpui::{Animation, AnimationExt, AnyElement, Context, Div, Role, div, prelude::*, px};
 use vorkspace_core::tool::{CommandStep, ToolCall, ToolState};
 use vorkspace_ui::radius;
 use vorkspace_ui::theme::*;
@@ -319,7 +319,9 @@ impl TranscriptView {
                             d.role(Role::Button)
                                 .aria_label(format!("Open {path}"))
                                 .cursor_pointer()
-                                .hover(|style| style.text_color(rgb(0x7dd3fc)))
+                                .hover(|style| {
+                                    style.text_color(vorkspace_ui::theme::accent_color())
+                                })
                                 .on_click(move |_, window, cx| {
                                     cx.stop_propagation();
                                     window.dispatch_action(
@@ -399,7 +401,11 @@ impl TranscriptView {
                                                 d.role(Role::Button)
                                                     .aria_label(format!("Open {path}"))
                                                     .cursor_pointer()
-                                                    .hover(|style| style.text_color(rgb(0x7dd3fc)))
+                                                    .hover(|style| {
+                                                        style.text_color(
+                                                            vorkspace_ui::theme::accent_color(),
+                                                        )
+                                                    })
                                                     .on_click(move |_, window, cx| {
                                                         cx.stop_propagation();
                                                         window.dispatch_action(
@@ -538,7 +544,10 @@ impl TranscriptView {
                                         d.role(Role::Button)
                                             .aria_label(format!("Open {path}"))
                                             .cursor_pointer()
-                                            .hover(|style| style.text_color(rgb(0x7dd3fc)))
+                                            .hover(|style| {
+                                                style
+                                                    .text_color(vorkspace_ui::theme::accent_color())
+                                            })
                                             .on_click(move |_, window, cx| {
                                                 cx.stop_propagation();
                                                 window.dispatch_action(

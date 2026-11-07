@@ -197,7 +197,7 @@ impl TranscriptView {
                         .border_color(vorkspace_ui::theme::danger())
                         .bg(rgb(0x252525))
                         .text_size(px(12.))
-                        .text_color(rgb(0xfca5a5))
+                        .text_color(vorkspace_ui::theme::danger())
                         .child(error.clone())
                         .child(
                             div()

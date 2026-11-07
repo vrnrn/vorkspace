@@ -146,7 +146,9 @@ impl TranscriptView {
                                     let menu_path = path.clone();
                                     d.role(Role::Link)
                                         .cursor_pointer()
-                                        .hover(|s| s.text_color(rgb(0x7dd3fc)))
+                                        .hover(|s| {
+                                            s.text_color(vorkspace_ui::theme::accent_color())
+                                        })
                                         .on_click(move |event, window, cx| {
                                             if event.click_count() == 1 {
                                                 window.dispatch_action(

@@ -98,7 +98,7 @@ impl TodoBoardView {
                                     .px_3()
                                     .py_2()
                                     .text_size(px(page::META_SIZE))
-                                    .text_color(gpui::rgb(0xe5484d))
+                                    .text_color(vorkspace_ui::theme::danger())
                                     .child(error.clone())
                             }))
                             .when(

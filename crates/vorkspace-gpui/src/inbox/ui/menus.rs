@@ -626,14 +626,14 @@ impl Inbox {
                         )
                         .font_weight(FontWeight::MEDIUM)
                         .bg(if action_name == "close" {
-                            Hsla::from(rgb(0xf43f5e)).opacity(0.2)
+                            vorkspace_ui::theme::danger().opacity(0.2)
                         } else if matches!(action_name.as_str(), "merge" | "squash" | "rebase") {
-                            Hsla::from(rgb(0x10b981)).opacity(0.2)
+                            vorkspace_ui::theme::success().opacity(0.2)
                         } else {
                             content(1.)
                         })
                         .text_color(if action_name == "close" {
-                            rgb(0xfda4af).into()
+                            vorkspace_ui::theme::danger()
                         } else if matches!(action_name.as_str(), "merge" | "squash" | "rebase") {
                             rgb(0x6ee7b7).into()
                         } else {

@@ -279,7 +279,7 @@ impl Render for HarnessUpdates {
                     div()
                         .mt(px(6.))
                         .text_size(px(11.))
-                        .text_color(gpui::rgb(0xfca5a5))
+                        .text_color(vorkspace_ui::theme::danger())
                         .child(error.clone()),
                 );
             }

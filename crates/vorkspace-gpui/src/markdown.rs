@@ -463,7 +463,7 @@ fn inline_selected(
         text.push_str(&run.text);
         let range = start..text.len();
         let color = if style.link.is_some() {
-            rgb(0x38bdf8).into()
+            vorkspace_ui::theme::accent_color()
         } else if style.bold || style.italic || style.code {
             content(tone.strong())
         } else {
@@ -646,7 +646,7 @@ fn rich_inline(
                     value
                 };
                 let color = if style.link.is_some() {
-                    rgb(0x38bdf8).into()
+                    vorkspace_ui::theme::accent_color()
                 } else if style.bold || style.italic {
                     content(tone.strong())
                 } else {

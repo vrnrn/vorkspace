@@ -9,7 +9,7 @@ use crate::{
 };
 use gpui::{
     AnyElement, Context, Div, Focusable, FontWeight, Role, SharedString, Task, Window, div,
-    prelude::*, px, rgb,
+    prelude::*, px,
 };
 use serde_json::{Value, json};
 use std::{
@@ -917,7 +917,7 @@ impl SettingsView {
                     .role(Role::Status)
                     .mt_4()
                     .text_size(px(13.))
-                    .text_color(rgb(0x10b981))
+                    .text_color(vorkspace_ui::theme::success())
                     .child(self.connections.notice.clone())
                     .into_any_element(),
             );

@@ -676,7 +676,7 @@ impl Bots {
                         .child(self.access_anchor.probe())
                         .child(
                             icon(access_icon, 14.).when(mode == AccessMode::FullAccess, |i| {
-                                i.text_color(rgb(0xffb900))
+                                i.text_color(vorkspace_ui::theme::warning())
                             }),
                         )
                         .child(mode.label())

@@ -293,7 +293,7 @@ impl Render for LinkedActivity {
                                     .px(px(8.))
                                     .py(px(4.))
                                     .text_size(px(11.))
-                                    .text_color(gpui::rgb(0xfca5a5))
+                                    .text_color(vorkspace_ui::theme::danger())
                                     .opacity(if busy || !self.can_delete { 0.4 } else { 1. })
                                     .when(!busy && self.can_delete, |d| {
                                         d.cursor_pointer().on_click(cx.listener(

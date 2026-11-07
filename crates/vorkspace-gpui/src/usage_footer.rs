@@ -687,7 +687,7 @@ impl UsageFooter {
                             .bg(gpui::rgba(0xfbbf241a))
                             .text_size(px(10.))
                             .line_height(px(16.))
-                            .text_color(rgb(0xfcd34d))
+                            .text_color(vorkspace_ui::theme::warning())
                             .child("Couldn’t refresh. Showing the last available snapshot."),
                     )
                 },

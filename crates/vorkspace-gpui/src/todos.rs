@@ -1751,7 +1751,7 @@ impl Render for TodoBoardView {
                     .px_3()
                     .py_2()
                     .text_size(px(12.))
-                    .text_color(gpui::rgb(0xe5484d))
+                    .text_color(vorkspace_ui::theme::danger())
                     .child(error)
             });
         root.children(error)
@@ -1994,7 +1994,7 @@ impl TodosPage {
                 .children(
                     self.assign_error
                         .clone()
-                        .map(|error| div().text_color(gpui::rgb(0xe5484d)).child(error)),
+                        .map(|error| div().text_color(vorkspace_ui::theme::danger()).child(error)),
                 )
                 .into_any_element(),
         )
