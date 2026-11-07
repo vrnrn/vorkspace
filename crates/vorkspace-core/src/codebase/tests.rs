@@ -113,6 +113,7 @@ fn inactive_entries_cannot_bypass_capacity_and_draining_workers_keep_their_slots
                 thread: Some(std::thread::spawn(move || {
                     let _ = barrier.recv();
                 })),
+                retirement: Arc::default(),
             },
         );
     }
@@ -128,6 +129,7 @@ fn inactive_entries_cannot_bypass_capacity_and_draining_workers_keep_their_slots
             })),
             sender,
             thread: None,
+            retirement: Arc::default(),
         },
     );
     assert_eq!(service.snapshot(project, project).phase, "idle");
@@ -186,6 +188,102 @@ fn runtime_locks_survive_client_replacement_and_cache_aliases() {
 }
 
 #[test]
+fn detached_cleanup_keeps_capacity_after_frontend_exit() {
+    let (root, mut service) = fixture();
+    Arc::get_mut(&mut service).unwrap().test_engine = Some("/usr/bin/false".into());
+    let project = root.path().to_str().unwrap();
+    service.configure(project, true).unwrap();
+    let runtime = root.path().join("runtime");
+    let directory = runtime.join(format!("cbm-daemon-{}", unsafe { libc::geteuid() }));
+    engine::private_dir(&directory).unwrap();
+    let daemon = OpenOptions::new()
+        .read(true)
+        .write(true)
+        .create_new(true)
+        .mode(0o600)
+        .open(directory.join("cbm-version-cohort-lifetime-v1.lock"))
+        .unwrap();
+    daemon.lock_shared().unwrap();
+    let mut retirement = Retirement::Unconfirmed;
+    retirement.observe(&runtime).unwrap();
+    // The frontend is authoritatively joined, while detached cleanup is held
+    // behind the same flock barrier used by the pinned engine.
+    std::thread::spawn(|| {}).join().unwrap();
+    let mut releases = Vec::new();
+    for index in 0..8 {
+        let (sender, _) = mpsc::sync_channel(2);
+        let (thread, retirement) = if index == 0 {
+            (None, std::mem::take(&mut retirement))
+        } else {
+            let (release, barrier) = mpsc::channel::<()>();
+            releases.push(release);
+            (
+                Some(std::thread::spawn(move || {
+                    let _ = barrier.recv();
+                })),
+                Retirement::Clear,
+            )
+        };
+        lock(&service.state).workers.insert(
+            format!("slot-{index}"),
+            Worker {
+                project: "other".into(),
+                cancel: Arc::new(AtomicBool::new(true)),
+                snapshot: Arc::default(),
+                sender,
+                thread,
+                retirement: Arc::new(Mutex::new(retirement)),
+            },
+        );
+    }
+    assert!(service
+        .activate(project, project, false)
+        .unwrap_err()
+        .contains("Eight"));
+    daemon.unlock().unwrap();
+    drop(daemon);
+    service.activate(project, project, false).unwrap();
+    drop(releases);
+    service.shutdown();
+}
+
+#[test]
+fn uncertain_startup_reservation_survives_a_failed_retry() {
+    let (root, mut service) = fixture();
+    Arc::get_mut(&mut service).unwrap().test_engine = Some("/usr/bin/false".into());
+    let project = root.path().to_str().unwrap();
+    service.configure(project, true).unwrap();
+    let retirement = Arc::new(Mutex::new(Retirement::Unconfirmed));
+    assert!(lock(&retirement).observe(root.path()).is_err());
+    assert!(lock(&retirement).occupies_slot());
+    let key = crate::files::path_key(project);
+    let (sender, _) = mpsc::sync_channel(2);
+    lock(&service.state).workers.insert(
+        key.clone(),
+        Worker {
+            project: key.clone(),
+            cancel: Arc::new(AtomicBool::new(true)),
+            snapshot: Arc::default(),
+            sender,
+            thread: None,
+            retirement: retirement.clone(),
+        },
+    );
+    service.activate(project, project, false).unwrap();
+    let thread = lock(&service.state)
+        .workers
+        .get_mut(&key)
+        .unwrap()
+        .thread
+        .take()
+        .unwrap();
+    thread.join().unwrap();
+    let state = lock(&service.state);
+    assert!(Arc::ptr_eq(&state.workers[&key].retirement, &retirement));
+    assert!(state.workers[&key].occupies_slot());
+}
+
+#[test]
 fn stopped_worker_can_transfer_project_ownership() {
     let (root, mut service) = fixture();
     Arc::get_mut(&mut service).unwrap().test_engine = Some("/usr/bin/false".into());
@@ -207,6 +305,7 @@ fn stopped_worker_can_transfer_project_ownership() {
             thread: Some(std::thread::spawn(move || {
                 let _ = barrier.recv();
             })),
+            retirement: Arc::default(),
         },
     );
     assert!(service

@@ -8,7 +8,7 @@ Search for a symbol, select it to read its source, then follow its callers or ca
 
 Each project checkout has its own map and private engine storage, identified by its full folder path, so similar folder names cannot mix their indexes. If the same folder is already active through another path or shortcut, use that entry or disable it before opening the second one. The engine watches for file changes after indexing. Restarts reuse the same coordination files, so a new engine waits for the previous one to finish using that map. Use **Reindex** to refresh it or recover from an error. Some files cannot be indexed, and the page tells you when coverage is incomplete. This feature currently works with local projects only.
 
-Turning the feature off stops its work and file watching but keeps the saved map. Closing its tab simply hides it. The app can keep eight working copies active at once; disable an unused project if you reach that limit, then retry after it finishes stopping.
+Turning the feature off stops its work and file watching but keeps the saved map. Closing its tab simply hides it. The app can keep eight working copies active or stopping at once; disable an unused project if you reach that limit, then retry after it finishes stopping. The app waits for a cleanup signal before reusing that capacity. If engine startup is interrupted before it can confirm what started, retry that working copy to reconnect safely.
 
 Bots and chats with `/operator` can use the same index through the app CLI. They can only query projects they are allowed to access. A chat working in a separate Git worktree reads that worktree's map. Read-only chats can search an existing index, but cannot enable the feature or start indexing.
 

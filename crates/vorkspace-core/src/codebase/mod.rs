@@ -10,6 +10,8 @@ use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 use std::{
     collections::{HashMap, HashSet},
+    fs::{File, OpenOptions},
+    os::unix::fs::{MetadataExt, OpenOptionsExt},
     path::{Path, PathBuf},
     sync::{
         atomic::{AtomicBool, Ordering},
@@ -44,12 +46,69 @@ struct Worker {
     snapshot: Arc<Mutex<Snapshot>>,
     sender: mpsc::SyncSender<Request>,
     thread: Option<JoinHandle<()>>,
+    retirement: Arc<Mutex<Retirement>>,
 }
 impl Worker {
     fn occupies_slot(&self) -> bool {
         self.thread
             .as_ref()
             .is_some_and(|thread| !thread.is_finished())
+            || lock(&self.retirement).occupies_slot()
+    }
+}
+
+#[derive(Default)]
+enum Retirement {
+    #[default]
+    Clear,
+    // A failed handshake cannot prove whether a detached daemon was launched.
+    // Preserve this reservation through retries instead of treating it as absent.
+    Unconfirmed,
+    Observed(File),
+}
+
+impl Retirement {
+    fn observe(&mut self, runtime: &Path) -> Result<(), String> {
+        let uid = unsafe { libc::geteuid() };
+        let directory = runtime.join(format!("cbm-daemon-{uid}"));
+        let metadata = std::fs::symlink_metadata(&directory).map_err(|e| e.to_string())?;
+        if !metadata.is_dir() || metadata.uid() != uid || metadata.mode() & 0o077 != 0 {
+            return Err("Codebase lifetime directory is not private".into());
+        }
+        // Pinned v0.12.1 holds a shared flock through daemon job, watcher and
+        // runtime cleanup (src/daemon/host.c). Retain this inode, never unlink it.
+        let file = OpenOptions::new()
+            .read(true)
+            .write(true)
+            .custom_flags(libc::O_NOFOLLOW)
+            .open(directory.join("cbm-version-cohort-lifetime-v1.lock"))
+            .map_err(|e| e.to_string())?;
+        let metadata = file.metadata().map_err(|e| e.to_string())?;
+        if !metadata.is_file()
+            || metadata.uid() != uid
+            || metadata.mode() & 0o077 != 0
+            || metadata.nlink() != 1
+        {
+            return Err("Codebase lifetime lock is not private".into());
+        }
+        *self = Self::Observed(file);
+        Ok(())
+    }
+
+    fn occupies_slot(&mut self) -> bool {
+        match self {
+            Self::Clear => false,
+            Self::Unconfirmed => true,
+            Self::Observed(file) => {
+                if file.try_lock().is_err() || file.unlock().is_err() {
+                    return true;
+                }
+                // Exclusive acquisition is the cleanup barrier. Release it
+                // immediately, including in any temporarily inherited FD copy.
+                *self = Self::Clear;
+                false
+            }
+        }
     }
 }
 struct State {
@@ -212,9 +271,9 @@ impl Service {
                 return Ok(());
             }
         }
-        // Draining workers retain their slot until they have actually stopped.
-        // A replacement can reuse its predecessor's slot because it joins that
-        // predecessor before starting an engine client.
+        // Retiring daemons retain capacity after their stdio frontend exits.
+        // Same-root replacement joins its predecessor and uses the same engine
+        // locks, so it can reuse the predecessor's reservation.
         let replacing_live_worker = state
             .workers
             .get(&root_key)
@@ -229,10 +288,16 @@ impl Service {
         {
             return Err("Eight working copies are still active or stopping. Disable Codebase Memory for an unused project or retry after it stops.".into());
         }
-        let previous = state.workers.remove(&root_key).and_then(|mut worker| {
+        let mut previous_worker = state.workers.remove(&root_key);
+        let retirement = previous_worker
+            .as_ref()
+            .map(|worker| worker.retirement.clone())
+            .unwrap_or_default();
+        let previous = Arc::new(Mutex::new(previous_worker.as_mut().and_then(|worker| {
             worker.cancel.store(true, Ordering::Release);
             worker.thread.take()
-        });
+        })));
+        let predecessor = previous.clone();
         let snapshot = Arc::new(Mutex::new(Snapshot {
             enabled: true,
             phase: "preparing".into(),
@@ -247,101 +312,120 @@ impl Service {
             snapshot: snapshot.clone(),
             sender,
             thread: None,
+            retirement: retirement.clone(),
         };
         let directory = self.directory.clone();
         let changes = self.changes.clone();
         let key = root_key;
         #[cfg(test)]
         let test_engine = self.test_engine.clone();
-        worker.thread = Some(
-            std::thread::Builder::new()
-                .name("codebase".into())
-                .spawn(move || {
-                    // A replacement waits until its predecessor has released
-                    // the request-owned index job and watcher subscription.
-                    if let Some(previous) = previous {
-                        let _ = previous.join();
-                    }
-                    let publish = |phase: &str, index: Option<Value>, error: Option<String>| {
-                        if !cancel.load(Ordering::Acquire) {
-                            *lock(&snapshot) = Snapshot {
-                                enabled: true,
-                                phase: phase.into(),
-                                root: root.clone(),
-                                index,
-                                error,
-                            };
-                            let _ = changes.try_send(());
-                        }
-                    };
-                    let result = (|| {
-                        engine::check_cancel(&cancel)?;
-                        #[cfg(test)]
-                        let binary = if let Some(path) = test_engine {
-                            path
-                        } else {
-                            engine::ensure(&directory, &cancel)?
+        let spawned = std::thread::Builder::new()
+            .name("codebase".into())
+            .spawn(move || {
+                // Join the previous frontend. Its detached daemon cleanup is
+                // tracked separately by the retained retirement reservation.
+                if let Some(previous) = lock(&predecessor).take() {
+                    let _ = previous.join();
+                }
+                let publish = |phase: &str, index: Option<Value>, error: Option<String>| {
+                    if !cancel.load(Ordering::Acquire) {
+                        *lock(&snapshot) = Snapshot {
+                            enabled: true,
+                            phase: phase.into(),
+                            root: root.clone(),
+                            index,
+                            error,
                         };
-                        #[cfg(not(test))]
-                        let binary = engine::ensure(&directory, &cancel)?;
-                        let env = prepare_environment(
-                            &directory, &binary, Path::new(&root), &cancel,
-                        )?;
-                        let mut command = transport::command(
-                            &binary, &env.cache, &env.runtime, Path::new(&root),
-                        );
-                        command.arg("--ui=false");
-                        let mut client = transport::Client::connect(command, &cancel)?;
-                        publish("indexing", None, None);
-                        let indexed = client.call(
-                            "index_repository",
-                            json!({"repo_path":root,"mode":"full","persistence":false,"async":false}),
-                            &cancel,
-                            Duration::from_secs(1800),
-                        )?;
-                        let name = indexed["project"].as_str()
-                            .ok_or("Index did not identify its project")?.to_owned();
-                        let status = client.call(
-                            "index_status",
-                            json!({"project":name,"format":"json","diagnostics":"summary"}),
-                            &cancel,
-                            Duration::from_secs(30),
-                        )?;
-                        if status["root_path"].as_str().and_then(|p| canonical(p).ok()).as_deref()
-                            != Some(root.as_str())
-                        {
-                            return Err("Index belongs to a different working copy".into());
-                        }
-                        publish("ready", Some(status), None);
-                        loop {
-                            engine::check_cancel(&cancel)?;
-                            let request: Request = match receiver.recv_timeout(Duration::from_secs(1)) {
-                                Ok(request) => request,
-                                Err(mpsc::RecvTimeoutError::Timeout) => {
-                                    client.idle(&cancel)?;
-                                    continue;
-                                }
-                                Err(mpsc::RecvTimeoutError::Disconnected) => break,
-                            };
-                            let result = query::arguments(
-                                &request.tool, request.arguments, &name, Path::new(&root),
-                            ).and_then(|args| client.call(
-                                &request.tool, args, &cancel, Duration::from_secs(30),
-                            ));
-                            let result = engine::check_cancel(&cancel).and(result);
-                            let _ = request.reply.try_send(result);
-                            if client.broken {
-                                return Err("Codebase connection interrupted. Retry the index to reconnect.".into());
-                            }
-                        }
-                        Ok::<(), String>(())
-                    })();
-                    if let Err(error) = result {
-                        publish("error", None, Some(error));
+                        let _ = changes.try_send(());
                     }
-                })
-                .map_err(|e| e.to_string())?,
-        );
+                };
+                let result = (|| {
+                    engine::check_cancel(&cancel)?;
+                    #[cfg(test)]
+                    let binary = if let Some(path) = test_engine {
+                        path
+                    } else {
+                        engine::ensure(&directory, &cancel)?
+                    };
+                    #[cfg(not(test))]
+                    let binary = engine::ensure(&directory, &cancel)?;
+                    let env = prepare_environment(&directory, &binary, Path::new(&root), &cancel)?;
+                    let mut command =
+                        transport::command(&binary, &env.cache, &env.runtime, Path::new(&root));
+                    command.arg("--ui=false");
+                    *lock(&retirement) = Retirement::Unconfirmed;
+                    let mut client = transport::Client::connect(command, &cancel)?;
+                    lock(&retirement).observe(&env.runtime)?;
+                    publish("indexing", None, None);
+                    let indexed = client.call(
+                        "index_repository",
+                        json!({"repo_path":root,"mode":"full","persistence":false,"async":false}),
+                        &cancel,
+                        Duration::from_secs(1800),
+                    )?;
+                    let name = indexed["project"]
+                        .as_str()
+                        .ok_or("Index did not identify its project")?
+                        .to_owned();
+                    let status = client.call(
+                        "index_status",
+                        json!({"project":name,"format":"json","diagnostics":"summary"}),
+                        &cancel,
+                        Duration::from_secs(30),
+                    )?;
+                    if status["root_path"]
+                        .as_str()
+                        .and_then(|p| canonical(p).ok())
+                        .as_deref()
+                        != Some(root.as_str())
+                    {
+                        return Err("Index belongs to a different working copy".into());
+                    }
+                    publish("ready", Some(status), None);
+                    loop {
+                        engine::check_cancel(&cancel)?;
+                        let request: Request = match receiver.recv_timeout(Duration::from_secs(1)) {
+                            Ok(request) => request,
+                            Err(mpsc::RecvTimeoutError::Timeout) => {
+                                client.idle(&cancel)?;
+                                continue;
+                            }
+                            Err(mpsc::RecvTimeoutError::Disconnected) => break,
+                        };
+                        let result = query::arguments(
+                            &request.tool,
+                            request.arguments,
+                            &name,
+                            Path::new(&root),
+                        )
+                        .and_then(|args| {
+                            client.call(&request.tool, args, &cancel, Duration::from_secs(30))
+                        });
+                        let result = engine::check_cancel(&cancel).and(result);
+                        let _ = request.reply.try_send(result);
+                        if client.broken {
+                            return Err(
+                                "Codebase connection interrupted. Retry the index to reconnect."
+                                    .into(),
+                            );
+                        }
+                    }
+                    Ok::<(), String>(())
+                })();
+                if let Err(error) = result {
+                    publish("error", None, Some(error));
+                }
+            });
+        worker.thread = Some(match spawned {
+            Ok(thread) => thread,
+            Err(error) => {
+                if let Some(mut old) = previous_worker {
+                    old.thread = lock(&previous).take();
+                    state.workers.insert(key, old);
+                }
+                return Err(error.to_string());
+            }
+        });
         state.workers.insert(key, worker);
         let _ = self.changes.try_send(());
         Ok(())
