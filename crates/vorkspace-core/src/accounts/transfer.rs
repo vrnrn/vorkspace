@@ -4,6 +4,59 @@ use crate::kind::Kind;
 use std::path::{Path, PathBuf};
 mod codex;
 use codex::*;
+/// Locate only a provider-owned transcript with the exact saved identity.
+pub(crate) fn find_native_thread(
+    home: &Path,
+    kind: Kind,
+    id: &str,
+) -> Result<Option<PathBuf>, String> {
+    validate_thread_id(id)?;
+    match kind {
+        Kind::Codex => {
+            for name in ["sessions", "archived_sessions"] {
+                let root = home.join(name);
+                if root.is_dir() {
+                    if let Some(path) = find_thread(&root, id)? {
+                        // Compressed history can have an uncompressed append tail.
+                        let compressed = path.with_extension("jsonl.zst");
+                        return Ok(Some(
+                            if path.extension().is_some_and(|ext| ext == "jsonl")
+                                && compressed.is_file()
+                            {
+                                compressed
+                            } else {
+                                path
+                            },
+                        ));
+                    }
+                }
+            }
+            Ok(None)
+        }
+        Kind::Claude => {
+            let root = home.join("projects");
+            if !root.is_dir() {
+                return Ok(None);
+            }
+            let mut found = None;
+            for entry in std::fs::read_dir(root).map_err(|e| e.to_string())? {
+                let entry = entry.map_err(|e| e.to_string())?;
+                if !entry.file_type().map_err(|e| e.to_string())?.is_dir() {
+                    continue;
+                }
+                let path = entry.path().join(format!("{id}.jsonl"));
+                if path.symlink_metadata().is_ok_and(|m| m.is_file()) {
+                    if found.is_some() {
+                        return Err("Multiple Claude transcripts have the same session ID; resolve the duplicate before syncing.".into());
+                    }
+                    found = Some(path);
+                }
+            }
+            Ok(found)
+        }
+        _ => Ok(None),
+    }
+}
 pub(super) fn transfer(from: &Profile, to: &Profile, kind: Kind, id: &str) -> Result<(), String> {
     validate_thread_id(id)?;
     let from = from.home(kind)?;

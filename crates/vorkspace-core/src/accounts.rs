@@ -7,6 +7,7 @@ mod transfer;
 pub use identity::Identity;
 pub use login::arguments as login_arguments;
 pub use login::{authenticate, AuthAction};
+pub(crate) use transfer::find_native_thread;
 mod processes;
 fn delete_keychain(config: &std::path::Path) -> Result<(), String> {
     use crate::process;

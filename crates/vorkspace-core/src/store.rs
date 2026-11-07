@@ -33,8 +33,10 @@ pub use session_preview::SessionPreviewData;
 mod edit;
 mod shared;
 pub use shared::{IndexedHistoryCursor, IndexedHistoryPage};
+mod native_history;
 mod side_threads;
 mod turn_history;
+pub use native_history::{NativeHistoryRequest, NativeHistoryResult};
 pub use turn_history::{recovery_text, RecoveredTurn, TurnHistory};
 pub(crate) mod todos;
 pub use crate::session::native_model;
@@ -1223,6 +1225,7 @@ impl Store {
             self.check_app_target(caller, id, project)?;
         }
         local_submissions::delete_if_present(&tx, &id.to_string())?;
+        native_history::delete_if_present(&tx, &id.to_string())?;
         if tx
             .query_row(
                 "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE name='composer_draft_recoveries')",

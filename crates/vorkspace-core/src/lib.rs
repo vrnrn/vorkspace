@@ -20,6 +20,7 @@ pub mod kind;
 pub mod limit;
 pub(crate) mod model_cache;
 pub mod notes;
+pub mod native_history;
 pub mod process;
 pub mod project_appearance;
 pub mod provider;

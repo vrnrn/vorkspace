@@ -78,10 +78,11 @@ impl Protocol {
                 } else {
                     request.prompt.clone()
                 };
-                write_json(
-                    stdin,
-                    json!({"type":"user","session_id":"","parent_tool_use_id":null,"message":{"role":"user","content":request.claude_content(&prompt)?}}),
-                )?;
+                let mut input = json!({"type":"user","session_id":"","parent_tool_use_id":null,"message":{"role":"user","content":request.claude_content(&prompt)?}});
+                if request.settings.bot.is_some() {
+                    input["uuid"] = json!(crate::native_history::input_uuid(&message.id));
+                }
+                write_json(stdin, input)?;
                 self.text_key = None;
                 return Ok(vec![Event::FollowUp(message)]);
             }

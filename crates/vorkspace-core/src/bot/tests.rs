@@ -1,5 +1,5 @@
 use super::*;
-use crate::store::Store;
+use crate::{store::Store, transcript::Row};
 use habits::{Habit, Schedule};
 use std::sync::atomic::{AtomicBool, Ordering};
 
@@ -19,6 +19,16 @@ fn queued_message_preserves_prepared_context_and_reads_legacy_messages() {
     let restored: Message = serde_json::from_str(&encoded).unwrap();
     assert_eq!(restored.text, "hello");
     assert_eq!(restored.prepared_prompt, message.prepared_prompt);
+}
+
+#[test]
+fn saved_bots_without_compaction_settings_default_to_session_rollover() {
+    let saved: Bot = serde_json::from_str(r#"{"id":"existing","name":"Existing Bot"}"#).unwrap();
+    assert_eq!(saved.compaction_mode, CompactionMode::SessionRollover);
+    assert_eq!(
+        Bot::default().compaction_mode,
+        CompactionMode::SessionRollover
+    );
 }
 
 #[test]

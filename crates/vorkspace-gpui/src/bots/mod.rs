@@ -825,8 +825,18 @@ impl Bots {
                         db.accept_follow_ups(session, &queue)?;
                     }
                 }
-                let summary = db.bot_session(session)?
+                let mut summary = db.bot_session(session)?
                     .ok_or("This Bot's saved conversation is unavailable. Reset its conversation explicitly to start a new one.")?;
+                let settings = db.agent_settings(session)?.unwrap_or_default();
+                // Existing Minions may share a live project-session view.
+                // Keep their working directory; new members get their own home.
+                let mut warning = None;
+                if !bot.is_minion() && settings.worktree_cwd.is_none() {
+                    let home = bot::home::ensure(&root, &bot, Some(std::path::Path::new(&summary.cwd)))?;
+                    db.move_bot_home(&summary, &home.to_string_lossy())?;
+                    summary.cwd = home.to_string_lossy().into_owned();
+                    warning = bot::home::write_session(&root, &bot, &summary, &settings.account).err();
+                }
                 let delivered = bot
                     .outbox
                     .iter()
@@ -838,19 +848,14 @@ impl Bots {
                     })
                     .map(|q| q.id.clone())
                     .collect::<Vec<_>>();
-                return Ok::<_, String>((summary, None, delivered));
+                return Ok::<_, String>((summary, None, delivered, warning));
             }
-            let home = std::env::var("HOME")
-                .or_else(|_| std::env::var("USERPROFILE"))
-                .unwrap_or_else(|_| ".".into());
+            let home = bot::home::ensure(&root, &bot, None)?;
             let provider = match &bot.initial_configuration {
                 Some(config) => Kind::parse(&config.provider).ok_or("This Bot's configured provider is unavailable.")?,
                 None => prefs.default_provider.as_deref().and_then(Kind::parse).unwrap_or(Kind::Codex),
             };
-            if bot.initial_configuration.is_some() {
-                bot::load_files(&root, &bot)?;
-            }
-            let mut summary = db.create(provider.id(), &home)?;
+            let mut summary = db.create(provider.id(), &home.to_string_lossy())?;
             summary.title = bot.label();
             db.title(summary.id, &summary.title)?;
             let settings = bot.initial_configuration.as_ref().map(|config| config.settings.clone()).unwrap_or_else(|| Settings {
@@ -859,13 +864,15 @@ impl Bots {
                 ..Default::default()
             });
             db.configure_agent(summary.id, provider.id(), &settings)?;
-            Ok((summary, Some(settings), Vec::new()))
+            // A failed convenience document must not orphan a created session.
+            let warning = bot::home::write_session(&root, &bot, &summary, &settings.account).err();
+            Ok((summary, Some(settings), Vec::new(), warning))
         });
         cx.spawn(async move |this, cx| {
             let result = work.await;
             let _ = this.update(cx, |this, cx| {
                 this.loading_chats.remove(&id);
-                let (summary, settings, delivered) = match result {
+                let (summary, settings, delivered, warning) = match result {
                     Ok(value) => value,
                     Err(e) => {
                         this.error = Some(e);
@@ -873,6 +880,9 @@ impl Bots {
                         return;
                     }
                 };
+                if let Some(warning) = warning {
+                    this.error = Some(warning);
+                }
                 if !this.roster.hidden_sessions.contains(&summary.id) {
                     this.roster.hidden_sessions.push(summary.id);
                 }

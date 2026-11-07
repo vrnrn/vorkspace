@@ -99,6 +99,32 @@ impl Store {
         provider: &str,
         account: &str,
     ) -> Result<bool, String> {
+        self.save_context_usage_for_owner(id, usage, provider, account, None)
+    }
+
+    /// A Bot can start fresh context on the same provider and account. Only
+    /// the exact provider session may publish its readings after a rollover.
+    pub fn save_bot_context_usage_if_owner(
+        &self,
+        id: i64,
+        usage: &crate::context::Usage,
+        provider: &str,
+        account: &str,
+        expected_provider_id: Option<&str>,
+    ) -> Result<bool, String> {
+        self.save_context_usage_for_owner(id, usage, provider, account, Some(expected_provider_id))
+    }
+
+    fn save_context_usage_for_owner(
+        &self,
+        id: i64,
+        usage: &crate::context::Usage,
+        provider: &str,
+        account: &str,
+        expected_thread: Option<Option<&str>>,
+    ) -> Result<bool, String> {
+        let check_thread = expected_thread.is_some();
+        let thread = expected_thread.flatten();
         if self.shared.is_some() {
             self.shared_writable()?;
             let fields = ["context_used", "context_window"]
@@ -111,7 +137,8 @@ impl Store {
             let changed = sql(self.conn.execute(
                 &format!(
                     "UPDATE sessions SET title=title{fields}
-                WHERE id=?1 AND harness=?4 AND COALESCE({account_column},?6)=?5"
+                WHERE id=?1 AND harness=?4 AND COALESCE({account_column},?6)=?5
+                  AND (NOT ?7 OR provider_session_id IS ?8)"
                 ),
                 params![
                     self.persisted_session_id(id)?,
@@ -119,16 +146,29 @@ impl Store {
                     usage.window.map(|n| n.min(i64::MAX as u64) as i64),
                     provider,
                     account,
-                    crate::accounts::DEFAULT
+                    crate::accounts::DEFAULT,
+                    check_thread,
+                    thread
                 ],
             ))?;
             return Ok(changed != 0);
         }
         let changed = sql(self.conn.execute("INSERT INTO native_settings(key,value)
             SELECT ?1,?2 WHERE EXISTS(SELECT 1 FROM native_sessions s JOIN native_settings a ON a.key='agent:'||s.id
-            WHERE s.id=?3 AND s.provider=?4 AND COALESCE(json_extract(a.value,'$.account.id'),?6)=?5)
+            WHERE s.id=?3 AND s.provider=?4 AND COALESCE(json_extract(a.value,'$.account.id'),?6)=?5
+              AND (NOT ?7 OR s.provider_id IS ?8))
             ON CONFLICT(key) DO UPDATE SET value=excluded.value",
-            params![format!("context:{id}"),encode(usage)?,id,provider,account,crate::accounts::DEFAULT]))?;
+            params![
+                format!("context:{id}"),
+                encode(usage)?,
+                id,
+                provider,
+                account,
+                crate::accounts::DEFAULT,
+                check_thread,
+                thread
+            ],
+        ))?;
         Ok(changed != 0)
     }
 

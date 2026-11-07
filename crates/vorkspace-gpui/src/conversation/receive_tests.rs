@@ -21,6 +21,7 @@ fn update(index: usize, finished: bool) -> vorkspace_runtime::runtime::Update {
             sent_at: None,
         }],
         provider_id: None,
+        provider_reset: false,
         model: None,
         config_model: None,
         config_settings: None,
@@ -179,9 +180,20 @@ fn superseding_a_yielded_receiver_protects_the_successor(cx: &mut TestAppContext
 #[gpui::test]
 fn stop_between_updates_skips_streaming_but_accepts_the_final_replay(cx: &mut TestAppContext) {
     let window = conversation(cx);
+    window
+        .update(cx, |view, _, _| {
+            view.summary.provider_id = Some("old-provider-session".into());
+            view.context = Some(vorkspace_core::context::Usage {
+                used: 95_000,
+                window: Some(100_000),
+            });
+        })
+        .unwrap();
     let (tx, rx) = async_channel::bounded(8);
     tx.try_send(update(0, false)).unwrap();
     let mut skipped = update(1, false);
+    skipped.provider_reset = true;
+    skipped.context = Some(Default::default());
     skipped.approvals.push(Approval {
         id: "late-approval".into(),
         title: "Synthetic approval".into(),
@@ -194,6 +206,8 @@ fn stop_between_updates_skips_streaming_but_accepts_the_final_replay(cx: &mut Te
     let mut final_update = update(0, true);
     final_update.rows.extend(update(1, false).rows);
     final_update.status = "Ready".into();
+    final_update.provider_reset = true;
+    final_update.context = Some(Default::default());
     tx.try_send(final_update).unwrap();
     start_receiver(window, rx, cx);
     first_poll(window, cx);
@@ -213,6 +227,8 @@ fn stop_between_updates_skips_streaming_but_accepts_the_final_replay(cx: &mut Te
             assert_eq!(view.status, "Ready");
             assert!(!view.busy && !view.stopping);
             assert!(view.approvals.is_empty());
+            assert_eq!(view.summary.provider_id, None);
+            assert_eq!(view.context, Some(Default::default()));
         })
         .unwrap();
 }

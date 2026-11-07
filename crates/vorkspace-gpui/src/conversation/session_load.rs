@@ -154,6 +154,7 @@ impl Conversation {
             return;
         }
         if self.loaded {
+            self.sync_native_history(cx);
             self.refresh_if_stale(cx);
             return;
         }
@@ -165,8 +166,18 @@ impl Conversation {
         let cwd = self.summary.cwd.clone();
         let bot = self.settings.bot.is_some();
         let page_bot = bot && self.allow_storage_paging;
+        let bot_root = self.settings.bot.as_ref().map(|bot| bot.root.clone());
         let recovery_epoch = self.submission_recovery_epoch;
         let work = cx.background_executor().spawn(async move {
+            if let Some(root) = bot_root {
+                // Initial loading reads the same durable projection as idle
+                // refresh. A read failure never hides already saved history.
+                if let Err(error) =
+                    vorkspace_runtime::runtime::native_history::sync(&store, id, &root)
+                {
+                    eprintln!("Could not sync Bot native history: {error}");
+                }
+            }
             let settings = locked(&store).and_then(|s| s.agent_settings(id));
             let execution_cwd = settings
                 .as_ref()
@@ -203,7 +214,13 @@ impl Conversation {
                     }),
                 git,
                 settings,
-                locked(&store).and_then(|s| s.context_usage(id)),
+                locked(&store).and_then(|s| {
+                    if bot && !s.bot_session(id)?.is_some_and(|s| s.provider_id.is_some()) {
+                        Ok(None)
+                    } else {
+                        s.context_usage(id)
+                    }
+                }),
                 locked(&store).and_then(|s| s.follow_ups(id)),
                 locked(&store).and_then(|s| {
                     s.recover_local_submissions()?;

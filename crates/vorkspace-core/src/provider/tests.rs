@@ -185,6 +185,57 @@ fn approvals_wait_for_a_decision_and_keep_the_requested_input() {
     assert_eq!(response["response"]["response"]["updatedInput"], input);
 }
 #[test]
+fn bot_home_keeps_assigned_projects_inside_the_selected_codex_policy() {
+    for access in [
+        AccessMode::Auto,
+        AccessMode::AutoAcceptEdits,
+        AccessMode::ReadOnly,
+        AccessMode::Supervised,
+    ] {
+        let mut p = protocol(Kind::Codex);
+        p.request.cwd = "/bot-home".into();
+        p.request.settings.access = access;
+        p.request.settings.bot = Some(crate::agent::BotContext {
+            bot: crate::bot::Roster::default().draft(vec![
+                "/project-a".into(),
+                "/project-b".into(),
+                "relative".into(),
+            ]),
+            root: "/bot-data".into(),
+            executable: "/vorkspace".into(),
+        });
+        let mut out = Vec::new();
+        p.frame(json!({"id":1,"result":{}}), &mut out).unwrap();
+        p.frame(
+            json!({"id":2,"result":{"thread":{"id":"bot-thread"}}}),
+            &mut out,
+        )
+        .unwrap();
+        for frame in String::from_utf8_lossy(&out)
+            .lines()
+            .map(|line| serde_json::from_str::<Value>(line).unwrap())
+            .filter(|frame| {
+                matches!(
+                    frame["method"].as_str(),
+                    Some("thread/start" | "turn/start")
+                )
+            })
+        {
+            let policy = &frame["params"]["sandboxPolicy"];
+            if matches!(access, AccessMode::Auto | AccessMode::AutoAcceptEdits) {
+                assert_eq!(
+                    policy["writableRoots"],
+                    json!(["/bot-home", "/project-a", "/project-b"])
+                );
+            } else {
+                assert_eq!(policy["type"], "readOnly");
+                assert!(policy.get("writableRoots").is_none());
+            }
+        }
+    }
+}
+
+#[test]
 fn selected_model_effort_and_access_reach_the_codex_turn() {
     let mut p = protocol(Kind::Codex);
     p.request.model = Some("selected-model".into());

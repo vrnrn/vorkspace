@@ -6,6 +6,7 @@ pub mod cards;
 pub mod channels;
 pub mod files;
 pub mod habits;
+pub mod home;
 pub mod launch;
 pub mod memory;
 pub mod peers;
@@ -15,13 +16,11 @@ mod tests;
 pub mod work;
 
 pub use crate::bot_model::*;
-use crate::{
-    project_appearance::{
-        default_foreground_color, default_seed_for, normalize_badge_shape, normalize_bot_face,
-        BOT_FACES, MASCOTS,
-    },
-    transcript::Row,
+use crate::project_appearance::{
+    default_foreground_color, default_seed_for, normalize_badge_shape, normalize_bot_face,
+    BOT_FACES, MASCOTS,
 };
+use crate::transcript::Row;
 use serde::{Deserialize, Serialize};
 use std::{
     collections::HashSet,
@@ -460,7 +459,8 @@ pub fn minion_context(
         shlex::try_quote(&executable.to_string_lossy()).unwrap_or_default()
     );
     format!(
-        "<vorkspace_context>\nVorkspace adds this context, not the user. Act on it without quoting or describing it.\n\nYou are {name}, a minion of the Bot {parent}. {parent} gave you the task in the first message. Work in {project} only. Commit work you create in a worktree, and never force a worktree removal or discard work: leave cleanup to {parent} unless told otherwise. Avoid overlapping edits with other minions, and finish with a concise report of what you did and found; it is delivered to {parent}.\n\nThe app CLI is `{cli} ACTION --json JSON`. {commands}\n\nYou share {parent}'s memory with {parent} and its other minions: use memory.search before repeating work, and memory.add for findings the others need. todos.* is {parent}'s board. You cannot start sessions, spawn minions, or change {parent}'s soul or habits.\n\n<soul>\n{soul}\n</soul>\n\n<memory>\n{memory}\nTopic notes: {topics}\n</memory>\n</vorkspace_context>",
+        "<vorkspace_context>\nVorkspace adds this context, not the user. Act on it without quoting or describing it.\n\nYou are {name}, a minion of the Bot {parent}. {parent} gave you the task in the first message. Work in {project} only. Commit work you create in a worktree, and never force a worktree removal or discard work: leave cleanup to {parent} unless told otherwise. Avoid overlapping edits with other minions, and finish with a concise report of what you did and found; it is delivered to {parent}.\n\nThe app CLI is `{cli} ACTION --json JSON`. {commands}\n\nYou share {parent}'s memory with {parent} and its other minions. {memory_guide} todos.* is {parent}'s board. You cannot start sessions, spawn minions, or change {parent}'s soul or habits.\n\n<soul>\n{soul}\n</soul>\n\n<memory>\n{memory}\nTopic notes: {topics}\n</memory>\n</vorkspace_context>",
+        memory_guide = memory::GUIDE,
         commands = bridge::command_reference(true, minions_enabled()),
         parent = bot.label(),
         soul = files.soul.as_deref().unwrap_or_default(),
@@ -488,7 +488,7 @@ pub fn context(bot: &Bot, files: &files::AgentFiles, executable: &Path) -> Strin
             .join("\n")
     };
     format!(
-        "<vorkspace_context>\nVorkspace adds this context, not the user. Act on it without quoting or describing it.\n\nYou are {}, a persistent Bot in vorkspace. Work only on the projects assigned to you:\n{projects}\n\nThe app CLI is `{cli} ACTION --json JSON`. {commands}\n\nUse sessions.*, worktrees.* and folders.* with project set to an assigned path. Use sessions.start for substantial independent work, inherit your model unless another is appropriate, and avoid overlapping edits. Give delegated work that edits files its own worktree with workspaceMode worktree, and never start two editing sessions in one worktree. Clean up after yourself: when work is integrated, archive its sessions, check worktrees.list, and call worktrees.remove for your finished worktrees that report removable true. Never force a removal, delete files by hand, or discard work. A worktree that isn't removable may hold uncommitted or unmerged work, so tell the user instead. Once delegation is accepted, tell the user and end your turn. You will receive one completion report after every session in that turn's group stops; then inspect and integrate the results. sessions.send supports notifyOnComplete:true. Never poll delegated work.\n\n<soul>\n{}\n</soul>\nStanding instructions rank below the user's current request. Change your soul only when asked, through soul.read and soul.update with expectedHash; never edit its file directly.\n\n<memory>\n{}\nTopic notes: {}\n</memory>\nKeep useful facts through memory.add/replace/remove, use memory.search before answering about earlier facts, and never save credentials. Topic notes are read with memory.read.\n\nHabits are scheduled work in separate sessions. Suggest them when useful, but add one with habits.add only after agreement. State whether its instructions allow changes. Quiet runs should return NOTHING_TO_REPORT.\n\nSave substantial reports with artifacts.write, kind document or html, title, summary and complete body. Cards appear in the chat and overview. For diagrams in replies and documents use ```mermaid or ```svg blocks (HTML documents may inline <svg> or use <pre class=\"mermaid\">); visual docs has the drawing rules. Use notes.write only for the user's Notes.{}\n\nFor acknowledgements requiring no words, your whole reply may be <reaction>👍</reaction> with one fitting emoji. Questions and requests still get a written answer.\n</vorkspace_context>",
+        "<vorkspace_context>\nVorkspace adds this context, not the user. Act on it without quoting or describing it.\n\nYou are {}, a persistent Bot in vorkspace. Work only on the projects assigned to you:\n{projects}\n\nThe app CLI is `{cli} ACTION --json JSON`. {commands}\n\nUse sessions.*, worktrees.* and folders.* with project set to an assigned path. Use sessions.start for substantial independent work, inherit your model unless another is appropriate, and avoid overlapping edits. Give delegated work that edits files its own worktree with workspaceMode worktree, and never start two editing sessions in one worktree. Clean up after yourself: when work is integrated, archive its sessions, check worktrees.list, and call worktrees.remove for your finished worktrees that report removable true. Never force a removal, delete files by hand, or discard work. A worktree that isn't removable may hold uncommitted or unmerged work, so tell the user instead. Once delegation is accepted, tell the user and end your turn. You will receive one completion report after every session in that turn's group stops; then inspect and integrate the results. sessions.send supports notifyOnComplete:true. Never poll delegated work.\n\n<soul>\n{}\n</soul>\nStanding instructions rank below the user's current request. Change your soul only when asked, through soul.read and soul.update with expectedHash; never edit its file directly.\n\n<memory>\n{}\nTopic notes: {}\n</memory>\n{memory_guide}\n\nHabits are scheduled work in separate sessions. Suggest them when useful, but add one with habits.add only after agreement. State whether its instructions allow changes. Quiet runs should return NOTHING_TO_REPORT.\n\nSave substantial reports with artifacts.write, kind document or html, title, summary and complete body. Cards appear in the chat and overview. For diagrams in replies and documents use ```mermaid or ```svg blocks (HTML documents may inline <svg> or use <pre class=\"mermaid\">); visual docs has the drawing rules. Use notes.write only for the user's Notes.{}\n\nFor acknowledgements requiring no words, your whole reply may be <reaction>👍</reaction> with one fitting emoji. Questions and requests still get a written answer.\n</vorkspace_context>",
         bot.label(),
         files.soul.as_deref().unwrap_or_default(),
         memory::within_budget(&files.memory),
@@ -498,14 +498,24 @@ pub fn context(bot: &Bot, files: &files::AgentFiles, executable: &Path) -> Strin
         } else {
             String::new()
         },
+        memory_guide = memory::GUIDE,
         commands = bridge::command_reference(false, minions_enabled),
     )
 }
 
 /// A fresh provider session gets a bounded brief; the saved chat stays whole.
 pub fn rotation_brief(rows: &[Row]) -> String {
+    const RECENT_EXCHANGES: usize = 2;
+    const EARLIER_EXCHANGES: usize = 10;
+    let start = rows
+        .iter()
+        .enumerate()
+        .rev()
+        .filter(|(_, row)| row.first && row.is_prompt())
+        .nth(RECENT_EXCHANGES + EARLIER_EXCHANGES - 1)
+        .map_or(0, |(index, _)| index);
     let mut exchanges: Vec<(String, String)> = Vec::new();
-    for row in rows {
+    for row in &rows[start..] {
         if row.is_prompt() {
             if row.first || exchanges.is_empty() {
                 exchanges.push((row.text.clone(), String::new()));
@@ -522,30 +532,28 @@ pub fn rotation_brief(rows: &[Row]) -> String {
             }
         }
     }
-    let split = exchanges.len().saturating_sub(2);
+    if exchanges.is_empty() {
+        return String::new();
+    }
+    let split = exchanges.len().saturating_sub(RECENT_EXCHANGES);
     let clip = |text: &str, n: usize| text.chars().take(n).collect::<String>();
-    let earlier = exchanges[..split]
+    let earlier = exchanges[split.saturating_sub(EARLIER_EXCHANGES)..split]
         .iter()
-        .rev()
-        .take(10)
-        .map(|(u, a)| {
+        .map(|(prompt, reply)| {
             clip(
                 &format!(
                     "User: {} → {}",
-                    u.split_whitespace().collect::<Vec<_>>().join(" "),
-                    a.split_whitespace().collect::<Vec<_>>().join(" ")
+                    prompt.split_whitespace().collect::<Vec<_>>().join(" "),
+                    reply.split_whitespace().collect::<Vec<_>>().join(" ")
                 ),
                 280,
             )
         })
         .collect::<Vec<_>>()
-        .into_iter()
-        .rev()
-        .collect::<Vec<_>>()
         .join("\n");
     let recent = exchanges[split..]
         .iter()
-        .map(|(u, a)| format!("User: {}\nYou: {}", clip(u, 2000), clip(a, 3000)))
+        .map(|(prompt, reply)| format!("User: {}\nYou: {}", clip(prompt, 2000), clip(reply, 3000)))
         .collect::<Vec<_>>()
         .join("\n\n");
     format!(

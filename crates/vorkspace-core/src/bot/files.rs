@@ -8,7 +8,7 @@
 //! │                         folder id → the project keys it answered for
 //! └── <bot id>/
 //!     ├── SOUL.md           who it is; edited by the user or at their request
-//!     ├── MEMORY.md         what it has learned; loads into every turn
+//!     ├── MEMORY.md         what it has learned; checked before every turn
 //!     ├── habits.json       what it does on its own, on a schedule
 //!     └── memory/           topic notes read on demand, and archive.md
 //! ```

@@ -5,6 +5,7 @@ pub fn validate(action: &str, input: &Value) -> Result<(), String> {
         "models.list" | "soul.read" | "habits.list" | "channels.list" | "bots.list" => "",
         "bots.read" => "bot before limit maxChars",
         "bots.send" => "to message expectReply",
+        "bots.configure" => "compactionMode",
         "channels.create" => "name topic members",
         "channels.read" => "channel limit",
         "channels.post" => "channel message to",
@@ -235,6 +236,14 @@ pub fn validate(action: &str, input: &Value) -> Result<(), String> {
     }
     if action == "bots.send" && input.get("to").is_some_and(|v| !v.is_string()) {
         return Err("to must be a Bot name or ID".into());
+    }
+    if action == "bots.configure"
+        && !matches!(
+            input["compactionMode"].as_str(),
+            Some("sessionRollover" | "native")
+        )
+    {
+        return Err("compactionMode must be sessionRollover or native".into());
     }
     Ok(())
 }

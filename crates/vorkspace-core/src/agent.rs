@@ -108,6 +108,9 @@ pub struct Settings {
     /// Immutable identity captured for this newly submitted turn.
     #[serde(skip)]
     pub turn_model: Option<TurnInfo>,
+    /// Stable native UUID supplied before a Claude Bot prompt is dispatched.
+    #[serde(skip)]
+    pub native_prompt_id: Option<String>,
     #[serde(skip)]
     pub disable_claude_hooks: bool,
     #[serde(skip)]

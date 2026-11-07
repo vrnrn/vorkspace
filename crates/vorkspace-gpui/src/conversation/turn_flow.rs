@@ -530,6 +530,9 @@ impl Conversation {
                             this.transcript
                                 .update(cx, |view, _| view.record_provider_turn(id));
                         }
+                        if update.provider_reset && source_selected {
+                            this.summary.provider_id = None;
+                        }
                         if let Some(id) = update.provider_id {
                             if let Some(pending) = this.settings.pending_provider_switch.as_mut()
                                 && pending.from == source_provider

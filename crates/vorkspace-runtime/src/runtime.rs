@@ -12,8 +12,11 @@ use vorkspace_core::{
 mod activity;
 pub mod card_persistence;
 #[cfg(test)]
+mod compaction_tests;
+#[cfg(test)]
 mod follow_up_tests;
 mod handoff;
+pub mod native_history;
 mod persistence;
 pub mod remote;
 mod submissions;
@@ -45,6 +48,7 @@ pub struct Update {
     pub start: usize,
     pub rows: Vec<Row>,
     pub provider_id: Option<String>,
+    pub provider_reset: bool,
     pub model: Option<String>,
     pub config_model: Option<String>,
     pub config_settings: Option<std::collections::HashMap<String, String>>,
@@ -151,10 +155,12 @@ fn run_turn_using(
     let mut initial_delivery = None;
     let mut accepted_messages = Vec::new();
     let mut provider_id = summary.provider_id.clone();
+    let mut provider_reset = false;
     let mut turn_start = 0;
     let mut activity = activity::ToolActivity::default();
     let mut turn_receipt: Option<(usize, vorkspace_core::agent::TurnInfo)> = None;
-    let mut bot_fingerprint = None;
+    let mut bot_context = None;
+    let bot_home = settings.bot.clone();
     let mut visual_introduction = None;
     let mut prepared_handoff = None;
     let mut handoff_accepted = false;
@@ -188,6 +194,10 @@ fn run_turn_using(
                 "This provider account was removed. Choose another account to continue.".into(),
             );
         }
+        native_history::before_turn(&store, &summary, &settings, &cancel)?;
+        context = locked(&store)?
+            .context_usage(summary.id)?
+            .unwrap_or_default();
         (transcript, pending.writer) = locked(&store)?.load_turn_history(summary.id)?;
         history_loaded = true;
         turn_start = transcript.rows.len();
@@ -201,6 +211,84 @@ fn run_turn_using(
             settings.ticket_context.take(),
         )?);
         submissions.reserve_initial(&prompt, &settings)?;
+        if settings.bot.is_some() {
+            // Reservation excludes background import before this writer takes
+            // its baseline, including imports finishing during preparation.
+            {
+                let store = locked(&store)?;
+                let current = store
+                    .bot_session(summary.id)?
+                    .ok_or("The Bot session no longer exists")?;
+                let saved = store.agent_settings(summary.id)?.unwrap_or_default();
+                if current.provider != summary.provider
+                    || current.cwd != summary.cwd
+                    || saved.account.id != source_account
+                {
+                    return Err("The Bot conversation changed before this turn. Retry to use its current settings.".into());
+                }
+                provider_reset = provider_id != current.provider_id;
+                provider_id = current.provider_id;
+                pending.own_bot_context(provider_id.as_deref());
+                context = store.context_usage(summary.id)?.unwrap_or_default();
+                (transcript, pending.writer) = store.load_turn_history(summary.id)?;
+                settings.turns = saved.turns;
+            }
+            turn_start = transcript.rows.len();
+            if kind == Kind::Claude {
+                settings.native_prompt_id = Some(vorkspace_core::native_history::input_uuid(
+                    &vorkspace_core::bot::new_id(),
+                ));
+            }
+            let raw_native_command = kind == Kind::Omp
+                && provider::native_prompt(
+                    kind,
+                    settings.prepared_prompt.as_deref().unwrap_or(&prompt),
+                )
+                .trim_start()
+                .starts_with('/');
+            let rollover = !raw_native_command
+                && settings.bot.as_ref().is_some_and(|b| {
+                    b.bot.compaction_mode == vorkspace_core::bot::CompactionMode::SessionRollover
+                })
+                && provider_id.is_some()
+                && context.ratio().is_some_and(|ratio| ratio >= 0.8);
+            if rollover
+                || (provider_id.is_none() && context != vorkspace_core::context::Usage::default())
+            {
+                let previous = provider_id.clone();
+                if !locked(&store)?.replace_bot_provider_session(
+                    summary.id,
+                    &summary.provider,
+                    &source_account,
+                    previous.as_deref(),
+                    None,
+                )? {
+                    return Err("The Bot session changed before context rollover. Retry to continue its current session.".into());
+                }
+                provider_id = None;
+                pending.own_bot_context(None);
+                context = vorkspace_core::context::Usage::default();
+                provider_reset = true;
+                if let Some(previous) = previous {
+                    provider::forget_session(
+                        kind,
+                        &previous,
+                        &source_account,
+                        std::path::Path::new(&summary.cwd),
+                    );
+                }
+                publish(
+                    &tx,
+                    &cancel,
+                    Update {
+                        provider_reset: true,
+                        context: Some(context),
+                        status: "Starting fresh context…".into(),
+                        ..Default::default()
+                    },
+                )?;
+            }
+        }
         let mut persisted = settings.clone();
         persisted.handoff = None;
         // These modes belong to this turn, not the next composer draft.
@@ -252,6 +340,9 @@ fn run_turn_using(
                     ..Default::default()
                 });
         info.started_at = info.started_at.or(started_at);
+        if let Some(id) = &settings.native_prompt_id {
+            info.provider_turn_id = Some(id.clone());
+        }
         // The receipt's key follows all continuation rows of the prompt.
         let turn = transcript
             .rows
@@ -268,8 +359,14 @@ fn run_turn_using(
             Update {
                 activity: activity.label(),
                 delivered: settings.bot_message_id.clone(),
-                start,
-                rows: transcript.rows[start..].to_vec(),
+                // A native import may have committed while its idle UI refresh
+                // was superseded by this submission. Publish the admitted Bot
+                // baseline together with its prompt, never a tail over stale rows.
+                start: if bot_home.is_some() { 0 } else { start },
+                rows: transcript.rows[if bot_home.is_some() { 0 } else { start }..].to_vec(),
+                provider_reset,
+                provider_id: provider_reset.then(|| provider_id.clone()).flatten(),
+                context: provider_reset.then_some(context),
                 status: if creating_worktree {
                     "Creating worktree…"
                 } else if settings.pending_provider_switch.is_some() {
@@ -400,10 +497,9 @@ fn run_turn_using(
                 TurnHistory {
                     summary: &summary,
                     earlier: &transcript.rows[..turn_start],
-                    context: &context,
                 },
-                &mut provider_id,
-                &mut bot_fingerprint,
+                provider_id.as_deref(),
+                &mut bot_context,
                 &store,
             )?
         };
@@ -527,6 +623,7 @@ fn run_turn_using(
                 let mut start = transcript.rows.len();
                 let mut status = "Streaming…".to_string();
                 let mut changed_id = None;
+                let mut changed_provider_reset = false;
                 let mut model = None;
                 let mut config_model = None;
                 let mut config_settings = None;
@@ -597,7 +694,14 @@ fn run_turn_using(
                                     provider: root.provider.clone(),
                                     model: root.model.clone(),
                                     model_id: root.model_id.clone(),
-                                    provider_turn_id: root.provider_turn_id.clone(),
+                                    provider_turn_id: if kind == Kind::Claude && bot_home.is_some()
+                                    {
+                                        Some(vorkspace_core::native_history::input_uuid(
+                                            &message.id,
+                                        ))
+                                    } else {
+                                        root.provider_turn_id.clone()
+                                    },
                                     ..Default::default()
                                 };
                                 pending.receipt(&store, summary.id, turn, steer)?;
@@ -669,14 +773,35 @@ fn run_turn_using(
                                     pending.provider_id = Some(id.clone());
                                     store.save_agent_settings(summary.id, &settings)?;
                                 } else if settings.account.id == source_account
-                                    && store.sessions()?.iter().any(|session| {
-                                        session.id == summary.id
-                                            && session.provider == summary.provider
-                                    })
+                                    && store
+                                        .bot_session(summary.id)?
+                                        .is_some_and(|session| session.provider == summary.provider)
                                 {
-                                    store.provider_id(summary.id, &id)?;
+                                    if bot_home.is_some() {
+                                        if !store.replace_bot_provider_session(
+                                            summary.id,
+                                            &summary.provider,
+                                            &source_account,
+                                            provider_id.as_deref(),
+                                            Some(&id),
+                                        )? {
+                                            return Err(
+                                                "The Bot provider session changed during this turn"
+                                                    .into(),
+                                            );
+                                        }
+                                        context = vorkspace_core::context::Usage::default();
+                                        context_changed = true;
+                                        provider_reset = true;
+                                        changed_provider_reset = true;
+                                    } else {
+                                        store.provider_id(summary.id, &id)?;
+                                    }
                                 }
                                 provider_id = Some(id.clone());
+                                if bot_home.is_some() {
+                                    pending.own_bot_context(Some(&id));
+                                }
                                 changed_id = Some(id);
                             }
                         }
@@ -806,6 +931,7 @@ fn run_turn_using(
                             start,
                             rows: transcript.rows[start..].to_vec(),
                             provider_id: changed_id,
+                            provider_reset: changed_provider_reset,
                             model,
                             config_model,
                             config_settings,
@@ -843,11 +969,11 @@ fn run_turn_using(
             let _ = notice.acknowledge();
         }
         if result.is_ok()
-            && let Some(fingerprint) = &bot_fingerprint
+            && let Some(receipt) = &bot_context
         {
             locked(&store)?.save_setting(
                 &format!("bot-context:{}", summary.id),
-                &serde_json::json!({"provider":provider_id,"hash":fingerprint}).to_string(),
+                &receipt.encode(provider_id.as_deref()),
             )?;
         }
         if result.is_ok()
@@ -1027,6 +1153,31 @@ fn run_turn_using(
     if let Err(error) = handoff_save {
         status = format!("{status} · Saving handoff failed: {error}");
     }
+    if let Some(bot) = bot_home.filter(|_| history_loaded && !pending.overlap) {
+        // Publish the pointer from durable state after the turn settles. A
+        // delayed provider event must not restore an old account or session.
+        let saved = (|| {
+            let store = locked(&store)?;
+            let Some(session) = store.bot_session(summary.id)? else {
+                return Ok(());
+            };
+            let settings = store.agent_settings(summary.id)?.unwrap_or_default();
+            if session.provider == summary.provider && settings.account.id == source_account {
+                vorkspace_core::bot::home::refresh_session(
+                    &bot.root,
+                    &bot.bot,
+                    &session,
+                    &settings.account,
+                )?;
+            }
+            Ok::<_, String>(())
+        })();
+        if let Err(error) = saved {
+            // This is a convenience pointer, not a turn receipt. Marking the
+            // turn failed here would requeue work the provider already did.
+            eprintln!("Could not update Bot SESSION.md: {error}");
+        }
+    }
     // Final status must still arrive after cancellation. Dropping a window closes
     // the receiver, so the worker never keeps a closed viewport alive.
     let _ = tx.send_blocking(Update {
@@ -1039,6 +1190,8 @@ fn run_turn_using(
         start,
         rows,
         provider_id: if pending.overlap { None } else { provider_id },
+        provider_reset: provider_reset && !pending.overlap,
+        context: (provider_reset && !pending.overlap).then_some(context),
         history_recovery,
         usage_limit: if cancelled { None } else { usage_limit },
         handoff: if pending.overlap { None } else { handoff },
@@ -1052,80 +1205,111 @@ fn run_turn_using(
 struct TurnHistory<'a> {
     summary: &'a Session,
     earlier: &'a [vorkspace_core::transcript::Row],
-    context: &'a vorkspace_core::context::Usage,
+}
+
+/// Records context delivery against the compaction visible BEFORE the turn.
+/// A compaction during the turn must leave the next turn due for a refresh.
+struct BotContextReceipt {
+    hash: String,
+    compaction: Option<String>,
+    native_compaction: Option<String>,
+}
+
+impl BotContextReceipt {
+    fn new(context: &str, earlier: &[Row]) -> Self {
+        let compaction = earlier.iter().rev().find_map(|row| {
+            if row.role != "tool" || !row.text.contains("\"contextCompaction\"") {
+                return None;
+            }
+            let tool = serde_json::from_str::<vorkspace_core::tool::ToolCall>(&row.text).ok()?;
+            // Failed, cancelled and interrupted attempts also refresh context:
+            // their local outcome cannot prove the provider retained everything.
+            tool.is_compaction().then_some(tool.id)
+        });
+        Self {
+            hash: vorkspace_core::bot::files::content_hash(context),
+            compaction,
+            native_compaction: None,
+        }
+    }
+
+    fn encode(&self, provider_id: Option<&str>) -> String {
+        serde_json::json!({
+            "provider": provider_id,
+            "hash": self.hash,
+            "compaction": self.compaction,
+            "nativeCompaction": self.native_compaction,
+        })
+        .to_string()
+    }
 }
 
 /// Prefixes a turn with the Bot or minion context the provider hasn't seen yet.
-/// A Bot near its context limit starts a fresh provider session instead.
+/// Providers own compaction; app-owned instructions and memory are reintroduced
+/// after a recorded compaction without discarding the provider's session.
 fn turn_prompt(
     prompt: String,
     settings: &Settings,
     history: TurnHistory<'_>,
-    provider_id: &mut Option<String>,
-    bot_fingerprint: &mut Option<String>,
+    provider_id: Option<&str>,
+    bot_context: &mut Option<BotContextReceipt>,
     store: &Database,
 ) -> Result<String, String> {
-    if let Some(bot) = &settings.bot {
+    let added = if let Some(bot) = &settings.bot {
         let files = vorkspace_core::bot::load_files(&bot.root, &bot.bot)?;
-        let added = vorkspace_core::bot::context(&bot.bot, &files, &bot.executable);
-        let fingerprint = vorkspace_core::bot::files::content_hash(&added);
-        *bot_fingerprint = Some(fingerprint.clone());
-        let rotated = provider_id.is_some() && history.context.ratio().is_some_and(|r| r >= 0.8);
-        if rotated {
-            *provider_id = None;
-            locked(store)?.reset_provider_id(history.summary.id)?;
-        }
-        let receipt = locked(store)?.setting(&format!("bot-context:{}", history.summary.id))?;
-        let expected = serde_json::json!({"provider":provider_id,"hash":fingerprint}).to_string();
-        let intro = if provider_id.is_none() || receipt.as_deref() != Some(&expected) {
-            added
-        } else {
-            String::new()
-        };
-        let brief = if provider_id.is_none() && !history.earlier.is_empty() {
-            vorkspace_core::bot::rotation_brief(history.earlier)
-        } else {
-            String::new()
-        };
-        let prompt = if let Some(handoff) = &settings.handoff {
-            vorkspace_core::response::wrap_handoff_prompt(&handoff.from, &handoff.brief, &prompt)
-        } else {
-            prompt
-        };
-        Ok(format!("{intro}\n\n{brief}\n\n{prompt}"))
+        Some(vorkspace_core::bot::context(
+            &bot.bot,
+            &files,
+            &bot.executable,
+        ))
     } else if let Some(minion) = &settings.minion {
-        // Its parent's soul and memory, re-sent whenever they change.
         let files = vorkspace_core::bot::load_files(&minion.root, &minion.bot)?;
-        let added = vorkspace_core::bot::minion_context(
+        Some(vorkspace_core::bot::minion_context(
             &minion.bot,
             &minion.name,
             &history.summary.cwd,
             &files,
             &minion.executable,
-        );
-        let fingerprint = vorkspace_core::bot::files::content_hash(&added);
-        *bot_fingerprint = Some(fingerprint.clone());
-        let receipt = locked(store)?.setting(&format!("bot-context:{}", history.summary.id))?;
-        let expected = serde_json::json!({"provider":provider_id,"hash":fingerprint}).to_string();
-        let intro = if provider_id.is_none() || receipt.as_deref() != Some(&expected) {
-            added
-        } else {
-            String::new()
-        };
-        let prompt = continuing_prompt(
-            settings.handoff.as_ref(),
-            provider_id.is_none(),
-            history.earlier,
-            prompt,
-        );
-        Ok(format!("{intro}\n\n{prompt}"))
-    } else {
-        Ok(continuing_prompt(
-            settings.handoff.as_ref(),
-            provider_id.is_none(),
-            history.earlier,
-            prompt,
         ))
+    } else {
+        None
+    };
+    let prompt = if provider_id.is_none()
+        && !history.earlier.is_empty()
+        && settings.handoff.is_none()
+        && settings.bot.as_ref().is_some_and(|b| {
+            b.bot.compaction_mode == vorkspace_core::bot::CompactionMode::SessionRollover
+        }) {
+        format!(
+            "{}\n\n{prompt}",
+            vorkspace_core::bot::rotation_brief(history.earlier)
+        )
+    } else {
+        continuing_prompt(
+            settings.handoff.as_ref(),
+            provider_id.is_none(),
+            history.earlier,
+            prompt,
+        )
+    };
+    let Some(added) = added else {
+        return Ok(prompt);
+    };
+    let mut receipt = BotContextReceipt::new(&added, history.earlier);
+    if let Some(bot) = settings.bot.as_ref().filter(|_| !settings.text_only) {
+        receipt.native_compaction = locked(store)?
+            .native_history_request(history.summary.id, &bot.root)?
+            .and_then(|r| r.cursor)
+            .and_then(|c| c.compaction);
+    }
+    let previous = locked(store)?.setting(&format!("bot-context:{}", history.summary.id))?;
+    let refresh =
+        provider_id.is_none() || previous.as_deref() != Some(receipt.encode(provider_id).as_str());
+    *bot_context = Some(receipt);
+    if refresh {
+        Ok(format!("{added}\n\n{prompt}"))
+    } else {
+        Ok(prompt)
     }
 }
 
@@ -1153,7 +1337,7 @@ fn continuing_prompt(
     for row in prior
         .iter()
         .rev()
-        .filter(|r| matches!(r.role.as_str(), "user" | "assistant"))
+        .filter(|r| r.is_prompt() || r.role == "assistant")
     {
         if history.len() + row.text.len() > 32_000 {
             break;
@@ -1215,11 +1399,18 @@ mod continuing_prompt_tests {
         // A first turn failed before the provider assigned a thread.
         let prior = [
             row("user", "Scout the repository layout"),
+            row(
+                "bot-system",
+                "The delegated scout finished; inspect its saved report",
+            ),
             row("tool", "ignored"),
             row("assistant", "The provider was unavailable"),
         ];
         let prompt = continuing_prompt(None, true, &prior, "try again".into());
         assert!(prompt.contains("user: Scout the repository layout"));
+        assert!(
+            prompt.contains("bot-system: The delegated scout finished; inspect its saved report")
+        );
         assert!(prompt.contains("assistant: The provider was unavailable"));
         assert!(prompt.ends_with("Current user message:\ntry again"));
         assert!(!prompt.contains("ignored"));

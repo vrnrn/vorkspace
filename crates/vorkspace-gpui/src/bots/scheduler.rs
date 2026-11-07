@@ -1206,6 +1206,9 @@ impl Bots {
         .detach();
     }
     pub(super) fn tick(&mut self, _window: &mut Window, cx: &mut Context<Self>) {
+        for view in self.chats.values() {
+            view.update(cx, |chat, cx| chat.sync_native_history(cx));
+        }
         self.resume_peer_queues(cx);
         // A failed settlement write may be retried locally. The provider turn
         // itself is never replayed; starts belong only to this live owner.

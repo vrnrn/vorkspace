@@ -1396,6 +1396,13 @@ fn run_operation(
                 command.args(["--tools", "Read,Glob,Grep,Bash", "--allowedTools", "Read,Glob,Grep,Bash(git status *),Bash(git diff *),Bash(git log *),Bash(git show *),Bash(pwd),Bash(ls *),Bash(rg *)"]);
             }
             if !settings.text_only {
+                if let Some(bot) = &settings.bot {
+                    for project in &bot.bot.projects {
+                        if std::path::Path::new(project).is_absolute() {
+                            command.args(["--add-dir", project]);
+                        }
+                    }
+                }
                 if let Some(server) = crate::visual_bridge::mcp_server(&settings.environment) {
                     command.args([
                         "--mcp-config",
