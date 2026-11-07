@@ -1,6 +1,52 @@
 use super::*;
 
 #[test]
+fn codebase_tabs_retain_independent_project_and_worktree_identity() {
+    let mut workspace = Workspace::default();
+    workspace.add_project("/work/project");
+    let first = workspace
+        .app_pane(
+            AppPane::Codebase,
+            "/work/project".into(),
+            "/work/project".into(),
+        )
+        .unwrap();
+    let second = workspace
+        .app_pane(
+            AppPane::Codebase,
+            "/work/project".into(),
+            "/work/checkout".into(),
+        )
+        .unwrap();
+    let other = workspace
+        .app_pane(
+            AppPane::Codebase,
+            "/work/other".into(),
+            "/work/other".into(),
+        )
+        .unwrap();
+    assert_ne!(first, second);
+    assert_ne!(first, other);
+    assert_eq!(
+        workspace.app_pane(
+            AppPane::Codebase,
+            "/work/project".into(),
+            "/work/project".into()
+        ),
+        Some(first)
+    );
+    workspace.open(first);
+    workspace.open(second);
+    workspace.title_order = vec![TitleTab::Workspace(first), TitleTab::Workspace(second)];
+    let saved = serde_json::to_string(&workspace).unwrap();
+    let restored = Workspace::restore(Some(&saved), &[], "/work/project");
+    assert_eq!(restored.app_panes[&second].worktree, "/work/checkout");
+    assert!(restored.counts_toward_pane_limit(first));
+    assert!(restored.tabs.contains(&first));
+    assert!(restored.tabs.contains(&second));
+}
+
+#[test]
 fn archived_project_is_not_reopened_by_active_session_or_stale_metadata() {
     let saved = serde_json::json!({
             "projects": ["/work/old", "/work/other"], "project": "/work/old", "active": 42,
@@ -124,7 +170,15 @@ fn sidebar_navigation_normalizes_ids_and_preserves_disabled_slots_and_hidden_sta
     let mut state = Workspace::restore(Some(&saved.to_string()), &[], "/work");
     assert_eq!(
         state.sidebar_navigation_order,
-        ["notes", "github", "automations", "gitlab", "jira", "todos"]
+        [
+            "notes",
+            "github",
+            "automations",
+            "codebase",
+            "gitlab",
+            "jira",
+            "todos"
+        ]
     );
     use SidebarNavigation::{Automations, Connector as Provider, Notes};
     let available = [
@@ -136,9 +190,17 @@ fn sidebar_navigation_normalizes_ids_and_preserves_disabled_slots_and_hidden_sta
     assert!(state.reorder_sidebar_navigation(Provider(Connector::Jira), Notes, false, &available));
     assert_eq!(
         state.sidebar_navigation_order,
-        ["jira", "notes", "github", "gitlab", "automations", "todos"]
+        [
+            "jira",
+            "notes",
+            "github",
+            "codebase",
+            "gitlab",
+            "automations",
+            "todos"
+        ]
     );
-    // GitLab's slot survives its absence; hidden GitHub is still reorderable.
+    // Disabled Codebase and GitLab keep their slots; hidden GitHub is still reorderable.
     assert!(state.reorder_sidebar_navigation(
         Provider(Connector::Github),
         Automations,
@@ -147,7 +209,15 @@ fn sidebar_navigation_normalizes_ids_and_preserves_disabled_slots_and_hidden_sta
     ));
     assert_eq!(
         state.sidebar_navigation_order,
-        ["jira", "notes", "automations", "gitlab", "github", "todos"]
+        [
+            "jira",
+            "notes",
+            "automations",
+            "codebase",
+            "gitlab",
+            "github",
+            "todos"
+        ]
     );
     assert!(!state.reorder_sidebar_navigation(
         Provider(Connector::Gitlab),
@@ -175,7 +245,15 @@ fn sidebar_navigation_normalizes_ids_and_preserves_disabled_slots_and_hidden_sta
     ));
     assert_eq!(
         state.sidebar_navigation_order,
-        ["jira", "gitlab", "notes", "automations", "github", "todos"]
+        [
+            "jira",
+            "gitlab",
+            "notes",
+            "automations",
+            "codebase",
+            "github",
+            "todos"
+        ]
     );
 }
 

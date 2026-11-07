@@ -7,6 +7,7 @@ mod avatar;
 mod background_helper;
 mod bot_header;
 mod bots;
+mod codebase;
 mod color_picker;
 mod composer;
 mod controls;
@@ -65,10 +66,16 @@ actions!(application, [Quit, Restart]);
 fn quit(cx: &mut App) {
     background_helper::app_quitting(cx);
     let voice = vox::shutdown(cx);
+    let codebase = codebase::service(cx).ok();
     cx.spawn(async move |cx| {
         voice.await;
         cx.background_executor()
-            .spawn(async { vorkspace_core::process::shutdown_all() })
+            .spawn(async move {
+                if let Some(service) = codebase {
+                    service.shutdown();
+                }
+                vorkspace_core::process::shutdown_all();
+            })
             .await;
         cx.update(|cx| cx.quit());
     })
@@ -77,10 +84,16 @@ fn quit(cx: &mut App) {
 
 fn restart(cx: &mut App) {
     let voice = vox::shutdown(cx);
+    let codebase = codebase::service(cx).ok();
     cx.spawn(async move |cx| {
         voice.await;
         cx.background_executor()
-            .spawn(async { vorkspace_core::process::shutdown_all() })
+            .spawn(async move {
+                if let Some(service) = codebase {
+                    service.shutdown();
+                }
+                vorkspace_core::process::shutdown_all();
+            })
             .await;
         if let Err(error) = vorkspace_macos::restart::relaunch_self() {
             eprintln!("Could not schedule restart: {error}");

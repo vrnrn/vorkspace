@@ -10,6 +10,14 @@ impl Shell {
     }
 
     pub(super) fn app_view_label(&self) -> Option<&'static str> {
+        if self
+            .workspace
+            .active
+            .and_then(|id| self.workspace.app_panes.get(&id))
+            .is_some_and(|p| p.content == crate::workspace::AppPane::Codebase)
+        {
+            return Some("Codebase");
+        }
         if self.active_terminal_tab.is_some() {
             return Some("Terminal");
         }

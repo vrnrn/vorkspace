@@ -575,6 +575,9 @@ impl Shell {
                 "models.list"
                     | "sessions.list"
                     | "sessions.read"
+                    | "codebase.tools"
+                    | "codebase.status"
+                    | "codebase.query"
                     | "workspace.list"
                     | "folders.list"
                     | "notes.list"
@@ -637,6 +640,38 @@ impl Shell {
         }
         let input = call.input.clone();
         let action = call.action.clone();
+        if action.starts_with("codebase.") {
+            let service = match crate::codebase::service(cx) {
+                Ok(s) => s,
+                Err(e) => {
+                    self.finish_app_call(call, Err(e));
+                    return;
+                }
+            };
+            let root = inherited
+                .worktree_cwd
+                .clone()
+                .unwrap_or_else(|| project.clone());
+            if input
+                .get("worktreeCwd")
+                .and_then(Value::as_str)
+                .is_some_and(|cwd| {
+                    vorkspace_core::files::path_key(cwd) != vorkspace_core::files::path_key(&root)
+                })
+            {
+                self.finish_app_call(call, Err("Use this session's working copy".into()));
+                return;
+            }
+            self.app_background(
+                call,
+                move |_| {
+                    crate::codebase::action(&service, &project, &root, &action, &input)
+                        .map(|v| (v, Effect::None))
+                },
+                cx,
+            );
+            return;
+        }
         let result = match action.as_str() {
             "workspace.list" | "workspace.open" | "workspace.focus" | "workspace.close" | "workspace.move" | "workspace.reorder" | "workspace.detach" | "workspace.resize" => {
                 self.app_workspace_action(call.session, &project, &action, &input, window, cx)

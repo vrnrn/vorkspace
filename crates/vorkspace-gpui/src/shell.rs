@@ -538,6 +538,7 @@ pub(crate) struct Shell {
     pending_folder: Option<(i64, AnchorSlot)>,
     _session_clock: gpui::Task<()>,
     notes: Option<Entity<Notes>>,
+    codebase_tabs: HashMap<i64, Entity<crate::codebase::Page>>,
     note_tabs: HashMap<i64, Entity<Notes>>,
     item_tabs: HashMap<i64, Entity<crate::inbox::Inbox>>,
     bot_document_tabs: HashMap<i64, Entity<crate::bots::BotDocumentPane>>,
@@ -741,6 +742,14 @@ impl Shell {
         cx: &mut Context<Self>,
     ) -> Self {
         crate::accounts::install(store.clone(), cx);
+        crate::codebase::install(store.clone(), cx);
+        if let Some(owner) = crate::codebase::get(cx) {
+            cx.observe(&owner, |this, _, cx| {
+                this.invalidate_chrome(cx);
+                cx.notify();
+            })
+            .detach();
+        }
         let remote_dir = locked(&store)
             .ok()
             .and_then(|store| store.data_dir().map(std::path::Path::to_path_buf))
@@ -918,6 +927,7 @@ impl Shell {
             pending_folder: None,
             _session_clock: session_clock,
             notes: None,
+            codebase_tabs: HashMap::new(),
             note_tabs: HashMap::new(),
             item_tabs: HashMap::new(),
             bot_document_tabs: HashMap::new(),
@@ -1798,6 +1808,14 @@ impl Shell {
             window.focus(&search.view.focus_handle(cx), cx);
             return;
         }
+        if let Some(view) = self
+            .workspace
+            .active
+            .and_then(|id| self.codebase_tabs.get(&id))
+        {
+            window.focus(&view.focus_handle(cx), cx);
+            return;
+        }
         if self.focus_app_view(window, cx) {
             return;
         }
@@ -1983,6 +2001,14 @@ impl Shell {
             return;
         }
         window.focus(&self.focus, cx);
+        if let Some(view) = self
+            .workspace
+            .active
+            .and_then(|id| self.codebase_tabs.get(&id))
+        {
+            window.focus(&view.focus_handle(cx), cx);
+            return;
+        }
         if self.focus_app_view(window, cx) {
             return;
         }

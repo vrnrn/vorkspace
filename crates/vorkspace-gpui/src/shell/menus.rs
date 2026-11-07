@@ -321,6 +321,16 @@ impl Shell {
                         .icon("image-add")
                         .into(),
                 ];
+                items.push(
+                    MenuAction::new("codebase-enabled", "Codebase Memory")
+                        .description("Local code index. First use downloads a 48 MB engine.")
+                        .icon("network")
+                        .disabled(vorkspace_core::files::remote::is_remote(
+                            std::path::Path::new(path),
+                        ))
+                        .toggle(crate::codebase::enabled(path, cx))
+                        .into(),
+                );
                 if *rail {
                     let rail = self
                         .workspace
@@ -471,7 +481,9 @@ impl Shell {
                     cx.notify();
                     return;
                 }
-                if action == "pin" {
+                if action == "codebase-enabled" {
+                    self.configure_codebase(path, window, cx);
+                } else if action == "pin" {
                     let key = vorkspace_core::files::path_key(&path);
                     let rail = self.workspace.project_rail_mut();
                     let value = if rail.pinned.remove(&key) {

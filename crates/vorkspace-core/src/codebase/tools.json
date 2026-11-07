@@ -1,0 +1,813 @@
+[
+  {
+    "name": "search_graph",
+    "description": "Find symbols via BM25 query or regex name/qn filters. Rows keep qn/file/lines and in/out over CALLS/USAGE/CALL_REFERENCE/INHERITS/IMPLEMENTS.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "query": {
+          "type": "string"
+        },
+        "label": {
+          "type": "string"
+        },
+        "name_pattern": {
+          "type": "string"
+        },
+        "qn_pattern": {
+          "type": "string"
+        },
+        "file_pattern": {
+          "type": "string"
+        },
+        "kind": {
+          "type": "string",
+          "description": "Resource kind, e.g. Deployment."
+        },
+        "namespace": {
+          "type": "string",
+          "description": "Resource namespace."
+        },
+        "relationship": {
+          "type": "string"
+        },
+        "min_degree": {
+          "type": "integer"
+        },
+        "max_degree": {
+          "type": "integer"
+        },
+        "exclude_entry_points": {
+          "type": "boolean"
+        },
+        "include_connected": {
+          "type": "boolean"
+        },
+        "limit": {
+          "type": "integer",
+          "default": 50,
+          "minimum": 1,
+          "maximum": 200
+        },
+        "offset": {
+          "type": "integer",
+          "default": 0,
+          "minimum": 0
+        },
+        "max_output_tokens": {
+          "type": "integer",
+          "default": 3200,
+          "minimum": 128,
+          "maximum": 16000
+        },
+        "format": {
+          "type": "string",
+          "enum": [
+            "tree",
+            "json"
+          ],
+          "default": "tree"
+        },
+        "fields": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "detail": {
+          "type": "string",
+          "enum": [
+            "ids",
+            "default"
+          ],
+          "default": "default"
+        }
+      },
+      "required": [],
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "query_graph",
+    "description": "Read-only Cypher for multi-hop, aggregation, complexity, or cross-service analysis. Default: 200 visible rows with exact/lower-bound totals and truncation; continue safely with next_cursor. graph=missed is a file tree of flagged coverage gaps; absence is not proof of completeness. Use get_graph_schema(diagnostics=full) for properties.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "query": {
+          "type": "string",
+          "description": "Cypher query"
+        },
+        "graph": {
+          "type": "string",
+          "enum": [
+            "code",
+            "missed"
+          ],
+          "default": "code",
+          "description": "code graph (default) or missed coverage-gap file tree."
+        },
+        "max_rows": {
+          "type": "integer",
+          "description": "Visible rows per page; the app caps this at 200. Evaluation is unchanged.",
+          "minimum": 1,
+          "default": 200,
+          "maximum": 200
+        },
+        "offset": {
+          "type": "integer",
+          "minimum": 0,
+          "default": 0,
+          "description": "Live compatibility paging; cannot be combined with cursor."
+        },
+        "cursor": {
+          "type": "string",
+          "description": "Snapshot continuation; keep query/project/graph. Format, budget, and max_rows may change."
+        },
+        "max_output_tokens": {
+          "type": "integer",
+          "minimum": 128,
+          "maximum": 16000,
+          "description": "Sizing hint; hard ceiling is 4 UTF-8 bytes/token. Rows stay whole."
+        },
+        "format": {
+          "type": "string",
+          "enum": [
+            "tree",
+            "json"
+          ],
+          "default": "tree",
+          "description": "tree may use local @N+suffix prefix refs; json uses direct strings."
+        }
+      },
+      "required": [
+        "query"
+      ],
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "trace_path",
+    "description": "Trace callers/callees, data flow, or cross-service paths. Defaults exclude tests and resolver evidence. Rows keep qn/hop with explicit totals, relations, and continuations.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "function_name": {
+          "type": "string"
+        },
+        "direction": {
+          "type": "string",
+          "enum": [
+            "inbound",
+            "outbound",
+            "both"
+          ],
+          "default": "both"
+        },
+        "depth": {
+          "type": "integer",
+          "default": 3,
+          "minimum": 1,
+          "maximum": 5
+        },
+        "limit": {
+          "type": "integer",
+          "default": 100,
+          "minimum": 1,
+          "maximum": 200,
+          "description": "Rows/page; gte flags the 5000-node engine ceiling."
+        },
+        "max_output_tokens": {
+          "type": "integer",
+          "default": 3200,
+          "minimum": 128,
+          "maximum": 16000,
+          "description": "Sizing hint; hard ceiling is 4 UTF-8 bytes/token. Evidence/args yield before nearest graph rows."
+        },
+        "cursor": {
+          "type": "string",
+          "description": "Pass next/next_cursor with traversal args unchanged; budget may increase."
+        },
+        "mode": {
+          "type": "string",
+          "enum": [
+            "calls",
+            "data_flow",
+            "cross_service",
+            "topology",
+            "deploy",
+            "run"
+          ],
+          "default": "calls",
+          "description": "calls; argument-aware data_flow; service edges; topology: infra objects, routes, controllers (from a Resource/Route); deploy: what CI jobs and scripts run and deploy; run: what a Service runs (image, Dockerfile, program, env)."
+        },
+        "parameter_name": {
+          "type": "string",
+          "description": "data_flow parameter filter."
+        },
+        "edge_types": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "risk_labels": {
+          "type": "boolean",
+          "default": false,
+          "description": "Add hop-risk labels."
+        },
+        "include_tests": {
+          "type": "boolean",
+          "default": false
+        },
+        "format": {
+          "type": "string",
+          "enum": [
+            "tree",
+            "json"
+          ],
+          "default": "tree",
+          "description": "tree chooses smaller complete direct/grouped output; json uses stable grouped tables."
+        },
+        "include_evidence": {
+          "type": "boolean",
+          "default": false,
+          "description": "Add resolver class and confidence."
+        }
+      },
+      "required": [
+        "function_name"
+      ],
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "get_code_snippet",
+    "description": "Read a search_graph symbol. auto bounds source and outlines large containers; full restores up to 500 lines. Source/outline pages continue; coverage_note marks gaps.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "qualified_name": {
+          "type": "string",
+          "description": "search_graph qn, or short name."
+        },
+        "include_neighbors": {
+          "type": "boolean",
+          "default": false
+        },
+        "source_mode": {
+          "type": "string",
+          "enum": [
+            "auto",
+            "full",
+            "outline"
+          ],
+          "default": "auto",
+          "description": "auto outlines 200+ line containers; full returns source; outline lists members."
+        },
+        "member_limit": {
+          "type": "integer",
+          "default": 50,
+          "minimum": 1,
+          "maximum": 200
+        },
+        "member_offset": {
+          "type": "integer",
+          "default": 0,
+          "minimum": 0
+        },
+        "start_line": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "max_lines": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 500
+        },
+        "max_output_tokens": {
+          "type": "integer",
+          "minimum": 128,
+          "maximum": 16000,
+          "description": "auto/outline sizing hint (default 2500), hard ceiling 4 UTF-8 bytes/token. Lines stay whole; explicit full is uncapped unless set."
+        },
+        "format": {
+          "type": "string",
+          "enum": [
+            "tree",
+            "json"
+          ],
+          "default": "tree"
+        }
+      },
+      "required": [
+        "qualified_name"
+      ],
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "get_file_outline",
+    "description": "Declaration outline of one exact repository-relative file: optional exact label filter, source order, exact total/offset/limit paging; file/folder/container nodes excluded.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "file_path": {
+          "type": "string",
+          "description": "Exact repository-relative file path"
+        },
+        "labels": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 16,
+          "description": "Optional exact node-label filter"
+        },
+        "limit": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 200,
+          "default": 100
+        },
+        "offset": {
+          "type": "integer",
+          "minimum": 0,
+          "default": 0
+        },
+        "format": {
+          "type": "string",
+          "enum": [
+            "tree",
+            "json"
+          ],
+          "default": "tree"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "file_path"
+      ]
+    }
+  },
+  {
+    "name": "get_graph_schema",
+    "description": "Get node-label and edge-type counts. diagnostics=full also lists queryable properties.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "format": {
+          "type": "string",
+          "enum": [
+            "tree",
+            "json"
+          ],
+          "default": "tree"
+        },
+        "diagnostics": {
+          "type": "string",
+          "enum": [
+            "none",
+            "full"
+          ],
+          "default": "none"
+        },
+        "limit": {
+          "type": "integer",
+          "default": 50,
+          "minimum": 1,
+          "maximum": 200
+        },
+        "offset": {
+          "type": "integer",
+          "default": 0,
+          "minimum": 0
+        }
+      },
+      "required": [],
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "get_architecture",
+    "description": "Bounded static architecture; poll pending jobs. include_behavior_evidence=true adds indexed call arguments, parameter declarations and return types; not full dataflow or runtime traces.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "path": {
+          "type": "string",
+          "description": "Directory prefix."
+        },
+        "aspects": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "enum": [
+              "all",
+              "overview",
+              "structure",
+              "dependencies",
+              "routes",
+              "languages",
+              "packages",
+              "entry_points",
+              "hotspots",
+              "boundaries",
+              "layers",
+              "file_tree",
+              "clusters",
+              "cycles",
+              "system_structure"
+            ]
+          },
+          "description": "Default: languages/packages/entry_points. overview omits file_tree. cycles/system_structure opt-in; system_structure alone, no path."
+        },
+        "entry_node_id": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "Start symbol."
+        },
+        "target_node_id": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "Requires entry_node_id."
+        },
+        "expected_generation": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Required generation."
+        },
+        "include_behavior_evidence": {
+          "type": "boolean",
+          "default": false,
+          "description": "system_structure only."
+        },
+        "format": {
+          "type": "string",
+          "enum": [
+            "tree",
+            "json"
+          ],
+          "default": "tree"
+        }
+      },
+      "required": [],
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "search_code",
+    "description": "Graph-ranked text search: compact symbols, full bounded source, or file paths.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "pattern": {
+          "type": "string"
+        },
+        "file_pattern": {
+          "type": "string"
+        },
+        "path_filter": {
+          "type": "string"
+        },
+        "mode": {
+          "type": "string",
+          "enum": [
+            "compact",
+            "full",
+            "files"
+          ],
+          "default": "compact"
+        },
+        "context": {
+          "type": "integer",
+          "default": 0,
+          "minimum": 0,
+          "maximum": 200
+        },
+        "regex": {
+          "type": "boolean",
+          "default": false
+        },
+        "debug": {
+          "type": "boolean",
+          "default": false,
+          "description": "Add scope_ms/scan_ms/enrich_ms phase timings."
+        },
+        "limit": {
+          "type": "integer",
+          "default": 10,
+          "minimum": 1,
+          "maximum": 200
+        },
+        "result_limit": {
+          "type": "integer",
+          "default": 10,
+          "minimum": 1,
+          "maximum": 200
+        },
+        "result_offset": {
+          "type": "integer",
+          "default": 0,
+          "minimum": 0
+        },
+        "raw_limit": {
+          "type": "integer",
+          "default": 5,
+          "minimum": 0,
+          "maximum": 100
+        },
+        "raw_offset": {
+          "type": "integer",
+          "default": 0,
+          "minimum": 0
+        },
+        "raw_content_offset": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Raw-line byte offset; omit for match-centered preview."
+        },
+        "directory_limit": {
+          "type": "integer",
+          "default": 20,
+          "minimum": 0,
+          "maximum": 64
+        },
+        "directory_offset": {
+          "type": "integer",
+          "default": 0,
+          "minimum": 0
+        },
+        "match_limit": {
+          "type": "integer",
+          "default": 8,
+          "minimum": 1,
+          "maximum": 200
+        },
+        "source_max_lines": {
+          "type": "integer",
+          "default": 20,
+          "minimum": 1,
+          "maximum": 200
+        },
+        "max_output_tokens": {
+          "type": "integer",
+          "minimum": 128,
+          "maximum": 16000
+        },
+        "format": {
+          "type": "string",
+          "enum": [
+            "tree",
+            "json"
+          ],
+          "default": "tree"
+        }
+      },
+      "required": [
+        "pattern"
+      ],
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "index_status",
+    "description": "Project readiness, counts, root, watch state, coverage gaps, and doc_links (doc-comment references: MENTIONS edges, unresolved by reason). diagnostics adds coverage rows; verbose adds Git paths. Best-effort only; verify cited paths with check_index_coverage.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "verbose": {
+          "type": "boolean",
+          "default": false,
+          "description": "Add worktree/shadow Git paths for index-location debugging."
+        },
+        "diagnostics": {
+          "type": "string",
+          "enum": [
+            "none",
+            "summary",
+            "full"
+          ],
+          "default": "none",
+          "description": "Coverage rows: counts, five samples, or up to 500."
+        },
+        "format": {
+          "type": "string",
+          "enum": [
+            "tree",
+            "json"
+          ],
+          "default": "tree"
+        }
+      },
+      "required": [],
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "check_index_coverage",
+    "description": "Best-effort exact-path/scope coverage and freshness, paged separately. full diagnostics adds raw detail. Clean is not proof of completeness.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "paths": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 128
+        },
+        "path_limit": {
+          "type": "integer",
+          "default": 20,
+          "minimum": 1,
+          "maximum": 128
+        },
+        "path_offset": {
+          "type": "integer",
+          "default": 0,
+          "minimum": 0
+        },
+        "scopes": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 32
+        },
+        "scope_limit": {
+          "type": "integer",
+          "default": 20,
+          "minimum": 1,
+          "maximum": 200
+        },
+        "scope_offset": {
+          "type": "integer",
+          "default": 0,
+          "minimum": 0
+        },
+        "diagnostics": {
+          "type": "string",
+          "enum": [
+            "none",
+            "full"
+          ],
+          "default": "none"
+        },
+        "format": {
+          "type": "string",
+          "enum": [
+            "tree",
+            "json"
+          ],
+          "default": "tree"
+        }
+      },
+      "required": [],
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "detect_changes",
+    "description": "Map a Git diff to files and impact. Page with snapshot cursors.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "scope": {
+          "type": "string",
+          "enum": [
+            "files",
+            "impact",
+            "tests"
+          ],
+          "default": "impact"
+        },
+        "direction": {
+          "type": "string",
+          "enum": [
+            "inbound",
+            "outbound",
+            "both"
+          ],
+          "default": "inbound",
+          "description": "inbound=callers; outbound=dependencies; both=union."
+        },
+        "depth": {
+          "type": "integer",
+          "default": 2,
+          "maximum": 5,
+          "minimum": 1
+        },
+        "edge_types": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "Inbound walk; default CALLS."
+        },
+        "via": {
+          "type": "boolean",
+          "description": "Add via_qn, via_edge."
+        },
+        "seeds": {
+          "type": "string",
+          "enum": [
+            "none",
+            "list"
+          ],
+          "default": "none",
+          "description": "List changed-symbol seeds with independent pagination."
+        },
+        "seed_filter": {
+          "type": "string",
+          "enum": [
+            "all",
+            "product"
+          ],
+          "default": "all",
+          "description": "Product excludes indexed test metadata and configured test globs."
+        },
+        "seed_limit": {
+          "type": "integer",
+          "default": 50,
+          "minimum": 1,
+          "maximum": 200
+        },
+        "seed_offset": {
+          "type": "integer",
+          "default": 0,
+          "minimum": 0
+        },
+        "seed_cursor": {
+          "type": "string",
+          "description": "Continue seeds:list; excludes nonzero seed_offset."
+        },
+        "limit": {
+          "type": "integer",
+          "default": 200,
+          "maximum": 200,
+          "minimum": 1
+        },
+        "impact_offset": {
+          "type": "integer",
+          "default": 0,
+          "minimum": 0
+        },
+        "impact_cursor": {
+          "type": "string"
+        },
+        "changed_limit": {
+          "type": "integer",
+          "default": 20,
+          "minimum": 1,
+          "maximum": 200
+        },
+        "changed_offset": {
+          "type": "integer",
+          "default": 0,
+          "minimum": 0
+        },
+        "changed_cursor": {
+          "type": "string"
+        },
+        "module_limit": {
+          "type": "integer",
+          "default": 20,
+          "minimum": 0,
+          "maximum": 256
+        },
+        "module_offset": {
+          "type": "integer",
+          "default": 0,
+          "minimum": 0
+        },
+        "module_cursor": {
+          "type": "string"
+        },
+        "max_output_tokens": {
+          "type": "integer",
+          "default": 3200,
+          "minimum": 128,
+          "maximum": 16000,
+          "description": "Sizing hint; hard ceiling is 4 UTF-8 bytes/token."
+        },
+        "base_branch": {
+          "type": "string",
+          "description": "Default: origin/HEAD, else main, else master, else the upstream."
+        },
+        "since": {
+          "type": "string"
+        },
+        "format": {
+          "type": "string",
+          "enum": [
+            "tree",
+            "json"
+          ],
+          "default": "tree"
+        }
+      },
+      "required": [],
+      "additionalProperties": false
+    }
+  }
+]

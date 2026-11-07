@@ -10,6 +10,7 @@ pub(crate) enum AppPane {
     Bot(String),
     BotDocument { bot: String, document: String },
     Terminal { id: u64, cwd: String },
+    Codebase,
     Search,
     Channels,
     Review,
@@ -17,7 +18,7 @@ pub(crate) enum AppPane {
 
 impl AppPane {
     pub fn project_scoped(&self) -> bool {
-        matches!(self, Self::Bot(_) | Self::Review)
+        matches!(self, Self::Bot(_) | Self::Review | Self::Codebase)
     }
 
     pub fn same_resource(&self, other: &Self) -> bool {

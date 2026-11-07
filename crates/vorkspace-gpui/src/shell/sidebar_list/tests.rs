@@ -274,7 +274,20 @@ fn sidebar_grip_drag_reorders_without_toggling_and_preserves_connector_tabs(
         .update(visual, |shell, w, cx| {
             assert_eq!(
                 shell.workspace.sidebar_navigation_order,
-                ["automations", "github", "gitlab", "jira", "notes", "todos"]
+                [
+                    "codebase",
+                    "automations",
+                    "github",
+                    "gitlab",
+                    "jira",
+                    "notes",
+                    "todos"
+                ]
+            );
+            assert!(
+                !shell
+                    .visible_sidebar_navigation(cx)
+                    .contains(&SidebarNavigation::Codebase)
             );
             assert!(shell.workspace.sidebar_automations_visible);
             assert!(shell.workspace.sidebar_hidden_connectors.is_empty());
@@ -301,7 +314,22 @@ fn sidebar_grip_drag_reorders_without_toggling_and_preserves_connector_tabs(
         .update(visual, |shell, _, cx| {
             assert!(shell.menu.is_some());
             assert!(!cx.has_active_drag());
-            assert_eq!(shell.workspace.sidebar_navigation_order[0], "automations");
+            assert_eq!(
+                shell.visible_sidebar_navigation(cx).first(),
+                Some(&SidebarNavigation::Automations)
+            );
+            assert_eq!(
+                shell.workspace.sidebar_navigation_order,
+                [
+                    "codebase",
+                    "automations",
+                    "github",
+                    "gitlab",
+                    "jira",
+                    "notes",
+                    "todos"
+                ]
+            );
         })
         .unwrap();
     let toggle = visual.debug_bounds("menu-action-sidebar-github").unwrap();
@@ -378,7 +406,15 @@ fn sidebar_grip_drag_reorders_without_toggling_and_preserves_connector_tabs(
                 );
                 assert_eq!(
                     shell.workspace.sidebar_navigation_order,
-                    ["automations", "github", "gitlab", "jira", "notes", "todos"]
+                    [
+                        "codebase",
+                        "automations",
+                        "github",
+                        "gitlab",
+                        "jira",
+                        "notes",
+                        "todos"
+                    ]
                 );
                 assert!(shell.workspace.sidebar_hidden_connectors.contains("github"));
             })

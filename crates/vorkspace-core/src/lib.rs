@@ -6,6 +6,7 @@ pub mod bot;
 pub mod bot_model;
 pub mod catalog;
 pub mod checkpoint;
+pub mod codebase;
 pub mod context;
 pub mod desktop_preferences;
 pub mod diff;

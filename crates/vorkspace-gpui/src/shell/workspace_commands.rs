@@ -35,7 +35,10 @@ impl Shell {
                                 && manager.document_for_pane(bot, document).is_some()
                         })
                 }
-                AppPane::Bot(_) | AppPane::Terminal { .. } | AppPane::Review => {
+                AppPane::Codebase
+                | AppPane::Bot(_)
+                | AppPane::Terminal { .. }
+                | AppPane::Review => {
                     path_key(&pane.project) == path_key(project)
                         && path_key(&pane.worktree) == path_key(self.working_copy())
                         && self.pane_in_scope(id, cx)
@@ -80,6 +83,9 @@ impl Shell {
             }
             AppPane::Terminal { id: terminal, cwd } => {
                 json!({"kind":"terminal","terminalId":terminal,"cwd":cwd,"running":self.terminal_tabs.get(terminal).and_then(|view| view.read(cx).foreground_process()),"title":self.pane_title(id,cx)})
+            }
+            AppPane::Codebase => {
+                json!({"kind":"codebase","root":pane.worktree,"title":self.pane_title(id,cx)})
             }
             AppPane::Search => json!({"kind":"search","title":self.pane_title(id,cx)}),
             AppPane::Channels => json!({"kind":"channels","title":self.pane_title(id,cx)}),
@@ -463,6 +469,12 @@ impl Shell {
 
         let content = match kind {
             "session" | "file" => None,
+            "codebase" => {
+                if !crate::codebase::enabled(project, cx) {
+                    return Err("Codebase Memory is disabled for this project".into());
+                }
+                Some(AppPane::Codebase)
+            }
             "notes" => {
                 if !self.workspace.preferences.notes {
                     return Err("Notes are disabled".into());
@@ -663,7 +675,7 @@ impl Shell {
                 AppPane::App(view) => self.open_title_tab(&TitleTab::App(*view), window, cx),
                 AppPane::Note(id) => self.open_note_tab(id.clone(), window, cx),
                 AppPane::ConnectorItem(item) => self.open_item_tab((**item).clone(), window, cx),
-                AppPane::Bot(_) => {
+                AppPane::Codebase | AppPane::Bot(_) => {
                     let id = self
                         .workspace
                         .app_pane(

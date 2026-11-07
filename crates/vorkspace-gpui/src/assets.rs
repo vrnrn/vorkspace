@@ -157,6 +157,9 @@ impl AssetSource for Assets {
 }
 fn icon_body(path: &str) -> Option<&'static str> {
     Some(match path {
+        "network" => {
+            "<rect x='9' y='2' width='6' height='6' rx='1.5'/><rect x='2' y='16' width='6' height='6' rx='1.5'/><rect x='16' y='16' width='6' height='6' rx='1.5'/><path d='M12 8v4M5 16v-4h14v4'/>"
+        }
         "bot-island" => {
             "<rect x='3' y='3' width='18' height='18' rx='5'/><path d='M8 8h8M8 12h5M8 16h8'/>"
         }
