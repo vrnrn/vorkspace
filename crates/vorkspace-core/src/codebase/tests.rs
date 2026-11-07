@@ -147,6 +147,50 @@ fn inactive_entries_cannot_bypass_capacity_and_draining_workers_keep_their_slots
 }
 
 #[test]
+fn stopped_worker_can_transfer_project_ownership() {
+    let (root, mut service) = fixture();
+    Arc::get_mut(&mut service).unwrap().test_engine = Some("/usr/bin/false".into());
+    let project = root.path().to_str().unwrap();
+    service.configure(project, true).unwrap();
+    let (release, barrier) = mpsc::channel::<()>();
+    let (sender, _) = mpsc::sync_channel(2);
+    let key = crate::files::path_key(project);
+    lock(&service.state).workers.insert(
+        key.clone(),
+        Worker {
+            project: "previous-project".into(),
+            cancel: Arc::new(AtomicBool::new(true)),
+            snapshot: Arc::new(Mutex::new(Snapshot {
+                root: canonical(project).unwrap(),
+                ..Snapshot::default()
+            })),
+            sender,
+            thread: Some(std::thread::spawn(move || {
+                let _ = barrier.recv();
+            })),
+        },
+    );
+    assert!(service
+        .activate(project, project, false)
+        .unwrap_err()
+        .contains("owned by another project"));
+    let previous = lock(&service.state)
+        .workers
+        .get_mut(&key)
+        .unwrap()
+        .thread
+        .take()
+        .unwrap();
+    drop(release);
+    previous.join().unwrap();
+    // The retained entry still belongs to the old project, but has released its
+    // physical client. A new owner can now replace it without restarting the app.
+    service.activate(project, project, false).unwrap();
+    assert_eq!(lock(&service.state).workers[&key].project, key);
+    service.shutdown();
+}
+
+#[test]
 fn disable_during_preparation_cannot_publish_a_ready_successor() {
     let (root, mut service) = fixture();
     let script = root.path().join("fixture-engine");

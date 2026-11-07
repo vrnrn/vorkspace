@@ -202,7 +202,7 @@ impl Service {
             return Err("This working copy is active through another path. Disable that project's Codebase Memory and wait for it to stop before retrying.".into());
         }
         if let Some(worker) = state.workers.get(&root_key) {
-            if worker.project != project_key {
+            if worker.project != project_key && worker.occupies_slot() {
                 return Err("This working copy is already owned by another project".into());
             }
             if !reindex
