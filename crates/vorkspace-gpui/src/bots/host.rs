@@ -415,6 +415,7 @@ impl Bots {
             || action.starts_with("workspace.")
             || action.starts_with("folders.")
             || action.starts_with("worktrees.")
+            || action.starts_with("codebase.")
         {
             match bot.project(input.get("project").and_then(Value::as_str)) {
                 Ok(p) => p,
@@ -428,6 +429,40 @@ impl Bots {
         };
         let hidden = self.roster.hidden_sessions.clone();
         let source = self.calling_view(call.session, cx);
+        if action.starts_with("codebase.") {
+            let service = match crate::codebase::service(cx) {
+                Ok(s) => s,
+                Err(e) => {
+                    self.finish_call(call, Err(e), cx);
+                    return;
+                }
+            };
+            let root = input
+                .get("worktreeCwd")
+                .and_then(Value::as_str)
+                .map(str::to_owned)
+                .or_else(|| {
+                    source.as_ref().and_then(|view| {
+                        let view = view.read(cx);
+                        (vorkspace_core::files::path_key(&view.summary.cwd)
+                            == vorkspace_core::files::path_key(&project))
+                        .then(|| view.settings.worktree_cwd.clone())
+                        .flatten()
+                    })
+                })
+                .unwrap_or_else(|| project.clone());
+            self.call_work(
+                call,
+                &actor.id,
+                target,
+                move |_| {
+                    crate::codebase::action(&service, &project, &root, &action, &input)
+                        .map(|v| (v, Effect::None))
+                },
+                cx,
+            );
+            return;
+        }
         if action.starts_with("workspace.") {
             let owner = self.owner.clone();
             let manager = cx.entity().downgrade();

@@ -57,3 +57,5 @@ The app works with VoiceOver and the keyboard. VoiceOver says when a session fin
 Each Mac window remembers which mouse pointer it should show. It updates the pointer straight away and puts it back if macOS resets it. Web and video panes are drawn by macOS itself, so whenever one moves, hides, or appears, the window recalculates where its own pointer rules apply.
 
 The background app is named **vorkspace helper**. It remains available after the main app quits while clipboard history or dictation is enabled. It also runs during meeting recordings and sends recording updates and transcript text to the main app. Clipboard history stays in the helper.
+
+Optional [Codebase Memory](codebase.md) uses a local helper engine to map a project’s symbols and calls. The app decides which projects may use it, keeps each checkout separate, and stops the work when you disable it.

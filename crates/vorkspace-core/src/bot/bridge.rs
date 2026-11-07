@@ -44,6 +44,11 @@ worktrees.create {branch,base?,existing?,project?}
 worktrees.remove {path,project?}
 folders.list {project?}
 folders.move {sessionId,folderId?,newFolderName?,project?}
+codebase.configure {enabled,project?,worktreeCwd?}
+codebase.status {project?,worktreeCwd?}
+codebase.index {project?,worktreeCwd?}
+codebase.tools {project?}
+codebase.query {tool,arguments?,project?,worktreeCwd?}
 notes.list {project?,limit?,offset?}
 notes.read {id?,noteId?,project?}
 notes.write {id?,noteId?,title,body,tags?,project?}

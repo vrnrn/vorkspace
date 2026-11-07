@@ -20,6 +20,9 @@ pub fn validate(action: &str, input: &Value) -> Result<(), String> {
         "sessions.draft" => "sessionId prompt project",
         "sessions.stop" | "sessions.archive" | "sessions.delete" => "sessionId project",
         "workspace.list" => "project",
+        "codebase.tools" | "codebase.status" | "codebase.index" => "project worktreeCwd",
+        "codebase.configure" => "project enabled worktreeCwd",
+        "codebase.query" => "project worktreeCwd tool arguments",
         "workspace.open" => {
             "project kind sessionId noteId provider itemKey bot document path placement targetPaneId"
         }
@@ -124,6 +127,7 @@ pub fn validate(action: &str, input: &Value) -> Result<(), String> {
                 "targetPaneId",
                 "sashPath",
                 "ratio",
+                "arguments",
                 "modelSettings",
                 "schedule",
                 "tags",
@@ -139,6 +143,12 @@ pub fn validate(action: &str, input: &Value) -> Result<(), String> {
         {
             return Err(format!("{key} must be text"));
         }
+    }
+    if input
+        .get("arguments")
+        .is_some_and(|value| !value.is_object())
+    {
+        return Err("arguments must be an object".into());
     }
     if input.get("runtimeMode").is_some_and(|v| {
         !matches!(
@@ -293,7 +303,8 @@ fn validate_workspace(action: &str, input: &Value) -> Result<(), String> {
                 "item" => Some("itemKey"),
                 "bot" | "botDocument" => Some("bot"),
                 "file" => Some("path"),
-                "notes" | "todos" | "automations" | "terminal" | "search" | "channels" => None,
+                "notes" | "todos" | "automations" | "terminal" | "search" | "channels"
+                | "codebase" => None,
                 _ => return Err("Unknown workspace pane kind".into()),
             };
             if let Some(key) = required {
@@ -374,6 +385,9 @@ pub fn is_read_only(action: &str) -> bool {
             | "bots.historyStatus"
             | "sessions.list"
             | "sessions.read"
+            | "codebase.tools"
+            | "codebase.status"
+            | "codebase.query"
             | "workspace.list"
             | "folders.list"
             | "notes.list"
@@ -411,6 +425,9 @@ pub fn minion_allowed(action: &str) -> bool {
                 | "soul.read"
                 | "sessions.list"
                 | "sessions.read"
+                | "codebase.tools"
+                | "codebase.status"
+                | "codebase.query"
                 | "workspace.list"
                 | "worktrees.list"
                 | "minions.list"
@@ -423,6 +440,30 @@ pub fn minion_allowed(action: &str) -> bool {
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn codebase_actions_preserve_read_and_write_capabilities() {
+        assert!(validate(
+            "codebase.query",
+            &json!({"tool":"search_graph","arguments":{"query":"main"}})
+        )
+        .is_ok());
+        assert!(validate(
+            "codebase.query",
+            &json!({"tool":"search_graph","arguments":"bad"})
+        )
+        .is_err());
+        assert!(validate("codebase.configure", &json!({"enabled":true})).is_ok());
+        assert!(validate("workspace.open", &json!({"kind":"codebase"})).is_ok());
+        for action in ["codebase.status", "codebase.tools", "codebase.query"] {
+            assert!(is_read_only(action));
+            assert!(minion_allowed(action));
+        }
+        for action in ["codebase.index", "codebase.configure"] {
+            assert!(!is_read_only(action));
+            assert!(!minion_allowed(action));
+        }
+    }
     #[test]
     fn native_recovery_requires_explicit_confirmation_and_is_not_a_minion_action() {
         assert!(is_read_only("bots.historyStatus"));

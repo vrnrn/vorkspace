@@ -70,13 +70,15 @@ impl AppView {
 /// Persist strings so unknown IDs can be discarded without losing the workspace.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub(crate) enum SidebarNavigation {
+    Codebase,
     Connector(Connector),
     Notes,
     Automations,
     Todos,
 }
 impl SidebarNavigation {
-    pub const ALL: [Self; 6] = [
+    pub const ALL: [Self; 7] = [
+        Self::Codebase,
         Self::Connector(Connector::Github),
         Self::Connector(Connector::Gitlab),
         Self::Connector(Connector::Jira),
@@ -87,6 +89,7 @@ impl SidebarNavigation {
     pub fn id(self) -> &'static str {
         match self {
             Self::Connector(provider) => provider.id(),
+            Self::Codebase => "codebase",
             Self::Notes => "notes",
             Self::Automations => "automations",
             Self::Todos => "todos",
@@ -98,6 +101,7 @@ impl SidebarNavigation {
     pub fn label(self) -> &'static str {
         match self {
             Self::Connector(provider) => provider.label(),
+            Self::Codebase => "Codebase",
             Self::Notes => "Notes",
             Self::Automations => "Automations",
             Self::Todos => "To-dos",
@@ -106,6 +110,7 @@ impl SidebarNavigation {
     pub fn icon(self) -> &'static str {
         match self {
             Self::Connector(provider) => provider.icon(),
+            Self::Codebase => "network",
             Self::Notes => "note",
             Self::Automations => "zap",
             Self::Todos => "check-circle",

@@ -367,6 +367,9 @@ impl Shell {
             .into_iter()
             .filter(|item| match item {
                 SidebarNavigation::Connector(provider) => enabled.contains(provider),
+                SidebarNavigation::Codebase => {
+                    crate::codebase::enabled(&self.workspace.project, cx)
+                }
                 _ => true,
             })
             .collect()
@@ -384,6 +387,7 @@ impl Shell {
                     self.workspace.preferences.notes && self.workspace.sidebar_notes_visible
                 }
                 SidebarNavigation::Automations => self.workspace.sidebar_automations_visible,
+                SidebarNavigation::Codebase => true,
                 SidebarNavigation::Todos => {
                     self.workspace.preferences.todos && self.workspace.sidebar_todos_visible
                 }
@@ -395,6 +399,7 @@ impl Shell {
         let mut items: Vec<_> = self
             .available_sidebar_navigation(cx)
             .into_iter()
+            .filter(|item| *item != SidebarNavigation::Codebase)
             .map(|item| {
                 let visible = match item {
                     SidebarNavigation::Connector(provider) => !self
@@ -403,6 +408,7 @@ impl Shell {
                         .contains(provider.id()),
                     SidebarNavigation::Notes => self.workspace.sidebar_notes_visible,
                     SidebarNavigation::Automations => self.workspace.sidebar_automations_visible,
+                    SidebarNavigation::Codebase => true,
                     SidebarNavigation::Todos => self.workspace.sidebar_todos_visible,
                 };
                 MenuAction::new(format!("sidebar-{}", item.id()), item.label())
@@ -621,6 +627,7 @@ impl Shell {
                                 "GitLab" => this.open_connector(Connector::Gitlab, window, cx),
                                 "Jira" => this.open_connector(Connector::Jira, window, cx),
                                 "Notes" => this.open_notes(window, cx),
+                                "Codebase" => this.open_codebase(window, cx),
                                 "Automations" => this.open_automations(window, cx),
                                 "To-dos" => this.open_todos(window, cx),
                                 _ => (),

@@ -13,6 +13,7 @@ For the full reference, see [Agent access with /operator](../agent-access.md).
 Once you type `/operator` in a thread, that agent can:
 
 - **Start new agent tabs (`sessions.start`)**: For example, you can say *"/operator open two tabs—one to check the backend and one to check the UI"* and it will create new tabs for you.
+- **Explore project code**: With [Codebase Memory](codebase.md) enabled for a project, agents can find symbols, read source previews and follow calls. A chat uses its own working copy’s map. Read-only chats and Minions can search, but cannot enable it or start indexing.
 - **Create Git worktrees (`worktrees.create`)**: It can set up fresh branch folders so multiple agents can work in parallel without stepping on each other's code.
 - **Check on other tabs (`sessions.list`, `sessions.read`)**: It can look at your other sessions in the project and read their recent replies.
 - **Arrange workspace tabs (`workspace.list`, `workspace.open`, `workspace.focus`, `workspace.close`, `workspace.move`, `workspace.detach`, `workspace.reorder`, `workspace.resize`)**: It can see which panes are open, open a note, connector item, Bot, document, terminal, Search, file, or chat, then select, tile, reorder, resize, or close those panes. It can move one pane or a whole tiled tab, using the same room limits as dragging panes yourself. If a terminal is running a process, the agent must inspect the process and explicitly confirm that exact process before closing it.

@@ -1,6 +1,52 @@
 use super::*;
 
 #[test]
+fn codebase_tabs_retain_independent_project_and_worktree_identity() {
+    let mut workspace = Workspace::default();
+    workspace.add_project("/work/project");
+    let first = workspace
+        .app_pane(
+            AppPane::Codebase,
+            "/work/project".into(),
+            "/work/project".into(),
+        )
+        .unwrap();
+    let second = workspace
+        .app_pane(
+            AppPane::Codebase,
+            "/work/project".into(),
+            "/work/checkout".into(),
+        )
+        .unwrap();
+    let other = workspace
+        .app_pane(
+            AppPane::Codebase,
+            "/work/other".into(),
+            "/work/other".into(),
+        )
+        .unwrap();
+    assert_ne!(first, second);
+    assert_ne!(first, other);
+    assert_eq!(
+        workspace.app_pane(
+            AppPane::Codebase,
+            "/work/project".into(),
+            "/work/project".into()
+        ),
+        Some(first)
+    );
+    workspace.open(first);
+    workspace.open(second);
+    workspace.title_order = vec![TitleTab::Workspace(first), TitleTab::Workspace(second)];
+    let saved = serde_json::to_string(&workspace).unwrap();
+    let restored = Workspace::restore(Some(&saved), &[], "/work/project");
+    assert_eq!(restored.app_panes[&second].worktree, "/work/checkout");
+    assert!(restored.counts_toward_pane_limit(first));
+    assert!(restored.tabs.contains(&first));
+    assert!(restored.tabs.contains(&second));
+}
+
+#[test]
 fn archived_project_is_not_reopened_by_active_session_or_stale_metadata() {
     let saved = serde_json::json!({
             "projects": ["/work/old", "/work/other"], "project": "/work/old", "active": 42,

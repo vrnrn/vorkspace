@@ -102,6 +102,7 @@ impl Shell {
         self.preparing_panes = true;
         for leaf in self.workspace.layout(tab).leaf_ids() {
             let ready = match self.workspace.app_panes.get(&leaf).map(|p| &p.content) {
+                Some(AppPane::Codebase) => self.codebase_tabs.contains_key(&leaf),
                 Some(AppPane::Note(_)) => self.note_tabs.contains_key(&leaf),
                 Some(AppPane::ConnectorItem(_)) => self.item_tabs.contains_key(&leaf),
                 Some(AppPane::BotDocument { .. }) => self.bot_document_tabs.contains_key(&leaf),
@@ -318,6 +319,52 @@ impl Shell {
         }));
     }
 
+    pub(super) fn open_codebase(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if !crate::codebase::enabled(&self.workspace.project, cx) {
+            return;
+        }
+        self.prepare_app_view(self.app_pane_id(&AppPane::Codebase), window, cx);
+        if let Some(id) = self.admit_app_pane(AppPane::Codebase) {
+            self.open_app_pane(id, window, cx);
+        }
+    }
+
+    pub(super) fn configure_codebase(
+        &mut self,
+        project: String,
+        _: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let service = match crate::codebase::service(cx) {
+            Ok(s) => s,
+            Err(e) => {
+                self.error = Some(e);
+                cx.notify();
+                return;
+            }
+        };
+        let enabled = !service.enabled(&project);
+        let target = project.clone();
+        let work = cx
+            .background_executor()
+            .spawn(async move { service.configure(&target, enabled) });
+        cx.spawn(async move |this, cx| {
+            let result = work.await;
+            let _ = this.update_in(cx, |this, window, cx| {
+                match result {
+                    Ok(()) if enabled && this.workspace.project == project => {
+                        this.open_codebase(window, cx)
+                    }
+                    Ok(()) => (),
+                    Err(error) => this.error = Some(error),
+                }
+                this.invalidate_chrome(cx);
+                cx.notify();
+            });
+        })
+        .detach();
+    }
+
     pub(super) fn admit_app_pane(&mut self, content: AppPane) -> Option<i64> {
         let worktree = self.working_copy().to_owned();
         let id = self
@@ -361,6 +408,7 @@ impl Shell {
                 .map(|view| view.read(cx).title())
                 .unwrap_or_else(|| "Document".into()),
             AppPane::Terminal { cwd, .. } => format!("Terminal · {}", project_name(cwd)),
+            AppPane::Codebase => "Codebase".into(),
             AppPane::Search => "Search".into(),
             AppPane::Channels => "Channels".into(),
             AppPane::Review => self
@@ -384,6 +432,7 @@ impl Shell {
             Some(AppPane::Bot(_)) => "bot",
             Some(AppPane::BotDocument { .. } | AppPane::Review) => "file-text",
             Some(AppPane::Terminal { .. }) => "terminal",
+            Some(AppPane::Codebase) => "network",
             Some(AppPane::Search) => "search",
             Some(AppPane::Channels) => "messages-square",
             _ => "inbox",
@@ -440,6 +489,21 @@ impl Shell {
             return;
         }
         match pane.content {
+            AppPane::Codebase => {
+                self.prepare_app_view(Some(id), window, cx);
+                self.leave_app_views(cx);
+                self.workspace.project = pane.project.clone();
+                if !self.codebase_tabs.contains_key(&id) {
+                    let view =
+                        cx.new(|cx| crate::codebase::Page::new(pane.project, pane.worktree, cx));
+                    self.codebase_tabs.insert(id, view);
+                }
+                self.workspace.open(id);
+                self.remember_title_tab(TitleTab::Workspace(
+                    self.workspace.tab_of(id).unwrap_or(id),
+                ));
+                self.finish_app_pane_open(window, cx);
+            }
             AppPane::App(view) => self.open_title_tab(&TitleTab::App(view), window, cx),
             AppPane::Note(note) => self.open_note_tab(note, window, cx),
             AppPane::ConnectorItem(item) => self.open_item_tab(*item, window, cx),
@@ -491,6 +555,7 @@ impl Shell {
             );
         }
         Some(match pane {
+            AppPane::Codebase => self.codebase_tabs.get(&id)?.clone().into_any_element(),
             AppPane::Note(_) => self.note_tabs.get(&id)?.clone().into_any_element(),
             AppPane::ConnectorItem(_) => self.item_tabs.get(&id)?.clone().into_any_element(),
             AppPane::BotDocument { .. } => {
@@ -531,6 +596,11 @@ impl Shell {
         };
         let content = pane.content.clone();
         match &content {
+            AppPane::Codebase => {
+                if let Some(view) = self.codebase_tabs.get(&id) {
+                    view.update(cx, |view, cx| view.set_width(width, cx));
+                }
+            }
             AppPane::Bot(bot) => {
                 self.bot_pane_body(id, Some(bot.clone()), cx);
                 if let Some(view) = self.bot_pane_views.get(&id) {
@@ -727,6 +797,7 @@ impl Shell {
         {
             self.workspace.app_panes.remove(&id);
         }
+        self.codebase_tabs.remove(&id);
         self.bot_pane_views.remove(&id);
         if let Some(view) = self.bot_document_tabs.remove(&id) {
             view.update(cx, |v, cx| v.set_active(false, cx));
