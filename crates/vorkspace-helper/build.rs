@@ -31,6 +31,7 @@ fn main() {
             "-emit-library",
             "-static",
             "-O",
+            "-warnings-as-errors",
             "-module-name",
             "VorkspaceHelper",
             "-target",

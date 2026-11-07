@@ -18,6 +18,7 @@ test("Finder launches use normal desktop data by default and honor explicit isol
   for (const [name, script] of [
     ["uname", "#!/bin/sh\nprintf 'Darwin\\n'\n"],
     ["codesign", "#!/bin/sh\nexit 0\n"],
+    ["otool", "#!/bin/sh\nprintf 'cmd LC_BUILD_VERSION\\nminos 26.0\\n'\n"],
   ]) {
     await writeFile(join(bin, name), script);
     await chmod(join(bin, name), 0o755);

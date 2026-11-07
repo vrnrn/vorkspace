@@ -5,7 +5,7 @@ The root Cargo workspace owns the desktop app, its background helper, and the sh
 ## Requirements
 
 - macOS 26 or newer. The native deployment target and both app bundles require 26.0.
-- Current stable Rust. The repository does not pin a toolchain.
+- Rust through `rustup`. `rust-toolchain.toml` pins the compiler and installs Rustfmt, Clippy, and LLVM tools. LLVM tools includes the matching library needed by `rust-objcopy` on macOS.
 - Zig 0.17.x to compile the bundled libghostty-vt terminal engine. Cargo builds and links it statically; the installed app does not require Zig.
 - Node.js 24 or newer.
 - Xcode with macOS 26 or newer platform components, for Metal and for `xcrun swiftc`, which compiles the clipboard panel and native speech bridge.
@@ -61,6 +61,8 @@ The app provides **Restart vorkspace** in its application menu and Command Palet
 
 `CARGO_TARGET_DIR` and `CARGO_BUILD_TARGET` override output placement. `CARGO_BUILD_JOBS` controls build concurrency. `npm run build` packages and installs locally but does not launch the app or publish a release.
 
+Cargo forces the macOS deployment target to 26.0. The Swift bridge, Ghostty terminal library, and app/helper metadata use the same minimum. Packaging checks the actual Mach-O deployment commands in both executables before copying or signing them, and rejects a mismatched minimum in any architecture slice. Prebuilt third-party frameworks may support older systems; they do not lower the app's minimum.
+
 The manual **Mac release** workflow runs from `main`. It selects an unused stable version at or above the checked-in version, stamps package and Cargo manifests in the runner only, and assigns the native build number from the workflow run and attempt. Draft retries retain their own reserved version; published releases are immutable. The workflow generates versioned notes before compilation, runs checks, prepares signed update formats and a disk image, verifies metadata, and then publishes. Starting this workflow is an explicit release action; ordinary pushes and pull requests do not trigger it.
 
 Release preparation writes ignored `build/release-notes.md` and `build/native-release.json` artifacts. `VORKSPACE_RELEASE_BUILD=1` requires notes matching the Cargo package version; normal local builds include matching generated notes when available. The app reads these bundled notes offline and records version observations so an installed update notice appears once per version change. Opening What's new for an unbundled version loads its matching published GitHub notes in the background, with a 10-second timeout and 256 KiB response limit. See [update signing](updates.md) for release secrets.
@@ -79,6 +81,8 @@ The GPUI fork and a patched `block` crate live in `vendor/` and are edited direc
 
 In a new linked worktree, run `npm run worktree:seed` before the first build. To have Vorkspace do this for its own worktrees, set the project's setup command to `npm run worktree:seed` under **Settings → Worktrees**. It clones the main checkout's Cargo target directory, honoring `CARGO_TARGET_DIR`, with APFS copy-on-write, so the clone is instant and takes no extra disk, and only workspace and vendored crates rebuild.
 
-`npm run check` runs tooling, voice, host, formatting, Clippy, and workspace tests. `npm run check:fast` skips the host and GPUI suites. `npm run test:rust` runs every Rust test in parallel, one process per test. `npm run host:package` creates a self-contained remote host archive including Node.
+`npm run check` runs tooling, voice, host, formatting, Clippy, and workspace tests. `npm run check:fast` skips the host and GPUI suites. Both use the `verify` Cargo profile: application code is unoptimized, dependencies retain basic optimization, and QuickJS retains its release-level optimization so interpreter deadlines remain meaningful. Debug assertions stay enabled. The interactive `native-dev` and shipped `release` profiles are separate. `npm run test:rust` runs every Rust test in parallel, one process per test. `npm run host:package` creates a self-contained remote host archive including Node.
+
+Native CI and Mac release use the pinned compiler components and checksum-verified Zig 0.17.0. They share a dependency cache keyed by Rust, manifests, compiler flags, and the macOS SDK. Application source still builds and every check still runs on a cache hit. CI packages the `verify` build to verify bundle metadata and signing; release packaging uses `release`. A compiler, SDK, or dependency change can require a cold build.
 
 See [verification](testing.md), [data selection](data-storage.md), and [signed update packaging](updates.md).

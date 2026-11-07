@@ -1,0 +1,5 @@
+[toolchain]
+channel = "1.99.1"
+profile = "minimal"
+# llvm-tools supplies rust-objcopy's matching LLVM library on macOS.
+components = ["rustfmt", "clippy", "llvm-tools"]
