@@ -1,7 +1,7 @@
 use crate::settings::{
     SettingsView,
     management::Target,
-    widgets::{note, page_note, secondary_button},
+    widgets::{page_note, secondary_button},
 };
 use gpui::{AnyElement, Context, SharedString, div, prelude::*, px};
 use vorkspace_ui::radius;
@@ -38,9 +38,11 @@ impl SettingsView {
             );
         }
         if self.selected_project.is_empty() {
-            page.push(note("Add a project to manage its worktrees."));
+            page.push(super::super::widgets::page_hint(
+                "Add a project to manage its worktrees.",
+            ));
         } else if self.discovery_loading {
-            page.push(note("Loading worktrees…"));
+            page.push(super::super::widgets::page_hint("Loading worktrees…"));
         } else if let Some(error) = &self.discovery.worktrees.error {
             page.push(
                 div()

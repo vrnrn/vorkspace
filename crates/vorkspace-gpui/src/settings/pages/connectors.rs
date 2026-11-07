@@ -210,7 +210,7 @@ impl SettingsView {
         let editor = match self.meeting_editor(cx) {
             Ok(editor) => editor,
             Err(error) => {
-                page.push(note(error));
+                page.push(super::super::widgets::page_hint(error));
                 return page;
             }
         };

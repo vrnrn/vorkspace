@@ -105,6 +105,11 @@ pub(super) fn page_note(text: impl Into<SharedString>) -> AnyElement {
         .into_any_element()
 }
 
+/// A page-level hint with the gap that separates it from what is above.
+pub(super) fn page_hint(text: impl Into<SharedString>) -> AnyElement {
+    div().mt_3().child(page_note(text)).into_any_element()
+}
+
 /// Borderless, square icon actions used by SkillsPage and BotRow.
 pub(super) fn icon_action(
     id: impl Into<ElementId>,
