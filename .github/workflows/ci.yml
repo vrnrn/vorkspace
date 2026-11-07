@@ -23,10 +23,12 @@ jobs:
       - name: Set up pinned native compilers
         run: bash scripts/desktop/setup-ci-macos.sh
       - uses: Swatinem/rust-cache@v2
+        env:
+          # Concurrency does not change artifacts; omit it from the cache key.
+          CARGO_BUILD_JOBS: ''
         with:
           shared-key: native-macos-26
-          # Build concurrency does not change artifacts. SDK and compiler flags do.
-          env-vars: CARGO_ENCODED_RUSTFLAGS CARGO_PROFILE CC CFLAGS CXX CMAKE RUST VORKSPACE_BUILD_SDK
+          env-vars: VORKSPACE_BUILD_SDK
           cache-bin: false
           cache-on-failure: true
       - uses: taiki-e/install-action@nextest
