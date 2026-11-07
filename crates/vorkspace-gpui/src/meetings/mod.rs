@@ -5,7 +5,6 @@ mod document;
 mod live;
 mod note;
 mod view;
-pub(crate) use capture::stop_active;
 
 use crate::{
     controls::page,

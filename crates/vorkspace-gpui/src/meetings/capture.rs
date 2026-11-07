@@ -77,15 +77,6 @@ pub(crate) fn current(cx: &App) -> Option<State> {
         .cloned()
 }
 
-pub(crate) fn stop_active(cx: &mut App) -> Result<(), String> {
-    if let Some(state) = current(cx)
-        && let Some(run) = &state.run
-    {
-        stop(&state.id, run, cx)?;
-    }
-    Ok(())
-}
-
 pub(crate) fn active(cx: &App) -> bool {
     cx.try_global::<MeetingCapture>()
         .is_some_and(|capture| capture.0.read(cx).recording.active())
