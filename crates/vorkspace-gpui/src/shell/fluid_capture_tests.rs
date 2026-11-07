@@ -22,6 +22,7 @@ const SHOTS: &[(&str, Option<usize>, (f32, f32))] = &[
     ("menu", Some(0), (1390., 890.)),
     ("glide", Some(1), (1390., 890.)),
     ("tasks", Some(3), (1390., 890.)),
+    ("work", Some(0), (1390., 890.)),
     ("tooltip", Some(0), (551., 271.)),
     ("explorer", Some(0), (1390., 890.)),
     ("changes", Some(0), (1390., 890.)),
@@ -302,6 +303,16 @@ fn fluid_capture() {
                                 cx,
                             );
                         });
+                    })
+                    .unwrap();
+                cx.run_until_parked();
+            }
+            if *name == "work" {
+                let id = sessions[0].id;
+                window
+                    .update(&mut cx, |shell, _, cx| {
+                        let transcript = shell.sessions[&id].read(cx).transcript.clone();
+                        transcript.update(cx, |view, cx| view.open_work(1, cx));
                     })
                     .unwrap();
                 cx.run_until_parked();

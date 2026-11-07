@@ -533,6 +533,12 @@ pub(crate) struct TranscriptView {
     rebuild_passes: usize,
 }
 impl TranscriptView {
+    /// Whether a turn's work shows open. Only a turn with work to show can
+    /// be: a search marks any turn it lands in, and a bare turn marked open
+    /// would swap its provider mark for a chevron over nothing.
+    pub(super) fn work_open(&self, turn: usize, expandable: bool) -> bool {
+        expandable && self.work_folds.get(&turn).copied().unwrap_or(false)
+    }
     /// Opens a finished turn's work, as clicking its receipt does. For tests
     /// in other modules, which cannot reach the fold state.
     #[cfg(test)]

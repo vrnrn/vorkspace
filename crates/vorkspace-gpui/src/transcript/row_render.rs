@@ -501,7 +501,7 @@ impl TranscriptView {
                 }
             );
         let receipt_open = match self.rows[ix].body {
-            Body::WorkLine { turn, .. } => self.work_folds.get(&turn).copied().unwrap_or(false),
+            Body::WorkLine { turn, expandable } => self.work_open(turn, expandable),
             _ => false,
         };
         let prose = matches!(self.rows[ix].body, Body::Markdown(..));

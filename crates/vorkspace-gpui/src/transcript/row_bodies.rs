@@ -115,7 +115,7 @@ impl TranscriptView {
             elapsed.map(|duration| duration.as_millis() as u64),
             live,
         );
-        let open = self.work_folds.get(&turn).copied().unwrap_or(false);
+        let open = self.work_open(turn, expandable);
         let label = if expandable {
             if open {
                 "Hide the work".into()
