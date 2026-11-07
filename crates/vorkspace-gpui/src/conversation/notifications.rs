@@ -36,10 +36,6 @@ impl Conversation {
     }
 
     /// The host also checks the active tab and pane before suppressing a notice.
-    pub(crate) fn composer_focused(&self, window: &Window, cx: &gpui::App) -> bool {
-        self.input.focus_handle(cx).is_focused(window)
-    }
-
     pub(crate) fn notification_reply_body(&self, cx: &gpui::App) -> String {
         self.transcript.read(cx).notification_reply_body()
     }

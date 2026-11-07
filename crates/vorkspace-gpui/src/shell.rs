@@ -2593,7 +2593,7 @@ impl Render for Shell {
             });
         }
         self.sync_right_panel(cx);
-        self.sync_notices(window, cx);
+        self.sync_notices(cx);
         div()
             .id("vorkspace-workspace")
             .role(Role::Application)

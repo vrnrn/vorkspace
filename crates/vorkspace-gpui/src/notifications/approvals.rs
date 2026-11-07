@@ -250,57 +250,46 @@ impl Render for ApprovalNotices {
                                         .pl(px(vorkspace_ui::fluid::STRIP_WIDTH + 10.))
                                         .pr(px(14.))
                                         .py(px(10.))
+                                        // The inline card's order and words: decline
+                                        // first, the primary action last.
                                         .child(
-                                            div()
-                                                .id(("approval-toast-allow", ix))
-                                                .role(Role::Button)
-                                                .aria_label("Allow")
-                                                .cursor_pointer()
-                                                .flex_1()
-                                                .rounded(px(radius::CONTROL))
-                                                .px(px(10.))
-                                                .py_1()
-                                                .text_center()
-                                                .text_size(px(11.))
-                                                .bg(content(1.))
-                                                .text_color({
-                                                    let mut color = pane_fill();
-                                                    color.a = 1.;
-                                                    color
-                                                })
-                                                .hover(|s| s.bg(content(0.8)))
-                                                .child("Allow")
-                                                .on_click(cx.listener(move |_, _, _, cx| {
-                                                    cx.emit(Action::Decide {
-                                                        session_id: allow_session.clone(),
-                                                        request_id: allow_request.clone(),
-                                                        decision: Box::new(Decision::Allow),
-                                                    })
-                                                })),
-                                        )
-                                        .child(
-                                            div()
-                                                .id(("approval-toast-deny", ix))
-                                                .role(Role::Button)
-                                                .aria_label("Deny")
-                                                .cursor_pointer()
-                                                .flex_1()
-                                                .rounded(px(radius::CONTROL))
-                                                .px(px(10.))
-                                                .py_1()
-                                                .text_center()
-                                                .text_size(px(11.))
-                                                .bg(content(0.1))
-                                                .text_color(content(0.7))
-                                                .hover(|s| s.bg(content(0.2)))
-                                                .child("Deny")
-                                                .on_click(cx.listener(move |_, _, _, cx| {
+                                            crate::controls::secondary_button(
+                                                ("approval-toast-deny", ix),
+                                                "Deny",
+                                                false,
+                                                false,
+                                            )
+                                            .flex_1()
+                                            .justify_center()
+                                            .child("Deny")
+                                            .on_click(
+                                                cx.listener(move |_, _, _, cx| {
                                                     cx.emit(Action::Decide {
                                                         session_id: deny_session.clone(),
                                                         request_id: deny_request.clone(),
                                                         decision: Box::new(Decision::Deny),
                                                     })
-                                                })),
+                                                }),
+                                            ),
+                                        )
+                                        .child(
+                                            crate::controls::primary_button(
+                                                ("approval-toast-allow", ix),
+                                                "Allow once",
+                                                false,
+                                            )
+                                            .flex_1()
+                                            .justify_center()
+                                            .child("Allow once")
+                                            .on_click(
+                                                cx.listener(move |_, _, _, cx| {
+                                                    cx.emit(Action::Decide {
+                                                        session_id: allow_session.clone(),
+                                                        request_id: allow_request.clone(),
+                                                        decision: Box::new(Decision::Allow),
+                                                    })
+                                                }),
+                                            ),
                                         ),
                                 )
                             })

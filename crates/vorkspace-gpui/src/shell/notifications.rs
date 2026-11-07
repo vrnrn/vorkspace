@@ -462,7 +462,7 @@ impl Shell {
         })
     }
 
-    pub(super) fn sync_notices(&mut self, window: &Window, cx: &mut Context<Self>) {
+    pub(super) fn sync_notices(&mut self, cx: &mut Context<Self>) {
         let now = vorkspace_core::time::now_ms();
         let prefs = self.workspace.preferences.clone();
         if self.notification_state.sounds_enabled != prefs.sounds {
@@ -495,7 +495,6 @@ impl Shell {
                 completed.push((chat.summary.clone(), chat.notification_reply_body(cx)));
             }
             directories.insert(id.to_string(), chat.summary.cwd.clone());
-            let bot_visible = self.bot_active(cx) && self.notice_session_visible(id, cx);
             snapshots.push(SessionInputs {
                 session_id: id.to_string(),
                 title: chat.display_title().to_owned(),
@@ -504,15 +503,10 @@ impl Shell {
                 pending: chat.pending_notification_inputs(cx),
                 inbox_ask: false,
                 orchestration_worker: self.orchestration_worker(id),
-                conversation_focused: self.window_active
-                    && (self
-                        .workspace
-                        .active
-                        .and_then(|pane| self.workspace.session_for_pane(pane))
-                        == Some(id)
-                        || bot_visible)
-                    && self.notice_session_visible(id, cx)
-                    && chat.composer_focused(window, cx),
+                // A conversation on screen already shows its request as the
+                // inline card, so a toast for it would ask the same thing twice.
+                // Where the keyboard focus sits does not change what is visible.
+                conversation_focused: self.window_active && self.notice_session_visible(id, cx),
             });
         }
         self.notification_state

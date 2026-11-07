@@ -37,7 +37,14 @@ impl Page {
             page::secondary("meeting-record", label, true, disabled)
                 .child(icon("stop", page::ICON_SIZE))
         } else {
-            page::primary("meeting-record", label, disabled)
+            // A note has one primary action, adding it to a chat. Recording
+            // is marked by its red dot instead of a second solid button.
+            page::secondary("meeting-record", label, false, disabled).child(
+                div()
+                    .size(px(8.))
+                    .rounded_full()
+                    .bg(vorkspace_ui::theme::danger()),
+            )
         };
         control
             .child(label)

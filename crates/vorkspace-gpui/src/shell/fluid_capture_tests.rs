@@ -24,6 +24,7 @@ const SHOTS: &[(&str, Option<usize>, (f32, f32))] = &[
     ("tasks", Some(3), (1390., 890.)),
     ("work", Some(0), (1390., 890.)),
     ("automation-editor", Some(0), (1390., 890.)),
+    ("approval-inline", Some(0), (1390., 890.)),
     ("tooltip", Some(0), (551., 271.)),
     ("explorer", Some(0), (1390., 890.)),
     ("changes", Some(0), (1390., 890.)),
@@ -157,6 +158,37 @@ fn fluid_capture() {
                     &[],
                     &[],
                 )
+                .unwrap();
+        }
+    }
+    {
+        // Saved notes, so Notes shows its library and an open note.
+        let store = locked(&store).unwrap();
+        for (id, title, body) in [
+            (
+                "note-1-0000000000000001",
+                "Glide timing",
+                "# Glide timing\n\nThe thumb springs on the **GLIDE** curve and lands in 0.18 s.\n\n- Probes record bounds in prepaint\n- The thumb paints after every prepaint\n- A stall over 0.25 s lands at once\n",
+            ),
+            (
+                "note-1-0000000000000002",
+                "Status colors",
+                "Never write dark-theme literals. Use `danger()`, `warning()` and `success()`.",
+            ),
+            (
+                "note-1-0000000000000003",
+                "Release checklist",
+                "1. Capture both themes\n2. Run the full suite\n3. Push the branch",
+            ),
+        ] {
+            store
+                .upsert_note(&vorkspace_core::notes::NoteUpsert {
+                    id: id.into(),
+                    title: title.into(),
+                    body: body.into(),
+                    source_cwd: Some(PROJECT.into()),
+                    ..Default::default()
+                })
                 .unwrap();
         }
     }
@@ -446,6 +478,16 @@ fn fluid_capture() {
                         shell.open_connector(crate::workspace::Connector::Github, window, cx)
                     }
                     "search" => shell.open_app_search(window, cx),
+                    "approval-inline" => {
+                        let view = shell.sessions[&sessions[0].id].clone();
+                        view.update(cx, |view, cx| {
+                            view.request_approval_for_test(
+                                "capture",
+                                "Run cargo nextest run -p vorkspace-gpui",
+                            );
+                            cx.notify();
+                        });
+                    }
                     "automation-editor" => {
                         shell.open_automations(window, cx);
                         if let Some(view) = shell.automations.clone() {

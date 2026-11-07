@@ -674,7 +674,7 @@ impl Notes {
         self.document = self.draft(cx).map(|note| {
             cx.new(|cx| {
                 Document::note(
-                    &note.body,
+                    without_title_heading(&note.body, &note.title),
                     note.source_cwd.as_deref().unwrap_or(&self.cwd),
                     &self.store,
                     cx,
@@ -1125,12 +1125,7 @@ impl Notes {
                     )
             }))
             .when(note.tags.len() < notes::MAX_TAGS, |d| {
-                d.child(
-                    page::field_frame()
-                        .min_w(px(80.))
-                        .flex_1()
-                        .child(self.tag.clone()),
-                )
+                d.child(page::field_frame().w(px(180.)).child(self.tag.clone()))
             });
         let actions = div()
             .flex()
@@ -2534,5 +2529,42 @@ mod tests {
             .unwrap();
         let saved = locked(&store).unwrap().list_notes().unwrap();
         assert_eq!(saved[0].body, "Hello");
+    }
+}
+
+/// The body as the preview shows it: a leading heading that repeats the
+/// title the page already shows above it is left out. Source keeps it.
+fn without_title_heading<'a>(body: &'a str, title: &str) -> &'a str {
+    let trimmed = body.trim_start();
+    let Some(rest) = trimmed.strip_prefix("# ") else {
+        return body;
+    };
+    let (line, after) = rest.split_once('\n').unwrap_or((rest, ""));
+    if !title.trim().is_empty() && line.trim().eq_ignore_ascii_case(title.trim()) {
+        after.trim_start_matches(['\n', '\r'])
+    } else {
+        body
+    }
+}
+
+#[cfg(test)]
+mod title_tests {
+    use super::without_title_heading;
+
+    #[test]
+    fn a_heading_that_repeats_the_title_is_left_out_of_the_preview() {
+        assert_eq!(
+            without_title_heading("# Glide timing\n\nThe thumb springs.", "Glide timing"),
+            "The thumb springs."
+        );
+        assert_eq!(without_title_heading("# Glide timing", "glide timing"), "");
+        // Another heading, a subheading or no title keeps the body whole.
+        let body = "# Other\n\nText";
+        assert_eq!(without_title_heading(body, "Glide timing"), body);
+        assert_eq!(
+            without_title_heading("## Glide timing\nx", "Glide timing"),
+            "## Glide timing\nx"
+        );
+        assert_eq!(without_title_heading("# Untitled\nx", ""), "# Untitled\nx");
     }
 }
