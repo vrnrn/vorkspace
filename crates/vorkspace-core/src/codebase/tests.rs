@@ -147,6 +147,45 @@ fn inactive_entries_cannot_bypass_capacity_and_draining_workers_keep_their_slots
 }
 
 #[test]
+fn runtime_locks_survive_client_replacement_and_cache_aliases() {
+    let directory = tempfile::tempdir().unwrap();
+    let root = directory.path().canonicalize().unwrap();
+    let cancel = AtomicBool::new(false);
+    let cache = root.join("codebase");
+    let first = prepare_environment(&cache, Path::new("/usr/bin/true"), &root, &cancel).unwrap();
+    let runtime = first.runtime.clone();
+    let lock_path = runtime.join("fixture-lifetime.lock");
+    let held = fs::OpenOptions::new()
+        .create_new(true)
+        .write(true)
+        .open(&lock_path)
+        .unwrap();
+    held.lock().unwrap();
+    drop(first);
+    let alias = root.join("cache-alias");
+    std::os::unix::fs::symlink(&cache, &alias).unwrap();
+    let second = prepare_environment(&alias, Path::new("/usr/bin/true"), &root, &cancel).unwrap();
+    assert_eq!(second.runtime, runtime);
+    let successor = fs::OpenOptions::new().write(true).open(&lock_path).unwrap();
+    assert!(matches!(
+        successor.try_lock(),
+        Err(std::fs::TryLockError::WouldBlock)
+    ));
+    let other = prepare_environment(
+        &root.join("other-app-data"),
+        Path::new("/usr/bin/true"),
+        &root,
+        &cancel,
+    )
+    .unwrap();
+    assert_ne!(other.runtime, runtime);
+    // Only this fixture uses /usr/bin/true, so no daemon can own these paths.
+    drop((held, successor));
+    fs::remove_dir_all(&runtime).unwrap();
+    fs::remove_dir_all(&other.runtime).unwrap();
+}
+
+#[test]
 fn stopped_worker_can_transfer_project_ownership() {
     let (root, mut service) = fixture();
     Arc::get_mut(&mut service).unwrap().test_engine = Some("/usr/bin/false".into());

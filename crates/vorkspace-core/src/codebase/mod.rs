@@ -59,7 +59,7 @@ struct State {
 }
 struct Environment {
     cache: PathBuf,
-    runtime: tempfile::TempDir,
+    runtime: PathBuf,
 }
 
 pub struct Service {
@@ -288,7 +288,7 @@ impl Service {
                             &directory, &binary, Path::new(&root), &cancel,
                         )?;
                         let mut command = transport::command(
-                            &binary, &env.cache, env.runtime.path(), Path::new(&root),
+                            &binary, &env.cache, &env.runtime, Path::new(&root),
                         );
                         command.arg("--ui=false");
                         let mut client = transport::Client::connect(command, &cancel)?;
@@ -412,16 +412,21 @@ fn prepare_environment(
     let key = format!("{:x}", Sha256::digest(root.as_os_str().as_encoded_bytes()));
     let cache = indexes.join(key);
     engine::private_dir(&cache)?;
-    let runtime = tempfile::Builder::new()
-        .prefix("vorkspace-cbm-")
-        // Darwin's per-user TMPDIR can exceed the Unix socket path limit once
-        // the engine adds its endpoint name. tempfile creates this exclusively
-        // with mode 0700; the directory remains private even under /tmp.
-        .tempdir_in("/tmp")
-        .map_err(|e| e.to_string())?;
+    // The stdio frontend can exit before its detached daemon finishes draining.
+    // Keep one rendezvous for this cache across client AND app restarts so the
+    // engine's lifetime/project locks serialize every successor. Never remove
+    // it on client drop. A 128-bit digest prefix keeps Darwin socket paths short,
+    // including the engine's per-user subdirectory and endpoint suffix.
+    let canonical_cache = cache.canonicalize().map_err(|e| e.to_string())?;
+    let runtime_key = format!(
+        "{:x}",
+        Sha256::digest(canonical_cache.as_os_str().as_encoded_bytes())
+    );
+    let runtime = Path::new("/tmp").join(format!("vcbm-{}", &runtime_key[..32]));
+    engine::private_dir(&runtime)?;
     // --ui=false alone is applied after daemon startup. Persist this setting
     // before any MCP session so there is never a transient HTTP listener.
-    let mut command = transport::command(binary, &cache, runtime.path(), root);
+    let mut command = transport::command(binary, &cache, &runtime, root);
     command.args(["config", "set", "ui_enabled", "false"]);
     transport::Client::configure(command, cancel)?;
     Ok(Environment { cache, runtime })
