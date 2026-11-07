@@ -26,6 +26,7 @@ for binary in "$native_binary" "$native_helper_binary"; do
     exit 1
   fi
 done
+python3 scripts/desktop/verify-macos-target.py "$native_binary" "$native_helper_binary"
 
 mkdir -p "$native_bundle/Contents/MacOS" "$native_bundle/Contents/Resources"
 # Replace the inode atomically so macOS does not reuse an older signature cache.

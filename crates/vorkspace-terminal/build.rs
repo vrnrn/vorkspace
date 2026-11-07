@@ -80,7 +80,7 @@ fn main() {
     let zig_target = match target.as_str() {
         "aarch64-apple-darwin" | "x86_64-apple-darwin" => {
             let arch = target.split('-').next().unwrap();
-            let minimum = env::var("MACOSX_DEPLOYMENT_TARGET").unwrap_or_else(|_| "13.0".into());
+            let minimum = env::var("MACOSX_DEPLOYMENT_TARGET").unwrap_or_else(|_| "26.0".into());
             format!("{arch}-macos.{minimum}")
         }
         "x86_64-unknown-linux-gnu" => "x86_64-linux-gnu".into(),
@@ -114,6 +114,7 @@ fn main() {
         .include(source.join("include"))
         .flag_if_supported("-std=c11")
         .warnings(true)
+        .warnings_into_errors(true)
         .compile("vorkspace_ghostty");
     println!(
         "cargo:rustc-link-search=native={}",

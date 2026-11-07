@@ -16,7 +16,8 @@ test("native clipboard preview deadline, cancellation and cleanup", { skip: proc
   const file = join(directory, "ClipboardTests.swift");
   const binary = join(directory, "ClipboardTests");
   await writeFile(file, `${source}\n${tests}`);
-  await run("xcrun", ["swiftc", "-parse-as-library", "-module-cache-path", join(directory, "module-cache"), file, "-o", binary]);
+  await run("xcrun", ["swiftc", "-warnings-as-errors", "-parse-as-library", "-module-cache-path", join(directory, "module-cache"),
+    "-target", `${process.arch === "arm64" ? "arm64" : "x86_64"}-apple-macos26.0`, file, "-o", binary]);
   const { stdout } = await run(binary, []);
   assert.match(stdout, /Native clipboard preview lifecycle passed/);
 });

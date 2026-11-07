@@ -1,28 +1,11 @@
 import { spawn } from "node:child_process";
-import { existsSync } from "node:fs";
-import { homedir } from "node:os";
-import { delimiter, join, resolve } from "node:path";
+import { join, resolve } from "node:path";
 import { createInterface } from "node:readline";
 import { fileURLToPath, pathToFileURL } from "node:url";
-import { installAppBundle } from "./build-native.mjs";
+import { installAppBundle, resolveNativeEnv } from "./build-native.mjs";
+export { resolveNativeEnv } from "./build-native.mjs";
 
 const workspace = fileURLToPath(new URL("../../", import.meta.url));
-
-export function resolveNativeEnv(base = process.env) {
-  const env = { ...base };
-  const home = homedir();
-  const cargoBin = join(home, ".cargo", "bin");
-  if (existsSync(cargoBin) && (!env.PATH || !env.PATH.includes(cargoBin))) {
-    env.PATH = `${cargoBin}${delimiter}${env.PATH || ""}`;
-  }
-  const rustLib = join(home, ".rustup", "toolchains", "stable-aarch64-apple-darwin", "lib");
-  if (existsSync(rustLib) && (!env.DYLD_FALLBACK_LIBRARY_PATH || !env.DYLD_FALLBACK_LIBRARY_PATH.includes(rustLib))) {
-    env.DYLD_FALLBACK_LIBRARY_PATH = env.DYLD_FALLBACK_LIBRARY_PATH
-      ? `${rustLib}${delimiter}${env.DYLD_FALLBACK_LIBRARY_PATH}`
-      : rustLib;
-  }
-  return env;
-}
 
 function track(child) {
   // Attach immediately: short-lived processes can exit before a caller awaits them.

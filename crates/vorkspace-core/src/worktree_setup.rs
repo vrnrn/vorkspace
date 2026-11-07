@@ -433,25 +433,31 @@ mod tests {
 
     #[test]
     fn quitting_the_app_stops_a_running_setup() {
+        const OWNER: i64 = 719_451;
         let (dir, tree) = repository();
         due(&tree, "sleep 30; touch survived");
         let worker = std::thread::spawn({
             let project = dir.path().to_owned();
             let tree = tree.clone();
-            move || run_due(&project, &tree, &stopped(false))
+            move || crate::process::owned_by(OWNER, || run_due(&project, &tree, &stopped(false)))
         });
         let start = Instant::now();
-        let marker = marker(&tree).unwrap();
-        while !fs::read_to_string(&marker).unwrap().starts_with(RUNNING) {
+        // RUNNING is persisted before environment preparation and spawn. Wait
+        // for the shutdown registry to own the child, rather than guessing how
+        // long shell startup takes under a busy build/test workload.
+        while !crate::process::agents()
+            .iter()
+            .any(|agent| agent.session == OWNER)
+        {
             assert!(start.elapsed() < Duration::from_secs(10));
             std::thread::sleep(POLL);
         }
-        std::thread::sleep(Duration::from_millis(200));
         crate::process::shutdown_all();
         let notice = worker.join().unwrap().unwrap().unwrap();
         let warning = notice.warning();
         assert!(warning.contains("interrupted"), "{warning}");
         assert!(is_due(&tree), "the next launch has to hear about it");
+        assert!(!tree.join("survived").exists());
     }
 
     #[test]

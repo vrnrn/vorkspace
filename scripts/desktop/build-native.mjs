@@ -1,7 +1,7 @@
 import { spawnSync } from "node:child_process";
 import { existsSync } from "node:fs";
 import { homedir } from "node:os";
-import { delimiter, join, resolve } from "node:path";
+import { delimiter, dirname, join, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
 const root = fileURLToPath(new URL("../../", import.meta.url));
@@ -9,18 +9,19 @@ const root = fileURLToPath(new URL("../../", import.meta.url));
 export function resolveNativeEnv(base = process.env) {
   const env = { ...base };
   const home = homedir();
-  const cargoBin = join(home, ".cargo", "bin");
-  if (existsSync(cargoBin) && (!env.PATH || !env.PATH.includes(cargoBin))) {
-    env.PATH = `${cargoBin}${delimiter}${env.PATH || ""}`;
+  const cargoBin = join(env.CARGO_HOME || join(home, ".cargo"), "bin");
+  if (existsSync(cargoBin)) {
+    // Rustup's shims must precede any old concrete toolchain on PATH, so Cargo
+    // and rustc both honor this checkout's rust-toolchain.toml.
+    env.PATH = [cargoBin, ...(env.PATH || "").split(delimiter).filter((entry) => entry !== cargoBin)].join(delimiter);
   }
-  if (process.platform === "darwin") {
-    const rustLib = join(home, ".rustup", "toolchains", "stable-aarch64-apple-darwin", "lib");
-    if (existsSync(rustLib) && (!env.DYLD_FALLBACK_LIBRARY_PATH || !env.DYLD_FALLBACK_LIBRARY_PATH.includes(rustLib))) {
-      env.DYLD_FALLBACK_LIBRARY_PATH = env.DYLD_FALLBACK_LIBRARY_PATH
-        ? `${rustLib}${delimiter}${env.DYLD_FALLBACK_LIBRARY_PATH}`
-        : rustLib;
-    }
+  // Some installations put concrete compiler symlinks in .cargo/bin. Resolve
+  // the active toolchain through rustup so those cannot bypass the project pin.
+  const compiler = spawnSync("rustup", ["which", "cargo"], { cwd: root, env, encoding: "utf8" });
+  if (compiler.error || compiler.status !== 0) {
+    throw new Error(`Could not resolve the project Rust toolchain: ${compiler.error?.message || compiler.stderr}`);
   }
+  env.PATH = `${dirname(compiler.stdout.trim())}${delimiter}${env.PATH}`;
   return env;
 }
 

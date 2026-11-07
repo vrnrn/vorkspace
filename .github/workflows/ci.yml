@@ -14,22 +14,28 @@ jobs:
     runs-on: macos-latest
     steps:
       - uses: actions/checkout@v7
+        env:
+          GIT_CONFIG_COUNT: '1'
+          GIT_CONFIG_KEY_0: init.defaultBranch
+          GIT_CONFIG_VALUE_0: main
         with:
           persist-credentials: false
       - uses: actions/setup-node@v7
         with:
           node-version: 24
           cache: npm
-      - uses: dtolnay/rust-toolchain@stable
-        with:
-          components: rustfmt, clippy
+      - name: Set up pinned native compilers
+        run: bash scripts/desktop/setup-ci-macos.sh
       - uses: Swatinem/rust-cache@v2
+        env:
+          # Concurrency does not change artifacts; omit it from the cache key.
+          CARGO_BUILD_JOBS: ''
         with:
+          shared-key: native-macos-26
+          env-vars: VORKSPACE_BUILD_SDK
+          cache-bin: false
           cache-on-failure: true
       - uses: taiki-e/install-action@nextest
-      - uses: mlugg/setup-zig@v2
-        with:
-          version: 0.17.0
       - run: npm ci
       - run: npm run assets
       - name: Verify generated assets
@@ -37,9 +43,9 @@ jobs:
       - run: npm run check
         env:
           NEXTEST_PROFILE: ci
-      - run: cargo build --locked -p vorkspace-gpui -p vorkspace-helper --profile native-dev
+      - run: cargo build --locked -p vorkspace-gpui -p vorkspace-helper --profile verify
       - name: Package and verify native app signature
         run: |
           version=$(node -p 'JSON.parse(require("fs").readFileSync("package.json", "utf8")).version')
-          bash scripts/desktop/bundle-native-macos.sh native-dev target "$version" dev-data
+          bash scripts/desktop/bundle-native-macos.sh verify target "$version" dev-data
       - run: npm run host:package

@@ -23,20 +23,28 @@ jobs:
       MACOSX_DEPLOYMENT_TARGET: '26.0'
     steps:
       - uses: actions/checkout@v7
+        env:
+          GIT_CONFIG_COUNT: '1'
+          GIT_CONFIG_KEY_0: init.defaultBranch
+          GIT_CONFIG_VALUE_0: main
         with:
           persist-credentials: false
       - uses: actions/setup-node@v7
         with:
           node-version: 24
           cache: npm
-      - uses: dtolnay/rust-toolchain@stable
+      - name: Set up pinned native compilers
+        run: bash scripts/desktop/setup-ci-macos.sh
+      - uses: Swatinem/rust-cache@v2
+        env:
+          # Keep the job's two-build limit without splitting dependency caches.
+          CARGO_BUILD_JOBS: ''
         with:
-          components: rustfmt, clippy
-          targets: aarch64-apple-darwin
+          shared-key: native-macos-26
+          env-vars: VORKSPACE_BUILD_SDK
+          cache-bin: false
+          cache-on-failure: true
       - uses: taiki-e/install-action@nextest
-      - uses: mlugg/setup-zig@v2
-        with:
-          version: 0.17.0
       - name: Prepare unused version, build number, and release notes
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
