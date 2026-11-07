@@ -307,6 +307,9 @@ fn fluid_capture() {
     vorkspace_ui::clock::use_test_clock(&cx);
     // A comma-separated subset of shot names, to iterate on one surface.
     let only = std::env::var("VORKSPACE_FLUID_CAPTURE_ONLY").ok();
+    // Screens that keep asking for frames once settled: an idle app should
+    // draw nothing until something changes.
+    let mut busy: Vec<String> = Vec::new();
     for theme in ["dark", "light"] {
         for (name, open, at) in SHOTS {
             if only
@@ -563,6 +566,30 @@ fn fluid_capture() {
             .unwrap();
             cx.run_until_parked();
             vorkspace_ui::clock::settle_headless_animations(window, &mut cx);
+            if !matches!(*name, "live" | "glide") {
+                // The first second may finish a last transition; after that
+                // nothing should keep asking.
+                let mut frames = 0;
+                for step in 0..8 {
+                    cx.advance_clock(std::time::Duration::from_millis(500));
+                    let ran = cx
+                        .update_window(window.into(), |_, window, cx| {
+                            let ran = window.simulate_next_frame(cx);
+                            window.draw(cx).clear(cx);
+                            ran
+                        })
+                        .unwrap();
+                    if step >= 2 {
+                        frames += ran;
+                    }
+                    cx.run_until_parked();
+                }
+                if frames > 0 {
+                    busy.push(format!(
+                        "{theme}-{file}: {frames} frame callbacks in 3 s, idle"
+                    ));
+                }
+            }
             if *name == "glide" {
                 // Select the other tab and capture two frames into the glide.
                 let id = sessions[0].id;
@@ -636,5 +663,10 @@ fn fluid_capture() {
                     .unwrap();
             }
         }
+    }
+    std::fs::write(output.join("idle-frames.txt"), busy.join("\n")).unwrap();
+    eprintln!("IDLE-FRAMES {}", busy.len());
+    for line in &busy {
+        eprintln!("IDLE-FRAMES {line}");
     }
 }
