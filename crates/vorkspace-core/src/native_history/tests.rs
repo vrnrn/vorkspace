@@ -187,9 +187,9 @@ fn native_history_waits_for_complete_records_and_commits_cursor_with_rows() {
         .append(true)
         .open(&source)
         .unwrap();
-    file.write_all(last[..10].as_bytes()).unwrap();
+    file.write_all(&last.as_bytes()[..10]).unwrap();
     assert!(sync(&mut store, session.id, root).active);
-    file.write_all(last[10..].as_bytes()).unwrap();
+    file.write_all(&last.as_bytes()[10..]).unwrap();
     file.write_all(b"\n").unwrap();
     let connection = rusqlite::Connection::open(&path).unwrap();
     connection.execute_batch("CREATE TRIGGER fail_cursor BEFORE UPDATE ON provider_history_cursors BEGIN SELECT RAISE(ABORT,'injected cursor write failure'); END;").unwrap();

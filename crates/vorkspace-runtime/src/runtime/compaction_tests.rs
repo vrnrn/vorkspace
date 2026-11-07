@@ -530,7 +530,9 @@ fn manual_and_uncertain_compactions_refresh_bot_and_minion_context_without_consu
             };
             {
                 let mut store = locked(&store).unwrap();
-                store.write_rows(summary.id, 0, &[row.clone()]).unwrap();
+                store
+                    .write_rows(summary.id, 0, std::slice::from_ref(&row))
+                    .unwrap();
                 store
                     .save_follow_ups(
                         summary.id,
