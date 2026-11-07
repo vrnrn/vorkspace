@@ -23,6 +23,10 @@ jobs:
       MACOSX_DEPLOYMENT_TARGET: '26.0'
     steps:
       - uses: actions/checkout@v7
+        env:
+          GIT_CONFIG_COUNT: '1'
+          GIT_CONFIG_KEY_0: init.defaultBranch
+          GIT_CONFIG_VALUE_0: main
         with:
           persist-credentials: false
       - uses: actions/setup-node@v7

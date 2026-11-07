@@ -10,7 +10,7 @@ test "$(uname -s)" = Darwin
 # rustup installs the toolchain and components declared in rust-toolchain.toml.
 export PATH="${CARGO_HOME:-$HOME/.cargo}/bin:$PATH"
 printf '%s\n' "${CARGO_HOME:-$HOME/.cargo}/bin" >> "$GITHUB_PATH"
-rustup show active-toolchain
+rustup toolchain install --no-self-update
 compiler_bin=$(dirname "$(rustup which cargo)")
 export PATH="$compiler_bin:$PATH"
 printf '%s\n' "$compiler_bin" >> "$GITHUB_PATH"

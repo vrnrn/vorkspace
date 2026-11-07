@@ -17,8 +17,7 @@ it("lists and switches only clean existing local branches", async () => {
   const cwd = mkdtempSync(join(tmpdir(), "vorkspace-host-branches-"));
   dirs.push(cwd);
   const git = (...args) => execFileSync("git", args, { cwd });
-  git("init");
-  git("checkout", "-b", "main");
+  git("init", "-b", "main");
   writeFileSync(join(cwd, "file.txt"), "initial");
   git("add", "file.txt");
   git(
