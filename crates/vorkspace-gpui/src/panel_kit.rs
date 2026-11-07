@@ -56,11 +56,7 @@ pub(crate) fn rail_divider(cap_top: Option<f32>) -> impl IntoElement {
     .absolute()
     .inset_0()
 }
-pub(crate) const DIFF_ADD: u32 = 0x6ee7b7;
-pub(crate) const DIFF_DEL: u32 = 0xfda4af;
 // Tailwind v4.
-pub(crate) const AMBER_400: u32 = 0xffb900;
-pub(crate) const SKY_400: u32 = 0x00bcff;
 /// `--color-background-base` in the default dark theme, hsl(240 0% 9%).
 pub(crate) const BACKGROUND_BASE: u32 = 0x171717;
 
@@ -217,7 +213,10 @@ pub(crate) fn diff_stat(
     let (add, del) = if clean {
         (content(0.35), content(0.35))
     } else {
-        (gpui::rgb(DIFF_ADD).into(), gpui::rgb(DIFF_DEL).into())
+        (
+            vorkspace_ui::theme::diff_foreground(true),
+            vorkspace_ui::theme::diff_foreground(false),
+        )
     };
     div()
         .id("project-diff-stat")

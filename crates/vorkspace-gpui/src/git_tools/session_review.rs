@@ -1,8 +1,8 @@
 //! SessionReview.tsx: the latest turn's recorded workspace changes, under its
 //! reply, with Undo, Keep and Review. The checkpoint runs off the UI thread.
-use crate::panel_kit::{DIFF_ADD, DIFF_DEL, format_integer, tabular};
+use crate::panel_kit::{format_integer, tabular};
 use gpui::{
-    Context, EventEmitter, FontWeight, Role, SharedString, Task, Window, div, prelude::*, px, rgb,
+    Context, EventEmitter, FontWeight, Role, SharedString, Task, Window, div, prelude::*, px,
 };
 use vorkspace_core::checkpoint::{CheckpointFile, CheckpointStatus};
 use vorkspace_ui::radius;
@@ -200,12 +200,12 @@ fn counts(additions: i64, deletions: i64, gap: f32) -> gpui::Div {
         .font_family(vorkspace_ui::fonts::MONO)
         .child(
             div()
-                .text_color(rgb(DIFF_ADD))
+                .text_color(vorkspace_ui::theme::diff_foreground(true))
                 .child(format!("+{}", format_integer(additions))),
         )
         .child(
             div()
-                .text_color(rgb(DIFF_DEL))
+                .text_color(vorkspace_ui::theme::diff_foreground(false))
                 .child(format!("-{}", format_integer(deletions))),
         )
 }

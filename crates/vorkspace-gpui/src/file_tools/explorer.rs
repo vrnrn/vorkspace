@@ -13,7 +13,7 @@ use gpui::{
     AnyElement, App, ClipboardEntry, ClipboardItem, Context, Entity, EventEmitter, ExternalPaths,
     FocusHandle, Focusable, FontWeight, Hsla, KeyBinding, KeyDownEvent, ListAlignment, ListState,
     MouseButton, MouseDownEvent, Point, PromptLevel, Role, SharedString, StyleRefinement,
-    Subscription, Window, actions, div, list, prelude::*, px, rgb,
+    Subscription, Window, actions, div, list, prelude::*, px,
 };
 use std::time::Instant;
 use std::{
@@ -1342,9 +1342,9 @@ impl Explorer {
                     statuses.files.get(&entry.path)
                 };
                 let git_color: Option<Hsla> = status.and_then(|s| match s.as_str() {
-                    "modified" => Some(rgb(AMBER_400).into()),
-                    "added" | "untracked" => Some(rgb(DIFF_ADD).into()),
-                    "deleted" => Some(rgb(DIFF_DEL).into()),
+                    "modified" | "added" | "untracked" | "deleted" => {
+                        Some(crate::git_tools::changes::status_color(s))
+                    }
                     _ => None,
                 });
                 let path = entry.path.clone();
