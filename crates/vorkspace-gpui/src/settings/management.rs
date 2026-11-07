@@ -381,7 +381,7 @@ impl SettingsView {
                             .bg(content(0.03))
                             .text_size(px(10.))
                             .child(
-                                div().font_family(vorkspace_ui::fonts::FIXED_FONT).child(
+                                div().font_family(vorkspace_ui::fonts::MONO).child(
                                     inspection
                                         .as_ref()
                                         .map(|i| i.path.display().to_string())
@@ -949,7 +949,7 @@ fn form_field(label: &str, input: Entity<Input>, height: f32) -> AnyElement {
                 .border_color(content(0.1))
                 .bg(content(0.04))
                 .when(label == "JSON configuration", |d| {
-                    d.font_family(vorkspace_ui::fonts::FIXED_FONT)
+                    d.font_family(vorkspace_ui::fonts::MONO)
                 })
                 .child(input),
         )

@@ -21,7 +21,10 @@ fn account_button(
         .items_center()
         .justify_center()
         .text_color(content(0.4))
-        .hover(|s| s.bg(content(0.1)).text_color(content(1.)))
+        .hover(|s| {
+            s.bg(vorkspace_ui::fluid::hover(0.1))
+                .text_color(content(1.))
+        })
         .child(icon(path, 14.))
 }
 
@@ -333,9 +336,9 @@ impl Accounts {
                     controls = controls.child(
                         div()
                             .mr_1()
-                            .text_size(px(10.))
-                            .text_color(content(0.3))
-                            .child("DEFAULT"),
+                            .text_size(px(11.))
+                            .text_color(content(0.45))
+                            .child("Default"),
                     );
                 }
                 controls = controls.child(
@@ -633,7 +636,13 @@ impl Accounts {
                     .border_1()
                     .border_color(if active { accent(0.2) } else { content(0.06) })
                     .bg(fill)
-                    .hover(move |s| s.bg(if active { accent(0.14) } else { content(0.075) }))
+                    .hover(move |s| {
+                        s.bg(vorkspace_ui::fluid::wash(if active {
+                            accent(0.14)
+                        } else {
+                            content(0.075)
+                        }))
+                    })
                     .cursor_pointer()
                     .flex()
                     .items_center()
@@ -718,7 +727,10 @@ impl Accounts {
                 .text_size(px(11.))
                 .text_color(content(ink))
                 .cursor_pointer()
-                .hover(|s| s.bg(content(0.07)).text_color(content(1.)))
+                .hover(|s| {
+                    s.bg(vorkspace_ui::fluid::hover(0.07))
+                        .text_color(content(1.))
+                })
         };
         div()
             .track_focus(&self.picker_focus)
@@ -786,7 +798,7 @@ fn back_header(
                 .items_center()
                 .justify_center()
                 .cursor_pointer()
-                .hover(|s| s.bg(content(0.1)))
+                .hover(|s| s.bg(vorkspace_ui::fluid::hover(0.1)))
                 .child(icon("arrow-left", 14.).text_color(content(0.45)))
                 .on_click(move |_, window, cx| on_back(window, cx)),
         )
@@ -899,6 +911,7 @@ fn meter(w: &usage::Window, now: i64, show_remaining: bool) -> Div {
                 .child(
                     div()
                         .flex_shrink_0()
+                        .font_family(vorkspace_ui::fonts::MONO)
                         .map(|d| {
                             if full {
                                 d.font_weight(FontWeight::MEDIUM)
@@ -921,7 +934,7 @@ fn meter(w: &usage::Window, now: i64, show_remaining: bool) -> Div {
                 .mt(px(6.))
                 .h_1()
                 .rounded_full()
-                .bg(content(0.1))
+                .bg(vorkspace_ui::fluid::track(0.1))
                 .overflow_hidden()
                 .child(
                     div()

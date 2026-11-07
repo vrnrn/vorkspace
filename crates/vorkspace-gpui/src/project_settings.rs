@@ -90,7 +90,10 @@ fn button(
         .text_size(px(12.))
         .line_height(px(18.))
         .text_color(content(0.7))
-        .hover(|s| s.bg(content(0.08)).text_color(content(1.)))
+        .hover(|s| {
+            s.bg(vorkspace_ui::fluid::hover(0.08))
+                .text_color(content(1.))
+        })
         .child(label)
 }
 
@@ -305,7 +308,7 @@ impl Render for AppearanceControls {
                             .flex()
                             .items_center()
                             .justify_center()
-                            .hover(|s| s.bg(content(0.1)))
+                            .hover(|s| s.bg(vorkspace_ui::fluid::hover(0.1)))
                             .child(project_icon(&self.appearance, &self.project, 20.))
                             .on_click(cx.listener(|this, _, _, cx| this.choose_logo(cx))),
                     )
@@ -409,7 +412,7 @@ impl Render for AppearanceControls {
                                                 .border_1()
                                                 .border_color(content(0.14))
                                                 .bg(content(0.06))
-                                                .hover(|s| s.bg(content(0.14)))
+                                                .hover(|s| s.bg(vorkspace_ui::fluid::hover(0.14)))
                                                 .flex()
                                                 .items_center()
                                                 .justify_center()
@@ -434,16 +437,7 @@ impl Render for AppearanceControls {
                                 .flex()
                                 .items_center()
                                 .child(probe.probe())
-                                .child(div().w_full().h(px(4.)).rounded_full().bg(content(0.16)))
-                                .child(
-                                    div()
-                                        .absolute()
-                                        .top(px(1.))
-                                        .left(gpui::relative(fraction * 0.94))
-                                        .size(px(12.))
-                                        .rounded_full()
-                                        .bg(content(1.)),
-                                )
+                                .children(vorkspace_ui::fluid::slider_parts(fraction))
                                 .on_mouse_down(
                                     MouseButton::Left,
                                     cx.listener(|this, event: &MouseDownEvent, _, cx| {
@@ -512,7 +506,7 @@ impl Render for AppearanceControls {
                                         content(0.15)
                                     })
                                     .bg(content(if bg_active { 0.12 } else { 0.05 }))
-                                    .hover(|s| s.bg(content(0.1)))
+                                    .hover(|s| s.bg(vorkspace_ui::fluid::hover(0.1)))
                                     .flex()
                                     .items_center()
                                     .justify_center()
@@ -550,7 +544,7 @@ impl Render for AppearanceControls {
                                             content(0.15)
                                         })
                                         .bg(content(if fg_active { 0.12 } else { 0.05 }))
-                                        .hover(|s| s.bg(content(0.1)))
+                                        .hover(|s| s.bg(vorkspace_ui::fluid::hover(0.1)))
                                         .flex()
                                         .items_center()
                                         .justify_center()
@@ -582,7 +576,7 @@ impl Render for AppearanceControls {
                                         .border_1()
                                         .border_color(content(0.15))
                                         .bg(content(0.05))
-                                        .hover(|s| s.bg(content(0.12)))
+                                        .hover(|s| s.bg(vorkspace_ui::fluid::hover(0.12)))
                                         .flex()
                                         .items_center()
                                         .justify_center()
@@ -679,6 +673,8 @@ pub(crate) struct BackgroundDialog {
     effect_active: usize,
     effect_focus: FocusHandle,
     effect_trigger_focus: FocusHandle,
+    /// Inside Project settings, which supplies the title and close button.
+    embedded: bool,
     _preview_events: Subscription,
 }
 impl EventEmitter<Event> for BackgroundDialog {}
@@ -714,7 +710,13 @@ impl BackgroundDialog {
             dragging: None,
             busy: false,
             error: None,
+            embedded: false,
         }
+    }
+    /// Drops the dialog's own header for a host that draws one.
+    pub(crate) fn embedded(mut self) -> Self {
+        self.embedded = true;
+        self
     }
     fn save(&mut self, cx: &mut Context<Self>) {
         self.background.normalize();
@@ -871,7 +873,10 @@ impl BackgroundDialog {
                             .line_height(px(13.))
                             .text_color(content(if self.effect_active == ix { 1. } else { 0.75 }))
                             .when(self.effect_active == ix, |d| d.bg(content(0.1)))
-                            .hover(|s| s.bg(content(0.05)).text_color(content(1.)))
+                            .hover(|s| {
+                                s.bg(vorkspace_ui::fluid::hover(0.05))
+                                    .text_color(content(1.))
+                            })
                             .child(
                                 div()
                                     .size(px(14.))
@@ -970,15 +975,28 @@ impl BackgroundDialog {
                             .flex()
                             .items_center()
                             .child(probe.probe())
-                            .child(div().w_full().h(px(4.)).rounded_full().bg(content(0.15)))
+                            .child(
+                                div()
+                                    .w_full()
+                                    .h(px(4.))
+                                    .rounded_full()
+                                    .bg(vorkspace_ui::fluid::track(0.15)),
+                            )
+                            // fluidither: solid ink where the value is, dots ahead of it.
                             .child(
                                 div()
                                     .absolute()
-                                    .top_0()
-                                    .left(px(fraction * 160.))
-                                    .size(px(12.))
+                                    .left_0()
+                                    .top(px(4.))
+                                    .h(px(4.))
+                                    .w(px(fraction * 160. + 6.))
                                     .rounded_full()
-                                    .bg(content(1.)),
+                                    .bg(content(0.85)),
+                            )
+                            .child(
+                                vorkspace_ui::fluid::thumb(content(1.))
+                                    .top(px(-2.))
+                                    .left(px(fraction * 160. + 2.)),
                             )
                             .on_mouse_down(
                                 MouseButton::Left,
@@ -1041,6 +1059,7 @@ impl BackgroundDialog {
                             .text_size(px(12.))
                             .line_height(px(18.))
                             .font_features(crate::panel_kit::tabular())
+                            .font_family(vorkspace_ui::fonts::MONO)
                             .child(format!("{}%", (value * 100.).round())),
                     ),
             )
@@ -1201,6 +1220,7 @@ impl BackgroundDialog {
 impl Render for BackgroundDialog {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let has_image = !self.background.path.is_empty();
+        let embedded = self.embedded;
         let settings = has_image.then(|| self.background.clone());
         self.preview.update(cx, |preview, cx| {
             preview.configure(settings, true, None, cx)
@@ -1211,7 +1231,7 @@ impl Render for BackgroundDialog {
             .or_else(|| self.preview.read(cx).error.clone());
         div().id("project-background-dialog").debug_selector(||"project-background-dialog".into())
             .role(Role::Dialog).aria_label("Background Image").track_focus(&self.focus)
-            .relative().min_h_0().max_h(px(window.viewport_size().height.as_f32()-34.))
+            .relative().min_h_0().when(!self.embedded, |d| d.max_h(px(window.viewport_size().height.as_f32()-34.)))
             .flex().flex_col().text_color(content(1.))
             .child(self.bounds.layout_probe())
             .on_key_down(cx.listener(|this,event:&gpui::KeyDownEvent,window,cx| {
@@ -1221,13 +1241,13 @@ impl Render for BackgroundDialog {
                 }
             }))
             .on_mouse_up(MouseButton::Left,cx.listener(|this,_,_,_|this.dragging=None))
-            .child(div().debug_selector(||"background-dialog-header".into()).flex_shrink_0().flex().items_start().gap_2().px_4().pt_3()
+            .when(!self.embedded, |d| d.child(div().debug_selector(||"background-dialog-header".into()).flex_shrink_0().flex().items_start().gap_2().px_4().pt_3()
                 .child(div().min_w_0().flex_1().pt(px(2.)).flex().flex_col()
                     .child(div().debug_selector(||"background-dialog-title".into()).text_size(px(16.)).line_height(px(20.)).font_weight(gpui::FontWeight::SEMIBOLD).child("Background Image"))
                     .child(div().mt(px(2.)).min_w_0().truncate().text_size(px(12.)).line_height(px(16.5)).text_color(content(0.5)).child(format!("Choose a background image for {}",self.appearance.label(&self.project)))))
-                .child(icon_button("close-project-background","Close background settings","close").debug_selector(|| "close-project-background".into()).size(px(28.)).on_click(cx.listener(|_,_,_,cx|cx.emit(Event::Close)))))
+                .child(icon_button("close-project-background","Close background settings","close").debug_selector(|| "close-project-background".into()).size(px(28.)).on_click(cx.listener(|_,_,_,cx|cx.emit(Event::Close))))))
             .child(div().id("background-dialog-body").debug_selector(||"background-dialog-body".into())
-                .min_h_0().overflow_y_scroll().flex().flex_col().gap_5().p_4()
+                .min_h_0().overflow_y_scroll().flex().flex_col().gap_5().map(|d| if embedded { d.px_5().py_4() } else { d.p_4() })
                 .child(div().flex_shrink_0().flex().flex_col()
                     .child(div().debug_selector(||"background-dialog-preview".into()).h(px(162.)).flex_shrink_0().overflow_hidden().rounded(px(radius::SURFACE)).border_1().border_color(content(0.1))
                         .bg(if self.background.effect==Effect::GradientBlur {rgb(0x171717).into()} else {content(0.05)})

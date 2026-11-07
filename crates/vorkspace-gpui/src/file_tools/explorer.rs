@@ -1238,7 +1238,9 @@ impl Explorer {
             .justify_center()
             .rounded(px(radius::CONTROL))
             .when(!enabled, |d| d.opacity(0.4))
-            .when(enabled, |d| d.hover(|s| s.bg(content(0.05))))
+            .when(enabled, |d| {
+                d.hover(|s| s.bg(vorkspace_ui::fluid::hover(0.05)))
+            })
             .child(icon(path, 14.).text_color(content(0.5)).when(enabled, |i| {
                 i.group_hover(id, |s| s.text_color(content(1.)))
             }))
@@ -1367,7 +1369,9 @@ impl Explorer {
                     .line_height(px(ENTRY_FONT_SIZE))
                     .text_color(content(1.))
                     .when(selected || over, |d| d.bg(selection()))
-                    .when(!selected && !over, |d| d.hover(|s| s.bg(content(0.05))))
+                    .when(!selected && !over, |d| {
+                        d.hover(|s| s.bg(vorkspace_ui::fluid::hover(0.05)))
+                    })
                     .when(selected && focused && self.keyboard, |d| {
                         d.border_1().border_color(accent_color().opacity(0.4))
                     })

@@ -15,6 +15,22 @@ fn palette() -> Palette {
 }
 
 #[test]
+fn mermaid_labels_name_a_sans_family() {
+    let svg = mermaid_svg("flowchart LR\n  A[One] --> B{Two}").unwrap();
+    let labelled = sans(&svg);
+    let texts = labelled.matches("<text ").count();
+    assert!(texts >= 2, "{labelled}");
+    // Every label carries its own family, ending in the generic fallback.
+    assert_eq!(
+        labelled
+            .matches(&format!("<text font-family=\"{LABEL_FONTS}\" "))
+            .count(),
+        texts
+    );
+    assert!(LABEL_FONTS.ends_with(",sans-serif"));
+}
+
+#[test]
 fn mermaid_renders_through_pele_and_resolves_its_theme() {
     let svg =
         mermaid_svg("flowchart LR\n  A[Mermaid text] --> B{Ok?}\n  B -- yes --> C([SVG])").unwrap();

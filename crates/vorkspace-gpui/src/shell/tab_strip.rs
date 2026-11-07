@@ -756,6 +756,18 @@ impl Shell {
             moving |= tick.0.is_some();
             copies.insert(id, (copy, tick));
         }
+        // One thumb springs between the tabs; each plate records its bounds
+        // and paints its own fill only until the thumb has measured it.
+        let glide = vorkspace_ui::glide::Glide::new(
+            "title-tab-glide",
+            selected
+                .as_ref()
+                .and_then(|selected| tabs.iter().position(|tab| tab == selected)),
+            window,
+            cx,
+        );
+        let thumb_ready = glide.ready();
+        vorkspace_ui::glide::forget_beyond(&glide, tabs.len());
         let mut workspace_elements: HashMap<i64, AnyElement> =
             tabs.iter()
                 .enumerate()
@@ -798,6 +810,8 @@ impl Shell {
                     .items_center()
                     .child(
                         title_tab_plate(active, hovered)
+                            .when(active && thumb_ready, |d| d.bg(gpui::transparent_black()))
+                            .child(glide.probe(ix))
                             .id(("tab-plate", id as usize))
                             .debug_selector(move || format!("title-tab-plate-{id}"))
                             .relative()
@@ -839,7 +853,7 @@ impl Shell {
                                 .flex()
                                 .items_center()
                                 .justify_center()
-                                .hover(|s| s.bg(content(0.1)))
+                                .hover(|s| s.bg(vorkspace_ui::fluid::hover(0.1)))
                                 .when(copy.panes.len() > 1, |d| {
                                     d.child(
                                         div()
@@ -941,7 +955,7 @@ impl Shell {
                     TitleTab::Workspace(id) => workspace_elements.remove(id)?,
                     TitleTab::Terminal { .. } | TitleTab::Bot { .. } => {
                         let element = self
-                            .simple_title_tab(tab, tab_width(tab), cx)?
+                            .simple_title_tab(tab, tab_width(tab), (&glide, ix), cx)?
                             .left(shifts[ix]);
                         if dragged.as_ref() == Some(tab) {
                             gpui::deferred(element).with_priority(1).into_any_element()
@@ -1026,6 +1040,13 @@ impl Shell {
             .overflow_hidden()
             .border_b_1()
             .border_color(crate::panel_kit::stroke())
+            // Outside the scrolled list, so the tabs keep their child indices
+            // in `tab_scroll`; the thumb paints in window coordinates.
+            .child(glide.container())
+            .child(glide.thumb(
+                vorkspace_ui::theme::title_tab_fill(true, false),
+                radius::CONTROL,
+            ))
             .child(
                 div()
                     .id("session-tabs")
@@ -1057,7 +1078,7 @@ impl Shell {
                             .flex()
                             .items_center()
                             .justify_center()
-                            .hover(|s| s.opacity(1.).bg(content(0.07)))
+                            .hover(|s| s.opacity(1.).bg(vorkspace_ui::fluid::hover(0.07)))
                             .child(
                                 icon("plus", 14.)
                                     .group_hover("new-tab", |s| s.text_color(content(1.))),

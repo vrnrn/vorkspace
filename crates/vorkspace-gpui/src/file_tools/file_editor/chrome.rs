@@ -116,7 +116,10 @@ impl FileEditor {
             .line_height(px(14.))
             .text_color(content(if wrap { 1. } else { 0.45 }))
             .when(wrap, |d| d.bg(content(0.15)))
-            .hover(|s| s.bg(content(0.1)).text_color(content(1.)))
+            .hover(|s| {
+                s.bg(vorkspace_ui::fluid::hover(0.1))
+                    .text_color(content(1.))
+            })
             .child("Wrap")
             .on_click(cx.listener(|this, _, _, cx| this.toggle_word_wrap(cx)))
             .into_any_element()
@@ -153,7 +156,10 @@ impl FileEditor {
                             .line_height(px(14.))
                             .text_color(content(if self.preview == preview { 1. } else { 0.45 }))
                             .when(self.preview == preview, |d| d.bg(content(0.15)))
-                            .hover(|s| s.bg(content(0.1)).text_color(content(1.)))
+                            .hover(|s| {
+                                s.bg(vorkspace_ui::fluid::hover(0.1))
+                                    .text_color(content(1.))
+                            })
                             .child(label)
                             .on_click(cx.listener(move |this, _, window, cx| {
                                 if this.preview != preview {
@@ -200,6 +206,7 @@ impl FileEditor {
             .border_t_1()
             .border_color(stroke())
             .font_features(tabular())
+            .font_family(vorkspace_ui::fonts::MONO)
             .text_size(px(10.))
             .line_height(px(16.))
             .text_color(content(0.45))

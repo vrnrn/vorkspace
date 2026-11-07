@@ -309,7 +309,9 @@ impl Shell {
                     .rounded(px(radius::CONTROL))
                     .cursor(CursorStyle::Arrow)
                     .when(open, |d| d.bg(content(0.1)))
-                    .when(!open, |d| d.hover(|s| s.bg(content(0.1))))
+                    .when(!open, |d| {
+                        d.hover(|s| s.bg(vorkspace_ui::fluid::hover(0.1)))
+                    })
                     .child(
                         div()
                             .size(px(14.))

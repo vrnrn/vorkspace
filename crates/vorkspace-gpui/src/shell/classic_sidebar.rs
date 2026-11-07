@@ -86,7 +86,7 @@ impl Shell {
                     .gap_1()
                     .h(px(28.))
                     .rounded(px(radius::CONTROL))
-                    .hover(|s| s.bg(content(0.08)))
+                    .hover(|s| s.bg(vorkspace_ui::fluid::hover(0.08)))
                     .text_size(px(13.))
                     .font_weight(FontWeight::SEMIBOLD)
                     .child(
@@ -157,53 +157,88 @@ impl Shell {
                     .h(px(36.))
                     .flex_shrink_0()
                     .relative()
-                    .flex()
-                    .items_center()
-                    .gap_px()
-                    .px_2()
                     .border_b_1()
                     .border_color(crate::panel_kit::stroke())
-                    .children(
-                        tabs.into_iter()
+                    .child({
+                        let items: Vec<SidebarTab> = tabs
+                            .into_iter()
                             .filter(|item| *item != SidebarTab::Todos || todos_enabled)
-                            .map(|item| {
-                                let selected = tab == item
-                                    || (tab == SidebarTab::Graph && item == SidebarTab::Changes);
-                                let id: SharedString =
-                                    format!("classic-tab-{}", item.label().to_lowercase()).into();
-                                div()
-                                    .id(id.clone())
-                                    .debug_selector(move || id.to_string())
-                                    .role(Role::Tab)
-                                    .aria_label(item.label())
-                                    .aria_selected(selected)
-                                    .focusable()
-                                    .tab_stop(true)
-                                    .h(px(28.))
-                                    .flex_1()
-                                    .min_w_0()
-                                    .relative()
-                                    .flex()
-                                    .items_center()
-                                    .justify_center()
-                                    .rounded(px(radius::CONTROL))
-                                    .text_size(px(12.))
-                                    .font_weight(FontWeight::MEDIUM)
-                                    .text_color(content(if selected { 0.9 } else { 0.5 }))
-                                    .when(selected, |d| d.bg(content(0.1)))
-                                    .hover(|s| s.bg(content(0.08)).text_color(content(1.)))
-                                    .focus(|s| s.bg(content(0.1)).text_color(content(1.)))
-                                    .child(item.label())
-                                    // Keep the cached sidebar's hover fill current,
-                                    // including clicks that arrive without a mouse move.
-                                    .on_hover(cx.listener(|this, _, _, cx| {
-                                        this.sidebar_frame.update(cx, |_, cx| cx.notify())
-                                    }))
-                                    .on_click(cx.listener(move |this, _, window, cx| {
-                                        this.select_classic_sidebar(item, window, cx)
-                                    }))
-                            }),
-                    ),
+                            .collect();
+                        let selected_index = items.iter().position(|item| {
+                            tab == *item
+                                || (tab == SidebarTab::Graph && *item == SidebarTab::Changes)
+                        });
+                        let listener = cx.entity().downgrade();
+                        vorkspace_ui::glide::GlideList::new(
+                            "classic-workspace-tab-glide",
+                            selected_index,
+                            div().size_full().flex().items_center().gap_px().px_2(),
+                            content(0.1),
+                            radius::CONTROL,
+                            move |glide| {
+                                let ready = glide.ready();
+                                items
+                                    .into_iter()
+                                    .enumerate()
+                                    .map(|(index, item)| {
+                                        let selected = selected_index == Some(index);
+                                        let listener = listener.clone();
+                                        let hovered = listener.clone();
+                                        let id: SharedString =
+                                            format!("classic-tab-{}", item.label().to_lowercase())
+                                                .into();
+                                        div()
+                                            .id(id.clone())
+                                            .debug_selector(move || id.to_string())
+                                            .role(Role::Tab)
+                                            .aria_label(item.label())
+                                            .aria_selected(selected)
+                                            .focusable()
+                                            .tab_stop(true)
+                                            .h(px(28.))
+                                            .flex_1()
+                                            .min_w_0()
+                                            .relative()
+                                            .flex()
+                                            .items_center()
+                                            .justify_center()
+                                            .rounded(px(radius::CONTROL))
+                                            .text_size(px(12.))
+                                            .font_weight(FontWeight::MEDIUM)
+                                            .text_color(content(if selected { 0.9 } else { 0.5 }))
+                                            // The glide's thumb draws the selection once it
+                                            // has measured the strip.
+                                            .when(selected && !ready, |d| d.bg(content(0.1)))
+                                            .hover(|s| {
+                                                s.bg(vorkspace_ui::fluid::hover(0.08))
+                                                    .text_color(content(1.))
+                                            })
+                                            .focus(|s| s.bg(content(0.1)).text_color(content(1.)))
+                                            .child(glide.probe(index))
+                                            .child(item.label())
+                                            // Keep the cached sidebar's hover fill current,
+                                            // including clicks that arrive without a mouse move.
+                                            .on_hover(move |_, _, cx| {
+                                                let _ =
+                                                    hovered.update(cx, |this: &mut Shell, cx| {
+                                                        this.sidebar_frame
+                                                            .update(cx, |_, cx| cx.notify())
+                                                    });
+                                            })
+                                            .on_click(move |_, window, cx| {
+                                                let _ =
+                                                    listener.update(cx, |this: &mut Shell, cx| {
+                                                        this.select_classic_sidebar(
+                                                            item, window, cx,
+                                                        )
+                                                    });
+                                            })
+                                            .into_any_element()
+                                    })
+                                    .collect()
+                            },
+                        )
+                    }),
             );
         if tab == SidebarTab::Sessions {
             body = body
@@ -257,7 +292,7 @@ impl Shell {
                                     .rounded(px(radius::CONTROL))
                                     .text_size(px(11.))
                                     .when(tab == item, |d| d.bg(content(0.1)))
-                                    .hover(|s| s.bg(content(0.08)))
+                                    .hover(|s| s.bg(vorkspace_ui::fluid::hover(0.08)))
                                     .child(label)
                                     .on_click(cx.listener(move |this, _, window, cx| {
                                         this.select_classic_sidebar(item, window, cx)

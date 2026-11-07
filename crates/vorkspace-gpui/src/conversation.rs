@@ -781,7 +781,7 @@ fn tool_pill(id: &'static str, label: &'static str) -> gpui::Stateful<gpui::Div>
         .gap_1()
         .bg(content(0.1))
         .text_color(content(1.))
-        .hover(|s| s.bg(content(0.15)))
+        .hover(|s| s.bg(vorkspace_ui::fluid::hover(0.15)))
         .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
 }
 /// The column a composer sits in, shared by sessions and Bots.
@@ -815,7 +815,10 @@ pub(super) fn quiet_control(
         .text_size(px(12.))
         .text_color(content(if open { 1. } else { 0.55 }))
         .when(open, |d| d.bg(content(0.08)))
-        .hover(|s| s.bg(content(0.08)).text_color(content(1.)))
+        .hover(|s| {
+            s.bg(vorkspace_ui::fluid::hover(0.08))
+                .text_color(content(1.))
+        })
         .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
 }
 // GitPickerTrigger: the quiet controls in the bar under the box.

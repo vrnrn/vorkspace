@@ -140,7 +140,9 @@ pub(crate) fn icon_action(
         .justify_center()
         .rounded(px(radius::SMALL))
         .when(!enabled, |d| d.opacity(0.4))
-        .when(enabled, |d| d.hover(|s| s.bg(content(0.1))))
+        .when(enabled, |d| {
+            d.hover(|s| s.bg(vorkspace_ui::fluid::hover(0.1)))
+        })
         .child(
             icon(path, 14.)
                 .text_color(content(0.55))
@@ -150,14 +152,36 @@ pub(crate) fn icon_action(
         )
 }
 
-/// The `animate-spin` Loader.
-pub(crate) fn spinner(id: impl Into<gpui::ElementId>, path: &'static str, side: f32) -> AnyElement {
-    use gpui::{Animation, AnimationExt, Transformation, percentage};
-    icon(path, side)
+/// The busy indicator: fluidither's Loader, three printed cells counting up,
+/// sized to the icon slot it replaces. `_path` names the icon the slot used
+/// to spin, so callers keep describing what is loading.
+pub(crate) fn spinner(
+    id: impl Into<gpui::ElementId>,
+    _path: &'static str,
+    side: f32,
+) -> AnyElement {
+    use gpui::{Animation, AnimationExt};
+    // Three cells and two gaps of the same size fill the slot's width.
+    let cell = (side / 5.).floor().max(2.);
+    div()
+        .size(px(side))
+        .flex_shrink_0()
+        .flex()
+        .items_center()
+        .justify_center()
+        .gap(px(cell))
         .with_animation(
             id,
-            Animation::new(std::time::Duration::from_secs(1)).repeat(),
-            |icon, delta| icon.with_transformation(Transformation::rotate(percentage(delta))),
+            Animation::new(std::time::Duration::from_millis(900)).repeat(),
+            move |row, delta| {
+                let shown = ((delta * 3.).floor() as usize).min(2) + 1;
+                row.children((0..3).map(|index| {
+                    div()
+                        .size(px(cell))
+                        .when(index < shown, |d| d.bg(content(0.6)))
+                        .when(index >= shown, |d| d.bg(vorkspace_ui::fluid::track(0.1)))
+                }))
+            },
         )
         .into_any_element()
 }
@@ -188,6 +212,13 @@ pub(crate) fn diff_stat(
     let added = format_integer(stats.map_or(0, |s| s.additions.max(0)));
     let deleted = format_integer(stats.map_or(0, |s| s.deletions.max(0)));
     let scale = ((width - 18.) / (diff_stat_width(stats) - 18.)).clamp(0.1, 1.);
+    // A clean tree reads as quiet zeros, not as green and red changes.
+    let clean = stats.is_none_or(|s| s.additions <= 0 && s.deletions <= 0);
+    let (add, del) = if clean {
+        (content(0.35), content(0.35))
+    } else {
+        (gpui::rgb(DIFF_ADD).into(), gpui::rgb(DIFF_DEL).into())
+    };
     div()
         .id("project-diff-stat")
         .debug_selector(|| "project-diff-stat".into())
@@ -208,14 +239,16 @@ pub(crate) fn diff_stat(
         .text_size(px(10. * scale))
         .font_weight(FontWeight::MEDIUM)
         .font_features(tabular())
-        .child(
-            div()
-                .text_color(gpui::rgb(DIFF_ADD))
-                .child(format!("+{added}")),
-        )
-        .child(
-            div()
-                .text_color(gpui::rgb(DIFF_DEL))
-                .child(format!("-{deleted}")),
-        )
+        .font_family(vorkspace_ui::fonts::MONO)
+        // The counts roll to each new total rather than jumping.
+        .child(div().text_color(add).child(vorkspace_ui::fluid::Count::new(
+            "project-diff-added",
+            stats.map_or(0, |s| s.additions.max(0)),
+            |n| format!("+{}", format_integer(n)),
+        )))
+        .child(div().text_color(del).child(vorkspace_ui::fluid::Count::new(
+            "project-diff-deleted",
+            stats.map_or(0, |s| s.deletions.max(0)),
+            |n| format!("-{}", format_integer(n)),
+        )))
 }

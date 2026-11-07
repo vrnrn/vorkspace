@@ -507,7 +507,7 @@ impl UsageFooter {
             .bg(content(0.045))
             .border_1()
             .border_color(content(0.06))
-            .hover(|s| s.bg(content(0.08)))
+            .hover(|s| s.bg(vorkspace_ui::fluid::hover(0.08)))
             .cursor_pointer()
             .flex()
             .items_center()
@@ -811,7 +811,7 @@ impl UsageFooter {
             .text_size(px(10.))
             .text_color(content(0.55))
             .cursor_pointer()
-            .hover(|s| s.bg(content(0.1)))
+            .hover(|s| s.bg(vorkspace_ui::fluid::hover(0.1)))
             .child(
                 div()
                     .max_w(gpui::relative(0.6))
@@ -889,7 +889,7 @@ impl UsageFooter {
                     .h(px(6.))
                     .w_full()
                     .rounded_full()
-                    .bg(content(0.1))
+                    .bg(vorkspace_ui::fluid::track(0.1))
                     .overflow_hidden()
                     .child(
                         div()
@@ -1099,7 +1099,11 @@ fn usage_ring(kind: Kind, window: &usage::Window) -> impl IntoElement {
                 let mut stroke = color;
                 stroke.a *= alpha;
                 if let Ok(path) = path.build() {
-                    window.paint_path(path, stroke);
+                    if alpha < 1. {
+                        window.paint_path(path, vorkspace_ui::fluid::ring_track(stroke));
+                    } else {
+                        window.paint_path(path, stroke);
+                    }
                 }
                 if alpha == 1. && amount < 1. {
                     for angle in [
@@ -1239,7 +1243,10 @@ impl Render for UsageFooter {
                             .flex()
                             .items_center()
                             .gap_2()
-                            .hover(|s| s.bg(content(0.08)).text_color(content(1.)))
+                            .hover(|s| {
+                                s.bg(vorkspace_ui::fluid::hover(0.08))
+                                    .text_color(content(1.))
+                            })
                             .child(anchor.probe())
                             .when(self.compact, |d| {
                                 d.children(ring.map(|w| usage_ring(key.kind, w)))

@@ -640,7 +640,7 @@ impl Bots {
                     .items_center()
                     .gap_3()
                     .bg(content(if chosen { 0.08 } else { 0.02 }))
-                    .hover(|s| s.bg(content(0.1)))
+                    .hover(|s| s.bg(vorkspace_ui::fluid::hover(0.1)))
                     .child(avatar::bot_avatar(bot, "idle", 24., true))
                     .child(div().flex_1().child(bot.label()))
                     .child(if chosen { "✓" } else { "" })

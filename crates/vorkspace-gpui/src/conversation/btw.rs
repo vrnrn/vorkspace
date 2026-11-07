@@ -807,8 +807,8 @@ impl Render for Btw {
                             .items_center()
                             .justify_center()
                             .rounded(px(radius::CONTROL))
-                            .hover(|style| style.bg(content(0.1)))
-                            .child(icon("x-mark", 12.))
+                            .hover(|style| style.bg(vorkspace_ui::fluid::hover(0.1)))
+                            .child(icon("x", 12.))
                             .on_click(
                                 cx.listener(move |this, _, _, cx| this.remove(&remove_id, cx)),
                             ),

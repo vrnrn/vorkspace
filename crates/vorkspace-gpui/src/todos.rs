@@ -1658,7 +1658,7 @@ impl TodoBoardView {
             .min_w_0()
             .min_h(px(64.))
             .rounded(px(radius::SURFACE))
-            .drag_over::<DraggedTodo>(|s, _, _, _| s.bg(content(0.04)))
+            .drag_over::<DraggedTodo>(|s, _, _, _| s.bg(vorkspace_ui::fluid::hint(0.04)))
             .on_drop(cx.listener(move |this, dragged: &DraggedTodo, _, cx| {
                 this.move_to(dragged, status, None, cx)
             }))
@@ -2046,7 +2046,7 @@ impl TodosPage {
                     .gap_2()
                     .text_size(px(13.))
                     .when(current, |d| d.bg(content(0.08)))
-                    .hover(|s| s.bg(content(0.08)))
+                    .hover(|s| s.bg(vorkspace_ui::fluid::hover(0.08)))
                     .child(
                         div()
                             .flex_1()

@@ -533,6 +533,13 @@ pub(crate) struct TranscriptView {
     rebuild_passes: usize,
 }
 impl TranscriptView {
+    /// Opens a finished turn's work, as clicking its receipt does. For tests
+    /// in other modules, which cannot reach the fold state.
+    #[cfg(test)]
+    pub(crate) fn open_work(&mut self, turn: usize, cx: &mut Context<Self>) {
+        self.work_folds.insert(turn, true);
+        self.rebuild(turn, cx);
+    }
     /// Drive ordinary callbacks for projection-only tests with no window.
     /// GPUI advancement also runs queued work, so it must be outside App borrows.
     #[cfg(test)]
@@ -1178,7 +1185,7 @@ impl Render for TranscriptView {
                         .relative().flex().items_center().gap(px(6.)).h(px(30.)).px(px(10.))
                         .rounded_full().border_1().border_color(content(0.1))
                         .text_size(px(12.)).line_height(px(16.)).text_color(content(0.8))
-                        .hover(|s| s.text_color(content(1.)).bg(content(0.04)))
+                        .hover(|s| s.text_color(content(1.)).bg(vorkspace_ui::fluid::hover(0.04)))
                         .child(canvas(|_, _, _| {}, |bounds, _, window, _| {
                             window.paint_quad(gpui::fill(bounds, content(0.04)).corner_radii(bounds.size.height / 2.).border_color(
                                 gpui_apple::metal_renderer::backdrop_blur_marker(12. * window.scale_factor())));

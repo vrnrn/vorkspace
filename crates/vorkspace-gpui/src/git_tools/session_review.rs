@@ -179,8 +179,10 @@ fn text_button(id: &'static str, label: &'static str, enabled: bool) -> gpui::St
         .text_color(content(0.5))
         .when(!enabled, |d| d.opacity(0.35))
         .when(enabled, |d| {
-            d.cursor_pointer()
-                .hover(|s| s.bg(content(0.08)).text_color(content(1.)))
+            d.cursor_pointer().hover(|s| {
+                s.bg(vorkspace_ui::fluid::hover(0.08))
+                    .text_color(content(1.))
+            })
         })
         .child(label)
 }
@@ -195,6 +197,7 @@ fn counts(additions: i64, deletions: i64, gap: f32) -> gpui::Div {
         .text_size(px(11.))
         .font_weight(FontWeight::SEMIBOLD)
         .font_features(tabular())
+        .font_family(vorkspace_ui::fonts::MONO)
         .child(
             div()
                 .text_color(rgb(DIFF_ADD))
@@ -344,7 +347,7 @@ impl Render for SessionReview {
                             .font_weight(FontWeight::MEDIUM)
                             .text_color(content(0.75))
                             .cursor_pointer()
-                            .hover(|s| s.bg(content(0.12)).text_color(content(1.)))
+                            .hover(|s| s.bg(vorkspace_ui::fluid::hover(0.12)).text_color(content(1.)))
                             .child("Review")
                             .on_click(cx.listener(|_, _, _, cx| {
                                 cx.emit(SessionReviewEvent::Open { path: None })
@@ -374,7 +377,10 @@ impl Render for SessionReview {
                 .px_3()
                 .cursor_pointer()
                 .text_color(content(0.65))
-                .hover(|s| s.bg(content(0.05)).text_color(content(1.)))
+                .hover(|s| {
+                    s.bg(vorkspace_ui::fluid::hover(0.05))
+                        .text_color(content(1.))
+                })
                 .child(file_type_icon(&name, false, false, 15.))
                 .child(
                     div()
@@ -433,7 +439,10 @@ impl Render for SessionReview {
                         .cursor_pointer()
                         .text_size(px(11.))
                         .text_color(content(0.45))
-                        .hover(|s| s.bg(content(0.05)).text_color(content(0.7)))
+                        .hover(|s| {
+                            s.bg(vorkspace_ui::fluid::hover(0.05))
+                                .text_color(content(0.7))
+                        })
                         .child(
                             icon(
                                 if expanded {

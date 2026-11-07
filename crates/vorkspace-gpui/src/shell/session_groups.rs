@@ -1213,7 +1213,10 @@ impl Shell {
             .gap_2()
             .text_color(content(0.5))
             .when(expanded, |d| d.bg(content(0.05)).text_color(content(0.8)))
-            .hover(|s| s.bg(content(0.1)).text_color(content(1.)))
+            .hover(|s| {
+                s.bg(vorkspace_ui::fluid::hover(0.1))
+                    .text_color(content(1.))
+            })
             .when(drop_target, |d| d.bg(content(0.14)))
             .when(
                 drag_key.as_ref().is_some_and(|id| {
@@ -1442,7 +1445,7 @@ impl Shell {
             div()
                 .absolute()
                 .size_full()
-                .bg(black(0.4))
+                .bg(vorkspace_ui::fluid::scrim(0.4))
                 .child(
                     popover("link-work-item-modal", anchor)
                         .modal_surface(self.workspace.classic_layout)
@@ -1535,7 +1538,7 @@ impl Shell {
                                                         button("link-remove", "Remove link")
                                                             .mr_auto()
                                                             .text_color(rgb(0xf87171))
-                                                            .hover(|s| s.bg(rgba(0xf871711a)))
+                                                            .hover(|s| s.bg(vorkspace_ui::fluid::wash(rgba(0xf871711a).into())))
                                                             .on_click(cx.listener(|this, _, window, cx| {
                                                                 this.save_link(false, window, cx)
                                                             })),
@@ -1543,7 +1546,7 @@ impl Shell {
                                                 })
                                                 .child(
                                                     button("link-cancel", "Cancel")
-                                                        .hover(|s| s.bg(content(0.08)))
+                                                        .hover(|s| s.bg(vorkspace_ui::fluid::hover(0.08)))
                                                         .on_click(cx.listener(|this, _, window, cx| {
                                                             this.close_link_dialog(window, cx)
                                                         })),

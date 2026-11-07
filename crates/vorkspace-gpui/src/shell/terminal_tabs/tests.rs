@@ -62,6 +62,8 @@ fn identical_cwd_terminal_tabs_keep_hover_and_selection_independent(cx: &mut Tes
         .unwrap();
     visual.simulate_click(first_bounds.center(), Default::default());
     visual.run_until_parked();
+    // The selection thumb glides to the clicked tab; check where it lands.
+    vorkspace_ui::clock::settle_animations(window, visual);
     let second_bounds = visual.debug_bounds(title_selector(&second)).unwrap();
     visual.simulate_mouse_move(second_bounds.center(), None, Default::default());
     visual.run_until_parked();

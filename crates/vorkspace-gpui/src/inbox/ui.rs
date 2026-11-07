@@ -369,8 +369,8 @@ impl Inbox {
             (format!("Loading {provider}…"), String::new())
         } else if !connected {
             (
-                format!("Connect {provider}"),
-                "Open Settings → Connectors to connect your account.".into(),
+                format!("{provider} isn't connected"),
+                "Connect your account to see its items here.".into(),
             )
         } else if self.projects.is_empty() && !model::is_tracker(&self.state.source) {
             (
@@ -538,13 +538,42 @@ impl Inbox {
                     .flex_col()
                     .gap(px(4.))
                     .when(rows.is_empty(), |d| {
-                        d.child(page::empty(
-                            provider_mark(&self.state.source)
-                                .size(px(24.))
-                                .text_color(page::secondary_ink()),
-                            empty_title,
-                            empty_detail,
-                        ))
+                        let source = self.state.source.clone();
+                        let can_connect = !connected
+                            && self
+                                .state
+                                .connectors
+                                .enabled_providers()
+                                .any(|p| *p == source);
+                        d.child(
+                            page::empty(
+                                provider_mark(&self.state.source)
+                                    .size(px(24.))
+                                    .text_color(page::secondary_ink()),
+                                empty_title,
+                                empty_detail,
+                            )
+                            // The way out of an unconnected page is one click.
+                            .when(can_connect, |d| {
+                                let label = format!("Connect {provider}");
+                                d.child(
+                                    crate::controls::primary_button(
+                                        "inbox-empty-connect",
+                                        label.clone(),
+                                        false,
+                                    )
+                                    .debug_selector(|| "inbox-empty-connect".into())
+                                    .mt(px(12.))
+                                    .px(px(12.))
+                                    .child(label)
+                                    .on_click(cx.listener(
+                                        move |this, _, _, cx| {
+                                            this.open_connection(source.clone(), cx)
+                                        },
+                                    )),
+                                )
+                            }),
+                        )
                     })
                     .children(rows),
             )

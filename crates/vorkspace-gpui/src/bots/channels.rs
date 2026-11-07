@@ -232,7 +232,7 @@ impl gpui::Render for ChannelLookEditor {
                                                 .border_1()
                                                 .border_color(content(0.14))
                                                 .bg(content(0.06))
-                                                .hover(|s| s.bg(content(0.14)))
+                                                .hover(|s| s.bg(vorkspace_ui::fluid::hover(0.14)))
                                                 .flex()
                                                 .items_center()
                                                 .justify_center()
@@ -257,16 +257,7 @@ impl gpui::Render for ChannelLookEditor {
                                 .flex()
                                 .items_center()
                                 .child(probe.probe())
-                                .child(div().w_full().h(px(4.)).rounded_full().bg(content(0.16)))
-                                .child(
-                                    div()
-                                        .absolute()
-                                        .top(px(1.))
-                                        .left(gpui::relative(fraction * 0.94))
-                                        .size(px(12.))
-                                        .rounded_full()
-                                        .bg(content(1.)),
-                                )
+                                .children(vorkspace_ui::fluid::slider_parts(fraction))
                                 .on_mouse_down(
                                     MouseButton::Left,
                                     cx.listener(|this, event: &gpui::MouseDownEvent, _, cx| {
@@ -335,7 +326,7 @@ impl gpui::Render for ChannelLookEditor {
                                         content(0.15)
                                     })
                                     .bg(content(if bg_active { 0.12 } else { 0.05 }))
-                                    .hover(|s| s.bg(content(0.1)))
+                                    .hover(|s| s.bg(vorkspace_ui::fluid::hover(0.1)))
                                     .flex()
                                     .items_center()
                                     .justify_center()
@@ -373,7 +364,7 @@ impl gpui::Render for ChannelLookEditor {
                                             content(0.15)
                                         })
                                         .bg(content(if fg_active { 0.12 } else { 0.05 }))
-                                        .hover(|s| s.bg(content(0.1)))
+                                        .hover(|s| s.bg(vorkspace_ui::fluid::hover(0.1)))
                                         .flex()
                                         .items_center()
                                         .justify_center()
@@ -405,7 +396,7 @@ impl gpui::Render for ChannelLookEditor {
                                         .border_1()
                                         .border_color(content(0.15))
                                         .bg(content(0.05))
-                                        .hover(|s| s.bg(content(0.12)))
+                                        .hover(|s| s.bg(vorkspace_ui::fluid::hover(0.12)))
                                         .flex()
                                         .items_center()
                                         .justify_center()
@@ -693,7 +684,7 @@ impl Bots {
                             .justify_center()
                             .child(vorkspace_ui::session_mark::color_dots(bg)),
                     )
-                    .hover(|s| s.bg(content(0.08)).opacity(1.))
+                    .hover(|s| s.bg(vorkspace_ui::fluid::hover(0.08)).opacity(1.))
                     .focus(|s| s.bg(content(0.1)).opacity(1.))
                     .child(
                         div()

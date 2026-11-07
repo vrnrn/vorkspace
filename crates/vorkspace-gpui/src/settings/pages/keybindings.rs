@@ -476,8 +476,10 @@ impl SettingsView {
                                         content(0.15)
                                     })
                                     .px(px(6.))
-                                    .font_family(vorkspace_ui::fonts::FIXED_FONT)
-                                    .text_size(px(11.))
+                                    // The system font draws ⌘ ⇧ ⌥ at text size;
+                                    // Obel Mono falls back to a tiny glyph.
+                                    .text_size(px(12.))
+                                    .font_features(crate::panel_kit::tabular())
                                     .text_color(content(if disabled {
                                         0.35
                                     } else if row.fixed {
@@ -487,15 +489,15 @@ impl SettingsView {
                                     }))
                                     .child(label)
                                     .when(!row.fixed, |d| {
-                                        d.cursor_pointer().hover(|s| s.bg(content(0.1))).on_click(
-                                            cx.listener(move |this, _, window, cx| {
+                                        d.cursor_pointer()
+                                            .hover(|s| s.bg(vorkspace_ui::fluid::hover(0.1)))
+                                            .on_click(cx.listener(move |this, _, window, cx| {
                                                 this.recording = Some(command.into());
                                                 this.recording_preview.clear();
                                                 this.recording_error = None;
                                                 window.focus(&this.recorder_focus, cx);
                                                 cx.notify();
-                                            }),
-                                        )
+                                            }))
                                     }),
                             )
                             .when(modified, |d| {
@@ -508,7 +510,7 @@ impl SettingsView {
                                         .p_1()
                                         .rounded(px(radius::CONTROL))
                                         .cursor_pointer()
-                                        .hover(|s| s.bg(content(0.1)))
+                                        .hover(|s| s.bg(vorkspace_ui::fluid::hover(0.1)))
                                         .child(icon("rotate-ccw", 14.))
                                         .on_click(cx.listener(move |this, _, _, cx| {
                                             this.update(cx, |p| {
@@ -523,9 +525,8 @@ impl SettingsView {
                             .w(px(112.))
                             .flex_shrink_0()
                             .truncate()
-                            .font_family(vorkspace_ui::fonts::FIXED_FONT)
-                            .text_size(px(11.))
-                            .text_color(content(0.4))
+                            .text_size(px(12.))
+                            .text_color(content(0.45))
                             .child(row.when),
                     )
                     .into_any_element(),

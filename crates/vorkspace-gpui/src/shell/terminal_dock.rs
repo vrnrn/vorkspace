@@ -516,7 +516,7 @@ impl Shell {
                                             } else {
                                                 0.
                                             })
-                                            .hover(|s| s.bg(content(0.1)))
+                                            .hover(|s| s.bg(vorkspace_ui::fluid::hover(0.1)))
                                             .child(
                                                 icon("x", 12.)
                                                     .text_color(content(0.5))

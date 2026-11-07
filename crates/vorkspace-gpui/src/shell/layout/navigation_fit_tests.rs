@@ -141,6 +141,8 @@ fn the_sidebar_tabs_keep_rounded_highlights_above_their_divider(cx: &mut TestApp
     visual.simulate_click(changes.center(), Default::default());
     visual.simulate_mouse_move(gpui::point(px(5.), px(5.)), None, Default::default());
     visual.run_until_parked();
+    // The thumb glides from Sessions to Changes; once settled it sits on Changes.
+    vorkspace_ui::clock::settle_animations(window, visual);
     assert!(rounded_highlight(
         window,
         "classic-tab-changes",

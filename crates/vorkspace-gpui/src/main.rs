@@ -385,6 +385,7 @@ fn main() {
             }
             cx.set_reduce_motion(vorkspace_macos::accessibility::reduce_motion());
             dev_reload::install(cx);
+            vorkspace_ui::fluid::init(cx);
             vorkspace_macos::updater::start(cx);
             app_menu::init(cx);
             input::bind(cx);

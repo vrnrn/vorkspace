@@ -98,7 +98,7 @@ impl Shell {
             div()
                 .absolute()
                 .size_full()
-                .bg(black(0.35))
+                .bg(vorkspace_ui::fluid::scrim(0.35))
                 .child(
                     popover("quick-open-modal", anchor)
                         .modal_surface(self.workspace.classic_layout)

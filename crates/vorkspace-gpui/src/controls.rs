@@ -6,7 +6,7 @@ use gpui::{
     Context, Div, ElementId, IntoElement, Render, Role, SharedString, Stateful, Window, div,
     prelude::*, px,
 };
-use vorkspace_ui::theme::{accent_color, content, shell_fill};
+use vorkspace_ui::theme::{accent_color, content};
 
 /// GPUI routes Return/Space releases and accessibility clicks through `on_click`.
 /// Do not add a second key handler: it would activate the same command twice.
@@ -89,8 +89,13 @@ fn switch_frame(
         .w(px(width))
         .h(px(height))
         .flex_shrink_0()
-        .rounded_full()
-        .bg(if on { accent_color() } else { content(0.2) })
+        .rounded(px(vorkspace_ui::fluid::SWITCH_RADIUS))
+        // A solid accent track when on, a flat tint when off.
+        .bg(if on {
+            accent_color()
+        } else {
+            vorkspace_ui::fluid::switch_off()
+        })
         .when(enabled, |d| {
             d.focusable()
                 .tab_stop(true)
@@ -112,8 +117,9 @@ fn switch_frame(
                 .top(px(2.))
                 .left(px(if on { width - knob - 2. } else { 2. }))
                 .size(px(knob))
-                .rounded_full()
-                .bg(gpui::white()),
+                // fluidither's knob: a rounded square in the pill.
+                .rounded(px(3.))
+                .bg(vorkspace_ui::fluid::knob(on)),
         )
 }
 
@@ -121,19 +127,8 @@ fn switch_frame(
 pub(crate) struct Tooltip(pub(crate) SharedString);
 impl Render for Tooltip {
     fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
-        let mut background = shell_fill();
-        background.a = 1.;
-        div()
+        vorkspace_ui::fluid::tip()
             .debug_selector(|| "control-tooltip".into())
-            .px_2()
-            .py_1()
-            .rounded(px(radius::CONTROL))
-            .bg(background)
-            .border_1()
-            .border_color(content(0.12))
-            .text_size(px(11.))
-            .line_height(px(16.))
-            .text_color(content(0.85))
             .child(self.0.clone())
     }
 }
@@ -153,13 +148,15 @@ pub(crate) fn secondary_button(
             d.opacity(0.4)
                 .text_color(if danger { red(1.) } else { content(0.7) })
         } else if danger {
-            d.cursor_pointer()
-                .text_color(red(1.))
-                .hover(|s| s.border_color(red(0.4)).bg(red(0.1)))
+            d.cursor_pointer().text_color(red(1.)).hover(|s| {
+                s.border_color(red(0.4))
+                    .bg(vorkspace_ui::fluid::wash(red(0.1)))
+            })
         } else {
-            d.cursor_pointer()
-                .text_color(content(0.7))
-                .hover(|s| s.bg(content(0.1)).text_color(content(1.)))
+            d.cursor_pointer().text_color(content(0.7)).hover(|s| {
+                s.bg(vorkspace_ui::fluid::hover(0.1))
+                    .text_color(content(1.))
+            })
         }
     })
 }
@@ -189,8 +186,7 @@ pub(crate) fn primary_button(
     label: impl Into<SharedString>,
     disabled: bool,
 ) -> Stateful<Div> {
-    let mut ink = shell_fill();
-    ink.a = 1.;
+    let ink = vorkspace_ui::fluid::on_ink();
     button_base(id, label, !disabled)
         .border_0()
         .bg(content(1.))
@@ -225,6 +221,9 @@ pub(crate) fn bot_button(
         .rounded(px(radius::CONTROL))
         .text_size(px(12.))
         .text_color(content(0.8))
-        .hover(|s| s.bg(content(0.08)).text_color(content(1.)))
+        .hover(|s| {
+            s.bg(vorkspace_ui::fluid::hover(0.08))
+                .text_color(content(1.))
+        })
         .child(label)
 }

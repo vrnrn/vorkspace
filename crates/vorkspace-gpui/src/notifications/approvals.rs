@@ -178,17 +178,27 @@ impl Render for ApprovalNotices {
                         super::surface::toast_frame()
                             .id(("approval-toast", ix))
                             .role(Role::Status)
+                            .relative()
+                            .overflow_hidden()
+                            .child(vorkspace_ui::fluid::strip(
+                                vorkspace_ui::theme::status(
+                                    vorkspace_ui::theme::StatusColor::Warning,
+                                    1.,
+                                ),
+                                radius::SURFACE,
+                            ))
                             .child(
                                 div()
                                     .id(("approval-toast-open", ix))
                                     .role(Role::Button)
                                     .cursor_pointer()
-                                    .px(px(14.))
+                                    .pl(px(vorkspace_ui::fluid::STRIP_WIDTH + 10.))
+                                    .pr(px(14.))
                                     .py_3()
                                     .flex()
                                     .flex_col()
                                     .gap_2()
-                                    .hover(|s| s.bg(content(0.05)))
+                                    .hover(|s| s.bg(vorkspace_ui::fluid::hover(0.05)))
                                     .on_click(cx.listener(move |_, _, _, cx| {
                                         cx.emit(Action::OpenSession {
                                             session_id: open_id.clone(),
@@ -209,23 +219,17 @@ impl Render for ApprovalNotices {
                                                     .font_weight(gpui::FontWeight::SEMIBOLD)
                                                     .child(session.title.clone()),
                                             )
-                                            .child(
-                                                div()
-                                                    .flex()
-                                                    .items_center()
-                                                    .gap_1()
-                                                    .text_size(px(11.))
-                                                    .text_color(gpui::rgb(0xffb900))
-                                                    .child(
-                                                        icon("circle-alert", 14.)
-                                                            .text_color(gpui::rgb(0xffb900)),
-                                                    )
-                                                    .child(if input.kind == InputKind::Question {
-                                                        "Question"
-                                                    } else {
-                                                        "Approval"
-                                                    }),
-                                            ),
+                                            .child(vorkspace_ui::fluid::badge(
+                                                if input.kind == InputKind::Question {
+                                                    "Question"
+                                                } else {
+                                                    "Approval"
+                                                },
+                                                vorkspace_ui::theme::status(
+                                                    vorkspace_ui::theme::StatusColor::Warning,
+                                                    1.,
+                                                ),
+                                            )),
                                     )
                                     .child(
                                         div()
@@ -249,7 +253,8 @@ impl Render for ApprovalNotices {
                                         .gap_2()
                                         .border_t_1()
                                         .border_color(content(0.1))
-                                        .px(px(14.))
+                                        .pl(px(vorkspace_ui::fluid::STRIP_WIDTH + 10.))
+                                        .pr(px(14.))
                                         .py(px(10.))
                                         .child(
                                             div()

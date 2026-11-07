@@ -105,9 +105,8 @@ fn switch_setting(label: &str, description: &str, disabled: bool, control: AnyEl
                 .child(
                     div()
                         .text_size(px(12.))
-                        .line_height(px(20.))
-                        .text_color(content(0.4))
-                        .truncate()
+                        .line_height(px(18.))
+                        .text_color(content(0.45))
                         .child(description.to_string()),
                 ),
         )
@@ -143,7 +142,7 @@ fn card() -> Div {
         .flex_col()
 }
 /// botPanelParts' EmptyState: an icon over a short, centred note.
-fn empty_state(glyph: &'static str, message: &str) -> AnyElement {
+pub(super) fn empty_state(glyph: &'static str, message: &str) -> AnyElement {
     div()
         .size_full()
         .flex()
@@ -154,7 +153,10 @@ fn empty_state(glyph: &'static str, message: &str) -> AnyElement {
         .px_6()
         .py_10()
         .text_center()
-        .child(icon(glyph, 18.).text_color(content(0.55)))
+        .child(vorkspace_ui::fluid::empty_mark(
+            icon(glyph, 18.).text_color(content(0.55)),
+            40.,
+        ))
         .child(
             div()
                 .max_w(px(288.))
@@ -296,7 +298,10 @@ impl LookEditor {
                             .border_1()
                             .border_color(content(0.14))
                             .bg(content(0.05))
-                            .hover(|s| s.bg(content(0.1)).border_color(content(0.24)))
+                            .hover(|s| {
+                                s.bg(vorkspace_ui::fluid::hover(0.1))
+                                    .border_color(content(0.24))
+                            })
                             .flex()
                             .items_center()
                             .gap_2()
@@ -345,7 +350,10 @@ impl LookEditor {
                                     .text_size(px(12.))
                                     .text_color(content(if selected { 1. } else { 0.75 }))
                                     .when(selected, |d| d.bg(content(0.12)))
-                                    .hover(|s| s.bg(content(0.08)).text_color(content(1.)))
+                                    .hover(|s| {
+                                        s.bg(vorkspace_ui::fluid::hover(0.08))
+                                            .text_color(content(1.))
+                                    })
                                     .child(*label)
                                     .when(selected, |d| {
                                         d.child(icon("check", 12.).text_color(content(1.)))
@@ -448,7 +456,7 @@ impl LookEditor {
                                                 .border_1()
                                                 .border_color(content(0.14))
                                                 .bg(content(0.06))
-                                                .hover(|s| s.bg(content(0.14)))
+                                                .hover(|s| s.bg(vorkspace_ui::fluid::hover(0.14)))
                                                 .flex()
                                                 .items_center()
                                                 .justify_center()
@@ -473,16 +481,7 @@ impl LookEditor {
                                 .flex()
                                 .items_center()
                                 .child(probe.probe())
-                                .child(div().w_full().h(px(4.)).rounded_full().bg(content(0.16)))
-                                .child(
-                                    div()
-                                        .absolute()
-                                        .top(px(1.))
-                                        .left(gpui::relative(fraction * 0.94))
-                                        .size(px(12.))
-                                        .rounded_full()
-                                        .bg(content(1.)),
-                                )
+                                .children(vorkspace_ui::fluid::slider_parts(fraction))
                                 .on_mouse_down(
                                     MouseButton::Left,
                                     cx.listener(|this, event: &gpui::MouseDownEvent, _, cx| {
@@ -563,7 +562,7 @@ impl LookEditor {
                                 content(0.15)
                             })
                             .bg(content(if bg_active { 0.12 } else { 0.05 }))
-                            .hover(|s| s.bg(content(0.1)))
+                            .hover(|s| s.bg(vorkspace_ui::fluid::hover(0.1)))
                             .flex()
                             .items_center()
                             .justify_center()
@@ -598,7 +597,7 @@ impl LookEditor {
                                     content(0.15)
                                 })
                                 .bg(content(if fg_active { 0.12 } else { 0.05 }))
-                                .hover(|s| s.bg(content(0.1)))
+                                .hover(|s| s.bg(vorkspace_ui::fluid::hover(0.1)))
                                 .flex()
                                 .items_center()
                                 .justify_center()
@@ -627,7 +626,7 @@ impl LookEditor {
                                 .border_1()
                                 .border_color(content(0.15))
                                 .bg(content(0.05))
-                                .hover(|s| s.bg(content(0.12)))
+                                .hover(|s| s.bg(vorkspace_ui::fluid::hover(0.12)))
                                 .flex()
                                 .items_center()
                                 .justify_center()
@@ -720,7 +719,7 @@ impl LookEditor {
                                     .when(selected, |d| {
                                         d.bg(content(0.1)).border_1().border_color(content(0.2))
                                     })
-                                    .hover(|d| d.bg(content(0.06)))
+                                    .hover(|d| d.bg(vorkspace_ui::fluid::hover(0.06)))
                                     .child(avatar::bot_avatar(&preview_bot, "idle", 28., !selected))
                                     .on_click(cx.listener(move |this, _, _, cx| {
                                         this.bot.mascot = (*face_id).into();
@@ -900,7 +899,7 @@ impl Bots {
         .relative()
         .rounded(px(radius::CONTROL))
         .when(active, |d| d.bg(content(0.1)))
-        .hover(|s| s.bg(content(0.08)))
+        .hover(|s| s.bg(vorkspace_ui::fluid::hover(0.08)))
         .child(avatar::minion_avatar(parent, &id, status, 16., false))
         .child(
             div()

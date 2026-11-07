@@ -313,24 +313,14 @@ impl Shell {
             }
             // TabGroupMenu's appearance controls and project actions.
             MenuTarget::Project { path, rail } => {
-                let controls = self.project_appearance_controls(path, events, window, cx);
+                // Customization lives in Project settings; the menu keeps
+                // the actions you reach for from the sidebar.
                 let mut items: Vec<MenuItem> = vec![
-                    MenuItem::Custom(controls.clone().into(), controls.read(cx).focus(cx)),
+                    MenuAction::new("project-settings", "Project settings…")
+                        .icon("settings")
+                        .into(),
                     MenuItem::Separator,
-                    MenuAction::new("background", "Background image")
-                        .icon("image-add")
-                        .into(),
                 ];
-                items.push(
-                    MenuAction::new("codebase-enabled", "Codebase Memory")
-                        .description("Local code index. First use downloads a 48 MB engine.")
-                        .icon("network")
-                        .disabled(vorkspace_core::files::remote::is_remote(
-                            std::path::Path::new(path),
-                        ))
-                        .toggle(crate::codebase::enabled(path, cx))
-                        .into(),
-                );
                 if *rail {
                     let rail = self
                         .workspace
@@ -573,8 +563,20 @@ impl Shell {
                     }
                 } else if let Some(editor) = action.strip_prefix("external-editor:") {
                     self.open_in_external_editor(editor, &path, cx);
+                } else if action == "project-settings" {
+                    self.open_project_settings(
+                        path,
+                        super::project_settings::ProjectSection::Appearance,
+                        window,
+                        cx,
+                    );
                 } else if action == "background" {
-                    self.open_background_dialog(path, window, cx);
+                    self.open_project_settings(
+                        path,
+                        super::project_settings::ProjectSection::Background,
+                        window,
+                        cx,
+                    );
                 } else if action.starts_with("mute:") {
                     self.run_project_notification_menu(&path, action, window, cx);
                 }

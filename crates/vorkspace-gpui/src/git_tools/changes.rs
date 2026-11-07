@@ -980,6 +980,7 @@ impl Changes {
                                 div()
                                     .flex_shrink_0()
                                     .font_features(tabular())
+                                    .font_family(vorkspace_ui::fonts::MONO)
                                     .text_size(px(11.))
                                     .text_color(content(0.4))
                                     .child(format!("↑{}", index.ahead)),
@@ -990,6 +991,7 @@ impl Changes {
                                 div()
                                     .flex_shrink_0()
                                     .font_features(tabular())
+                                    .font_family(vorkspace_ui::fonts::MONO)
                                     .text_size(px(11.))
                                     .text_color(content(0.4))
                                     .child(format!("↓{}", index.behind)),
@@ -1031,7 +1033,9 @@ impl Changes {
                         .child(self.branch_anchor.probe())
                         .when(busy, |d| d.opacity(0.4))
                         .when(menu_open, |d| d.bg(content(0.1)))
-                        .when(!busy && !menu_open, |d| d.hover(|s| s.bg(content(0.05))))
+                        .when(!busy && !menu_open, |d| {
+                            d.hover(|s| s.bg(vorkspace_ui::fluid::hover(0.05)))
+                        })
                         .child(if self.busy.as_deref() == Some("pull") {
                             spinner("pull-spin", "loader", 14.)
                         } else {
@@ -1280,7 +1284,9 @@ impl Changes {
                 .bg(content(0.1))
                 .text_color(content(1.))
                 .when(!enabled, |d| d.opacity(0.4))
-                .when(enabled, |d| d.hover(|s| s.bg(content(0.15))))
+                .when(enabled, |d| {
+                    d.hover(|s| s.bg(vorkspace_ui::fluid::hover(0.15)))
+                })
         };
         let glyph = |path: &'static str| icon(path, 14.).text_color(content(1.)).into_any_element();
         div()
@@ -1316,6 +1322,7 @@ impl Changes {
                                 div()
                                     .flex_shrink_0()
                                     .font_features(tabular())
+                                    .font_family(vorkspace_ui::fonts::MONO)
                                     .text_color(content(0.55))
                                     .child(format!("↓{behind}")),
                             )
@@ -1325,6 +1332,7 @@ impl Changes {
                                 div()
                                     .flex_shrink_0()
                                     .font_features(tabular())
+                                    .font_family(vorkspace_ui::fonts::MONO)
                                     .text_color(content(0.55))
                                     .child(format!("↑{ahead}")),
                             )
@@ -1545,7 +1553,7 @@ impl Changes {
                     .pl(px(8. + depth as f32 * 12.))
                     .pr_2()
                     .text_color(content(1.))
-                    .hover(|s| s.bg(content(0.05)))
+                    .hover(|s| s.bg(vorkspace_ui::fluid::hover(0.05)))
                     .child(
                         div()
                             .id(("change-dir-toggle", ix))
@@ -1673,7 +1681,9 @@ impl Changes {
                     })
                     .text_color(content(1.))
                     .when(active, |d| d.bg(selection()))
-                    .when(!active, |d| d.hover(|s| s.bg(content(0.05))))
+                    .when(!active, |d| {
+                        d.hover(|s| s.bg(vorkspace_ui::fluid::hover(0.05)))
+                    })
                     .child(
                         div()
                             .id(("change-open", ix))

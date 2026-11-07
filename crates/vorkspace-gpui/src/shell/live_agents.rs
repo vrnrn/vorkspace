@@ -419,7 +419,9 @@ impl LiveAgents {
             .cursor(CursorStyle::Arrow)
             .rounded(px(radius::CONTROL))
             .when(agent.selected, |d| d.bg(content(0.1)))
-            .when(!agent.selected, |d| d.hover(|s| s.bg(content(0.08))))
+            .when(!agent.selected, |d| {
+                d.hover(|s| s.bg(vorkspace_ui::fluid::hover(0.08)))
+            })
             .on_click(move |_, window, cx| {
                 let _ = owner.update(cx, |shell, cx| {
                     shell.selected_sessions.clear();
@@ -616,7 +618,7 @@ impl Render for LiveAgents {
                     .flex()
                     .items_center()
                     .justify_center()
-                    .hover(|s| s.bg(content(0.08)))
+                    .hover(|s| s.bg(vorkspace_ui::fluid::hover(0.08)))
                     .child(vorkspace_ui::session_mark::spinner_dots(self.frame_ms()))
                     .on_click(move |_, _, cx| {
                         let _ = owner.update(cx, |shell, cx| {
@@ -752,7 +754,10 @@ impl Render for LiveAgents {
             .py_1p5()
             .text_size(px(11.))
             .text_color(content(0.5))
-            .hover(|s| s.bg(content(0.08)).text_color(content(1.)))
+            .hover(|s| {
+                s.bg(vorkspace_ui::fluid::hover(0.08))
+                    .text_color(content(1.))
+            })
             .child(
                 icon(
                     if expanded {

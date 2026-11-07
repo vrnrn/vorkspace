@@ -970,7 +970,7 @@ impl Render for Completion {
                         } else {
                             content(0.)
                         })
-                        .hover(|s| s.bg(content(0.08)))
+                        .hover(|s| s.bg(vorkspace_ui::fluid::hover(0.08)))
                         .child(
                             div()
                                 .size(px(30.))

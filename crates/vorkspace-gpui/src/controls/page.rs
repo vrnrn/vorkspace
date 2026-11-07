@@ -136,7 +136,9 @@ pub(crate) fn row(
         .border_color(content(0.))
         .cursor_pointer()
         .when(selected, |d| d.bg(content(0.10)))
-        .when(!selected, |d| d.hover(|s| s.bg(content(0.05))))
+        .when(!selected, |d| {
+            d.hover(|s| s.bg(vorkspace_ui::fluid::hover(0.05)))
+        })
 }
 
 pub(crate) fn title() -> Div {
@@ -185,7 +187,18 @@ pub(crate) fn empty(
         .gap(px(4.))
         .text_center()
         .text_color(secondary_ink())
-        .child(div().size(px(24.)).mb(px(4.)).child(icon))
+        .child(
+            vorkspace_ui::fluid::empty_mark(
+                div()
+                    .size(px(24.))
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .child(icon),
+                48.,
+            )
+            .mb(px(8.)),
+        )
         .child(label().font_weight(FontWeight::MEDIUM).child(title.into()))
         .when(!detail.is_empty(), |d| {
             d.child(meta().max_w(px(360.)).child(detail))
@@ -214,8 +227,10 @@ pub(crate) fn action(
         .text_color(content(0.8))
         .whitespace_nowrap()
         .when(enabled, |d| {
-            d.cursor_pointer()
-                .hover(|s| s.bg(content(0.05)).text_color(content(1.)))
+            d.cursor_pointer().hover(|s| {
+                s.bg(vorkspace_ui::fluid::hover(0.05))
+                    .text_color(content(1.))
+            })
         })
         .when(!enabled, |d| d.opacity(0.4))
 }

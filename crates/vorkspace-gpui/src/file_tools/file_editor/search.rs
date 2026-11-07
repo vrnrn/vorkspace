@@ -66,7 +66,7 @@ impl FileEditor {
                 .font_weight(gpui::FontWeight::SEMIBOLD)
                 .text_color(content(if on { 1. } else { 0.6 }))
                 .when(on, |d| d.bg(accent_color().opacity(0.25)))
-                .hover(|s| s.bg(content(0.1)))
+                .hover(|s| s.bg(vorkspace_ui::fluid::hover(0.1)))
                 .child(label)
         };
         div()
@@ -164,7 +164,7 @@ impl FileEditor {
                                         .rounded(px(radius::CONTROL))
                                         .text_size(px(11.))
                                         .text_color(content(0.6))
-                                        .hover(|s| s.bg(content(0.1)))
+                                        .hover(|s| s.bg(vorkspace_ui::fluid::hover(0.1)))
                                         .child("Replace")
                                         .on_click(cx.listener(|this, _, _, cx| {
                                             this.replace_matches(false, cx)
@@ -180,7 +180,7 @@ impl FileEditor {
                                         .rounded(px(radius::CONTROL))
                                         .text_size(px(11.))
                                         .text_color(content(0.6))
-                                        .hover(|s| s.bg(content(0.1)))
+                                        .hover(|s| s.bg(vorkspace_ui::fluid::hover(0.1)))
                                         .child("All")
                                         .on_click(cx.listener(|this, _, _, cx| {
                                             this.replace_matches(true, cx)

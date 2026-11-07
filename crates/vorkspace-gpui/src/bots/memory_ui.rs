@@ -175,7 +175,7 @@ impl Bots {
                                 .h(px(4.))
                                 .rounded_full()
                                 .overflow_hidden()
-                                .bg(content(0.08))
+                                .bg(vorkspace_ui::fluid::track(0.08))
                                 .child(
                                     div()
                                         .h_full()
@@ -290,10 +290,20 @@ impl Bots {
                     .when(
                         files.is_some() && empty && !self.memory_loading && !failed,
                         |d| {
-                            d.child(Self::memory_status(
-                                "Nothing remembered yet",
-                                "bot-memory-empty",
-                            ))
+                            d.child(
+                                div()
+                                    .id("bot-memory-empty")
+                                    .debug_selector(|| "bot-memory-empty".into())
+                                    .min_h(px(240.))
+                                    .flex()
+                                    .child(panels::empty_state(
+                                        "note",
+                                        &format!(
+                                            "Nothing remembered yet. {} keeps what it learns about you and your projects here.",
+                                            bot.label()
+                                        ),
+                                    )),
+                            )
                         },
                     )
                     .children(rows),
@@ -475,7 +485,7 @@ impl Bots {
                     .rounded(px(radius::CONTROL))
                     .flex()
                     .items_center()
-                    .hover(|s| s.bg(content(0.05)))
+                    .hover(|s| s.bg(vorkspace_ui::fluid::hover(0.05)))
                     .child(
                         div()
                             .id(SharedString::from(format!("memory-fact-body-{row_key}")))

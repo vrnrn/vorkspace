@@ -51,7 +51,10 @@ impl TodoBoardView {
             .border_color(content(0.1))
             .bg(content(0.035))
             .cursor_pointer()
-            .hover(|s| s.bg(content(0.065)).border_color(content(0.18)))
+            .hover(|s| {
+                s.bg(vorkspace_ui::fluid::hover(0.065))
+                    .border_color(content(0.18))
+            })
             .focus_visible(|s| s.border_color(accent_color()))
             .drag_over::<DraggedTodo>(|s, _, _, _| s.border_color(accent_color()))
             .on_drop(cx.listener(move |this, dragged: &DraggedTodo, _, cx| {

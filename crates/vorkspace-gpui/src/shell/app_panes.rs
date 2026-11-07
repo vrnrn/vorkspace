@@ -432,15 +432,15 @@ impl Shell {
             Some(AppPane::ConnectorItem(item)) => {
                 Connector::from_id(&item.provider).map_or("inbox", |p| p.icon())
             }
-            Some(AppPane::App(AppView::Notes) | AppPane::Note(_)) => "notepad-text",
+            Some(AppPane::App(AppView::Notes) | AppPane::Note(_)) => "note",
             Some(AppPane::App(AppView::Automations)) => "zap",
-            Some(AppPane::App(AppView::Todos)) => "circle-check",
+            Some(AppPane::App(AppView::Todos)) => "check-circle",
             Some(AppPane::Bot(_)) => "bot",
-            Some(AppPane::BotDocument { .. } | AppPane::Review) => "file-text",
+            Some(AppPane::BotDocument { .. } | AppPane::Review) => "file",
             Some(AppPane::Terminal { .. }) => "terminal",
             Some(AppPane::Codebase) => "network",
             Some(AppPane::Search) => "search",
-            Some(AppPane::Channels) => "messages-square",
+            Some(AppPane::Channels) => "message-multiple",
             _ => "inbox",
         }
     }

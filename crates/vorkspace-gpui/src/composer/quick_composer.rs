@@ -417,7 +417,7 @@ impl Render for QuickComposer {
                                 .py_2()
                                 .rounded(px(radius::CONTROL))
                                 .text_size(px(12.))
-                                .hover(|s| s.bg(content(0.1)))
+                                .hover(|s| s.bg(vorkspace_ui::fluid::hover(0.1)))
                                 .child(mode.label())
                                 .on_click(cx.listener(move |this, _, window, cx| {
                                     this.access = mode;

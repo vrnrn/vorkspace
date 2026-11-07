@@ -192,7 +192,13 @@ pub fn primary_action(enabled: bool) -> Option<(Hsla, Hsla)> {
     if !enabled {
         return Some((accent.opacity(0.28), content(0.35)));
     }
-    let rgb = accent.to_rgb();
+    Some((accent, ink_on(accent)))
+}
+
+/// Black or white, whichever reads better on `fill` (WCAG relative
+/// luminance against the 0.179 crossover).
+pub fn ink_on(fill: Hsla) -> Hsla {
+    let rgb = fill.to_rgb();
     let linear = |value: f32| {
         if value <= 0.04045 {
             value / 12.92
@@ -201,14 +207,11 @@ pub fn primary_action(enabled: bool) -> Option<(Hsla, Hsla)> {
         }
     };
     let luminance = 0.2126 * linear(rgb.r) + 0.7152 * linear(rgb.g) + 0.0722 * linear(rgb.b);
-    Some((
-        accent,
-        if luminance > 0.179 {
-            black(1.)
-        } else {
-            white(1.)
-        },
-    ))
+    if luminance > 0.179 {
+        black(1.)
+    } else {
+        white(1.)
+    }
 }
 
 /// `[data-composer-box]::before` uses content ink at 3% over its backdrop.
@@ -244,6 +247,15 @@ pub fn title_tab_fill(selected: bool, hovered: bool) -> Hsla {
     })
 }
 
+/// The plate's fill, through the fluid owner so every hover reads alike.
+pub fn title_tab_background(selected: bool, hovered: bool) -> gpui::Background {
+    if hovered && !selected {
+        crate::fluid::hover(title_tab_fill(false, true).a)
+    } else {
+        title_tab_fill(selected, hovered).into()
+    }
+}
+
 /// A separate rounded highlight, centred in the title bar.
 /// Headline ink owns inactive dimming; the plate never fades its children.
 pub fn title_tab_plate(selected: bool, hovered: bool) -> Div {
@@ -253,7 +265,7 @@ pub fn title_tab_plate(selected: bool, hovered: bool) -> Div {
         .px_2()
         .flex()
         .items_center()
-        .bg(title_tab_fill(selected, hovered))
+        .bg(title_tab_background(selected, hovered))
 }
 pub fn shell_fill() -> Hsla {
     if let Some(fill) = TOKENS.with(|t| t.borrow().as_ref().map(|t| t.shell)) {

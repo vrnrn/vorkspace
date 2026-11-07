@@ -288,7 +288,10 @@ impl ProjectSearch {
             .rounded(px(radius::SMALL))
             .text_color(content(if active { 1. } else { 0.4 }))
             .when(active, |d| d.bg(content(0.1)))
-            .hover(|s| s.bg(content(0.1)).text_color(content(0.7)))
+            .hover(|s| {
+                s.bg(vorkspace_ui::fluid::hover(0.1))
+                    .text_color(content(0.7))
+            })
             .child(icon(path, 14.))
     }
 
@@ -375,6 +378,7 @@ impl Render for ProjectSearch {
                                     .py(px(2.))
                                     .text_size(px(10.))
                                     .font_features(tabular())
+                                    .font_family(vorkspace_ui::fonts::MONO)
                                     .text_color(accent_color())
                                     .child(group.matches.len().to_string()),
                             ),
@@ -414,7 +418,7 @@ impl Render for ProjectSearch {
                             .gap_2()
                             .px_2()
                             .py_1()
-                            .hover(|s| s.bg(content(0.05)))
+                            .hover(|s| s.bg(vorkspace_ui::fluid::hover(0.05)))
                             .child(
                                 div()
                                     .w(px(28.))
@@ -423,6 +427,7 @@ impl Render for ProjectSearch {
                                     .text_align(gpui::TextAlign::Right)
                                     .font_family("monospace")
                                     .font_features(tabular())
+                                    .font_family(vorkspace_ui::fonts::MONO)
                                     .text_size(px(11.))
                                     .text_color(content(0.35))
                                     .child(matched.source.line.to_string()),
@@ -497,7 +502,10 @@ impl Render for ProjectSearch {
                             .justify_center()
                             .rounded(px(radius::CONTROL))
                             .text_color(content(0.5))
-                            .hover(|s| s.bg(content(0.1)).text_color(content(1.)))
+                            .hover(|s| {
+                                s.bg(vorkspace_ui::fluid::hover(0.1))
+                                    .text_color(content(1.))
+                            })
                             .child(icon("chevron-left", 16.))
                             .on_click(cx.listener(|_, _, _, cx| cx.emit(SearchEvent::Close))),
                     )

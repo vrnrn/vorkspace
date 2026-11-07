@@ -525,7 +525,10 @@ impl SettingsView {
                                 .gap_2()
                                 .text_color(content(0.4))
                                 .cursor_pointer()
-                                .hover(|s| s.bg(content(0.05)).text_color(content(0.7)))
+                                .hover(|s| {
+                                    s.bg(vorkspace_ui::fluid::hover(0.05))
+                                        .text_color(content(0.7))
+                                })
                                 .child(icon("image-add", 20.).text_color(content(0.4)))
                                 .child(div().text_size(px(12.)).child("Choose an image"))
                                 .on_click(cx.listener(|_, _, _, cx| {

@@ -1,6 +1,6 @@
 # Codebase Memory
 
-Codebase Memory makes a local map of your project's code: what symbols exist, where they are, and which functions call each other. It starts turned off. Turn on **Codebase Memory** in a project's settings menu, then use **Codebase** in the sidebar.
+Codebase Memory makes a local map of your project's code: what symbols exist, where they are, and which functions call each other. It starts turned off. Right-click the project, choose **Project settings…**, turn on **Codebase Memory** in the Codebase section, then use **Codebase** in the sidebar.
 
 The first use downloads a roughly 48 MB engine. The app checks that download before running it. Indexing and browsing stay on your Mac. This feature does not change the tools you use in an outside terminal. If you let an agent query code, the excerpts it reads become part of its normal AI conversation.
 

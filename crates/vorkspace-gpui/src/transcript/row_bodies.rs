@@ -148,7 +148,25 @@ impl TranscriptView {
                     .relative()
                     .size(px(14.))
                     .flex_shrink_0()
-                    .when(!open, |d| {
+                    // While the turn works, fluidither's thinking cells
+                    // stand in for the provider mark.
+                    .when(!open && live, |d| {
+                        d.child(
+                            div()
+                                .size_full()
+                                .flex()
+                                .items_center()
+                                .when(expandable, |i| {
+                                    i.group_hover("work-fold", |s| s.opacity(0.))
+                                })
+                                .child(crate::panel_kit::spinner(
+                                    ("live-work-cells", turn),
+                                    "",
+                                    14.,
+                                )),
+                        )
+                    })
+                    .when(!open && !live, |d| {
                         d.child(
                             provider_icon(
                                 self.turns
@@ -536,7 +554,10 @@ impl TranscriptView {
                             .text_size(px(12.))
                             .line_height(px(16.))
                             .text_color(content(0.6))
-                            .hover(|s| s.bg(content(0.08)).text_color(content(1.)))
+                            .hover(|s| {
+                                s.bg(vorkspace_ui::fluid::hover(0.08))
+                                    .text_color(content(1.))
+                            })
                             .child(if collapsed { "Show more" } else { "Show less" })
                             .on_mouse_down(gpui::MouseButton::Left, |_, _, cx| {
                                 cx.stop_propagation()

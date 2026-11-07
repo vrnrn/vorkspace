@@ -686,6 +686,7 @@ impl Conversation {
                         popover("context-tooltip", Anchor::Slot(self.context_anchor.clone()))
                             .side(Side::Top)
                             .align(Align::End)
+                            .tip()
                             .max_width(240.)
                             .padding(10.)
                             .child(
@@ -694,13 +695,13 @@ impl Conversation {
                                     .flex_col()
                                     .text_size(px(12.))
                                     .line_height(px(16.))
-                                    .text_color(content(1.))
+                                    .text_color(vorkspace_ui::fluid::tip_text(1.))
                                     .child(headline)
                                     .when_some(detail, |d, detail| {
                                         d.child(
                                             div()
                                                 .text_size(px(11.))
-                                                .text_color(content(0.5))
+                                                .text_color(vorkspace_ui::fluid::tip_text(0.6))
                                                 .child(detail),
                                         )
                                     }),
@@ -747,12 +748,23 @@ impl Conversation {
                 Some((fill, _)) => d
                     .bg(fill)
                     .when(enabled, |d| d.hover(|s| s.bg(fill.blend(content(0.12))))),
+                // Without an accent the submit is theme ink, like every
+                // primary button, so it reads in light mode as in dark.
                 None => d
-                    .bg(white(if enabled { 1. } else { 0.3 }))
-                    .when(enabled, |d| d.hover(|s| s.bg(white(0.9)))),
+                    .bg(content(if enabled { 1. } else { 0.1 }))
+                    .when(enabled, |d| d.hover(|s| s.bg(content(0.85)))),
             })
             .map(|d| {
-                let ink = accent.map_or(black(if enabled { 1. } else { 0.4 }), |(_, ink)| ink);
+                let ink = accent.map_or_else(
+                    || {
+                        if enabled {
+                            vorkspace_ui::fluid::on_ink()
+                        } else {
+                            content(0.35)
+                        }
+                    },
+                    |(_, ink)| ink,
+                );
                 if busy {
                     d.child(div().size(px(10.)).rounded(px(2.)).bg(ink))
                 } else {
@@ -812,7 +824,17 @@ impl Conversation {
                     .pb(px(6.))
                     .child(div().flex_grow(1.).flex_basis(px(0.)))
                     .when(!docked, |d| {
+                        // A still, printed field above the prompt: the page is
+                        // empty, not blank.
                         d.child(
+                            div()
+                                .flex_shrink_0()
+                                .h(px(132.))
+                                .mx(px(10.))
+                                .mb_6()
+                                .child(vorkspace_ui::fluid::field("empty-session-field")),
+                        )
+                        .child(
                             div()
                                 .id("empty-session-title")
                                 .role(Role::Heading)

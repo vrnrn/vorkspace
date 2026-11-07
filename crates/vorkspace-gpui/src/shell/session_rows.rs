@@ -333,7 +333,10 @@ impl Shell {
                     .font_weight(FontWeight::SEMIBOLD)
                     .text_color(content(1.))
             })
-            .child(session.display_title());
+            .child(vorkspace_ui::fluid::Scramble::new(
+                ("session-title-scramble", id as usize),
+                session.display_title(),
+            ));
         let badges = div()
             .flex()
             .items_center()
@@ -508,7 +511,14 @@ impl Shell {
             .items_center()
             .when(active, |d| d.bg(content(0.1)))
             .when(started_in_view && !active, |d| d.bg(content(0.05)))
-            .hover(|s| s.bg(content(if active { 0.1 } else { 0.05 })))
+            .hover(|s| {
+                // The selection keeps its stronger fill while hovered.
+                if active {
+                    s.bg(content(0.1))
+                } else {
+                    s.bg(vorkspace_ui::fluid::hover(0.05))
+                }
+            })
             .when(
                 self.sidebar_drop == Some(session_groups::ListDrop::Session(id)),
                 |d| d.bg(content(0.14)),
@@ -591,7 +601,7 @@ impl Shell {
             } else {
                 1.
             })
-            .hover(|s| s.bg(content(0.1)))
+            .hover(|s| s.bg(vorkspace_ui::fluid::hover(0.1)))
             .child(
                 icon("archive", 12.).group_hover("session-archive", |s| s.text_color(content(1.))),
             )

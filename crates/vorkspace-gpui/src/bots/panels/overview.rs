@@ -202,7 +202,7 @@ impl Bots {
                                 gpui::transparent_black()
                             })
                             .when(state.is_some_and(|s| s.needs_input), |d| d.bg(content(0.2)))
-                            .hover(|s| s.bg(content(0.05)))
+                            .hover(|s| s.bg(vorkspace_ui::fluid::hover(0.05)))
                             .when(state.is_none(), |d| d.opacity(0.5))
                             .flex()
                             .flex_col()
@@ -344,7 +344,7 @@ impl Bots {
                     .rounded(px(radius::CONTROL))
                     .px_2()
                     .py_2()
-                    .hover(|s| s.bg(content(0.05)))
+                    .hover(|s| s.bg(vorkspace_ui::fluid::hover(0.05)))
                     .child(
                         div()
                             .size(px(28.))

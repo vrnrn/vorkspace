@@ -262,7 +262,10 @@ impl RemoteProjectPicker {
             .text_size(px(12.))
             .text_color(content(0.75))
             .cursor_pointer()
-            .hover(|s| s.bg(content(0.08)).text_color(content(1.)))
+            .hover(|s| {
+                s.bg(vorkspace_ui::fluid::hover(0.08))
+                    .text_color(content(1.))
+            })
             .child(icon("folder", 14.).text_color(content(0.45)))
             .child(div().min_w_0().flex_1().truncate().child(name))
             .child(icon("chevron-right", 12.).text_color(content(0.3)))
@@ -522,7 +525,7 @@ impl Shell {
             div()
                 .absolute()
                 .size_full()
-                .bg(black(0.3))
+                .bg(vorkspace_ui::fluid::scrim(0.3))
                 .child(
                     popover("remote-project-modal", anchor)
                         .modal_surface(self.workspace.classic_layout)

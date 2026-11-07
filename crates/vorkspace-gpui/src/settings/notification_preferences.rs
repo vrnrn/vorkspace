@@ -1115,7 +1115,8 @@ impl SettingsView {
                                     d.bg(content(0.1)).border_1().border_color(content(0.2))
                                 })
                                 .when(!disabled, |d| {
-                                    d.cursor_pointer().hover(|s| s.bg(content(0.05)))
+                                    d.cursor_pointer()
+                                        .hover(|s| s.bg(vorkspace_ui::fluid::hover(0.05)))
                                 })
                                 .child(date.day().to_string())
                                 .on_click(cx.listener(move |this, _, _, cx| {

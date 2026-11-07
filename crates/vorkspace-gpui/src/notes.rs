@@ -998,7 +998,7 @@ impl Notes {
                         .py_1p5()
                         .rounded(px(radius::CONTAINER))
                         .text_size(px(12.))
-                        .hover(|style| style.bg(content(0.08)))
+                        .hover(|style| style.bg(vorkspace_ui::fluid::hover(0.08)))
                         .child("No project")
                         .on_click(cx.listener(|this, _, _, cx| this.move_project("~".into(), cx))),
                 )
@@ -1017,7 +1017,7 @@ impl Notes {
                                 .py_1p5()
                                 .rounded(px(radius::CONTAINER))
                                 .text_size(px(12.))
-                                .hover(|style| style.bg(content(0.08)))
+                                .hover(|style| style.bg(vorkspace_ui::fluid::hover(0.08)))
                                 .child(name)
                                 .child(
                                     div()

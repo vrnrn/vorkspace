@@ -10,6 +10,7 @@ The root Cargo workspace owns the desktop app, its background helper, and the sh
 - Node.js 24 or newer.
 - Xcode with macOS 26 or newer platform components, for Metal and for `xcrun swiftc`, which compiles the clipboard panel and native speech bridge.
 - [`cargo-nextest`](https://nexte.st) to run Rust tests: `cargo install --locked cargo-nextest`.
+- A checkout of [fluidither](https://github.com/vrnrn/fluidither) beside this repository at `../fluidither-gpui-pre`, on a branch with the `pre` feature. `vorkspace-ui` builds its GPUI crate against this workspace's GPUI fork and uses it for dither, springs and Obel Mono (see `DESIGN.md`).
 
 `npm ci` installs the build and test tools. The app itself needs no JavaScript dependencies to compile, so you can skip that step when you only want to run it.
 
@@ -77,7 +78,7 @@ npm run check
 
 The editor and formatter bundles are committed under `crates/vorkspace-gpui/assets/`; the Vox audio bundle lives under `crates/vorkspace-core/assets/`. Their maintained sources live in `embedded/editor` and `embedded/vox`. These files are embedded, so Cargo can compile without installing JavaScript dependencies. `npm run assets` installs the separate editor generator dependencies and rebuilds these bundles. Root npm dependencies are build/test tools only.
 
-The GPUI fork and a patched `block` crate live in `vendor/` and are edited directly. `cargo clippy` with `-D warnings` doesn't cover them, so check that a rebuild stays free of warnings after changing one. `npm run test:rust` runs the `block` tests separately because that crate sits outside the workspace.
+The GPUI fork and a patched `block` crate live in `vendor/` and are edited directly. The fork adds a `dither` background (`Background::Dither`, a 4×4 Bayer pattern in the Metal quad shader) that `vorkspace_ui::fluid` owns. `cargo clippy` with `-D warnings` doesn't cover them, so check that a rebuild stays free of warnings after changing one. `npm run test:rust` runs the `block` tests separately because that crate sits outside the workspace.
 
 In a new linked worktree, run `npm run worktree:seed` before the first build. To have Vorkspace do this for its own worktrees, set the project's setup command to `npm run worktree:seed` under **Settings → Worktrees**. It clones the main checkout's Cargo target directory, honoring `CARGO_TARGET_DIR`, with APFS copy-on-write, so the clone is instant and takes no extra disk, and only workspace and vendored crates rebuild.
 

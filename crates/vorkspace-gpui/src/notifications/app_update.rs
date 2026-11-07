@@ -146,7 +146,10 @@ impl Render for InstalledUpdateNotice {
                     .items_center()
                     .justify_center()
                     .text_color(content(0.45))
-                    .hover(|s| s.bg(content(0.08)).text_color(content(1.)))
+                    .hover(|s| {
+                        s.bg(vorkspace_ui::fluid::hover(0.08))
+                            .text_color(content(1.))
+                    })
                     .on_click(cx.listener(|_, _, _, cx| cx.emit(AppUpdateEvent::Dismiss)))
                     .child(icon("x", 14.)),
             )

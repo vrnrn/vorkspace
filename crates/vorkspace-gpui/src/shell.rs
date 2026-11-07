@@ -19,6 +19,10 @@ mod classic_sidebar;
 mod external_editor;
 mod file_panes;
 #[cfg(test)]
+mod fluid_capture_tests;
+#[cfg(test)]
+mod glide_tests;
+#[cfg(test)]
 mod hover_cursor_tests;
 mod idle_agents;
 #[cfg(test)]
@@ -598,6 +602,9 @@ pub(crate) struct Shell {
     quit_prompted: bool,
     pub(crate) menu: Option<ShellMenu>,
     background_dialog: Option<project_settings::OpenBackground>,
+    /// Project settings: one project's appearance, background, Codebase
+    /// Memory and notifications, in the same dialog frame as a Bot's.
+    pub(super) project_dialog: Option<project_settings::ProjectDialog>,
     backgrounds: HashMap<i64, Entity<crate::project_background::ProjectBackground>>,
     background_card: AnchorSlot,
     /// Each project's working grid in the rail, by project path.
@@ -741,6 +748,7 @@ impl Shell {
         sidebar_metadata: vorkspace_core::store::SessionSidebarMetadata,
         cx: &mut Context<Self>,
     ) -> Self {
+        vorkspace_ui::fluid::init(cx);
         crate::accounts::install(store.clone(), cx);
         crate::codebase::install(store.clone(), cx);
         if let Some(owner) = crate::codebase::get(cx) {
@@ -977,6 +985,7 @@ impl Shell {
             quit_prompted: false,
             menu: None,
             background_dialog: None,
+            project_dialog: None,
             backgrounds: HashMap::new(),
             background_card: AnchorSlot::default(),
             project_marks: HashMap::new(),
@@ -2986,6 +2995,7 @@ impl Render for Shell {
             }))
             .children(self.drag_ghost(cx))
             .children(self.background_modal(window, cx))
+            .children(self.project_settings_modal(window, cx))
             .children(
                 self.bots
                     .clone()

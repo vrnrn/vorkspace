@@ -8,6 +8,24 @@ pub(super) fn rounded_highlight(
     alpha: f32,
     visual: &mut gpui::VisualTestContext,
 ) -> bool {
+    rounded_background(
+        window,
+        selector,
+        |background| {
+            background
+                .as_solid()
+                .is_some_and(|color| (color.a - alpha).abs() < 0.001)
+        },
+        visual,
+    )
+}
+
+fn rounded_background(
+    window: WindowHandle<Shell>,
+    selector: &str,
+    matches: impl Fn(&gpui::Background) -> bool,
+    visual: &mut gpui::VisualTestContext,
+) -> bool {
     let bounds = visual
         .debug_bounds(Box::leak(selector.to_owned().into_boxed_str()))
         .unwrap_or_else(|| panic!("{selector} is visible"));
@@ -19,10 +37,7 @@ pub(super) fn rounded_highlight(
                     && (quad.bounds.top().0 - bounds.top().as_f32() * scale).abs() < 0.5
                     && (quad.bounds.size.width.0 - bounds.size.width.as_f32() * scale).abs() < 0.5
                     && (quad.bounds.size.height.0 - bounds.size.height.as_f32() * scale).abs() < 0.5
-                    && quad
-                        .background
-                        .as_solid()
-                        .is_some_and(|color| (color.a - alpha).abs() < 0.001)
+                    && matches(&quad.background)
                     && [
                         quad.corner_radii.top_left,
                         quad.corner_radii.top_right,
@@ -777,7 +792,7 @@ fn header_menu_switches_projects_from_its_picker_flyout(cx: &mut TestAppContext)
         .unwrap();
 }
 #[gpui::test]
-fn project_appearance_menu_edits_and_background_dialog_persist_per_project(
+fn project_settings_edit_appearance_and_background_and_persist_per_project(
     cx: &mut TestAppContext,
 ) {
     use vorkspace_core::project_appearance::{Background, COLORS, Effect, Scope};
@@ -787,90 +802,9 @@ fn project_appearance_menu_edits_and_background_dialog_persist_per_project(
         crate::popover::bind(cx);
         vorkspace_ui::clock::use_test_clock(cx);
     });
+    // The project menu keeps actions; customization opens Project settings.
     window
         .update(cx, |shell, w, cx| {
-            let anchor = Anchor::Slot(shell.project_anchor.clone());
-            shell.open_menu(MenuTarget::Header, anchor, w, cx);
-        })
-        .unwrap();
-    cx.run_until_parked();
-    // The settings flyout opens beside the header menu and focuses its name.
-    cx.simulate_keystrokes(window.into(), "down down right");
-    cx.run_until_parked();
-    cx.simulate_input(window.into(), "Small");
-    cx.simulate_keystrokes(window.into(), "space");
-    cx.simulate_input(window.into(), "Studio");
-    cx.run_until_parked();
-    let visual = &mut gpui::VisualTestContext::from_window(window.into(), cx);
-    let flyout = window
-        .update(visual, |shell, _, cx| {
-            shell
-                .menu
-                .as_ref()
-                .unwrap()
-                .menu
-                .read(cx)
-                .submenu_region()
-                .get()
-                .unwrap()
-        })
-        .unwrap();
-    let controls = visual.debug_bounds("project-appearance-controls").unwrap();
-    let name = visual.debug_bounds("project-appearance-name").unwrap();
-    let logo = visual.debug_bounds("choose-project-logo").unwrap();
-    // TabGroupMenu's p-2 belongs to the whole card, including its actions.
-    for inset in [
-        controls.left() - flyout.left(),
-        flyout.right() - controls.right(),
-        name.top() - flyout.top(),
-    ] {
-        assert_eq!(inset, px(9.), "8px of padding inside the card's 1px frame");
-    }
-    assert_eq!(name.left(), controls.left());
-    assert_eq!(logo.left() - controls.left(), px(2.));
-    assert_eq!(logo.top() - name.bottom(), px(8.));
-    assert_eq!(logo.size, gpui::size(px(36.), px(36.)));
-    let background = visual.debug_bounds("menu-action-background").unwrap();
-    assert_eq!(background.left() - flyout.left(), px(9.));
-    assert_eq!(flyout.right() - background.right(), px(9.));
-    let color = visual
-        .debug_bounds("project-color-4")
-        .expect("appearance controls in the flyout");
-    visual.simulate_click(color.center(), Default::default());
-    visual.run_until_parked();
-    vorkspace_ui::clock::settle_animations(window, visual);
-    let grid_slider = visual.debug_bounds("project-grid-slider").unwrap();
-    let click_x = grid_slider.left() + grid_slider.size.width * (4. / 6.);
-    visual.simulate_click(
-        gpui::point(click_x, grid_slider.center().y),
-        Default::default(),
-    );
-    visual.run_until_parked();
-    vorkspace_ui::clock::settle_animations(window, visual);
-    visual.simulate_keystrokes("escape");
-    visual.run_until_parked();
-    vorkspace_ui::clock::settle_animations(window, visual);
-    window
-        .update(visual, |shell, w, cx| {
-            assert!(shell.menu.is_none());
-            assert_eq!(shell.project_label("/work/vorkspace"), "Small Studio");
-            let appearance = shell
-                .workspace
-                .project_appearance
-                .get_mut("/work/vorkspace")
-                .unwrap();
-            assert_eq!(appearance.color, Some(COLORS[4]));
-            assert_eq!(appearance.grid, Some(6));
-            appearance.background = Some(Background {
-                path: concat!(env!("CARGO_MANIFEST_DIR"), "/assets/vorkspace.png").into(),
-                ..Default::default()
-            });
-            assert!(
-                !shell
-                    .workspace
-                    .project_appearance
-                    .contains_key("/work/another-project")
-            );
             shell.open_menu(
                 MenuTarget::Project {
                     path: "/work/vorkspace".into(),
@@ -882,62 +816,95 @@ fn project_appearance_menu_edits_and_background_dialog_persist_per_project(
             );
         })
         .unwrap();
+    cx.run_until_parked();
+    let visual = &mut gpui::VisualTestContext::from_window(window.into(), cx);
+    vorkspace_ui::clock::settle_animations(window, visual);
+    assert!(visual.debug_bounds("project-appearance-controls").is_none());
+    assert!(visual.debug_bounds("menu-action-background").is_none());
+    let open = visual
+        .debug_bounds("menu-action-project-settings")
+        .expect("Project settings in the project menu");
+    visual.simulate_click(open.center(), Default::default());
     visual.run_until_parked();
     vorkspace_ui::clock::settle_animations(window, visual);
-    let card = window
-        .update(visual, |shell, _, cx| {
-            let menu = shell.menu.as_ref().unwrap().menu.read(cx);
-            menu.surface_region().get().unwrap()
+    window
+        .update(visual, |shell, _, _| {
+            assert!(shell.menu.is_none());
+            assert!(shell.project_dialog.is_some());
         })
         .unwrap();
-    let background_row = visual.debug_bounds("menu-action-background").unwrap();
-    let last_row = visual.debug_bounds("menu-action-delete").unwrap();
-    assert_eq!(background_row.left() - card.left(), px(9.));
-    assert_eq!(card.right() - background_row.right(), px(9.));
-    assert_eq!(background_row.size.height, px(32.));
-    assert_eq!(card.bottom() - last_row.bottom(), px(9.));
-    visual.simulate_click(background_row.center(), Default::default());
+    assert!(visual.debug_bounds("project-settings-dialog").is_some());
+    // Appearance opens first, with its name field focused and selected.
+    visual.simulate_input("Small Studio");
+    visual.run_until_parked();
+    let color = visual
+        .debug_bounds("project-color-4")
+        .expect("appearance controls in Project settings");
+    visual.simulate_click(color.center(), Default::default());
+    visual.run_until_parked();
+    vorkspace_ui::clock::settle_animations(window, visual);
+    let grid_slider = visual.debug_bounds("project-grid-slider").unwrap();
+    let click_x = grid_slider.left() + grid_slider.size.width * (4. / 6.);
+    visual.simulate_click(
+        gpui::point(click_x, grid_slider.center().y),
+        Default::default(),
+    );
+    visual.run_until_parked();
+    vorkspace_ui::clock::settle_animations(window, visual);
+    window
+        .update(visual, |shell, _, _| {
+            assert_eq!(shell.project_label("/work/vorkspace"), "Small Studio");
+            let appearance = &shell.workspace.project_appearance["/work/vorkspace"];
+            assert_eq!(appearance.color, Some(COLORS[4]));
+            assert_eq!(appearance.grid, Some(6));
+            assert!(
+                !shell
+                    .workspace
+                    .project_appearance
+                    .contains_key("/work/another-project")
+            );
+        })
+        .unwrap();
+    // A section built after another's edits starts from the saved
+    // appearance, so its own saves keep those edits.
+    let background_tab = visual.debug_bounds("project-settings-background").unwrap();
+    visual.simulate_click(background_tab.center(), Default::default());
     visual.run_until_parked();
     vorkspace_ui::clock::settle_animations(window, visual);
     assert!(visual.debug_bounds("project-background-dialog").is_some());
-    let dialog = visual.debug_bounds("project-background-dialog").unwrap();
-    let header = visual.debug_bounds("background-dialog-header").unwrap();
-    let preview = visual.debug_bounds("background-dialog-preview").unwrap();
-    let change = visual
-        .debug_bounds("project-settings-Change image")
+    assert!(
+        visual.debug_bounds("background-dialog-header").is_none(),
+        "the dialog supplies the title"
+    );
+    window
+        .update(visual, |shell, w, cx| {
+            shell
+                .workspace
+                .project_appearance
+                .get_mut("/work/vorkspace")
+                .unwrap()
+                .background = Some(Background {
+                path: concat!(env!("CARGO_MANIFEST_DIR"), "/assets/vorkspace.png").into(),
+                ..Default::default()
+            });
+            shell.open_project_settings(
+                "/work/vorkspace".into(),
+                super::project_settings::ProjectSection::Background,
+                w,
+                cx,
+            );
+        })
         .unwrap();
-    let effect = visual.debug_bounds("background-effect-row").unwrap();
-    let scope = visual.debug_bounds("background-scope-row").unwrap();
-    let scope_control = visual.debug_bounds("background-scope-control").unwrap();
-    let empty_row = visual.debug_bounds("background-empty-row").unwrap();
-    let session_row = visual.debug_bounds("background-session-row").unwrap();
-    let remove = visual
-        .debug_bounds("project-settings-Remove background image")
-        .unwrap();
-    // Modal.tsx + ProjectBackgroundDialog.tsx: match the React box metrics.
-    assert_eq!(dialog.size.width, px(418.));
-    assert_eq!(preview.size, gpui::size(px(386.), px(162.)));
-    assert_eq!(preview.left() - dialog.left(), px(16.));
-    assert_eq!(preview.top() - header.bottom(), px(16.));
-    assert_eq!(change.top() - preview.bottom(), px(8.));
-    assert_eq!(change.size.height, px(32.));
-    assert_eq!(effect.size.height, px(57.5));
-    assert_eq!(scope_control.size, gpui::size(px(176.), px(32.)));
-    for (before, after) in [
-        (effect, scope),
-        (scope, empty_row),
-        (empty_row, session_row),
-        (session_row, remove),
-    ] {
-        assert_eq!(after.top() - before.bottom(), px(20.));
-    }
-    assert_eq!(dialog.bottom() - remove.bottom(), px(16.));
+    visual.run_until_parked();
+    vorkspace_ui::clock::settle_animations(window, visual);
     window
         .update(visual, |_, w, _| {
             assert_eq!(
                 w.painted_quads()
                     .iter()
-                    .filter(|q| q.background == content(0.15).into()
+                    // Both sliders' tracks print as the dotted fluid track.
+                    .filter(|q| format!("{:?}", q.background)
+                        .starts_with(&format!("Dither({:?}, tone 0.25,", content(0.6)))
                         && q.bounds.size.width.0 == 172. * w.scale_factor()
                         && q.bounds.size.height.0 == 4. * w.scale_factor())
                     .count(),
@@ -946,16 +913,6 @@ fn project_appearance_menu_edits_and_background_dialog_persist_per_project(
         })
         .unwrap();
     let effect_trigger = visual.debug_bounds("project-background-effect").unwrap();
-    assert_eq!(effect_trigger.size, gpui::size(px(144.), px(36.)));
-    assert_eq!(effect_trigger.right(), preview.right());
-    visual.simulate_click(effect_trigger.center(), Default::default());
-    visual.run_until_parked();
-    vorkspace_ui::clock::settle_animations(window, visual);
-    visual.simulate_keystrokes("escape");
-    visual.run_until_parked();
-    vorkspace_ui::clock::settle_animations(window, visual);
-    assert!(visual.debug_bounds("project-background-dialog").is_some());
-    assert!(visual.debug_bounds("project-settings-Haze").is_none());
     visual.simulate_click(effect_trigger.center(), Default::default());
     visual.run_until_parked();
     vorkspace_ui::clock::settle_animations(window, visual);
@@ -972,10 +929,11 @@ fn project_appearance_menu_edits_and_background_dialog_persist_per_project(
     vorkspace_ui::clock::settle_animations(window, visual);
     window
         .update(visual, |shell, _, _| {
-            let background = shell.workspace.project_appearance["/work/vorkspace"]
-                .background
-                .as_ref()
-                .unwrap();
+            let appearance = &shell.workspace.project_appearance["/work/vorkspace"];
+            // The background section kept the appearance section's edits.
+            assert_eq!(appearance.color, Some(COLORS[4]));
+            assert_eq!(appearance.grid, Some(6));
+            let background = appearance.background.as_ref().unwrap();
             assert_eq!(background.effect, Effect::GradientBlur);
             assert_eq!(background.scope, Scope::Empty);
             assert!((background.empty_opacity - 0.36).abs() < 0.001);
@@ -995,7 +953,7 @@ fn project_appearance_menu_edits_and_background_dialog_persist_per_project(
     vorkspace_ui::clock::settle_animations(window, visual);
     window
         .update(visual, |shell, _, _| {
-            assert!(shell.background_dialog.is_none())
+            assert!(shell.project_dialog.is_none())
         })
         .unwrap();
     assert!(visual.debug_bounds("project-chat-background").is_some());
@@ -1012,16 +970,22 @@ fn project_appearance_menu_edits_and_background_dialog_persist_per_project(
     visual.run_until_parked();
     vorkspace_ui::clock::settle_animations(window, visual);
     assert!(visual.debug_bounds("project-chat-background").is_none());
+    // A short window still fits the whole dialog.
     visual.simulate_resize(gpui::size(px(820.), px(520.)));
     window
         .update(visual, |shell, w, cx| {
-            shell.open_background_dialog("/work/vorkspace".into(), w, cx);
+            shell.open_project_settings(
+                "/work/vorkspace".into(),
+                super::project_settings::ProjectSection::Background,
+                w,
+                cx,
+            );
         })
         .unwrap();
     visual.run_until_parked();
     vorkspace_ui::clock::settle_animations(window, visual);
-    let compact = visual.debug_bounds("project-background-dialog").unwrap();
-    let body = visual.debug_bounds("background-dialog-body").unwrap();
+    let compact = visual.debug_bounds("project-settings-dialog").unwrap();
+    let body = visual.debug_bounds("project-settings-body").unwrap();
     assert!(compact.top() >= px(16.));
     assert!(compact.bottom() <= px(504.));
     assert!(body.bottom() <= compact.bottom());
@@ -2523,7 +2487,7 @@ fn many_blank_tabs_fit_without_creating_sidebar_conversations(cx: &mut TestAppCo
         .unwrap();
     cx.run_until_parked();
 }
-fn same_project_window(cx: &mut TestAppContext) -> (WindowHandle<Shell>, i64, i64) {
+pub(super) fn same_project_window(cx: &mut TestAppContext) -> (WindowHandle<Shell>, i64, i64) {
     let (window, a, b) = window(cx);
     window
         .update(cx, |shell, _, cx| {
@@ -4197,13 +4161,9 @@ fn settled_title_does_not_schedule_decorative_redraws(cx: &mut TestAppContext) {
         .unwrap();
     cx.run_until_parked();
     cx.refresh().unwrap();
-    // Settle the title-change layout before measuring idle redraw work.
-    cx.update_window(window.into(), |_, window, cx| {
-        window.simulate_next_frame(cx);
-        window.draw(cx).clear(cx);
-    })
-    .unwrap();
-    cx.run_until_parked();
+    // Settle the title-change layout, and the new title's 0.7 s scramble,
+    // before measuring idle redraw work.
+    vorkspace_ui::clock::settle_animations(window, cx);
     let (sidebar, tabs, transcript) = window
         .read_with(cx, |shell, cx| {
             (

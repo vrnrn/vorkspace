@@ -120,7 +120,10 @@ impl SettingsView {
                             .when(busy, |d| d.opacity(0.4))
                             .when(!busy, |d| {
                                 d.cursor_pointer()
-                                    .hover(|s| s.bg(content(0.1)).text_color(content(1.)))
+                                    .hover(|s| {
+                                        s.bg(vorkspace_ui::fluid::hover(0.1))
+                                            .text_color(content(1.))
+                                    })
                                     .on_click(cx.listener(|this, _, window, cx| {
                                         this.close_management(window, cx)
                                     }))

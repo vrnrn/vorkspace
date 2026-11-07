@@ -84,8 +84,10 @@ pub(super) fn icon_action(
         .text_color(content(alpha))
         .when(disabled, |d| d.opacity(0.4))
         .when(!disabled, |d| {
-            d.cursor_pointer()
-                .hover(|s| s.bg(content(0.1)).text_color(content(1.)))
+            d.cursor_pointer().hover(|s| {
+                s.bg(vorkspace_ui::fluid::hover(0.1))
+                    .text_color(content(1.))
+            })
         })
         .child(
             icon(path, icon_side)
@@ -342,48 +344,77 @@ impl SettingsView {
         cx: &mut Context<Self>,
         change: impl Fn(&mut Self, &'static str, &mut Context<Self>) + Clone + 'static,
     ) -> AnyElement {
+        let selected = options.iter().position(|&(option, _)| value == option);
+        let options: Vec<(&'static str, String)> = options
+            .iter()
+            .map(|&(option, text)| (option, text.to_owned()))
+            .collect();
+        let columns = options.len() as u16;
+        let entity = cx.entity().downgrade();
         div()
             .id(SharedString::from(format!("segmented-{id}")))
             .role(Role::RadioGroup)
             .aria_label(label)
-            .grid()
-            .grid_cols(options.len() as u16)
             .flex_shrink_0()
-            .gap(px(2.))
-            .rounded(px(radius::CONTROL))
-            .border_1()
-            .border_color(content(0.1))
-            .p(px(2.))
-            .text_size(px(12.))
-            .line_height(px(16.))
-            .children(options.iter().map(|&(option, text)| {
-                let selected = value == option;
-                let change = change.clone();
+            // The selection is one thumb that slides between the options.
+            .child(vorkspace_ui::glide::GlideList::new(
+                SharedString::from(format!("segmented-glide-{id}")),
+                selected,
                 div()
-                    .id(SharedString::from(format!("segmented-{id}-{option}")))
-                    .debug_selector(move || format!("settings-{id}-{option}"))
-                    .role(Role::RadioButton)
-                    .aria_label(text.to_owned())
-                    .aria_selected(selected)
-                    .min_w_0()
-                    .flex()
-                    .justify_center()
-                    .whitespace_nowrap()
-                    .rounded(px(radius::CONTROL - 2. - 1.))
-                    .px(px(10.))
-                    .py_1()
-                    .cursor_pointer()
-                    .map(|d| {
-                        if selected {
-                            d.bg(content(0.1)).text_color(content(1.))
-                        } else {
-                            d.text_color(content(0.5))
-                                .hover(|s| s.text_color(content(1.)))
-                        }
-                    })
-                    .child(text.to_owned())
-                    .on_click(cx.listener(move |this, _, _, cx| change(this, option, cx)))
-            }))
+                    .grid()
+                    .grid_cols(columns)
+                    .gap(px(2.))
+                    .rounded(px(radius::CONTROL))
+                    .border_1()
+                    .border_color(content(0.1))
+                    .p(px(2.))
+                    .text_size(px(12.))
+                    .line_height(px(16.)),
+                content(0.1),
+                radius::CONTROL - 2. - 1.,
+                move |glide| {
+                    let ready = glide.ready();
+                    options
+                        .into_iter()
+                        .enumerate()
+                        .map(|(index, (option, text))| {
+                            let selected = selected == Some(index);
+                            let change = change.clone();
+                            let entity = entity.clone();
+                            div()
+                                .id(SharedString::from(format!("segmented-{id}-{option}")))
+                                .debug_selector(move || format!("settings-{id}-{option}"))
+                                .role(Role::RadioButton)
+                                .aria_label(text.clone())
+                                .aria_selected(selected)
+                                .relative()
+                                .min_w_0()
+                                .flex()
+                                .justify_center()
+                                .whitespace_nowrap()
+                                .rounded(px(radius::CONTROL - 2. - 1.))
+                                .px(px(10.))
+                                .py_1()
+                                .cursor_pointer()
+                                .child(glide.probe(index))
+                                .map(|d| {
+                                    if selected {
+                                        d.when(!ready, |d| d.bg(content(0.1)))
+                                            .text_color(content(1.))
+                                    } else {
+                                        d.text_color(content(0.5))
+                                            .hover(|s| s.text_color(content(1.)))
+                                    }
+                                })
+                                .child(text)
+                                .on_click(move |_, _, cx| {
+                                    entity.update(cx, |this, cx| change(this, option, cx)).ok();
+                                })
+                                .into_any_element()
+                        })
+                        .collect()
+                },
+            ))
             .into_any_element()
     }
 
@@ -428,16 +459,29 @@ impl SettingsView {
                     .flex()
                     .items_center()
                     .child(slot.layout_probe())
-                    .child(div().w_full().h(px(4.)).rounded_full().bg(content(0.15)))
+                    .child(
+                        div()
+                            .w_full()
+                            .h(px(4.))
+                            .rounded_full()
+                            .bg(vorkspace_ui::fluid::track(0.15)),
+                    )
+                    // fluidither: solid ink where the value is, dots ahead of it.
                     .child(
                         div()
                             .absolute()
-                            .top_0()
-                            .left(relative(fraction))
-                            .ml(px(-6. + 12. * (0.5 - fraction)))
-                            .size(px(12.))
+                            .left_0()
+                            .top(px(4.))
+                            .h(px(4.))
+                            .w(relative(fraction))
                             .rounded_full()
-                            .bg(content(1.)),
+                            .bg(content(0.85)),
+                    )
+                    .child(
+                        vorkspace_ui::fluid::thumb(content(1.))
+                            .top(px(-2.))
+                            .left(relative(fraction))
+                            .ml(px(-4. + 8. * (0.5 - fraction))),
                     )
                     .when(!disabled, |d| {
                         d.cursor_pointer().on_mouse_down(
@@ -615,7 +659,7 @@ impl SettingsView {
                                 if highlighted || is_selected {
                                     d.bg(content(0.1))
                                 } else {
-                                    d.hover(|s| s.bg(content(0.05)))
+                                    d.hover(|s| s.bg(vorkspace_ui::fluid::hover(0.05)))
                                 }
                             })
                             .when_some(icon_el, |d, icon_el| {
@@ -811,7 +855,7 @@ impl SettingsView {
                             .line_height(px(16.))
                             .text_color(content(if shown { 1. } else { 0.5 }))
                             .cursor_pointer()
-                            .hover(|s| s.bg(content(0.05)))
+                            .hover(|s| s.bg(vorkspace_ui::fluid::hover(0.05)))
                             .child(
                                 div()
                                     .size_4()

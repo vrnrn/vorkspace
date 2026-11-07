@@ -30,6 +30,51 @@ Paths are relative to `crates/vorkspace-gpui/src/`, except `theme.rs`, `radius.r
 
 ## 2. Color
 
+### Print (`fluid.rs`)
+
+Vorkspace borrows fluidither's printed look for surfaces that carry meaning:
+tracks, gauges, charts, empty pages and notice strips. Hover, selection,
+scrims, switches and diagram nodes stay flat; the pointer passing over a row
+never prints a pattern, and the 50% checkerboard is never used. `vorkspace_ui::fluid` is the only owner; call
+its helpers, never `gpui::dither` directly.
+
+| Helper | Use |
+|---|---|
+| `hover(weight)`, `wash(tint)`, `pressed(weight)` | Flat hover and press tints |
+| `track(weight)` | The empty part of a slider, meter or progress bar: a dotted rule (25% Bayer). The filled part is solid ink |
+| `ring_track(color)` | A gauge's unfilled ring, dotted in 1pt cells |
+| `area(color)` / `bar(color)` | Chart fills: solid under the line fading to nothing; bars full at the top printing down to three-quarter tone, never the half-tone checkerboard |
+| `plate()` | The dotted plate behind an empty state's icon, fading from quarter tone to paper |
+| `field(id)` | A still fluidither aurora field above the empty session prompt |
+| `hint(weight)`, `hint_in(color, weight)` | Dotted washes for drop targets and split landing zones |
+| `scrim(weight)` | A flat black dim behind dialogs; a printed scrim garbles the text it covers |
+| `rule()` | Markdown's `---`: a line of dots |
+| `strip(tone, radius)` | A notice's leading edge, as fluidither's Banner: a 3pt tone bar over a dotted column, one quad that follows the card's corners (error and approval toasts) |
+| `badge(label, tone)` | A status label, as fluidither's Badge: a square tone cell, label at full contrast (inbox status) |
+| `kbd(keys)` | A shortcut chip in Obel Mono on a soft pill (menu shortcuts); chips with macOS key symbols use the system font, which has them |
+| `step_mark(step, color, slot)` | A step's mark, as fluidither's Steps: solid square done, outlined with dots active, empty outline waiting, a dash skipped (task lists) |
+| `thumb(color)` | A slider's upright rounded-bar thumb, 8 by 16 |
+| `knob(on)`, `switch_off()` | A switch: a white 3pt-rounded square knob (black on a pale accent) on a solid accent track when on, a flat `content(0.16)` track when off |
+| `on_ink()` | Text and icons on a solid ink fill: primary buttons and the neutral composer submit |
+| `is_numeric(text)` | Whether a table cell is a number; numeric cells use Obel Mono's tabular digits, and a visual's all-numeric columns right-align |
+| `Count` | A whole number that rolls to each new value on the `QUICK` spring (the diff stat) |
+| `Scramble` | Text that settles from stand-in glyphs over 0.7 s when it changes after its first showing (session titles in the sidebar) |
+
+fluidither's own components draw with its theme and, in places, the 50%
+checker, so vorkspace adopts their patterns through these helpers in its own
+ink rather than mounting them. Working states use the loader cells
+(`panel_kit::spinner`): busy controls, the live work receipt and Bot launch
+cards.
+
+The cells are drawn by the GPUI fork's `Background::Dither` (and its vertical
+tone ramp, `vertical_dither`): one quad or path, clipped by its rounded corners,
+with fluidither's 4×4 Bayer ranks, so a tone inks the same cells as fluidither
+on the web. Cell sizes are logical points and scale to device pixels at paint.
+Patterns use content ink or the series' own color; the user's accent stays the
+only chrome color. Mermaid node surfaces stay flat, since a texture behind a
+label costs it legibility. Chart value axes land on round steps (1, 2, 2.5 or
+5 × 10ⁿ) that clear the tallest value (`visuals::nice_scale`).
+
 ### Tokens (`theme.rs`)
 
 `theme::configure` derives all tokens from the saved Appearance preferences;
@@ -43,7 +88,7 @@ read them only through these helpers:
 | `user_bubble_fill()` | The user's message bubble |
 | `text_selection()` | Text selection highlight |
 | `shell_fill()`, `pane_fill()`, `floating_fill()`, `composer_fill()` | Surfaces (§4) |
-| `syntax_color()`, `diff_foreground()`, `diff_background()` | Code and diffs; these follow the workspace theme and diff palette preferences |
+| `syntax_color()`, `diff_foreground()`, `diff_background()` | Code and diffs; these follow the workspace theme and diff palette preferences. The highlighter emits Dark+ colors; code blocks, visual source and diffs all resolve them through `diff_syntax_color`, never `rgb(span.color)` |
 | `status(StatusColor, alpha)` | Danger, warning and success ink or washes, paired for light and dark |
 | `is_light()` | Only when a value genuinely cannot be expressed as ink alpha |
 
@@ -68,10 +113,15 @@ Pick from this scale; don't invent in-between values.
 
 Interaction states:
 
-- **Hover:** `content(0.1)` fill and ink to `content(1.)` (`theme::icon_button`).
-  Dense lists may use `0.05`–`0.08`.
-- **Selected:** `content(0.1)`; hovered `0.07`; resting `0.04`
-  (`title_tab_fill`). Keyboard-highlighted menu rows use the popover's own fill.
+- **Hover:** a flat `fluid::hover(weight)` tint and ink to `content(1.)`.
+  `weight` comes from the scale above (`0.1` for chrome buttons, `0.05`–`0.08`
+  for dense lists).
+- **Selected:** a solid `content(0.1)` thumb; resting plates `0.04`
+  (`title_tab_fill`). In fixed lists and strips (title-bar tabs, the
+  workspace tabs, sidebar navigation, Settings sections and segmented
+  controls) the thumb is one shape that glides between items
+  (`glide::GlideList`, §7). Keyboard-highlighted menu rows use the
+  popover's own fill.
 - **Focused field:** border from `0.1` to `0.2` (`composer_border`).
 - **Disabled:** whole control at `opacity(0.4)`, or ink at `content(0.25)` for
   icon chrome. Disabled controls lose hover and pointer cursor.
@@ -107,8 +157,13 @@ alpha)` (or `Warning`, `Success`) for ink and translucent washes.
 
 ## 3. Typography
 
-- Family: the system UI font (`fonts::UI`). Monospace only for code, paths,
-  terminals and diffs.
+- Family: the system UI font (`fonts::UI`) for prose and controls.
+- Monospace: Obel Mono (`fonts::MONO`, from fluidither) for code blocks,
+  inline code, keyboard and menu shortcut hints, hex values and numeric
+  readouts (every tabular-figure readout, usage percentages) in the chat and
+  chrome. The terminal and code editor keep `fonts::FIXED_FONT`, so their cell
+  grids and the user's muscle memory don't move. `fluid::init` loads the faces
+  once per app.
 - Sizes (px), in order of use:
 
 | Size | Use |
@@ -161,6 +216,10 @@ From back to front:
   retain their separate motion settings.
 - **Shadows** belong to floating layers only; flat panes and cards have none.
   Popovers and their modal variant share the layered pair in `popover.rs`.
+- **Settings dialogs** for one thing (a Bot, a project) share one frame: a
+  navigation rail headed by the thing's own mark and name, a titled section
+  on the right, a close button top-right, and the flat scrim. Customization
+  lives there; a right-click menu keeps actions and opens the dialog.
 
 ### Corner scale (`radius.rs`)
 
@@ -224,6 +283,7 @@ old call sites at it, instead of copying it.
 | Compact icon action | `settings::widgets::icon_action` (20 or 24px) |
 | Switch | `controls::switch` (36×20) or `controls::compact_switch` (28×16); Settings uses `SettingsView::toggle` |
 | Compact icon hint | `controls::Tooltip`; it supplements the accessible name |
+| Tooltip look | fluidither's inverted tip: `fluid::tip()` (an opaque ink pill, `fluid::tip_fill()`, with `fluid::tip_text(alpha)`); popover tooltips use `Popover::tip()` |
 | Segmented choice | `SettingsView::segmented` (`RadioGroup`/`RadioButton`) |
 | Text input | `input::Input::field` and its variants (`multiline_field`, `commit_message`, `channel_message`) |
 | Menu, dropdown, flyout | `popover::popover` with `MenuAction` items; pick the closest `MenuStyle` |
@@ -262,6 +322,20 @@ Behavior rules for controls:
 - There is no reduced-motion mode and no code reads `cx.reduce_motion()`.
   Tests that depend on timing advance the clock past the animation duration.
 - Hover feedback is immediate, or at most a short fade.
+- Selection in a fixed list or strip glides: `vorkspace_ui::glide::GlideList`
+  (or `Glide` directly, as the title-bar strip does) springs one thumb
+  (fluidither's `GLIDE` spring) between measured items, so a change of
+  selection reads as one shape moving. Items record their bounds in prepaint
+  and the thumb steps its springs in paint, from that same frame's layout, so
+  it never trails a tab that slides, opens, or is dragged. A layout change
+  without a change of selection moves the thumb with its item at once. Until
+  the selection has been measured, the item paints its own fill, so no frame
+  loses the selection; a frame gap longer than a glide lands the thumb at
+  once. Keep a glide's probes and thumb outside a scroll handle's tracked
+  children. Virtualized lists (the
+  session list) keep per-row fills.
+- Busy indicators are fluidither's loader: three cells counting up
+  (`panel_kit::spinner`), never a spinning icon.
 
 ---
 

@@ -162,20 +162,14 @@ impl SettingsView {
                         )
                     }))
                 })
-                .child(
-                    div()
-                        .rounded_full()
-                        .bg(content(0.1))
-                        .px(px(6.))
-                        .py(px(2.))
-                        .text_size(px(10.))
-                        .text_color(content(0.6))
-                        .child(if installed.is_some() {
-                            "INSTALLED"
-                        } else {
-                            "NOT INSTALLED"
-                        }),
-                );
+                .child(if installed.is_some() {
+                    vorkspace_ui::fluid::badge(
+                        "Installed",
+                        vorkspace_ui::theme::status(vorkspace_ui::theme::StatusColor::Success, 1.),
+                    )
+                } else {
+                    vorkspace_ui::fluid::badge("Not installed", content(0.3))
+                });
             let mut controls = vec![
                 secondary_button(
                     SharedString::from(format!("default-provider-{}", kind.id())),

@@ -942,7 +942,10 @@ fn queue_button(
 ) -> gpui::Stateful<gpui::Div> {
     crate::controls::icon_button(id, label, true)
         .text_color(content(0.5))
-        .hover(|s| s.bg(content(0.08)).text_color(content(0.9)))
+        .hover(|s| {
+            s.bg(vorkspace_ui::fluid::hover(0.08))
+                .text_color(content(0.9))
+        })
         .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
         .child(icon(glyph, 14.))
 }

@@ -206,7 +206,7 @@ impl Render for LinkedActivity {
                     .border_color(content(0.1))
                     .when(!url.is_empty(), |d| {
                         d.cursor_pointer()
-                            .hover(|s| s.bg(content(0.05)))
+                            .hover(|s| s.bg(vorkspace_ui::fluid::hover(0.05)))
                             .on_click(cx.listener(move |_, _, _, cx| {
                                 cx.emit(LinkedActivityEvent::Acknowledge(session));
                                 cx.emit(LinkedActivityEvent::OpenUrl(url.clone()));

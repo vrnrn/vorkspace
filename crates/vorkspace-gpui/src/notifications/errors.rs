@@ -5,7 +5,7 @@ use vorkspace_ui::theme::*;
 pub(crate) fn card(id: &'static str, message: String, dismiss: impl IntoElement) -> Stateful<Div> {
     let rose: Hsla = rgb(0xf43f5e).into();
     let mut border = rose;
-    border.a = 0.3;
+    border.a = 0.22;
     let mut tint = rose;
     tint.a = 0.1;
     super::surface::toast_frame()
@@ -14,9 +14,16 @@ pub(crate) fn card(id: &'static str, message: String, dismiss: impl IntoElement)
         .role(Role::Alert)
         .border_color(border)
         .bg(tint)
+        .relative()
+        .overflow_hidden()
+        .child(vorkspace_ui::fluid::strip(
+            rose,
+            vorkspace_ui::radius::SURFACE,
+        ))
         .child(
             div()
-                .px(px(14.))
+                .pl(px(vorkspace_ui::fluid::STRIP_WIDTH + 10.))
+                .pr(px(14.))
                 .py_3()
                 .flex()
                 .flex_col()

@@ -11,6 +11,7 @@ impl Shell {
         &self,
         tab: &TitleTab,
         width: f32,
+        glide: (&vorkspace_ui::glide::Glide, usize),
         cx: &mut Context<Self>,
     ) -> Option<gpui::Stateful<gpui::Div>> {
         let (identity, label, description, mark) = match tab {
@@ -40,6 +41,7 @@ impl Shell {
         let menu_tab = tab.clone();
         let middle_tab = tab.clone();
         let close = active || width >= TAB_CLOSE_MIN_WIDTH;
+        let thumb = active && glide.0.ready();
         Some(
             div()
                 .id(SharedString::from(identity.clone()))
@@ -58,15 +60,23 @@ impl Shell {
                 .relative()
                 .child(
                     title_tab_plate(active, false)
+                        // The strip's gliding thumb draws the selection.
+                        .when(thumb, |d| d.bg(gpui::transparent_black()))
                         .relative()
+                        .child(glide.0.probe(glide.1))
                         .text_color(content(if active { 1. } else { 0.5 }))
                         .w_full()
                         .min_w_0()
                         .when(close && width >= TAB_CLOSE_MIN_WIDTH, |d| d.pr_7())
                         .when(width < 30., |d| d.px(px(((width - 14.) / 2.).max(0.))))
                         .gap(px(6.))
-                        .group_hover("simple-title-tab", |s| {
-                            s.bg(title_tab_fill(active, true)).text_color(content(1.))
+                        .group_hover("simple-title-tab", move |s| {
+                            let s = s.text_color(content(1.));
+                            if thumb {
+                                s
+                            } else {
+                                s.bg(vorkspace_ui::theme::title_tab_background(active, true))
+                            }
                         })
                         .child(mark)
                         .child(
@@ -95,7 +105,7 @@ impl Shell {
                             .justify_center()
                             .opacity(0.)
                             .group_hover("simple-title-tab", |s| s.opacity(1.))
-                            .hover(|s| s.bg(content(0.1)))
+                            .hover(|s| s.bg(vorkspace_ui::fluid::hover(0.1)))
                             .child(icon("close", 12.))
                             .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
                             .on_click(cx.listener(move |this, _, window, cx| {

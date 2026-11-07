@@ -137,7 +137,7 @@ impl Bots {
                 .overflow_y_scroll()
                 .px_3()
                 .py_3()
-                .font_family(vorkspace_ui::fonts::FIXED_FONT)
+                .font_family(vorkspace_ui::fonts::MONO)
                 .text_size(px(13.))
                 .line_height(px(20.))
                 .text_color(content(0.85))

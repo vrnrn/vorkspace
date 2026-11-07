@@ -51,7 +51,7 @@ impl TodoBoardView {
                                 div()
                                     .w(size.width)
                                     .h(size.height)
-                                    .bg(gpui::black().opacity(0.4))
+                                    .bg(vorkspace_ui::fluid::scrim(0.4))
                                     .occlude(),
                             ),
                     )

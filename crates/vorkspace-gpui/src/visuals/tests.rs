@@ -457,3 +457,14 @@ fn source_and_reset_emit_row_remeasure_events(cx: &mut TestAppContext) {
         "Responsive width changes must also remeasure the transcript row"
     );
 }
+
+#[test]
+fn chart_axes_land_on_round_steps_that_clear_the_data() {
+    // The dashboard fixture's weekly requests peak at 91.
+    assert_eq!(nice_scale(0., 91.), (0., 100., 4));
+    assert_eq!(nice_scale(0., 7.), (0., 8., 4));
+    assert_eq!(nice_scale(0., 0.9), (0., 1., 4));
+    assert_eq!(nice_scale(-12., 30.), (-20., 40., 3));
+    let (low, high, ticks) = nice_scale(3., 3.);
+    assert_eq!((low, high, ticks), (3., 3., 4));
+}

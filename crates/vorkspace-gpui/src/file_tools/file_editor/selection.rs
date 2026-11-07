@@ -199,7 +199,7 @@ impl FileEditor {
                                 .px_2()
                                 .rounded(px(radius::CONTAINER))
                                 .text_size(px(13.))
-                                .hover(|s| s.bg(content(0.05)))
+                                .hover(|s| s.bg(vorkspace_ui::fluid::hover(0.05)))
                                 .cursor_pointer()
                                 .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
                                 .on_mouse_up(MouseButton::Left, |_, _, cx| cx.stop_propagation())

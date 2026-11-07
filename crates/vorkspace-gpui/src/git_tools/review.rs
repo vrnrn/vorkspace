@@ -1641,7 +1641,10 @@ impl ReviewPane {
                         .rounded(px(radius::CONTROL))
                         .cursor(CursorStyle::OpenHand)
                         .text_color(content(0.35))
-                        .hover(|s| s.bg(content(0.05)).text_color(content(0.7)))
+                        .hover(|s| {
+                            s.bg(vorkspace_ui::fluid::hover(0.05))
+                                .text_color(content(0.7))
+                        })
                         .child(icon("grip-vertical", 14.))
                         .on_mouse_down(
                             MouseButton::Left,
@@ -1801,7 +1804,7 @@ impl ReviewPane {
                             .justify_center()
                             .rounded(px(radius::SMALL))
                             .when(!(active || hovered), |d| d.opacity(0.))
-                            .hover(|s| s.bg(content(0.1)))
+                            .hover(|s| s.bg(vorkspace_ui::fluid::hover(0.1)))
                             .child(icon("x", 12.))
                             .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
                             .on_click(cx.listener(move |this, _, _, cx| {

@@ -396,7 +396,7 @@ impl Render for WorktreeSwitcher {
                                 if self.active == index {
                                     d.bg(content(0.1))
                                 } else {
-                                    d.hover(|s| s.bg(content(0.05)))
+                                    d.hover(|s| s.bg(vorkspace_ui::fluid::hover(0.05)))
                                 }
                             })
                             .child(
@@ -520,8 +520,10 @@ impl Render for WorktreeSwitcher {
                                 .text_color(content(0.75))
                                 .when(self.creating, |d| d.opacity(0.6))
                                 .when(!self.creating, |d| {
-                                    d.cursor_pointer()
-                                        .hover(|s| s.bg(content(0.08)).text_color(content(1.)))
+                                    d.cursor_pointer().hover(|s| {
+                                        s.bg(vorkspace_ui::fluid::hover(0.08))
+                                            .text_color(content(1.))
+                                    })
                                 })
                                 .child(icon(if self.creating { "loader" } else { "plus" }, 16.))
                                 .child(format!("Create worktree {}", self.query(cx)))

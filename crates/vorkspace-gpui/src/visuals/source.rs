@@ -2,7 +2,7 @@
 use crate::syntax::{HighlightRequest, HighlightedDocument};
 use gpui::{
     Context, HighlightStyle, IntoElement, ListHorizontalSizingBehavior, Render, SharedString,
-    StyledText, Task, UniformListScrollHandle, Window, div, prelude::*, px, rgb, uniform_list,
+    StyledText, Task, UniformListScrollHandle, Window, div, prelude::*, px, uniform_list,
 };
 use std::{ops::Range, sync::Arc};
 use vorkspace_ui::fonts::FIXED_FONT;
@@ -69,7 +69,7 @@ impl Document {
                 (
                     span.range.clone(),
                     HighlightStyle {
-                        color: Some(rgb(span.color).into()),
+                        color: Some(vorkspace_ui::theme::diff_syntax_color(span.color)),
                         ..Default::default()
                     },
                 )
@@ -213,7 +213,10 @@ mod tests {
                 for (span, (range, style)) in spans.iter().zip(&rendered) {
                     assert!(line.is_char_boundary(range.start) && line.is_char_boundary(range.end));
                     assert_eq!(range, &span.range);
-                    assert_eq!(style.color, Some(rgb(span.color).into()));
+                    assert_eq!(
+                        style.color,
+                        Some(vorkspace_ui::theme::diff_syntax_color(span.color))
+                    );
                 }
             })
             .unwrap();

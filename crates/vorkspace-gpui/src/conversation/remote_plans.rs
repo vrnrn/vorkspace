@@ -139,7 +139,7 @@ impl Conversation {
                         .gap_2()
                         .border_b_1()
                         .border_color(content(0.1))
-                        .child(icon("file-text", 16.))
+                        .child(icon("file", 16.))
                         .child(div().flex_1().truncate().text_size(px(13.)).child(title))
                         .child(
                             crate::controls::secondary_button(

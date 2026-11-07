@@ -555,7 +555,10 @@ impl Shell {
                         },
                     ))
                     .font_weight(FontWeight::MEDIUM)
-                    .hover(|s| s.bg(content(0.08)).text_color(content(1.)))
+                    .hover(|s| {
+                        s.bg(vorkspace_ui::fluid::hover(0.08))
+                            .text_color(content(1.))
+                    })
                     .focus(|s| s.bg(content(0.1)).text_color(content(1.)))
                     .on_hover(cx.listener(|this, hovered, _, cx| {
                         this.sidebar_hover = if *hovered { Some("Search") } else { None };
@@ -574,75 +577,128 @@ impl Shell {
                     )
                     .child(div().flex_1().min_w_0().child("Search")),
             )
-            .children(
-                self.visible_sidebar_navigation(cx)
+            .child({
+                // Gathered first: the glide builds the rows when it renders.
+                let rows: Vec<_> = self
+                    .visible_sidebar_navigation(cx)
                     .into_iter()
-                    .map(|item| (item.label(), item.icon()))
-                    .map(|(label, glyph)| {
-                        let selected = self.app_view_label() == Some(label);
-                        let connector = Connector::ALL
+                    .map(|item| {
+                        let label = item.label();
+                        let unread = Connector::ALL
                             .into_iter()
-                            .find(|provider| provider.label() == label);
-                        let unread =
-                            connector.is_some_and(|provider| self.connector_unread(provider, cx));
-                        div()
-                            .id(label)
-                            .debug_selector(move || format!("sidebar-navigation-{label}"))
-                            .role(Role::Button)
-                            .aria_label(if unread {
-                                format!("{label}, new items")
-                            } else {
-                                label.into()
+                            .find(|provider| provider.label() == label)
+                            .is_some_and(|provider| self.connector_unread(provider, cx));
+                        (
+                            label,
+                            item.icon(),
+                            self.app_view_label() == Some(label),
+                            unread,
+                            self.sidebar_hover == Some(label),
+                        )
+                    })
+                    .collect();
+                let selected_index = rows.iter().position(|row| row.2);
+                let shell = cx.entity().downgrade();
+                vorkspace_ui::glide::GlideList::new(
+                    "sidebar-navigation-glide",
+                    selected_index,
+                    div().w_full().flex().flex_col().gap_px(),
+                    content(0.1),
+                    radius::CONTROL,
+                    move |glide| {
+                        let ready = glide.ready();
+                        rows.into_iter()
+                            .enumerate()
+                            .map(|(index, (label, glyph, selected, unread, hovered))| {
+                                let clicked = shell.clone();
+                                let hovering = shell.clone();
+                                div()
+                                    .id(label)
+                                    .debug_selector(move || format!("sidebar-navigation-{label}"))
+                                    .role(Role::Button)
+                                    .aria_label(if unread {
+                                        format!("{label}, new items")
+                                    } else {
+                                        label.into()
+                                    })
+                                    .aria_selected(selected)
+                                    .cursor(CursorStyle::Arrow)
+                                    .group("rail-action")
+                                    .h(px(32.))
+                                    .px_2()
+                                    .rounded(px(radius::CONTROL))
+                                    .flex()
+                                    .items_center()
+                                    .gap_2()
+                                    .text_size(px(14.))
+                                    .font_weight(FontWeight::MEDIUM)
+                                    .text_color(content(if selected || hovered { 1. } else { 0.5 }))
+                                    .relative()
+                                    .child(glide.probe(index))
+                                    // The glide's thumb draws the selection once measured.
+                                    .when(selected && !ready, |d| d.bg(content(0.1)))
+                                    .hover(|s| {
+                                        s.bg(vorkspace_ui::fluid::hover(0.08))
+                                            .text_color(content(1.))
+                                    })
+                                    .child(icon(glyph, 16.).text_color(content(if selected {
+                                        0.7
+                                    } else {
+                                        0.35
+                                    })))
+                                    .child(div().flex_1().child(label))
+                                    .when(unread, |row| {
+                                        row.child(
+                                            div().size(px(6.)).rounded_full().bg(accent_color()),
+                                        )
+                                    })
+                                    .on_click(move |_, window, cx| {
+                                        let _ =
+                                            clicked.update(
+                                                cx,
+                                                |this: &mut Shell, cx| match label {
+                                                    "GitHub" => this.open_connector(
+                                                        Connector::Github,
+                                                        window,
+                                                        cx,
+                                                    ),
+                                                    "GitLab" => this.open_connector(
+                                                        Connector::Gitlab,
+                                                        window,
+                                                        cx,
+                                                    ),
+                                                    "Jira" => this.open_connector(
+                                                        Connector::Jira,
+                                                        window,
+                                                        cx,
+                                                    ),
+                                                    "Notes" => this.open_notes(window, cx),
+                                                    "Codebase" => this.open_codebase(window, cx),
+                                                    "Automations" => {
+                                                        this.open_automations(window, cx)
+                                                    }
+                                                    "To-dos" => this.open_todos(window, cx),
+                                                    _ => (),
+                                                },
+                                            );
+                                    })
+                                    .on_hover(move |hovered, _, cx| {
+                                        let _ = hovering.update(cx, |this: &mut Shell, cx| {
+                                            if *hovered {
+                                                this.sidebar_hover = Some(label);
+                                            } else if this.sidebar_hover == Some(label) {
+                                                this.sidebar_hover = None;
+                                            }
+                                            this.sidebar_frame.update(cx, |_, cx| cx.notify());
+                                            this.project_rail_frame.update(cx, |_, cx| cx.notify());
+                                        });
+                                    })
+                                    .into_any_element()
                             })
-                            .aria_selected(selected)
-                            .cursor(CursorStyle::Arrow)
-                            .group("rail-action")
-                            .h(px(32.))
-                            .px_2()
-                            .rounded(px(radius::CONTROL))
-                            .flex()
-                            .items_center()
-                            .gap_2()
-                            .text_size(px(14.))
-                            .font_weight(FontWeight::MEDIUM)
-                            .text_color(content(if selected || self.sidebar_hover == Some(label) {
-                                1.
-                            } else {
-                                0.5
-                            }))
-                            .relative()
-                            .when(selected, |d| d.bg(content(0.1)))
-                            .hover(|s| s.bg(content(0.08)).text_color(content(1.)))
-                            .child(icon(glyph, 16.).text_color(content(if selected {
-                                0.7
-                            } else {
-                                0.35
-                            })))
-                            .child(div().flex_1().child(label))
-                            .when(unread, |row| {
-                                row.child(div().size(px(6.)).rounded_full().bg(accent_color()))
-                            })
-                            .on_click(cx.listener(move |this, _, window, cx| match label {
-                                "GitHub" => this.open_connector(Connector::Github, window, cx),
-                                "GitLab" => this.open_connector(Connector::Gitlab, window, cx),
-                                "Jira" => this.open_connector(Connector::Jira, window, cx),
-                                "Notes" => this.open_notes(window, cx),
-                                "Codebase" => this.open_codebase(window, cx),
-                                "Automations" => this.open_automations(window, cx),
-                                "To-dos" => this.open_todos(window, cx),
-                                _ => (),
-                            }))
-                            .on_hover(cx.listener(move |this, hovered, _, cx| {
-                                if *hovered {
-                                    this.sidebar_hover = Some(label);
-                                } else if this.sidebar_hover == Some(label) {
-                                    this.sidebar_hover = None;
-                                }
-                                this.sidebar_frame.update(cx, |_, cx| cx.notify());
-                                this.project_rail_frame.update(cx, |_, cx| cx.notify());
-                            }))
-                    }),
-            )
+                            .collect()
+                    },
+                )
+            })
             .into_any()
     }
     pub(super) fn sidebar_filter_button(&mut self, cx: &mut Context<Self>) -> impl IntoElement {

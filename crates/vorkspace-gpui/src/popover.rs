@@ -309,6 +309,8 @@ pub(crate) struct Popover {
     consume_outside_press: bool,
     modal_classic: Option<bool>,
     animate: bool,
+    /// A tooltip: solid ink with paper text instead of the glass card.
+    tip: bool,
     /// Without a fixed width, the card hugs its content between these.
     fit: (Option<f32>, Option<f32>),
     children: Vec<AnyElement>,
@@ -326,6 +328,7 @@ pub(crate) fn popover(id: impl Into<ElementId>, anchor: Anchor) -> Popover {
         consume_outside_press: true,
         modal_classic: None,
         animate: true,
+        tip: false,
         fit: (None, None),
         children: Vec::new(),
     }
@@ -335,6 +338,12 @@ impl Popover {
     /// link menus let that press select text or open another link's menu.
     pub(crate) fn allow_outside_press(mut self) -> Self {
         self.consume_outside_press = false;
+        self
+    }
+    /// Draws the card as a tooltip, fluidither's inverted tip: solid ink,
+    /// tip corners, no glass or rule. Its content uses `fluid::tip_text`.
+    pub(crate) fn tip(mut self) -> Self {
+        self.tip = true;
         self
     }
     pub(crate) fn without_animation(mut self) -> Self {
@@ -431,7 +440,9 @@ impl RenderOnce for Popover {
 impl Popover {
     fn render_at(self, enter: f32, viewport: gpui::Size<Pixels>) -> impl IntoElement {
         let (viewport_width, viewport_height) = (viewport.width, viewport.height);
-        let radius = if self.modal_classic.is_some() {
+        let radius = if self.tip {
+            vorkspace_ui::fluid::TIP_RADIUS
+        } else if self.modal_classic.is_some() {
             radius::MODAL
         } else {
             radius::SURFACE
@@ -480,7 +491,13 @@ impl Popover {
                     .blur_radius(px(10.))
                     .spread_radius(px(-6.)),
             ])
-            .child(glass(tint, radius))
+            .map(|d| {
+                if self.tip {
+                    d.bg(vorkspace_ui::fluid::tip_fill())
+                } else {
+                    d.child(glass(tint, radius))
+                }
+            })
             .child(
                 div()
                     .debug_selector(|| "popover-inner-container".into())
@@ -495,14 +512,16 @@ impl Popover {
                     .p(px(self.padding))
                     .children(self.children),
             )
-            .child(
-                div()
-                    .absolute()
-                    .inset_0()
-                    .rounded(px(radius))
-                    .border_1()
-                    .border_color(content(border)),
-            );
+            .when(!self.tip, |d| {
+                d.child(
+                    div()
+                        .absolute()
+                        .inset_0()
+                        .rounded(px(radius))
+                        .border_1()
+                        .border_color(content(border)),
+                )
+            });
         deferred(Placed {
             anchor: self.anchor,
             options: self.options,
@@ -1331,7 +1350,9 @@ impl Menu {
                 d.h(px(height)).gap(px(8.))
             })
             .when(filled && !action.disabled, |d| d.bg(fill))
-            .when(!filled && !action.disabled, |d| d.hover(|s| s.bg(hover)))
+            .when(!filled && !action.disabled, |d| {
+                d.hover(|s| s.bg(vorkspace_ui::fluid::wash(hover)))
+            })
             .when(!in_submenu, |d| d.child(self.rows[ix].probe()))
             .when(reorderable, |d| {
                 let grip_selector = action.id.clone();
@@ -1349,7 +1370,10 @@ impl Menu {
                         .justify_center()
                         .rounded(px(radius::SMALL))
                         .text_color(content(0.5))
-                        .hover(|s| s.bg(content(0.08)).text_color(content(1.)))
+                        .hover(|s| {
+                            s.bg(vorkspace_ui::fluid::hover(0.08))
+                                .text_color(content(1.))
+                        })
                         .child(icon("grip-vertical", 12.))
                         .on_mouse_down(gpui::MouseButton::Left, |_, window, cx| {
                             window.prevent_default();
@@ -1365,7 +1389,7 @@ impl Menu {
                 })
                 .drag_over::<MenuDrag>(move |s, drag, _, _| {
                     if drag.menu == menu_id {
-                        s.bg(content(0.15))
+                        s.bg(vorkspace_ui::fluid::pressed(0.15))
                     } else {
                         s
                     }
@@ -1444,22 +1468,31 @@ impl Menu {
                     };
                     d.child(icon("chevron-right", 14.).text_color(chevron))
                 } else if action.switch {
+                    // The row is the control; this is the same switch the
+                    // settings pages draw, without its own focus or click.
+                    let on = action.checked;
                     d.child(
                         div()
                             .relative()
                             .w(px(36.))
                             .h(px(20.))
                             .flex_shrink_0()
-                            .rounded_full()
-                            .bg(content(if action.checked { 0.35 } else { 0.15 }))
+                            .rounded(px(vorkspace_ui::fluid::SWITCH_RADIUS))
+                            .map(|d| {
+                                if on {
+                                    d.bg(vorkspace_ui::theme::accent_color())
+                                } else {
+                                    d.bg(vorkspace_ui::fluid::switch_off())
+                                }
+                            })
                             .child(
                                 div()
                                     .absolute()
                                     .top(px(2.))
-                                    .left(px(if action.checked { 18. } else { 2. }))
+                                    .left(px(if on { 18. } else { 2. }))
                                     .size(px(16.))
-                                    .rounded_full()
-                                    .bg(content(1.)),
+                                    .rounded(px(3.))
+                                    .bg(vorkspace_ui::fluid::knob(on)),
                             ),
                     )
                 } else if action.checked && style == MenuStyle::Recent {
@@ -1478,13 +1511,7 @@ impl Menu {
                         .when(rich, |i| i.mt(px(2.))),
                     )
                 } else if let Some(shortcut) = action.shortcut.clone() {
-                    d.child(
-                        div()
-                            .flex_shrink_0()
-                            .text_size(px(11.))
-                            .text_color(content(0.4))
-                            .child(shortcut),
-                    )
+                    d.child(vorkspace_ui::fluid::kbd(shortcut))
                 } else {
                     d
                 }

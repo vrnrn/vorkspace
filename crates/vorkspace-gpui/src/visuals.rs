@@ -101,7 +101,10 @@ fn button(id: impl Into<SharedString>) -> Stateful<Div> {
         .border_1()
         .border_color(content(0.12))
         .text_color(content(0.8))
-        .hover(|s| s.bg(content(0.06)).text_color(content(1.)))
+        .hover(|s| {
+            s.bg(vorkspace_ui::fluid::hover(0.06))
+                .text_color(content(1.))
+        })
         .focus(|s| s.border_color(accent_color()))
 }
 fn tab_button(id: impl Into<SharedString>, selected: bool) -> Stateful<Div> {
@@ -119,7 +122,8 @@ fn tab_button(id: impl Into<SharedString>, selected: bool) -> Stateful<Div> {
             if selected {
                 s.bg(selected_fill).text_color(selected_text)
             } else {
-                s.bg(content(0.06)).text_color(content(1.))
+                s.bg(vorkspace_ui::fluid::hover(0.06))
+                    .text_color(content(1.))
             }
         })
         .focus_visible(move |s| {
@@ -152,7 +156,7 @@ fn action_button(
         .rounded(px(radius::CONTROL))
         .cursor_pointer()
         .when(active, |d| d.bg(content(0.06)))
-        .hover(|s| s.bg(content(0.08)))
+        .hover(|s| s.bg(vorkspace_ui::fluid::hover(0.08)))
         .focus(|s| s.bg(content(0.1)))
         .tooltip(move |_, cx| cx.new(|_| crate::controls::Tooltip(label.into())).into())
         .child(
@@ -377,6 +381,18 @@ impl VisualView {
                     .text_size(px(12.));
                 let count = columns.len().max(1);
                 let width = (self.width.get() / count as f32).max(100.);
+                // A column of numbers sits right-aligned in Obel Mono, as
+                // fluidither's tables set theirs.
+                let numeric: Vec<bool> = (0..columns.len())
+                    .map(|col| {
+                        !rows.is_empty()
+                            && rows.iter().all(|cells| {
+                                cells
+                                    .get(col)
+                                    .is_some_and(|cell| vorkspace_ui::fluid::is_numeric(cell))
+                            })
+                    })
+                    .collect();
                 let row = |cells: &[String], header: bool| {
                     div()
                         .flex()
@@ -387,12 +403,18 @@ impl VisualView {
                             d.font_weight(FontWeight::SEMIBOLD)
                                 .text_color(content(0.65))
                         })
-                        .children(cells.iter().map(|cell| {
+                        .children(cells.iter().enumerate().map(|(col, cell)| {
+                            let number = numeric.get(col).copied().unwrap_or(false);
                             div()
                                 .w(px(width))
                                 .flex_shrink_0()
                                 .px_2()
                                 .py_2()
+                                .when(number, |d| d.text_right())
+                                .when(number && !header, |d| {
+                                    d.font_family(vorkspace_ui::fonts::MONO)
+                                        .font_features(crate::panel_kit::tabular())
+                                })
                                 .child(cell.clone())
                         }))
                 };
@@ -458,11 +480,11 @@ impl VisualView {
                         div()
                             .w(px(30.))
                             .h(px(18.))
-                            .rounded_full()
+                            .rounded(px(vorkspace_ui::fluid::SWITCH_RADIUS))
                             .bg(if *value {
                                 accent_color()
                             } else {
-                                content(0.18)
+                                vorkspace_ui::fluid::switch_off()
                             })
                             .relative()
                             .child(
@@ -471,8 +493,8 @@ impl VisualView {
                                     .top(px(3.))
                                     .left(px(if *value { 15. } else { 3. }))
                                     .size(px(12.))
-                                    .rounded_full()
-                                    .bg(content(1.)),
+                                    .rounded(px(3.))
+                                    .bg(vorkspace_ui::fluid::knob(*value)),
                             ),
                     )
                     .child(label.clone())
@@ -544,7 +566,13 @@ impl VisualView {
                                     .absolute()
                                     .size_full(),
                             )
-                            .child(div().w_full().h(px(4.)).rounded_full().bg(content(0.12)))
+                            .child(
+                                div()
+                                    .w_full()
+                                    .h(px(4.))
+                                    .rounded_full()
+                                    .bg(vorkspace_ui::fluid::track(0.12)),
+                            )
                             .child(
                                 div()
                                     .absolute()
@@ -556,14 +584,10 @@ impl VisualView {
                                     .bg(accent_color()),
                             )
                             .child(
-                                div()
-                                    .absolute()
-                                    .top(px(4.))
+                                vorkspace_ui::fluid::thumb(accent_color())
+                                    .top(px(2.))
                                     .left(relative(fraction))
-                                    .ml(px(-6.))
-                                    .size(px(12.))
-                                    .rounded_full()
-                                    .bg(accent_color()),
+                                    .ml(px(-4.)),
                             )
                             .on_mouse_down(
                                 MouseButton::Left,
@@ -1173,6 +1197,26 @@ fn node_at<'a>(mut node: &'a Node, key: &str) -> Option<&'a Node> {
     Some(node)
 }
 
+/// A value axis on round steps (1, 2, 2.5 or 5 × 10ⁿ), widened to whole
+/// steps around `low..high`, with about four intervals. Returns the axis
+/// bounds and the number of intervals.
+fn nice_scale(low: f64, high: f64) -> (f64, f64, usize) {
+    let rough = (high - low) / 4.;
+    if !rough.is_finite() || rough <= 0. {
+        return (low, high, 4);
+    }
+    let magnitude = 10f64.powf(rough.log10().floor());
+    let step = [1., 2., 2.5, 5., 10.]
+        .into_iter()
+        .map(|m| m * magnitude)
+        .find(|step| *step >= rough)
+        .unwrap_or(10. * magnitude);
+    let low = (low / step).floor() * step;
+    let high = (high / step).ceil() * step;
+    let ticks = ((high - low) / step).round().max(1.) as usize;
+    (low, high, ticks)
+}
+
 fn format_number(value: f64) -> String {
     if value.abs() >= 1_000_000. {
         format!("{:.1}m", value / 1_000_000.)
@@ -1217,6 +1261,22 @@ fn paint_path(
     }
     if let Ok(path) = path.build() {
         window.paint_path(path, color);
+    }
+}
+/// A closed area under a line, shaded with fluidither's fading dither.
+fn paint_area(points: &[[f32; 2]], origin: Point<Pixels>, color: Hsla, window: &mut Window) {
+    let mut path = PathBuilder::fill();
+    for (i, p) in points.iter().enumerate() {
+        let p = origin + point(px(p[0]), px(p[1]));
+        if i == 0 {
+            path.move_to(p);
+        } else {
+            path.line_to(p);
+        }
+    }
+    path.close();
+    if let Ok(path) = path.build() {
+        window.paint_path(path, vorkspace_ui::fluid::area(color));
     }
 }
 fn paint_label(
@@ -1395,13 +1455,15 @@ fn chart(kind: ChartKind, series: Vec<Series>, labels: Vec<String>, height: f32)
                     if (high - low).abs() < f64::EPSILON {
                         high = low + 1.;
                     }
+                    // Round gridlines that clear the tallest value.
+                    let (low, high, ticks) = nice_scale(low, high);
                     let w = (bounds.size.width.as_f32() - 52.).max(1.);
                     let h = (bounds.size.height.as_f32() - 30.).max(1.);
                     let origin = bounds.origin + point(px(44.), px(4.));
                     let y = |v: f64| ((high - v) / (high - low)) as f32 * h;
                     window.with_content_mask(Some(gpui::ContentMask { bounds }), |window| {
-                        for i in 0..=4 {
-                            let value = low + (high - low) * i as f64 / 4.;
+                        for i in 0..=ticks {
+                            let value = low + (high - low) * i as f64 / ticks as f64;
                             let yy = y(value);
                             paint_path(
                                 &[[0., yy], [w, yy]],
@@ -1453,7 +1515,7 @@ fn chart(kind: ChartKind, series: Vec<Series>, labels: Vec<String>, height: f32)
                                                 px((y(*value) - y(0.)).abs().max(1.)),
                                             ),
                                         ),
-                                        color(&s.color),
+                                        vorkspace_ui::fluid::bar(color(&s.color)),
                                     ));
                                 }
                             } else {
@@ -1461,9 +1523,7 @@ fn chart(kind: ChartKind, series: Vec<Series>, labels: Vec<String>, height: f32)
                                     let mut area = points.clone();
                                     area.push([points.last().unwrap()[0], y(0.)]);
                                     area.push([points[0][0], y(0.)]);
-                                    let mut tint = color(&s.color);
-                                    tint.a = 0.14;
-                                    paint_path(&area, origin, 1., 0., true, tint, window);
+                                    paint_area(&area, origin, color(&s.color), window);
                                 }
                                 paint_path(&points, origin, 1., 2., false, color(&s.color), window);
                                 if points.len() <= 32 {

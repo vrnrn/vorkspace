@@ -100,7 +100,10 @@ impl Conversation {
                     .child(
                         approval_button("approval-deny", "Deny")
                             .text_color(content(0.5))
-                            .hover(|s| s.bg(content(0.08)).text_color(content(0.9)))
+                            .hover(|s| {
+                                s.bg(vorkspace_ui::fluid::hover(0.08))
+                                    .text_color(content(0.9))
+                            })
                             .on_click(cx.listener(move |this, _, _, cx| {
                                 this.decide_notification_request(&deny_id, Decision::Deny, cx);
                             })),
@@ -109,7 +112,7 @@ impl Conversation {
                         d.child(
                             approval_button("approval-session", "Allow for this session")
                                 .bg(content(0.06))
-                                .hover(|s| s.bg(content(0.1)))
+                                .hover(|s| s.bg(vorkspace_ui::fluid::hover(0.1)))
                                 .on_click(cx.listener(move |this, _, _, cx| {
                                     this.decide_notification_request(
                                         &session_id,

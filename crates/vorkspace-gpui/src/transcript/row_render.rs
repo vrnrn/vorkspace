@@ -413,7 +413,7 @@ impl TranscriptView {
                     && let Some(id) = cards::session(&value["sessionId"])
                     && let Some(view) = self.launches.get(&id)
                 {
-                    bot_cards::launch(id, Some(view), self.started_at.elapsed().as_secs_f32(), cx)
+                    bot_cards::launch(id, Some(view), cx)
                 } else {
                     bot_cards::render(value, cx)
                 }

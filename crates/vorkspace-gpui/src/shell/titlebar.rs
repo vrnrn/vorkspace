@@ -274,7 +274,9 @@ impl Shell {
                                 .items_center()
                                 .justify_center()
                                 .rounded(px(radius::CONTROL))
-                                .when(!panel_off, |d| d.hover(|s| s.bg(content(0.1))))
+                                .when(!panel_off, |d| {
+                                    d.hover(|s| s.bg(vorkspace_ui::fluid::hover(0.1)))
+                                })
                                 .child(
                                     div()
                                         .relative()
@@ -340,7 +342,7 @@ impl Shell {
             crate::panel_kit::diff_stat(self.git.read(cx).stats.as_ref(), width)
                 .when(self.has_session_panes(), |d| {
                     d.cursor(CursorStyle::Arrow)
-                        .hover(|s| s.bg(content(0.1)))
+                        .hover(|s| s.bg(vorkspace_ui::fluid::hover(0.1)))
                         .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
                         .on_click(cx.listener(|this, _, window, cx| {
                             this.ensure_right_panel(window, cx);

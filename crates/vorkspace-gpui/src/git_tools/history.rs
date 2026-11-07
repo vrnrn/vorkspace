@@ -403,7 +403,9 @@ impl History {
             .pr_3()
             .text_color(content(1.))
             .when(active, |d| d.bg(selection()))
-            .when(!active, |d| d.hover(|s| s.bg(content(0.05))))
+            .when(!active, |d| {
+                d.hover(|s| s.bg(vorkspace_ui::fluid::hover(0.05)))
+            })
             .on_hover(cx.listener(move |this, hovering: &bool, _, cx| {
                 let next = if *hovering {
                     Some(ix)
@@ -511,7 +513,9 @@ fn header_action(
         .justify_center()
         .rounded(px(radius::CONTROL))
         .when(!enabled, |d| d.opacity(0.4))
-        .when(enabled, |d| d.hover(|s| s.bg(content(0.05))))
+        .when(enabled, |d| {
+            d.hover(|s| s.bg(vorkspace_ui::fluid::hover(0.05)))
+        })
         .child(if spinning {
             spinner(id, path, side)
         } else {

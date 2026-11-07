@@ -67,7 +67,7 @@ impl Bots {
                                 div()
                                     .w(size.width)
                                     .h(size.height)
-                                    .bg(gpui::black().opacity(0.4))
+                                    .bg(vorkspace_ui::fluid::scrim(0.4))
                                     .occlude(),
                             ),
                     )
@@ -264,7 +264,12 @@ impl Bots {
                                                 .text_size(px(13.))
                                                 .line_height(px(20.))
                                                 .text_color(rgb(0xff6467))
-                                                .hover(|d| d.bg(rgb(0xff6467).opacity(0.08)))
+                                                .hover(|d| {
+                                                    d.bg(vorkspace_ui::fluid::wash(
+                                                        gpui::Hsla::from(rgb(0xff6467))
+                                                            .opacity(0.08),
+                                                    ))
+                                                })
                                                 .child(delete_anchor.probe())
                                                 .child(icon("trash", 14.).text_color(rgb(0xff6467)))
                                                 .child("Delete bot…")
@@ -478,7 +483,7 @@ impl Bots {
                 .gap_2()
                 .text_size(px(12.))
                 .text_color(content(0.85))
-                .hover(|s| s.bg(content(0.06)))
+                .hover(|s| s.bg(vorkspace_ui::fluid::hover(0.06)))
                 .child(label)
         };
         let identity = div()
@@ -505,7 +510,7 @@ impl Bots {
                     .border_1()
                     .border_color(content(0.04))
                     .bg(content(0.04))
-                    .hover(|s| s.bg(content(0.08)))
+                    .hover(|s| s.bg(vorkspace_ui::fluid::hover(0.08)))
                     .child(self.settings_anchor.probe())
                     .child(avatar::settings_preview(
                         bot,
@@ -544,7 +549,7 @@ impl Bots {
                     .py_1p5()
                     .rounded(px(radius::CONTROL))
                     .font_weight(FontWeight::MEDIUM)
-                    .hover(|s| s.bg(content(0.05)))
+                    .hover(|s| s.bg(vorkspace_ui::fluid::hover(0.05)))
                     .child(name),
             );
         let compaction_anchor = AnchorSlot::default();
@@ -571,7 +576,7 @@ impl Bots {
                     .gap_2()
                     .text_size(px(12.))
                     .text_color(content(0.85))
-                    .hover(|s| s.bg(content(0.06)))
+                    .hover(|s| s.bg(vorkspace_ui::fluid::hover(0.06)))
                     .child(self.model_anchor.probe())
                     .child(provider_icon(&provider, 14.))
                     .child(div().min_w_0().truncate().child(model))
@@ -665,7 +670,7 @@ impl Bots {
                         .gap_2()
                         .text_size(px(12.))
                         .text_color(content(0.85))
-                        .hover(|s| s.bg(content(0.06)))
+                        .hover(|s| s.bg(vorkspace_ui::fluid::hover(0.06)))
                         .child(self.access_anchor.probe())
                         .child(
                             icon(access_icon, 14.).when(mode == AccessMode::FullAccess, |i| {
@@ -704,7 +709,7 @@ impl Bots {
                             .on_click(cx.listener(move |this,_,_,cx| { this.edit_settings_bot(&owner, |bot| bot.projects.retain(|path| path != &remove), cx);})))
                 }))
                 .child(div().id("bot-add-project").role(Role::Button).aria_label("Add project").h(px(44.)).px_3().flex().items_center().gap_3()
-                    .text_size(px(13.)).text_color(content(0.55)).hover(|s|s.bg(content(0.04)).text_color(content(1.)))
+                    .text_size(px(13.)).text_color(content(0.55)).hover(|s| s.bg(vorkspace_ui::fluid::hover(0.04)).text_color(content(1.)))
                     .when(!bot.projects.is_empty(),|d|d.border_t_1().border_color(content(0.04)))
                     .child(self.projects_anchor.probe())
                     .child(div().size(px(32.)).rounded(px(radius::CONTAINER)).border_1().border_color(content(0.15)).flex().items_center().justify_center().child(icon("plus",14.)))

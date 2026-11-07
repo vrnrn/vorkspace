@@ -647,7 +647,7 @@ impl ResourceMonitor {
                     .child(
                         div()
                             .truncate()
-                            .font_family(vorkspace_ui::fonts::FIXED_FONT)
+                            .font_family(vorkspace_ui::fonts::MONO)
                             .text_size(px(11.))
                             .text_color(content(0.65))
                             .child(process.command.clone()),
@@ -749,7 +749,10 @@ impl Render for ResourceMonitor {
                                 d.text_color(content(0.55))
                             }
                         })
-                        .hover(|s| s.bg(content(0.08)).text_color(content(1.)))
+                        .hover(|s| {
+                            s.bg(vorkspace_ui::fluid::hover(0.08))
+                                .text_color(content(1.))
+                        })
                         .child(
                             icon("circle-alert", 14.).text_color(status(StatusColor::Warning, 1.)),
                         )

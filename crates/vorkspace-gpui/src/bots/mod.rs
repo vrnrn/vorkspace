@@ -1611,6 +1611,17 @@ impl Bots {
         }
         cx.notify();
     }
+    /// Shows one settings section, for captures of each page.
+    #[cfg(test)]
+    pub(crate) fn show_settings_section(&mut self, section: &str, cx: &mut Context<Self>) {
+        self.settings = Some(match section {
+            "soul" => SettingsSection::Soul,
+            "memory" => SettingsSection::Memory,
+            "habits" => SettingsSection::Habits,
+            _ => SettingsSection::General,
+        });
+        cx.notify();
+    }
     pub(crate) fn dismiss_settings(&mut self, window: &mut Window, cx: &mut Context<Self>) -> bool {
         if self
             .creation
@@ -1732,7 +1743,10 @@ impl Bots {
                         .text_size(px(14.))
                         .text_color(content(0.5))
                         .relative()
-                        .hover(|s| s.bg(content(0.08)).text_color(content(1.)))
+                        .hover(|s| {
+                            s.bg(vorkspace_ui::fluid::hover(0.08))
+                                .text_color(content(1.))
+                        })
                         .child(icon("plus", 16.))
                         .child("New bot")
                         .on_click(cx.listener(move |this, _, w, cx| {
@@ -1799,7 +1813,7 @@ impl Bots {
                     .gap_2()
                     .opacity(if active { 1. } else { 0.65 })
                     .when(active, |d| d.bg(content(0.1)))
-                    .hover(|s| s.bg(content(0.08)).opacity(1.))
+                    .hover(|s| s.bg(vorkspace_ui::fluid::hover(0.08)).opacity(1.))
                     .child(avatar::bot_avatar(&bot, state, 16., false))
                     .child(
                         div()

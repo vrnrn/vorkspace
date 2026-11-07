@@ -167,7 +167,7 @@ impl Render for HarnessUpdates {
                     .rounded(px(radius::CONTROL))
                     .text_size(px(11.))
                     .text_color(content(0.7))
-                    .hover(|s| s.bg(content(0.1)))
+                    .hover(|s| s.bg(vorkspace_ui::fluid::hover(0.1)))
                     .on_click(cx.listener(move |this, _, _, cx| this.start(pending.clone(), cx)))
                     .child("Update all"),
             );
@@ -185,7 +185,7 @@ impl Render for HarnessUpdates {
                 .text_color(content(if busy { 0.16 } else { 0.4 }))
                 .when(!busy, |el| {
                     el.cursor_pointer()
-                        .hover(|s| s.bg(content(0.1)))
+                        .hover(|s| s.bg(vorkspace_ui::fluid::hover(0.1)))
                         .on_click(cx.listener(|this, _, _, cx| this.dismiss(cx)))
                 })
                 .child(icon("x", 12.)),
@@ -236,11 +236,11 @@ impl Render for HarnessUpdates {
                             .text_size(px(11.))
                             .opacity(if updating { 0.6 } else { 1. })
                             .when(!updating, |el| {
-                                el.cursor_pointer().hover(|s| s.bg(content(0.15))).on_click(
-                                    cx.listener(move |this, _, _, cx| {
+                                el.cursor_pointer()
+                                    .hover(|s| s.bg(vorkspace_ui::fluid::hover(0.15)))
+                                    .on_click(cx.listener(move |this, _, _, cx| {
                                         this.start(vec![target.clone()], cx)
-                                    }),
-                                )
+                                    }))
                             })
                             .flex()
                             .items_center()

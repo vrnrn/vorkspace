@@ -186,12 +186,19 @@ impl Render for QuickOpen {
             .iter()
             .enumerate()
             .map(|(ix, row)| {
+                let command = row.path.is_none();
                 div()
                     .id(("quick-open-row", ix))
                     .role(Role::ListItem)
-                    .aria_label(row.detail.clone())
+                    .aria_label(if command {
+                        format!("{} {}", row.label, row.detail)
+                    } else {
+                        row.detail.to_string()
+                    })
                     .px_3()
-                    .py_2()
+                    // One line: a command's name and its keys as chips, a
+                    // file's name and the folder it sits in.
+                    .py(px(7.))
                     .rounded(px(radius::CONTROL))
                     .flex()
                     .gap_2p5()
@@ -201,26 +208,48 @@ impl Render for QuickOpen {
                     } else {
                         content(0.)
                     })
-                    .hover(|s| s.bg(content(0.07)))
-                    .child(if row.path.is_some() {
-                        vorkspace_ui::file_icons::file_type_icon(&row.label, false, false, 18.)
-                    } else {
-                        icon("sparkles", 16.).into_any_element()
+                    .hover(|s| s.bg(vorkspace_ui::fluid::hover(0.07)))
+                    .when(!command, |d| {
+                        d.child(vorkspace_ui::file_icons::file_type_icon(
+                            &row.label, false, false, 16.,
+                        ))
                     })
                     .child(
                         div()
                             .flex_1()
                             .min_w_0()
+                            .flex()
+                            .items_baseline()
+                            .gap_2()
                             .text_size(px(13.))
-                            .child(div().truncate().child(row.label.clone()))
+                            .text_color(content(if self.active == ix { 1. } else { 0.85 }))
                             .child(
                                 div()
-                                    .text_size(px(11.))
-                                    .text_color(content(0.4))
+                                    .flex_shrink_0()
+                                    .max_w_full()
                                     .truncate()
-                                    .child(row.detail.clone()),
-                            ),
+                                    .child(row.label.clone()),
+                            )
+                            .when(!command, |d| {
+                                let folder = std::path::Path::new(&row.detail)
+                                    .parent()
+                                    .map(|p| p.to_string_lossy().into_owned())
+                                    .unwrap_or_default();
+                                d.when(!folder.is_empty(), |d| {
+                                    d.child(
+                                        div()
+                                            .min_w_0()
+                                            .text_size(px(12.))
+                                            .text_color(content(0.4))
+                                            .truncate()
+                                            .child(folder),
+                                    )
+                                })
+                            }),
                     )
+                    .when(command && !row.detail.is_empty(), |d| {
+                        d.child(vorkspace_ui::fluid::kbd(row.detail.clone()))
+                    })
                     .on_click(cx.listener(move |this, _, _, cx| this.pick(ix, cx)))
                     .into_any_element()
             })
@@ -293,9 +322,27 @@ impl Render for QuickOpen {
                     .py_2()
                     .border_t_1()
                     .border_color(content(0.07))
-                    .text_size(px(10.))
-                    .text_color(content(0.35))
-                    .child("↑ ↓ navigate    ↵ open    Esc close    > commands"),
+                    .flex()
+                    .items_center()
+                    .gap_3()
+                    .text_size(px(11.))
+                    .text_color(content(0.4))
+                    .children(
+                        [
+                            ("↑↓", "navigate"),
+                            ("↵", "open"),
+                            ("esc", "close"),
+                            (">", "commands"),
+                        ]
+                        .map(|(keys, what)| {
+                            div()
+                                .flex()
+                                .items_center()
+                                .gap_1p5()
+                                .child(vorkspace_ui::fluid::kbd(keys))
+                                .child(what)
+                        }),
+                    ),
             )
     }
 }

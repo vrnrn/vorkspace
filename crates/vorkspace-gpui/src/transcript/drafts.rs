@@ -392,12 +392,12 @@ impl TranscriptView {
                                                                 "Send draft",
                                                             )
                                                             .px(px(10.))
-                                                            .bg(white(1.))
-                                                            .text_color(black(1.))
+                                                            .bg(content(1.))
+                                                            .text_color(vorkspace_ui::fluid::on_ink())
                                                             .child("Send")
                                                             .child(
                                                                 icon("send", 14.)
-                                                                    .text_color(black(1.)),
+                                                                    .text_color(vorkspace_ui::fluid::on_ink()),
                                                             )
                                                             .on_click(cx.listener(|_, _, _, cx| {
                                                                 cx.emit(ResponseRequest::Draft {
@@ -470,7 +470,7 @@ fn draft_button(id: &'static str, label: &'static str) -> gpui::Stateful<gpui::D
         .items_center()
         .gap(px(6.))
         .text_size(px(12.))
-        .hover(|s| s.bg(content(0.1)))
+        .hover(|s| s.bg(vorkspace_ui::fluid::hover(0.1)))
         .on_mouse_down(gpui::MouseButton::Left, |_, _, cx| cx.stop_propagation())
 }
 

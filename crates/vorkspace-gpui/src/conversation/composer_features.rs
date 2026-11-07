@@ -438,7 +438,7 @@ impl Conversation {
                                 .rounded(px(radius::CONTROL))
                                 .bg(content(0.1))
                                 .text_color(content(1.))
-                                .hover(|s| s.bg(content(0.15)))
+                                .hover(|s| s.bg(vorkspace_ui::fluid::hover(0.15)))
                         })
                         .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
                         .child(icon("close", if image { 12. } else { 10. }))

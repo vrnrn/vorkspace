@@ -260,7 +260,10 @@ impl Shell {
                     .text_size(px(14.))
                     .text_color(content(0.65))
                     .relative()
-                    .hover(|s| s.bg(content(0.08)).text_color(content(1.)))
+                    .hover(|s| {
+                        s.bg(vorkspace_ui::fluid::hover(0.08))
+                            .text_color(content(1.))
+                    })
                     .focus(|s| s.bg(content(0.1)).text_color(content(1.)))
                     .child(icon(
                         if collapsed {
@@ -489,7 +492,7 @@ impl Shell {
                     .justify_center()
                     .child(mark),
             )
-            .hover(|s| s.bg(content(0.08)).opacity(1.))
+            .hover(|s| s.bg(vorkspace_ui::fluid::hover(0.08)).opacity(1.))
             .focus(|s| s.bg(content(0.1)).opacity(1.))
             .child(
                 div()
@@ -636,7 +639,9 @@ impl Shell {
                             .inset_0()
                             .left(px(24.))
                             .rounded(px(radius::CONTROL))
-                            .group_hover("project-session", |s| s.bg(content(0.08))),
+                            .group_hover("project-session", |s| {
+                                s.bg(vorkspace_ui::fluid::hover(0.08))
+                            }),
                     )
                     // The tree: a rail down from the project's mark, and a stub.
                     .child(
@@ -705,7 +710,10 @@ impl Shell {
                     .items_center()
                     .justify_center()
                     .text_color(content(0.5))
-                    .hover(|s| s.bg(content(0.08)).text_color(content(1.)))
+                    .hover(|s| {
+                        s.bg(vorkspace_ui::fluid::hover(0.08))
+                            .text_color(content(1.))
+                    })
                     .child(self.sidebar_options_anchor.probe())
                     .child(icon("more-horizontal", 14.))
                     .on_click(cx.listener(|this, _, window, cx| {
@@ -734,7 +742,10 @@ impl Shell {
                     .text_size(px(14.))
                     .text_color(content(0.5))
                     .relative()
-                    .hover(|s| s.bg(content(0.08)).text_color(content(1.)))
+                    .hover(|s| {
+                        s.bg(vorkspace_ui::fluid::hover(0.08))
+                            .text_color(content(1.))
+                    })
                     .focus(|s| s.bg(content(0.1)).text_color(content(1.)))
                     .child(icon("settings", 16.))
                     .child(div().flex_1().child("Settings"))
@@ -786,7 +797,7 @@ impl Shell {
                                 .items_center()
                                 .justify_center()
                                 .when(selected, |d| d.bg(content(0.1)))
-                                .hover(|s| s.bg(content(0.08)))
+                                .hover(|s| s.bg(vorkspace_ui::fluid::hover(0.08)))
                                 .child(crate::avatar::bot_avatar(bot, "idle", 18., true))
                                 .on_click(move |_, window, cx| {
                                     manager.update(cx, |manager, cx| manager.open(&id, window, cx));
@@ -841,7 +852,7 @@ impl Shell {
                         .flex()
                         .items_center()
                         .justify_center()
-                        .hover(|s| s.bg(content(0.08)))
+                        .hover(|s| s.bg(vorkspace_ui::fluid::hover(0.08)))
                         .child(self.project_mark(&self.workspace.project, 14.))
                         .on_click(cx.listener(|this, event: &gpui::ClickEvent, window, cx| {
                             this.open_menu(
@@ -891,7 +902,7 @@ impl Shell {
                                 .items_center()
                                 .justify_center()
                                 .when(selected, |d| d.bg(content(0.1)))
-                                .hover(|s| s.bg(content(0.08)))
+                                .hover(|s| s.bg(vorkspace_ui::fluid::hover(0.08)))
                                 .child(icon(item.icon(), 18.).text_color(content(if selected {
                                     0.9
                                 } else {

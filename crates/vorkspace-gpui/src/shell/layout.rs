@@ -326,7 +326,7 @@ impl Shell {
             div()
                 .absolute()
                 .size_full()
-                .bg(black(0.4))
+                .bg(vorkspace_ui::fluid::scrim(0.4))
                 .child(
                     popover("running-work-modal", anchor)
                         .modal_surface(self.workspace.classic_layout)

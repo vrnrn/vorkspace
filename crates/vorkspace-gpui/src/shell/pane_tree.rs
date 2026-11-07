@@ -62,7 +62,10 @@ impl Shell {
                     .justify_center()
                     .rounded(px(radius::CONTROL))
                     .text_color(content(0.35))
-                    .hover(|s| s.bg(content(0.05)).text_color(content(0.7)))
+                    .hover(|s| {
+                        s.bg(vorkspace_ui::fluid::hover(0.05))
+                            .text_color(content(0.7))
+                    })
                     .child(icon("grip-vertical", 14.)),
             )
             .child(
@@ -94,7 +97,7 @@ impl Shell {
                     .justify_center()
                     .rounded(px(radius::SMALL))
                     .cursor(CursorStyle::Arrow)
-                    .hover(|s| s.bg(content(0.1)))
+                    .hover(|s| s.bg(vorkspace_ui::fluid::hover(0.1)))
                     .child(
                         icon("x", 12.)
                             .text_color(content(0.5))
@@ -557,7 +560,11 @@ impl Shell {
                     .into_any_element(),
             );
         }
-        let wash = div().absolute().bg(accent_color()).opacity(0.15);
+        // Where the pane will land: a sparse accent dither, so the content
+        // underneath still reads through the hint.
+        let wash = div()
+            .absolute()
+            .bg(vorkspace_ui::fluid::hint_in(accent_color(), 0.15));
         let line = div().absolute().bg(accent_color());
         let (wash, line) = match edge {
             Edge::Left => (

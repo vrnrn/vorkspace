@@ -1052,7 +1052,7 @@ impl gpui::Render for FileEditor {
                             .px_3()
                             .py_1()
                             .rounded(px(radius::CONTROL))
-                            .hover(|s| s.bg(content(0.1)))
+                            .hover(|s| s.bg(vorkspace_ui::fluid::hover(0.1)))
                             .child("Open externally")
                             .on_click(cx.listener(|this, _, _, cx| {
                                 cx.open_url(&format!(

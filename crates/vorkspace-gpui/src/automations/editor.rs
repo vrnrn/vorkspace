@@ -881,7 +881,7 @@ impl Automations {
                     .items_center()
                     .gap(px(8.))
                     .cursor_pointer()
-                    .hover(|s| s.bg(content(0.05)))
+                    .hover(|s| s.bg(vorkspace_ui::fluid::hover(0.05)))
                     .child(
                         div()
                             .flex_1()
@@ -1060,7 +1060,8 @@ impl Automations {
                     .when(narrow, |d| d.flex_col().items_start().gap(px(4.)))
                     .when(!narrow, |d| d.items_center().gap(px(12.)))
                     .when(session.is_some(), |d| {
-                        d.cursor_pointer().hover(|s| s.bg(content(0.05)))
+                        d.cursor_pointer()
+                            .hover(|s| s.bg(vorkspace_ui::fluid::hover(0.05)))
                     })
                     .child(
                         page::label()
