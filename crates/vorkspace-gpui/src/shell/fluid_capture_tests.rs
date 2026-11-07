@@ -457,6 +457,19 @@ fn fluid_capture() {
                 .unwrap()
                 .save(output.join(format!("{theme}-{name}.png")))
                 .unwrap();
+            if *name == "typed" {
+                // Drafts persist per session; later shots start clean.
+                window
+                    .update(&mut cx, |shell, _, cx| {
+                        let view = shell.sessions[&sessions[0].id].clone();
+                        view.update(cx, |view, cx| {
+                            view.input
+                                .update(cx, |input, cx| input.set_text(String::new(), cx))
+                        });
+                    })
+                    .unwrap();
+                cx.run_until_parked();
+            }
             cx.update_window(window.into(), |_, window, _| window.remove_window())
                 .unwrap();
             if *name == "notice" {
