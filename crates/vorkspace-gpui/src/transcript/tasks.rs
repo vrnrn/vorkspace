@@ -6,7 +6,7 @@ use super::{
 use crate::markdown;
 use gpui::{
     AnyElement, Context, Pixels, Role, SharedString, Transformation, div, percentage, prelude::*,
-    px, rgb,
+    px,
 };
 use std::{
     collections::{HashMap, HashSet},
@@ -475,13 +475,13 @@ fn agent(
                         .min_w_0()
                         .truncate()
                         .text_color(if failed {
-                            rgb(0xf87171).into()
+                            vorkspace_ui::theme::danger()
                         } else {
                             content(0.75)
                         })
                         .group_hover("subagent-row", |s| {
                             s.text_color(if failed {
-                                rgb(0xf87171).into()
+                                vorkspace_ui::theme::danger()
                             } else {
                                 content(1.)
                             })
@@ -547,7 +547,7 @@ fn agent(
                     .text_size(px(12.))
                     .line_height(px(20.))
                     .text_color({
-                        let mut color: gpui::Hsla = rgb(0xf87171).into();
+                        let mut color: gpui::Hsla = vorkspace_ui::theme::danger();
                         color.a = 0.8;
                         color
                     })

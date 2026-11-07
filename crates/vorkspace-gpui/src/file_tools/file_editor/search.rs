@@ -29,7 +29,7 @@ impl FileEditor {
             .rounded(px(radius::CONTROL))
             .border_1()
             .border_color(if bad {
-                rgb(0xf87171).opacity(0.55).into()
+                vorkspace_ui::theme::danger().opacity(0.55)
             } else {
                 content(0.1)
             })
@@ -41,7 +41,7 @@ impl FileEditor {
                     .text_right()
                     .text_size(px(11.))
                     .text_color(if bad {
-                        rgb(0xf87171).into()
+                        vorkspace_ui::theme::danger()
                     } else {
                         content(0.45)
                     })

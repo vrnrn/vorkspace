@@ -161,8 +161,11 @@ impl Bots {
                                 .flex()
                                 .items_center()
                                 .gap_1()
-                                .text_color(rgb(0xfbbf24))
-                                .child(icon("circle-alert", 12.).text_color(rgb(0xfbbf24)))
+                                .text_color(vorkspace_ui::theme::warning())
+                                .child(
+                                    icon("circle-alert", 12.)
+                                        .text_color(vorkspace_ui::theme::warning()),
+                                )
                                 .child("Need approval")
                                 .into_any_element(),
                             Some(s) if s.busy => div()

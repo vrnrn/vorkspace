@@ -538,7 +538,7 @@ impl SettingsView {
                     .px_4()
                     .py_2()
                     .text_size(px(11.))
-                    .text_color(gpui::rgb(0xf87171))
+                    .text_color(vorkspace_ui::theme::danger())
                     .child(error.clone())
                     .into_any_element(),
             );

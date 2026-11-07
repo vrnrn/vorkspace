@@ -425,7 +425,7 @@ impl Render for RemoteProjectPicker {
                     .role(Role::Alert)
                     .text_size(px(12.))
                     .line_height(px(17.))
-                    .text_color(rgb(0xf87171))
+                    .text_color(vorkspace_ui::theme::danger())
                     .child(self.error.clone()),
             );
         }

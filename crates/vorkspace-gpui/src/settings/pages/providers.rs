@@ -163,10 +163,7 @@ impl SettingsView {
                     }))
                 })
                 .child(if installed.is_some() {
-                    vorkspace_ui::fluid::badge(
-                        "Installed",
-                        vorkspace_ui::theme::status(vorkspace_ui::theme::StatusColor::Success, 1.),
-                    )
+                    vorkspace_ui::fluid::badge("Installed", vorkspace_ui::theme::success())
                 } else {
                     vorkspace_ui::fluid::badge("Not installed", content(0.3))
                 });

@@ -194,7 +194,7 @@ impl TranscriptView {
                         .py_2()
                         .rounded(px(radius::SURFACE))
                         .border_1()
-                        .border_color(rgb(0xf87171))
+                        .border_color(vorkspace_ui::theme::danger())
                         .bg(rgb(0x252525))
                         .text_size(px(12.))
                         .text_color(rgb(0xfca5a5))

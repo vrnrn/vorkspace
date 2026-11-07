@@ -58,7 +58,7 @@ pub(super) fn render(
                         .flex_shrink_0()
                         .text_size(px(11.))
                         .text_color(if done {
-                            gpui::rgb(0x34d399).into()
+                            vorkspace_ui::theme::success()
                         } else {
                             content(0.45)
                         })

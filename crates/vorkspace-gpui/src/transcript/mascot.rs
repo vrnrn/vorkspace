@@ -1,5 +1,5 @@
 //! ProjectMascot / SubagentMascot: the React transcript's two-frame pixel faces.
-use gpui::{Animation, AnimationExt, AnyElement, canvas, div, prelude::*, px, rgb};
+use gpui::{Animation, AnimationExt, AnyElement, canvas, div, prelude::*, px};
 use std::time::Duration;
 use vorkspace_core::tool::ToolState;
 use vorkspace_ui::theme::content;
@@ -97,7 +97,7 @@ const TALK: [Frame; 10] = [
 /// Activity is independent of state: a pending run can already have settled.
 pub(super) fn subagent_mascot(name: &str, state: &ToolState, active: bool) -> AnyElement {
     let color = match state {
-        ToolState::Failed | ToolState::Cancelled => rgb(0xf87171).into(),
+        ToolState::Failed | ToolState::Cancelled => vorkspace_ui::theme::danger(),
         ToolState::Running => content(0.70),
         ToolState::Completed => content(0.45),
     };

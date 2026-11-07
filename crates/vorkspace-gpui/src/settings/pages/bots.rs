@@ -38,10 +38,7 @@ impl SettingsView {
                 Some("bot-channels"),
                 false,
                 div().flex().items_center().gap_2().child("Channels").child(
-                    vorkspace_ui::fluid::badge(
-                        "Experimental",
-                        vorkspace_ui::theme::status(vorkspace_ui::theme::StatusColor::Warning, 1.),
-                    ),
+                    vorkspace_ui::fluid::badge("Experimental", vorkspace_ui::theme::warning()),
                 ),
                 Some("Shared conversations with your Bots.".into()),
                 vec![self.toggle(
@@ -57,10 +54,7 @@ impl SettingsView {
                 Some("bot-minions"),
                 false,
                 div().flex().items_center().gap_2().child("Minions").child(
-                    vorkspace_ui::fluid::badge(
-                        "Experimental",
-                        vorkspace_ui::theme::status(vorkspace_ui::theme::StatusColor::Warning, 1.),
-                    ),
+                    vorkspace_ui::fluid::badge("Experimental", vorkspace_ui::theme::warning()),
                 ),
                 Some("Let Bots delegate work to Minions that share their memory.".into()),
                 vec![self.toggle(

@@ -117,7 +117,7 @@ impl SettingsView {
                     .role(gpui::Role::Alert)
                     .mt_3()
                     .text_size(px(12.))
-                    .text_color(gpui::rgb(0xf87171))
+                    .text_color(vorkspace_ui::theme::danger())
                     .child(error.clone())
                     .into_any_element(),
             );

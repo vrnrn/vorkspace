@@ -159,6 +159,17 @@ pub fn status(role: StatusColor, alpha: f32) -> Hsla {
     color.opacity(alpha)
 }
 
+/// Full-strength status ink, paired for light and dark.
+pub fn danger() -> Hsla {
+    status(StatusColor::Danger, 1.)
+}
+pub fn warning() -> Hsla {
+    status(StatusColor::Warning, 1.)
+}
+pub fn success() -> Hsla {
+    status(StatusColor::Success, 1.)
+}
+
 pub fn floating_fill() -> Hsla {
     let mut fill = pane_fill();
     if is_light() {

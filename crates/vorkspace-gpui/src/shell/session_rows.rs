@@ -638,7 +638,7 @@ impl Shell {
                     .flex()
                     .items_center()
                     .gap_1()
-                    .text_color(rgb(0xfbbf24))
+                    .text_color(vorkspace_ui::theme::warning())
                     .child(icon("circle-alert", 14.))
                     .when(detailed, |d| d.child("Needs approval"))
                     .into_any()
@@ -656,8 +656,8 @@ impl Shell {
                     .flex()
                     .items_center()
                     .gap_1()
-                    .text_color(rgb(0x2dd4bf))
-                    .child(icon("check-circle-2", 14.).text_color(rgb(0x2dd4bf)))
+                    .text_color(vorkspace_ui::theme::success())
+                    .child(icon("check-circle-2", 14.).text_color(vorkspace_ui::theme::success()))
                     .child("Done")
                     .into_any()
             } else if session.has_saved_draft() {
@@ -675,7 +675,7 @@ impl Shell {
                 div()
                     .id(("session-reminder", id as usize))
                     .aria_label(local_reminder_label(reminder.due_at))
-                    .text_color(rgb(0xf59e0b))
+                    .text_color(vorkspace_ui::theme::warning())
                     .child(session_groups::reminder_caption(reminder.due_at))
                     .into_any()
             } else {

@@ -1739,7 +1739,7 @@ impl gpui::Render for Notes {
                         .items_center()
                         .gap_2()
                         .text_size(px(12.))
-                        .text_color(gpui::rgb(0xf87171))
+                        .text_color(vorkspace_ui::theme::danger())
                         .child(div().flex_1().child(error))
                         .child(
                             div()

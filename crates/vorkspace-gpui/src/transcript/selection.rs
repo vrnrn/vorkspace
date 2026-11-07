@@ -834,7 +834,7 @@ impl TranscriptView {
                             .px_2p5()
                             .py_1()
                             .text_size(px(11.))
-                            .text_color(rgb(0xf87171))
+                            .text_color(vorkspace_ui::theme::danger())
                             .child(format!("Could not save note: {error}")),
                     )
                 },

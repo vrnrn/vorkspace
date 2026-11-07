@@ -432,12 +432,8 @@ impl LiveAgents {
                 });
             });
         let ink = match agent.status {
-            Status::Approval => {
-                vorkspace_ui::theme::status(vorkspace_ui::theme::StatusColor::Warning, 1.)
-            }
-            Status::Done => {
-                vorkspace_ui::theme::status(vorkspace_ui::theme::StatusColor::Success, 1.)
-            }
+            Status::Approval => vorkspace_ui::theme::warning(),
+            Status::Done => vorkspace_ui::theme::success(),
             Status::Working => content(0.5),
         };
         let status = div()

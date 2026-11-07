@@ -84,7 +84,7 @@ impl TranscriptView {
                 .py_1()
                 .line_height(px(20.))
                 .text_color(if failed {
-                    rgb(0xf87171).into()
+                    vorkspace_ui::theme::danger()
                 } else {
                     content(0.55)
                 })
@@ -117,7 +117,7 @@ impl TranscriptView {
                     };
                     icon(glyph, 14.)
                         .text_color(if failed {
-                            rgb(0xf87171).into()
+                            vorkspace_ui::theme::danger()
                         } else {
                             content(0.45)
                         })
@@ -242,7 +242,7 @@ impl TranscriptView {
                     div()
                         .flex_shrink_0()
                         .text_color(if failed {
-                            rgb(0xf87171).into()
+                            vorkspace_ui::theme::danger()
                         } else {
                             content(0.5)
                         })
@@ -265,7 +265,7 @@ impl TranscriptView {
                                 .text_size(px(12.))
                         })
                         .text_color(if failed {
-                            rgb(0xff6467).into()
+                            vorkspace_ui::theme::danger()
                         } else {
                             content(0.7)
                         })
@@ -294,7 +294,7 @@ impl TranscriptView {
                                         .bg(content(0.))
                                         .border_color(content(0.12))
                                         .text_color(if failed {
-                                            rgb(0xff6467).into()
+                                            vorkspace_ui::theme::danger()
                                         } else {
                                             content(0.5)
                                         })
@@ -427,7 +427,7 @@ impl TranscriptView {
                                             .bg(content(0.))
                                             .border_color(content(0.12))
                                             .text_color(if failed {
-                                                rgb(0xff6467).into()
+                                                vorkspace_ui::theme::danger()
                                             } else {
                                                 content(0.5)
                                             })
@@ -442,7 +442,11 @@ impl TranscriptView {
                 ),
             )
             .when(failed, |d| {
-                d.child(icon("close", 14.).text_color(rgb(0xff6467)).flex_shrink_0())
+                d.child(
+                    icon("close", 14.)
+                        .text_color(vorkspace_ui::theme::danger())
+                        .flex_shrink_0(),
+                )
             })
             .when(has_detail, |d| {
                 let toggle_key = error_key.clone();
@@ -468,7 +472,7 @@ impl TranscriptView {
                                     14.,
                                 )
                                 .text_color(if has_error {
-                                    rgb(0xf87171).into()
+                                    vorkspace_ui::theme::danger()
                                 } else {
                                     content(0.4)
                                 }),
@@ -557,7 +561,7 @@ impl TranscriptView {
                         .font_family(vorkspace_ui::fonts::FIXED_FONT)
                         .text_size(px(12.))
                         .line_height(px(20.))
-                        .text_color(rgb(0xf87171))
+                        .text_color(vorkspace_ui::theme::danger())
                         .child(error_detail),
                 )
             })

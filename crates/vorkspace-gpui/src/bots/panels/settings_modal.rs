@@ -263,15 +263,17 @@ impl Bots {
                                                 .rounded(px(radius::CONTROL))
                                                 .text_size(px(13.))
                                                 .line_height(px(20.))
-                                                .text_color(rgb(0xff6467))
+                                                .text_color(vorkspace_ui::theme::danger())
                                                 .hover(|d| {
                                                     d.bg(vorkspace_ui::fluid::wash(
-                                                        gpui::Hsla::from(rgb(0xff6467))
-                                                            .opacity(0.08),
+                                                        vorkspace_ui::theme::danger().opacity(0.08),
                                                     ))
                                                 })
                                                 .child(delete_anchor.probe())
-                                                .child(icon("trash", 14.).text_color(rgb(0xff6467)))
+                                                .child(
+                                                    icon("trash", 14.)
+                                                        .text_color(vorkspace_ui::theme::danger()),
+                                                )
                                                 .child("Delete bot…")
                                                 .on_click(cx.listener(
                                                     move |this, _, window, cx| {
@@ -391,7 +393,7 @@ impl Bots {
                 .child(
                     button("bot-reset", "Reset")
                         .debug_selector(|| "bot-reset".into())
-                        .text_color(rgb(0xff6467))
+                        .text_color(vorkspace_ui::theme::danger())
                         .on_click(cx.listener(move |this, _, window, cx| {
                             this.reset_conversation(&reset, window, cx)
                         })),

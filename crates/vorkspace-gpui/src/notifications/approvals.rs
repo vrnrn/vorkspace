@@ -181,10 +181,7 @@ impl Render for ApprovalNotices {
                             .relative()
                             .overflow_hidden()
                             .child(vorkspace_ui::fluid::strip(
-                                vorkspace_ui::theme::status(
-                                    vorkspace_ui::theme::StatusColor::Warning,
-                                    1.,
-                                ),
+                                vorkspace_ui::theme::warning(),
                                 radius::SURFACE,
                             ))
                             .child(
@@ -225,10 +222,7 @@ impl Render for ApprovalNotices {
                                                 } else {
                                                     "Approval"
                                                 },
-                                                vorkspace_ui::theme::status(
-                                                    vorkspace_ui::theme::StatusColor::Warning,
-                                                    1.,
-                                                ),
+                                                vorkspace_ui::theme::warning(),
                                             )),
                                     )
                                     .child(

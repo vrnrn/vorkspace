@@ -91,7 +91,7 @@ read them only through these helpers:
 | `text_selection()` | Text selection highlight |
 | `shell_fill()`, `pane_fill()`, `floating_fill()`, `composer_fill()` | Surfaces (§4) |
 | `syntax_color()`, `diff_foreground()`, `diff_background()` | Code and diffs; these follow the workspace theme and diff palette preferences. The highlighter emits Dark+ colors; code blocks, visual source and diffs all resolve them through `diff_syntax_color`, never `rgb(span.color)` |
-| `status(StatusColor, alpha)` | Danger, warning and success ink or washes, paired for light and dark |
+| `status(StatusColor, alpha)`, `danger()`, `warning()`, `success()` | Danger, warning and success ink or washes, paired for light and dark. Never write the dark values (`#f87171`, `#fbbf24`, `#34d399`) as literals: they fade on light backgrounds |
 | `is_light()` | Only when a value genuinely cannot be expressed as ink alpha |
 
 `white(a)` and `black(a)` are for literal-contrast cases only, such as ink on a

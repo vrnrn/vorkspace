@@ -9,7 +9,7 @@ use crate::{
 use gpui::{
     AnyElement, App, Context, Entity, EventEmitter, FocusHandle, Focusable, Image, ImageFormat,
     KeyBinding, ObjectFit, PromptLevel, Role, SharedString, Subscription, Task, Window, actions,
-    div, img, prelude::*, px, rgb,
+    div, img, prelude::*, px,
 };
 use std::{path::PathBuf, sync::Arc, time::Duration};
 use vorkspace_core::files::document::{self, Document, TextDocument};
@@ -1208,7 +1208,7 @@ impl gpui::Render for FileEditor {
                             .px_3()
                             .py_2()
                             .text_size(px(12.))
-                            .text_color(rgb(0xfbbf24))
+                            .text_color(vorkspace_ui::theme::warning())
                             .flex()
                             .items_center()
                             .gap_3()

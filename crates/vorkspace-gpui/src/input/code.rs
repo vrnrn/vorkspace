@@ -1559,7 +1559,7 @@ fn shape(i: &Input, row: usize, width: Option<Pixels>, w: &mut Window) -> Wrappe
                 decorated.push(TextRun {
                     len: b - a,
                     underline: Some(UnderlineStyle {
-                        color: Some(rgb(0xf87171).into()),
+                        color: Some(vorkspace_ui::theme::danger()),
                         thickness: px(1.),
                         wavy: true,
                     }),

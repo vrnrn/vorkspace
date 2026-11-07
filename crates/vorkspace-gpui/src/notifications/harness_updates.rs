@@ -209,7 +209,7 @@ impl Render for HarnessUpdates {
                 line = line.child(
                     div()
                         .text_size(px(11.))
-                        .text_color(gpui::rgb(0x34d399))
+                        .text_color(vorkspace_ui::theme::success())
                         .child(format!("✓ Updated to {version}")),
                 );
             } else {

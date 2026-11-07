@@ -1275,10 +1275,14 @@ impl Shell {
                     .text_size(px(11.))
                     .text_color(content(0.4))
                     .when(!expanded && approval, |d| {
-                        d.child(icon("circle-alert", 12.).text_color(rgb(0xfbbf24)))
+                        d.child(
+                            icon("circle-alert", 12.).text_color(vorkspace_ui::theme::warning()),
+                        )
                     })
                     .when(!expanded && !approval && done, |d| {
-                        d.child(icon("check-circle-2", 12.).text_color(rgb(0x2dd4bf)))
+                        d.child(
+                            icon("check-circle-2", 12.).text_color(vorkspace_ui::theme::success()),
+                        )
                     })
                     .child(sessions.len().to_string()),
             )
@@ -1516,7 +1520,7 @@ impl Shell {
                                                             .id("link-error")
                                                         .role(Role::Alert)
                                                         .text_size(px(11.))
-                                                        .text_color(rgb(0xf87171))
+                                                        .text_color(vorkspace_ui::theme::danger())
                                                         .child(error.clone()),
                                                     None => div()
                                                             .id("link-help")
@@ -1537,7 +1541,7 @@ impl Shell {
                                                     d.child(
                                                         button("link-remove", "Remove link")
                                                             .mr_auto()
-                                                            .text_color(rgb(0xf87171))
+                                                            .text_color(vorkspace_ui::theme::danger())
                                                             .hover(|s| s.bg(vorkspace_ui::fluid::wash(rgba(0xf871711a).into())))
                                                             .on_click(cx.listener(|this, _, window, cx| {
                                                                 this.save_link(false, window, cx)

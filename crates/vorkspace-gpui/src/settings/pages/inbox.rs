@@ -185,7 +185,7 @@ impl SettingsView {
                 .child(div().h(px(36.)).px_2().border_1().border_color(content(0.15)).rounded(px(radius::CONTROL)).flex().items_center().child(query))
                 .child(div().text_color(content(0.5)).child("JQL controls which tickets are fetched. Project selections and Assigned to me do not apply. Jira status, time, and search filters still narrow the results."))
                 .child(apply).child(div().text_color(content(0.5)).child(if applied {"JQL query applied."}else{"Apply to check and save your query."}))
-                .when_some(self.inbox.error.clone(),|d,error|d.child(div().text_color(gpui::rgb(0xef4444)).child(error))).into_any_element());
+                .when_some(self.inbox.error.clone(),|d,error|d.child(div().text_color(vorkspace_ui::theme::danger()).child(error))).into_any_element());
         } else {
             let refresh =
                 secondary_button("jira-refresh-projects", "Refresh projects", false, false)

@@ -628,14 +628,14 @@ impl SettingsView {
                 if tree.assessment.dirty != Some(false) {
                     consequences = consequences.child(
                         div()
-                            .text_color(gpui::rgb(0xfbbf24))
+                            .text_color(vorkspace_ui::theme::warning())
                             .child("All uncommitted and untracked changes here are discarded."),
                     );
                 }
                 if tree.assessment.safety_unknown() {
                     consequences = consequences.child(
                         div()
-                            .text_color(gpui::rgb(0xfbbf24))
+                            .text_color(vorkspace_ui::theme::warning())
                             .child("Deleting this worktree can discard files or changes Git could not inspect."),
                     );
                 }
@@ -696,7 +696,7 @@ impl SettingsView {
                     .id("management-error")
                     .role(Role::Alert)
                     .text_size(px(11.))
-                    .text_color(gpui::rgb(0xf87171))
+                    .text_color(vorkspace_ui::theme::danger())
                     .child(error)
                     .into_any_element(),
             );

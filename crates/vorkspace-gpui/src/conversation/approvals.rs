@@ -61,7 +61,7 @@ impl Conversation {
                     .flex()
                     .items_center()
                     .gap(px(10.))
-                    .child(icon("square-lock", 14.).text_color(gpui::rgb(0xfbbf24)))
+                    .child(icon("square-lock", 14.).text_color(vorkspace_ui::theme::warning()))
                     .child(
                         div()
                             .min_w_0()

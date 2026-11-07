@@ -278,11 +278,11 @@ impl Shell {
                 let alert = needs_input || matches!(task.status.as_str(), "failed" | "blocked");
                 let done = task.status == "completed";
                 let tone: gpui::Hsla = if alert {
-                    rgb(0xfbbf24).into()
+                    vorkspace_ui::theme::warning()
                 } else if working {
                     accent_color()
                 } else if done {
-                    rgb(0x34d399).into()
+                    vorkspace_ui::theme::success()
                 } else {
                     content(0.45)
                 };

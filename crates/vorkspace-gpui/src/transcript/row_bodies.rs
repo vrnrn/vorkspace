@@ -15,8 +15,8 @@ impl TranscriptView {
         let long = note.text.lines().count() > 4 || note.text.len() > 300;
         let severity = note.severity.as_deref();
         let color = match severity {
-            Some("blocker") => rgb(0xf87171).into(),
-            Some("concern") => rgb(0xfbbf24).into(),
+            Some("blocker") => vorkspace_ui::theme::danger(),
+            Some("concern") => vorkspace_ui::theme::warning(),
             _ => content(0.55),
         };
         div()
@@ -471,7 +471,7 @@ impl TranscriptView {
             .flex()
             .flex_col()
             .text_color(if error {
-                rgb(0xf87171).into()
+                vorkspace_ui::theme::danger()
             } else {
                 content(1.)
             })
