@@ -2,6 +2,8 @@
 
 Stable releases publish a signed Sparkle ZIP and appcast for macOS 26 and later. The release also carries the existing signed legacy JSON manifest pinned to [version 1.1.2](https://github.com/vrnrn/vorkspace/releases/tag/mac-v1.1.2), the macOS 11-compatible bridge for older updater clients. Once installed, the bridge can use Sparkle, which checks the appcast's minimum system version. The app opens existing databases and settings in place. See [data continuity](data-storage.md).
 
+When automatic checks are enabled, the app checks for updates in the background on every launch, immediately after starting Sparkle. Sparkle then owns the regular schedule, which defaults to every 24 hours. The launch check respects a saved opt-out from automatic checks. **vorkspace → Check for Updates…** and **Settings → General → Check for updates** start a manual check.
+
 Local builds without Sparkle open the release page when **Check for Updates** is selected. Development-data bundles cannot use a release feed. Packaging prepares files locally.
 
 The manual **Mac release** workflow uses `MACOS_SPARKLE_SIGNING_KEY` with the seed matching `scripts/release/sparkle-public-key.txt`. It reserves an unused version and numeric build number, verifies the Sparkle archive and the appcast's macOS minimum, and copies `scripts/release/legacy-macos-update.json` into the published assets. Keep the bridge release and its signed archive available at the URLs in that manifest.

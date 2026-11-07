@@ -2,6 +2,8 @@
 
 The current app requires macOS 26. The original updater can install version 1.1.2, which works on macOS 11 and later. That version includes Sparkle, which checks the computer's macOS version and the publisher's signature before offering a newer update. The app opens saved data where it already lives.
 
+Vorkspace checks for updates in the background each time you open it, then about once a day while it stays open. If you have turned automatic checks off, it respects that choice. To check immediately, choose **vorkspace → Check for Updates…** or **Settings → General → Check for updates**.
+
 The manually started **Mac release** workflow signs the new download, checks that it advertises the correct macOS minimum, and keeps the original updater pointed at 1.1.2. Local builds without Sparkle open the release page. Development builds keep separate data.
 
 Published builds carry their own release notes. Local builds can fetch the matching published notes when you open **What's new**. The app remembers which version you last opened and shows an update notice once when that version changes. Opening a fresh installation does not show an update notice unless the older updater left a matching marker.

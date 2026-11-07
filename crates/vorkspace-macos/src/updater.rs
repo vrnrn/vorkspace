@@ -38,6 +38,14 @@ mod macos {
             let allocated: objc2::rc::Allocated<AnyObject> = msg_send![class, alloc];
             let controller: Option<Retained<AnyObject>> = msg_send![allocated, initWithStartingUpdater: true, updaterDelegate: std::ptr::null::<AnyObject>(), userDriverDelegate: std::ptr::null::<AnyObject>()];
             if let Some(controller) = controller {
+                let updater: Retained<AnyObject> = msg_send![&controller, updater];
+                let automatic: bool = msg_send![&updater, automaticallyChecksForUpdates];
+                let can_check: bool = msg_send![&updater, canCheckForUpdates];
+                // Check before Sparkle's first scheduled cycle, respecting an
+                // explicit opt-out and leaving subsequent checks to Sparkle.
+                if automatic && can_check {
+                    let _: () = msg_send![&updater, checkForUpdatesInBackground];
+                }
                 cx.set_global(Updater {
                     _framework: framework,
                     controller,

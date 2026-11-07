@@ -1,6 +1,6 @@
 # Record a meeting in a note
 
-Choose **Notes**, then open a note or press **+** above the list. Press **Start recording** when you are ready. You can record in any note. Stop and start as often as needed: each take continues the same recording, including any transcript corrections. Opening an untouched blank note does not save it. A blank, unnamed recording with no transcript does not add an empty note to your saved list. You can also use ⌘⇧R or choose **Stop Meeting Recording** from the vorkspace menu. Vorkspace saves the words, start time and duration. It does not save the audio.
+Choose **Notes**, then open a note or press **+** above the list. Press **Start recording** when you are ready. You can record in any note. Stop and start as often as needed: each take continues the same recording, including any transcript corrections. Opening an untouched blank note does not save it. A blank, unnamed recording with no transcript does not add an empty note to your saved list. Vorkspace saves the words, start time and duration. It does not save the audio.
 
 **Preview** shows the text you wrote in the note; **Source** lets you edit that text. A recording adds **Summary** and **Transcript** tabs beside them. The active tab has a line underneath it. Your written note, the transcript and the generated summary stay separate. To change a summary, open **Summary** and choose **Edit summary**, then **View summary** to return to its formatted view.
 

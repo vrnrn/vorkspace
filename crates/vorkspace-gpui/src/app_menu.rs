@@ -51,7 +51,6 @@ actions!(
     [
         About,
         CheckUpdates,
-        StopMeetingRecording,
         Hide,
         HideOthers,
         ShowAll,
@@ -148,21 +147,6 @@ pub(crate) fn init(cx: &mut App) {
         }
     });
     cx.on_action(|_: &CheckUpdates, cx| vorkspace_macos::updater::check(cx));
-    cx.on_action(|_: &StopMeetingRecording, cx| {
-        if let Err(error) = crate::meetings::stop_active(cx)
-            && let Some(window) = cx.active_window()
-        {
-            let _ = window.update(cx, |_, window, cx| {
-                drop(window.prompt(
-                    gpui::PromptLevel::Warning,
-                    "Could not stop recording",
-                    Some(&error),
-                    &["OK"],
-                    cx,
-                ));
-            });
-        }
-    });
     cx.on_action(|_: &Hide, cx| cx.hide());
     cx.on_action(|_: &HideOthers, cx| cx.hide_other_apps());
     cx.on_action(|_: &ShowAll, cx| cx.unhide_other_apps());
@@ -197,7 +181,6 @@ pub(crate) fn build(prefs: &Preferences) -> Vec<Menu> {
             MenuItem::action("Settings…", shell::OpenSettings),
             MenuItem::action("Check for Updates…", CheckUpdates),
             MenuItem::separator(),
-            MenuItem::action("Stop Meeting Recording", StopMeetingRecording),
             MenuItem::action("Restart vorkspace", crate::Restart),
             MenuItem::separator(),
             MenuItem::os_submenu("Services", SystemMenuType::Services),
