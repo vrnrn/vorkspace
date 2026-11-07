@@ -132,7 +132,12 @@ for line in sys.stdin:
         |_| Some(binary),
     );
     let updates: Vec<_> = std::iter::from_fn(|| rx.try_recv().ok()).collect();
-    assert_eq!(updates.last().unwrap().status, "Ready");
+    let finished = updates.last().unwrap();
+    assert_eq!(finished.status, "Ready");
+    assert_eq!(finished.start, 0);
+    assert_eq!(finished.source_len, Some(finished.rows.len()));
+    assert_eq!(finished.bot_turn_start, Some(2));
+    assert_eq!(finished.provider_turn_id.as_deref(), Some("managed"));
     let first = updates.iter().find(|u| !u.rows.is_empty()).unwrap();
     assert_eq!(first.start, 0);
     assert_eq!(first.rows[0].text, "From the terminal");
@@ -154,6 +159,140 @@ for line in sys.stdin:
             "Managed answer"
         ]
     );
+}
+
+#[test]
+fn bot_final_snapshot_includes_imports_when_initial_publication_is_stopped_or_skipped() {
+    for stopped in [true, false] {
+        let directory = tempfile::tempdir().unwrap();
+        let (store, summary, mut settings, source) = native_fixture(directory.path());
+        let id = summary.id;
+        let message = "managed-message";
+        settings.bot_message_id = Some(message.into());
+        let mut visible = Transcript::default();
+        visible.begin("user");
+        visible.append("Previous prompt");
+        visible.begin("assistant");
+        visible.append("Previous answer");
+        let draft = json!({"text":"Unsent draft","cwd":summary.cwd,"selectionStart":0,"selectionEnd":0,"attachments":[],"mcpTags":[]});
+        let queued = vorkspace_core::follow_up::Message {
+            id: "queued-later".into(),
+            text: "Retained queued input".into(),
+            ..Default::default()
+        };
+        {
+            let mut owner = locked(&store).unwrap();
+            owner.write_rows(id, 0, &visible.rows).unwrap();
+            owner.save_composer_draft(id, 0, &draft).unwrap();
+            owner
+                .save_follow_ups(
+                    id,
+                    &vorkspace_core::follow_up::State {
+                        messages: vec![queued.clone()],
+                        ..Default::default()
+                    },
+                )
+                .unwrap();
+        }
+        append_native(
+            &source,
+            &external_turn("outside", "Terminal prompt", "Terminal answer"),
+        );
+        let cancel = Arc::new(AtomicBool::new(false));
+        let (tx, rx) = async_channel::bounded(if stopped { 1 } else { 8 });
+        if stopped {
+            // Keep the channel full until the worker has processed Stop. The
+            // first Bot snapshot cannot reach a receiver in this ordering.
+            tx.try_send(Update {
+                status: "Hold the channel".into(),
+                ..Default::default()
+            })
+            .unwrap();
+        }
+        let worker = std::thread::spawn({
+            let store = store.clone();
+            let cancel = cancel.clone();
+            let summary = summary.clone();
+            move || {
+                let (_control, controls) = std::sync::mpsc::channel();
+                run_turn_using(
+                    TurnInput {
+                        summary,
+                        prompt: "Managed prompt".into(),
+                        settings,
+                    },
+                    controls,
+                    store,
+                    cancel,
+                    tx,
+                    |_| {
+                        assert!(
+                            !stopped,
+                            "Stop must reject the first publication before provider resolution"
+                        );
+                        None
+                    },
+                );
+            }
+        });
+        if stopped {
+            let delivered = format!("bot-delivered:{id}:{message}");
+            let deadline = std::time::Instant::now() + Duration::from_secs(5);
+            loop {
+                {
+                    let owner = locked(&store).unwrap();
+                    if owner.setting(&delivered).unwrap().is_some() {
+                        cancel.store(true, Ordering::Relaxed);
+                    }
+                    if owner
+                        .local_submissions(id)
+                        .unwrap()
+                        .iter()
+                        .any(|receipt| receipt.phase == "settled")
+                    {
+                        break;
+                    }
+                }
+                assert!(
+                    std::time::Instant::now() < deadline,
+                    "The blocked worker must settle after Stop"
+                );
+                std::thread::sleep(Duration::from_millis(1));
+            }
+            assert_eq!(rx.try_recv().unwrap().status, "Hold the channel");
+        }
+        worker.join().unwrap();
+        let first = rx.try_recv().unwrap();
+        let finished = if stopped {
+            first
+        } else {
+            assert!(!first.finished);
+            rx.try_recv().unwrap()
+        };
+        assert!(finished.finished && rx.is_empty());
+        assert_eq!(finished.start, 0);
+        assert_eq!(finished.source_len, Some(finished.rows.len()));
+        assert_eq!(finished.bot_turn_start, Some(4));
+        assert_eq!(finished.provider_id, summary.provider_id);
+        assert_eq!(finished.delivered.as_deref(), Some(message));
+        assert_eq!(finished.rows[..visible.rows.len()], visible.rows);
+        assert_eq!(finished.rows[2].text, "Terminal prompt");
+        assert_eq!(finished.rows[3].text, "Terminal answer");
+        assert_eq!(finished.rows[4].text, "Managed prompt");
+        if stopped {
+            assert_eq!(finished.status, "Ready");
+        } else {
+            assert!(finished.status.contains("CLI not found"));
+            assert_eq!(finished.rows.last().unwrap().role, "error");
+        }
+        let owner = locked(&store).unwrap();
+        assert_eq!(owner.composer_draft(id).unwrap().unwrap().payload, draft);
+        assert_eq!(owner.follow_ups(id).unwrap().messages, vec![queued]);
+        assert_eq!(
+            owner.local_submissions(id).unwrap()[0].outcome.as_deref(),
+            Some("failed")
+        );
+    }
 }
 
 #[test]

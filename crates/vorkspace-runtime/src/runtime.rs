@@ -39,6 +39,8 @@ pub struct Update {
     pub activity: Option<String>,
     /// Present only when rows describe the complete authoritative snapshot tail.
     pub source_len: Option<usize>,
+    /// A local Bot snapshot includes any imported history before this prompt.
+    pub bot_turn_start: Option<usize>,
     pub worktree_cwd: Option<String>,
     pub commands: Option<Vec<provider::NativeCommand>>,
     pub provider_turn_id: Option<String>,
@@ -362,6 +364,8 @@ fn run_turn_using(
         turn_receipt = Some((turn, info));
         initial_delivery = settings.bot_message_id.clone();
         let creating_worktree = settings.new_worktree && settings.worktree_cwd.is_none();
+        let bot_snapshot = bot_home.is_some();
+        let update_start = if bot_snapshot { 0 } else { start };
         publish(
             &tx,
             &cancel,
@@ -371,8 +375,10 @@ fn run_turn_using(
                 // A native import may have committed while its idle UI refresh
                 // was superseded by this submission. Publish the admitted Bot
                 // baseline together with its prompt, never a tail over stale rows.
-                start: if bot_home.is_some() { 0 } else { start },
-                rows: transcript.rows[if bot_home.is_some() { 0 } else { start }..].to_vec(),
+                start: update_start,
+                rows: transcript.rows[update_start..].to_vec(),
+                source_len: bot_snapshot.then_some(transcript.rows.len()),
+                bot_turn_start: bot_snapshot.then_some(turn_start),
                 provider_reset,
                 provider_id: provider_reset.then(|| provider_id.clone()).flatten(),
                 context: provider_reset.then_some(context),
@@ -929,6 +935,7 @@ fn run_turn_using(
                         &cancel,
                         Update {
                             source_len: None,
+                            bot_turn_start: None,
                             activity: activity.label(),
                             worktree_cwd: None,
                             commands,
@@ -1053,14 +1060,13 @@ fn run_turn_using(
             store.finish_turn(&session, cwd, id)
         });
     }
-    let (mut start, mut rows, mut status) = if pending.overlap {
-        (0, Vec::new(), String::new())
+    let (mut start, mut status) = if pending.overlap {
+        (0, String::new())
     } else if !history_loaded {
         // A rejected preflight has no row baseline. Writing an error at row 0
         // would replace a real conversation's first saved message.
         (
             0,
-            Vec::new(),
             if cancelled {
                 "Ready".into()
             } else {
@@ -1087,7 +1093,7 @@ fn run_turn_using(
             Ok(()) => error.clone(),
             Err(storage) => format!("{error} · Saving failed: {storage}"),
         };
-        (start, transcript.rows[start..].to_vec(), error)
+        (start, error)
     } else {
         if final_start < transcript.rows.len() {
             pending.changed(final_start);
@@ -1102,15 +1108,17 @@ fn run_turn_using(
             )
             .map(|_| "Ready".into())
             .unwrap_or_else(|error| format!("Saving failed: {error}"));
-        (final_start, transcript.rows[final_start..].to_vec(), status)
+        (final_start, status)
     };
     // Settle provenance in storage before notifying the view, including when
     // its window has closed or the provider was cancelled.
+    let mut settled_provider_turn_id = None;
     if let Some((turn, mut info)) = turn_receipt.filter(|_| !pending.overlap) {
         let completed = vorkspace_core::time::now_ms();
         info.duration_ms = info.started_at.map_or(0, |at| completed.saturating_sub(at));
         info.duration_known = true;
         info.completed_at = info.started_at.map(|_| completed);
+        settled_provider_turn_id = info.provider_turn_id.clone();
         if let Err(error) = pending.receipt(&store, summary.id, turn, info) {
             status = format!("{status} · Saving turn metadata failed: {error}");
         }
@@ -1127,19 +1135,19 @@ fn run_turn_using(
                     .filter(|_| submissions.was_dispatched()),
             )
         });
+        start = 0;
         match recovery {
             Ok(()) => {
                 history_recovery = Some(HistoryRecovery::Saved);
-                start = 0;
-                rows.clear();
                 status = "Recovered a competing version of this turn".into();
             }
             Err(error) => {
                 // The store retains the complete payload until its retry
                 // commits, independently of the projected transcript.
                 history_recovery = Some(HistoryRecovery::Unsaved);
-                start = turn_start;
-                rows = transcript.rows[turn_start..].to_vec();
+                if bot_home.is_none() {
+                    start = turn_start;
+                }
                 status = format!("Could not save the recovered version: {error}");
             }
         }
@@ -1162,7 +1170,10 @@ fn run_turn_using(
     if let Err(error) = handoff_save {
         status = format!("{status} · Saving handoff failed: {error}");
     }
-    if let Some(bot) = bot_home.filter(|_| history_loaded && !pending.overlap) {
+    let bot_snapshot = history_loaded && !pending.overlap && bot_home.is_some();
+    let ordinary_unsaved_recovery =
+        bot_home.is_none() && history_recovery == Some(HistoryRecovery::Unsaved);
+    if let Some(bot) = bot_home.filter(|_| bot_snapshot) {
         // Publish the pointer from durable state after the turn settles. A
         // delayed provider event must not restore an old account or session.
         let saved = (|| {
@@ -1187,6 +1198,20 @@ fn run_turn_using(
             eprintln!("Could not update Bot SESSION.md: {error}");
         }
     }
+    // Stop can discard the initial snapshot even after the worker enqueues it.
+    // Send the whole admitted Bot transcript at settlement. Durable writes above
+    // still start at the changed suffix; the final snapshot takes the owned rows.
+    let source_len = bot_snapshot.then_some(transcript.rows.len());
+    if bot_snapshot {
+        start = 0;
+    }
+    let rows = if !history_loaded || (pending.overlap && !ordinary_unsaved_recovery) {
+        Vec::new()
+    } else if start == 0 {
+        transcript.rows
+    } else {
+        transcript.rows.split_off(start)
+    };
     // Final status must still arrive after cancellation. Dropping a window closes
     // the receiver, so the worker never keeps a closed viewport alive.
     let _ = tx.send_blocking(Update {
@@ -1198,6 +1223,9 @@ fn run_turn_using(
         delivered: initial_delivery,
         start,
         rows,
+        source_len,
+        bot_turn_start: bot_snapshot.then_some(turn_start),
+        provider_turn_id: settled_provider_turn_id.filter(|_| bot_snapshot),
         provider_id: if pending.overlap { None } else { provider_id },
         provider_reset: provider_reset && !pending.overlap,
         context: (provider_reset && !pending.overlap).then_some(context),

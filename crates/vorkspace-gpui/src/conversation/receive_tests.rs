@@ -5,6 +5,7 @@ use vorkspace_core::{store::Store, transcript::Row};
 fn update(index: usize, finished: bool) -> vorkspace_runtime::runtime::Update {
     vorkspace_runtime::runtime::Update {
         source_len: None,
+        bot_turn_start: None,
         activity: None,
         worktree_cwd: None,
         commands: None,
@@ -229,6 +230,94 @@ fn stop_between_updates_skips_streaming_but_accepts_the_final_replay(cx: &mut Te
             assert!(view.approvals.is_empty());
             assert_eq!(view.summary.provider_id, None);
             assert_eq!(view.context, Some(Default::default()));
+        })
+        .unwrap();
+}
+
+#[gpui::test]
+fn stopped_bot_accepts_a_settled_snapshot_without_its_initial_imported_rows(
+    cx: &mut TestAppContext,
+) {
+    let window = conversation(cx);
+    let rows: Vec<_> = [
+        ("user", "Previous prompt"),
+        ("assistant", "Previous answer"),
+        ("user", "First external prompt"),
+        ("assistant", "First external answer"),
+        ("user", "Second external prompt"),
+        ("assistant", "Second external answer"),
+        ("user", "Managed prompt"),
+        ("assistant", "Settled response"),
+    ]
+    .into_iter()
+    .map(|(role, text)| Row {
+        role: role.into(),
+        text: text.into(),
+        first: true,
+        sent_at: None,
+    })
+    .collect();
+    let queued = vorkspace_core::follow_up::Message {
+        id: "retained-queue".into(),
+        text: "Queued after Stop".into(),
+        ..Default::default()
+    };
+    window
+        .update(cx, |view, _, cx| {
+            view.summary.provider_id = Some("saved-thread".into());
+            view.transcript.update(cx, |view, cx| {
+                view.bot_mode("cat", 0xe86b5f, "Fixture Bot");
+                view.patch(0, rows[..2].to_vec(), cx);
+            });
+            view.input
+                .update(cx, |input, cx| input.set_text("Unsent draft".into(), cx));
+            view.follow_ups.state.messages = vec![queued.clone()];
+        })
+        .unwrap();
+
+    let (tx, rx) = async_channel::bounded(2);
+    start_receiver(window, rx, cx);
+    window
+        .update(cx, |view, _, cx| {
+            view.stop(cx);
+            assert!(view.stopping);
+            assert_eq!(view.transcript.read(cx).source_rows().len(), 2);
+        })
+        .unwrap();
+    let mut skipped = update(0, false);
+    skipped.rows = rows[..7].to_vec();
+    skipped.source_len = Some(skipped.rows.len());
+    skipped.bot_turn_start = Some(6);
+    skipped.provider_id = Some("wrong-skipped-thread".into());
+    tx.try_send(skipped).unwrap();
+    tx.try_send(vorkspace_runtime::runtime::Update {
+        rows: rows.clone(),
+        source_len: Some(rows.len()),
+        bot_turn_start: Some(6),
+        provider_turn_id: Some("managed-turn".into()),
+        provider_id: Some("saved-thread".into()),
+        status: "Ready".into(),
+        finished: true,
+        ..Default::default()
+    })
+    .unwrap();
+    drop(tx);
+    settle_turn(window, cx);
+    window
+        .update(cx, |view, _, cx| {
+            let transcript = view.transcript.read(cx);
+            assert_eq!(transcript.source_rows(), rows);
+            assert_eq!(transcript.active_turn(), Some(7));
+            assert_eq!(
+                transcript.turns[&7].provider_turn_id.as_deref(),
+                Some("managed-turn")
+            );
+            assert!(!transcript.turns.contains_key(&3));
+            assert!(!transcript.turns.contains_key(&5));
+            assert_eq!(view.summary.provider_id.as_deref(), Some("saved-thread"));
+            assert_eq!(view.input.read(cx).content.as_str(), "Unsent draft");
+            assert_eq!(view.follow_ups.state.messages, vec![queued]);
+            assert!(view.follow_ups.state.paused);
         })
         .unwrap();
 }
