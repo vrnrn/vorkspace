@@ -1,7 +1,7 @@
 use crate::settings::{
     SettingsView,
     management::Target,
-    widgets::{note, secondary_button},
+    widgets::{note, page_note, secondary_button},
 };
 use gpui::{AnyElement, Context, SharedString, div, prelude::*, px};
 use vorkspace_ui::radius;
@@ -23,7 +23,7 @@ impl SettingsView {
                     .items_center()
                     .justify_between()
                     .gap_3()
-                    .child(note(match command {
+                    .child(page_note(match command {
                         Some(command) => format!("New worktrees run: {command}"),
                         None => "New worktrees only contain tracked files. Add a setup command to install dependencies or restore local files.".into(),
                     }))
@@ -227,10 +227,15 @@ impl SettingsView {
             );
         }
         if ready {
-            page.push(note(format!(
-                "New worktrees are created in {}.",
-                self.discovery.worktrees.default_root.display()
-            )));
+            page.push(
+                div()
+                    .mt_3()
+                    .child(page_note(format!(
+                        "New worktrees are created in {}.",
+                        crate::panel_kit::home_relative(&self.discovery.worktrees.default_root)
+                    )))
+                    .into_any_element(),
+            );
         }
         page
     }

@@ -57,6 +57,19 @@ pub(super) fn note(text: impl Into<SharedString>) -> AnyElement {
         .into_any_element()
 }
 
+/// A muted line on the page itself, aligned with section text rather than
+/// inset like `note` inside a card.
+pub(super) fn page_note(text: impl Into<SharedString>) -> AnyElement {
+    div()
+        .min_w_0()
+        .flex_1()
+        .text_size(px(12.))
+        .line_height(px(18.))
+        .text_color(content(0.45))
+        .child(text.into())
+        .into_any_element()
+}
+
 /// Borderless, square icon actions used by SkillsPage and BotRow.
 pub(super) fn icon_action(
     id: impl Into<ElementId>,
