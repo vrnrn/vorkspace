@@ -80,6 +80,17 @@ The editor and formatter bundles are committed under `crates/vorkspace-gpui/asse
 
 The GPUI fork and a patched `block` crate live in `vendor/` and are edited directly. The fork adds a `dither` background (`Background::Dither`, a 4×4 Bayer pattern in the Metal quad shader) that `vorkspace_ui::fluid` owns. `cargo clippy` with `-D warnings` doesn't cover them, so check that a rebuild stays free of warnings after changing one. `npm run test:rust` runs the `block` tests separately because that crate sits outside the workspace.
 
+## Build output and disk
+
+Cargo keeps every build's output and never deletes superseded files, so a busy checkout grows by gigabytes a day unless something prunes it. The repository bounds it in four ways:
+
+- **Light debug info.** The `dev` profile, used by plain `cargo build`, `cargo test` and editor tooling, keeps file-and-line tables for workspace crates and no debug info for dependencies. `native-dev` and `verify` carry none.
+- **Pruning after builds.** `scripts/desktop/prune-target.mjs` keeps the two newest linked binaries and incremental caches per crate in each profile and removes the rest; libraries stay. `npm run dev` runs it after each successful build, `npm run test:rust` after its tests, and `npm run target:prune` on demand.
+- **One output directory per checkout.** Do not point a task at its own `CARGO_TARGET_DIR`; that duplicates every dependency.
+- **Warm worktrees.** Seed new worktrees as described below rather than building them cold.
+
+Two optional machine-level tools complement these. A capped [sccache](https://github.com/mozilla/sccache) (`build.rustc-wrapper` in `~/.cargo/config.toml`, size in its own config) lets any checkout rebuild dependencies from cache. A weekly `cargo sweep --recursive --time 7` plus `--maxsize 20GB` over your projects folder removes output unused for a week. Neither is required to build.
+
 In a new linked worktree, run `npm run worktree:seed` before the first build. To have Vorkspace do this for its own worktrees, set the project's setup command to `npm run worktree:seed` under **Settings → Worktrees**. It clones the main checkout's Cargo target directory, honoring `CARGO_TARGET_DIR`, with APFS copy-on-write, so the clone is instant and takes no extra disk, and only workspace and vendored crates rebuild.
 
 `npm run check` runs tooling, voice, host, formatting, Clippy, and workspace tests. `npm run check:fast` skips the host and GPUI suites. Both use the `verify` Cargo profile: application code is unoptimized, dependencies retain basic optimization, and QuickJS retains its release-level optimization so interpreter deadlines remain meaningful. Debug assertions stay enabled. The interactive `native-dev` and shipped `release` profiles are separate. `npm run test:rust` runs every Rust test in parallel, one process per test. `npm run host:package` creates a self-contained remote host archive including Node.

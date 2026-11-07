@@ -3,6 +3,7 @@ import { join, resolve } from "node:path";
 import { createInterface } from "node:readline";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { installAppBundle, resolveNativeEnv } from "./build-native.mjs";
+import { pruneTarget } from "./prune-target.mjs";
 export { resolveNativeEnv } from "./build-native.mjs";
 
 const workspace = fileURLToPath(new URL("../../", import.meta.url));
@@ -92,6 +93,13 @@ export async function startDev({
         if (result.code !== 0) {
           log("Build failed. Keeping the current app; type r to retry after fixing the error.");
           continue;
+        }
+        // Superseded binaries and incremental caches would otherwise pile up
+        // with every rebuild. Best effort: it never holds up a launch.
+        try {
+          pruneTarget(target);
+        } catch (error) {
+          log(`Skipped pruning old build output: ${error.message}`);
         }
         // Another restart request during compilation gets a fresh build first.
         if (builtRevision !== revision) continue;
