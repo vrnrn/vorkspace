@@ -307,6 +307,22 @@ impl Client {
     }
 }
 
+impl Drop for Client {
+    fn drop(&mut self) {
+        // EOF cancels synchronous index requests and releases this client's
+        // watcher subscription. Never stop another project's shared daemon.
+        self.input.take();
+        let deadline = Instant::now() + Duration::from_secs(2);
+        while Instant::now() < deadline {
+            if self.child.try_wait().ok().flatten().is_some() {
+                return;
+            }
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        crate::process::terminate(&mut self.child);
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -361,21 +377,5 @@ mod tests {
             )
             .unwrap_err();
         assert!(error.contains("cancelled"), "{error}");
-    }
-}
-
-impl Drop for Client {
-    fn drop(&mut self) {
-        // EOF cancels synchronous index requests and releases this client's
-        // watcher subscription. Never stop another project's shared daemon.
-        self.input.take();
-        let deadline = Instant::now() + Duration::from_secs(2);
-        while Instant::now() < deadline {
-            if self.child.try_wait().ok().flatten().is_some() {
-                return;
-            }
-            std::thread::sleep(Duration::from_millis(20));
-        }
-        crate::process::terminate(&mut self.child);
     }
 }

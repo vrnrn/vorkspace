@@ -7,6 +7,7 @@ use crate::store::Store;
 pub use query::tools;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
+use sha2::{Digest, Sha256};
 use std::{
     collections::{HashMap, HashSet},
     path::{Path, PathBuf},
@@ -65,7 +66,6 @@ pub struct Service {
     store: Database,
     directory: PathBuf,
     state: Mutex<State>,
-    environment: Arc<Mutex<Option<Arc<Environment>>>>,
     changes: async_channel::Sender<()>,
     #[cfg(test)]
     test_engine: Option<PathBuf>,
@@ -111,7 +111,6 @@ impl Service {
                     workers: HashMap::new(),
                     closed: false,
                 }),
-                environment: Arc::new(Mutex::new(None)),
                 changes,
                 #[cfg(test)]
                 test_engine: None,
@@ -195,6 +194,13 @@ impl Service {
         if state.closed || !state.enabled.contains(&project_key) {
             return Err("Enable Codebase Memory in this project's settings first".into());
         }
+        // Aliases share the canonical cache. Do not let a second lexical path
+        // start an independent daemon while that cache's owner is still alive.
+        if state.workers.iter().any(|(key, worker)| {
+            key != &root_key && worker.occupies_slot() && lock(&worker.snapshot).root == root
+        }) {
+            return Err("This working copy is active through another path. Disable that project's Codebase Memory and wait for it to stop before retrying.".into());
+        }
         if let Some(worker) = state.workers.get(&root_key) {
             if worker.project != project_key {
                 return Err("This working copy is already owned by another project".into());
@@ -243,7 +249,6 @@ impl Service {
             thread: None,
         };
         let directory = self.directory.clone();
-        let environment = self.environment.clone();
         let changes = self.changes.clone();
         let key = root_key;
         #[cfg(test)]
@@ -280,7 +285,7 @@ impl Service {
                         #[cfg(not(test))]
                         let binary = engine::ensure(&directory, &cancel)?;
                         let env = prepare_environment(
-                            &environment, &directory, &binary, Path::new(&root), &cancel,
+                            &directory, &binary, Path::new(&root), &cancel,
                         )?;
                         let mut command = transport::command(
                             &binary, &env.cache, env.runtime.path(), Path::new(&root),
@@ -389,31 +394,23 @@ impl Service {
                 let _ = thread.join();
             }
         }
-        lock(&self.environment).take();
     }
 }
 
 fn prepare_environment(
-    shared: &Mutex<Option<Arc<Environment>>>,
     directory: &Path,
     binary: &Path,
     root: &Path,
     cancel: &AtomicBool,
-) -> Result<Arc<Environment>, String> {
-    let mut shared = loop {
-        engine::check_cancel(cancel)?;
-        match shared.try_lock() {
-            Ok(guard) => break guard,
-            Err(std::sync::TryLockError::WouldBlock) => {
-                std::thread::sleep(Duration::from_millis(50))
-            }
-            Err(error) => return Err(error.to_string()),
-        }
-    };
-    if let Some(environment) = shared.as_ref() {
-        return Ok(environment.clone());
-    }
-    let cache = directory.join("indexes");
+) -> Result<Environment, String> {
+    engine::check_cancel(cancel)?;
+    let indexes = directory.join("indexes");
+    engine::private_dir(&indexes)?;
+    // Default upstream names flatten path punctuation, and its watcher only
+    // follows those names. Isolate the entire cache/daemon namespace by the
+    // canonical root rather than overriding the name and losing file watching.
+    let key = format!("{:x}", Sha256::digest(root.as_os_str().as_encoded_bytes()));
+    let cache = indexes.join(key);
     engine::private_dir(&cache)?;
     let runtime = tempfile::Builder::new()
         .prefix("vorkspace-cbm-")
@@ -427,9 +424,7 @@ fn prepare_environment(
     let mut command = transport::command(binary, &cache, runtime.path(), root);
     command.args(["config", "set", "ui_enabled", "false"]);
     transport::Client::configure(command, cancel)?;
-    let environment = Arc::new(Environment { cache, runtime });
-    *shared = Some(environment.clone());
-    Ok(environment)
+    Ok(Environment { cache, runtime })
 }
 
 impl Drop for Service {

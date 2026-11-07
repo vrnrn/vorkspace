@@ -268,8 +268,14 @@ impl Shell {
 
     pub(super) fn app_pane_id(&self, content: &AppPane) -> Option<i64> {
         self.workspace.app_panes.iter().find_map(|(&id, pane)| {
-            (pane.content.same_resource(content) && self.workspace.tab_of(id).is_some())
-                .then_some(id)
+            (pane.content.same_resource(content)
+                && self.workspace.tab_of(id).is_some()
+                && (!content.project_scoped()
+                    || (vorkspace_core::files::path_key(&pane.project)
+                        == vorkspace_core::files::path_key(&self.workspace.project)
+                        && vorkspace_core::files::path_key(&pane.worktree)
+                            == vorkspace_core::files::path_key(self.working_copy()))))
+            .then_some(id)
         })
     }
 
@@ -493,12 +499,15 @@ impl Shell {
                 self.prepare_app_view(Some(id), window, cx);
                 self.leave_app_views(cx);
                 self.workspace.project = pane.project.clone();
-                if !self.codebase_tabs.contains_key(&id) {
-                    let view =
-                        cx.new(|cx| crate::codebase::Page::new(pane.project, pane.worktree, cx));
-                    self.codebase_tabs.insert(id, view);
-                } else if let Some(view) = self.codebase_tabs.get(&id) {
-                    view.update(cx, |view, cx| view.activate(false, cx));
+                match self.codebase_tabs.entry(id) {
+                    std::collections::hash_map::Entry::Vacant(entry) => {
+                        let view = cx
+                            .new(|cx| crate::codebase::Page::new(pane.project, pane.worktree, cx));
+                        entry.insert(view);
+                    }
+                    std::collections::hash_map::Entry::Occupied(entry) => {
+                        entry.get().update(cx, |view, cx| view.activate(false, cx));
+                    }
                 }
                 self.workspace.open(id);
                 self.remember_title_tab(TitleTab::Workspace(

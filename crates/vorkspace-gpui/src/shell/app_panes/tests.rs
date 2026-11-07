@@ -3,6 +3,63 @@ use crate::shell::tests::window;
 use gpui::TestAppContext;
 
 #[gpui::test]
+fn codebase_navigation_keeps_the_selected_project_and_worktree(cx: &mut TestAppContext) {
+    let (window, _, _) = window(cx);
+    let directory = tempfile::tempdir().unwrap();
+    let first = directory.path().join("first").to_str().unwrap().to_owned();
+    let second = directory.path().join("second").to_str().unwrap().to_owned();
+    let worktree = directory.path().join("tree").to_str().unwrap().to_owned();
+    window
+        .update(cx, |shell, w, cx| {
+            let (service, _) = vorkspace_core::codebase::Service::new(
+                shell.store.clone(),
+                directory.path().join("codebase"),
+            )
+            .unwrap();
+            for project in [&first, &second] {
+                std::fs::create_dir(project).unwrap();
+                service.configure(project, true).unwrap();
+                // Exercise real navigation with unavailable roots: activation
+                // stops at validation without downloading or starting an engine.
+                std::fs::remove_dir(project).unwrap();
+            }
+            crate::codebase::get(cx)
+                .unwrap()
+                .update(cx, |owner, _| owner.service = Ok(service));
+            let mut ids = HashMap::new();
+            for (project, root) in [
+                (&first, &first),
+                (&second, &second),
+                (&first, &worktree),
+                (&first, &first),
+                (&second, &second),
+            ] {
+                shell.workspace.project = project.clone();
+                shell.worktree_focus.insert(
+                    project.clone(),
+                    crate::git_tools::worktree_switcher::WorktreeFocus {
+                        path: root.clone(),
+                        branch: None,
+                    },
+                );
+                shell.open_codebase(w, cx);
+                assert_eq!(&shell.workspace.project, project);
+                assert_eq!(shell.working_copy(), root);
+                let id = shell.workspace.active.unwrap();
+                assert_eq!(&shell.workspace.app_panes[&id].project, project);
+                assert_eq!(&shell.workspace.app_panes[&id].worktree, root);
+                if let Some(previous) = ids.insert((project.clone(), root.clone()), id) {
+                    assert_eq!(id, previous, "reopening reuses only the matching pane");
+                }
+            }
+            assert_eq!(ids.values().copied().collect::<HashSet<_>>().len(), 3);
+            assert_eq!(shell.codebase_tabs.len(), 3);
+        })
+        .unwrap();
+    cx.run_until_parked();
+}
+
+#[gpui::test]
 fn remote_session_restores_beside_app_panes_and_uses_the_same_stack_limit(cx: &mut TestAppContext) {
     use serde_json::json;
     use vorkspace_core::store::Store;

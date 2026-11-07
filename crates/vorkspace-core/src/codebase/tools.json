@@ -1,7 +1,7 @@
 [
   {
     "name": "search_graph",
-    "description": "Find symbols via BM25 query, regex name/qn filters, or semantic_query. Rows keep qn/file/lines and in/out over CALLS/USAGE/CALL_REFERENCE/INHERITS/IMPLEMENTS.",
+    "description": "Find symbols via BM25 query or regex name/qn filters. Rows keep qn/file/lines and in/out over CALLS/USAGE/CALL_REFERENCE/INHERITS/IMPLEMENTS.",
     "inputSchema": {
       "type": "object",
       "properties": {

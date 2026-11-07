@@ -184,9 +184,10 @@ fn pinned_engine_indexes_isolated_roots_and_stops_cleanly() {
     let (root, mut service) = fixture();
     Arc::get_mut(&mut service).unwrap().test_engine = Some(binary);
     let mut projects = Vec::new();
-    for name in ["alpha", "beta"] {
-        let project = root.path().join(name);
-        fs::create_dir(&project).unwrap();
+    // These roots collide under the upstream default path-to-name mapping.
+    for (path, name) in [("repo-copy", "alpha"), ("repo/copy", "beta")] {
+        let project = root.path().join(path);
+        fs::create_dir_all(&project).unwrap();
         assert!(std::process::Command::new("git")
             .args(["init", "--quiet", "--initial-branch=main"])
             .arg(&project)
@@ -212,6 +213,14 @@ fn pinned_engine_indexes_isolated_roots_and_stops_cleanly() {
             std::thread::sleep(Duration::from_millis(20));
         }
     }
+    let alias = root.path().join("alias");
+    std::os::unix::fs::symlink(&projects[0], &alias).unwrap();
+    let alias = alias.to_str().unwrap();
+    service.configure(alias, true).unwrap();
+    assert!(service
+        .activate(alias, alias, false)
+        .unwrap_err()
+        .contains("another path"));
     let query = |project: &str, tool: &str, args: Value| {
         service
             .query(project, project, tool, args)
@@ -220,27 +229,40 @@ fn pinned_engine_indexes_isolated_roots_and_stops_cleanly() {
             .unwrap()
             .unwrap()
     };
-    let found = query(
-        &projects[0],
-        "search_graph",
-        json!({"query":"alpha_greet","format":"json"}),
-    );
-    assert!(found.to_string().contains("alpha_greet"), "{found}");
-    let absent = query(
-        &projects[0],
-        "search_graph",
-        json!({"query":"beta_greet","format":"json"}),
-    );
-    assert_eq!(absent["returned"], 0, "{absent}");
-    let source = query(
-        &projects[0],
-        "get_code_snippet",
-        json!({"qualified_name":"alpha_greet","max_lines":20}),
-    );
-    assert!(source["source"]
-        .as_str()
-        .unwrap()
-        .contains("return 'Hello '"));
+    // Check both directions after initial indexing and after replacing each
+    // graph. Reading the same qualified name must still use the caller's root.
+    for reindex in [None, Some(0), Some(1)] {
+        if let Some(index) = reindex {
+            let project = &projects[index];
+            service.activate(project, project, true).unwrap();
+            loop {
+                let snapshot = service.snapshot(project, project);
+                assert_ne!(snapshot.phase, "error", "{:?}", snapshot.error);
+                if snapshot.phase == "ready" {
+                    break;
+                }
+                assert!(Instant::now() < deadline, "reindex did not finish");
+                std::thread::sleep(Duration::from_millis(20));
+            }
+        }
+        for (project, own, foreign) in [
+            (&projects[0], "alpha_greet", "beta_greet"),
+            (&projects[1], "beta_greet", "alpha_greet"),
+        ] {
+            let found = query(project, "search_graph", json!({"query":own}));
+            assert!(found.to_string().contains(own), "{found}");
+            let absent = query(project, "search_graph", json!({"query":foreign}));
+            assert_eq!(absent["returned"], 0, "{absent}");
+            let source = query(
+                project,
+                "get_code_snippet",
+                json!({"qualified_name":"main","max_lines":20}),
+            );
+            let source = source["source"].as_str().unwrap();
+            assert!(source.contains(own), "{source}");
+            assert!(!source.contains(foreign), "{source}");
+        }
+    }
     service.configure(&projects[0], false).unwrap();
     assert!(service
         .query(&projects[0], &projects[0], "index_status", json!({}))
