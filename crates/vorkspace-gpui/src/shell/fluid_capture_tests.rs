@@ -23,6 +23,7 @@ const SHOTS: &[(&str, Option<usize>, (f32, f32))] = &[
     ("glide", Some(1), (1390., 890.)),
     ("tasks", Some(3), (1390., 890.)),
     ("work", Some(0), (1390., 890.)),
+    ("automation-editor", Some(0), (1390., 890.)),
     ("tooltip", Some(0), (551., 271.)),
     ("explorer", Some(0), (1390., 890.)),
     ("changes", Some(0), (1390., 890.)),
@@ -134,6 +135,31 @@ fn fluid_capture() {
     let store = Arc::new(Mutex::new(
         Store::open(std::path::Path::new(":memory:")).unwrap(),
     ));
+    {
+        // A populated board, so To-dos shows its columns in use.
+        use vorkspace_core::todos::{TodoBoard, TodoStatus};
+        let store = locked(&store).unwrap();
+        let board = TodoBoard::Personal;
+        for (title, status) in [
+            ("Port the glide to segmented controls", TodoStatus::Done),
+            ("Square the switch tracks", TodoStatus::Done),
+            ("Theme every status color", TodoStatus::InReview),
+            ("Capture narrow windows", TodoStatus::InProgress),
+            ("Audit the Codebase view", TodoStatus::Todo),
+            ("Check approval toasts in the shell", TodoStatus::Todo),
+        ] {
+            store
+                .add_todo_with_details(
+                    &board,
+                    title,
+                    status,
+                    "Verified in the offscreen captures.",
+                    &[],
+                    &[],
+                )
+                .unwrap();
+        }
+    }
     let sessions: Vec<_> = {
         let mut store = locked(&store).unwrap();
         let titles = [
@@ -420,6 +446,12 @@ fn fluid_capture() {
                         shell.open_connector(crate::workspace::Connector::Github, window, cx)
                     }
                     "search" => shell.open_app_search(window, cx),
+                    "automation-editor" => {
+                        shell.open_automations(window, cx);
+                        if let Some(view) = shell.automations.clone() {
+                            view.update(cx, |view, cx| view.begin_first_template(cx));
+                        }
+                    }
                     "project-appearance"
                     | "project-background"
                     | "project-codebase"

@@ -368,6 +368,12 @@ impl Automations {
         })
         .detach();
     }
+    /// Opens the editor on the first template, for captures.
+    #[cfg(test)]
+    pub(crate) fn begin_first_template(&mut self, cx: &mut Context<Self>) {
+        let template = self.templates.first().cloned();
+        self.begin(template, cx);
+    }
     fn begin(&mut self, template: Option<Template>, cx: &mut Context<Self>) {
         let preferences = cx.try_global::<vorkspace_ui::preferences::Preferences>();
         let kind = preferences

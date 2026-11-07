@@ -671,13 +671,13 @@ impl Automations {
                     .child(div().h(px(1.)).bg(page::divider()))
                 })
                 .child(
-                    page::action("automation-add-trigger", "Add Trigger", triggers.len() < 20)
+                    page::action("automation-add-trigger", "Add trigger", triggers.len() < 20)
                         .relative()
                         .m(px(8.))
                         .justify_start()
                         .child(self.trigger_anchor.probe())
                         .child(icon("plus", page::ICON_SIZE))
-                        .child("Add Trigger")
+                        .child("Add trigger")
                         .on_click(cx.listener(|this, _, window, cx| {
                             this.open_trigger_menu(window, cx);
                         })),
