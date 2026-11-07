@@ -1,6 +1,7 @@
 use super::*;
 use crate::bot::{channels::Channels, peers};
 use crate::store::Store;
+use crate::transcript::Row;
 
 fn roster() -> Roster {
     Roster {

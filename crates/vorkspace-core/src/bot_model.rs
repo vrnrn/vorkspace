@@ -22,6 +22,15 @@ fn is_true(value: &bool) -> bool {
 fn is_default_shape(shape: &str) -> bool {
     shape.is_empty() || shape == "squircle"
 }
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum CompactionMode {
+    #[default]
+    SessionRollover,
+    Native,
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
 pub struct Bot {
@@ -54,6 +63,7 @@ pub struct Bot {
     pub projects: Vec<String>,
     pub show_started_sessions_in_sidebar: bool,
     pub use_sidebar_folders: bool,
+    pub compaction_mode: CompactionMode,
     pub background: Option<Background>,
     pub launches: Vec<Launch>,
     pub documents: Vec<Document>,
@@ -103,6 +113,7 @@ impl Default for Bot {
             projects: Vec::new(),
             show_started_sessions_in_sidebar: false,
             use_sidebar_folders: false,
+            compaction_mode: CompactionMode::default(),
             background: None,
             launches: Vec::new(),
             documents: Vec::new(),

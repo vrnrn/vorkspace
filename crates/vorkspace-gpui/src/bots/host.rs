@@ -293,7 +293,10 @@ impl Bots {
                 }
             }
         }
-        if call.action == "bots.read" {
+        if matches!(
+            call.action.as_str(),
+            "bots.read" | "bots.historyStatus" | "bots.recoverHistory"
+        ) {
             let target = self
                 .roster
                 .resolve_peer(
@@ -319,6 +322,40 @@ impl Bots {
                     return;
                 }
             };
+            if call.action != "bots.read" {
+                let root = self.root.clone();
+                let recovery = (call.action == "bots.recoverHistory").then(|| {
+                    call.input["expectedHistory"]
+                        .as_str()
+                        .unwrap_or_default()
+                        .to_owned()
+                });
+                self.call_work(
+                    call,
+                    &actor.id,
+                    bot.id.clone(),
+                    move |store| {
+                        if let Some(expected) = recovery {
+                            vorkspace_runtime::runtime::native_history::recover(
+                                &store, session, &root, &expected,
+                            )?;
+                            Ok((json!({"bot":target,"recovered":true}), Effect::None))
+                        } else {
+                            let result = vorkspace_runtime::runtime::native_history::sync(
+                                &store, session, &root,
+                            )?;
+                            Ok((
+                                json!({"bot":target,"unfinished":result.active,
+                            "expectedHistory":result.recovery,"more":result.more,
+                            "superseded":result.superseded}),
+                                Effect::None,
+                            ))
+                        }
+                    },
+                    cx,
+                );
+                return;
+            }
             let before = call.input["before"].as_u64();
             let limit = call.input["limit"].as_u64().unwrap_or(40).clamp(1, 100) as usize;
             let max = call.input["maxChars"]

@@ -517,18 +517,23 @@ impl Conversation {
                         let incoming_notification_input = !stopping
                             && (!update.approvals.is_empty() || !update.questions.is_empty());
                         this.transcript.update(cx, |v, cx| {
-                            if let Some(len) = update.source_len {
+                            if let Some(turn_start) = update.bot_turn_start {
+                                v.patch_bot_turn_snapshot(turn_start, update.rows, cx);
+                            } else if let Some(len) = update.source_len {
                                 v.patch_snapshot(update.start, update.rows, len, cx);
                             } else {
                                 v.patch(update.start, update.rows, cx);
                             }
-                            if stopping {
+                            if stopping && update.bot_turn_start.is_none() {
                                 v.stop_streaming(cx);
                             }
                         });
                         if let Some(id) = update.provider_turn_id {
                             this.transcript
                                 .update(cx, |view, _| view.record_provider_turn(id));
+                        }
+                        if update.provider_reset && source_selected {
+                            this.summary.provider_id = None;
                         }
                         if let Some(id) = update.provider_id {
                             if let Some(pending) = this.settings.pending_provider_switch.as_mut()

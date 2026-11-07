@@ -245,6 +245,7 @@ mod tests {
         assert_eq!(bot.mascot, "ghost");
         assert_eq!(bot.color, 0xe25a9e);
         assert!(bot.use_sidebar_folders);
+        assert_eq!(bot.compaction_mode, CompactionMode::SessionRollover);
         assert_eq!(
             store.persisted_session_id(bot.session_id.unwrap()).unwrap(),
             original
@@ -281,8 +282,10 @@ mod tests {
         roster
             .merge_desktop(vec![first.clone(), removed.clone()])
             .unwrap();
-        roster.get_mut("existing").unwrap().name = "Native rename".into();
-        roster.get_mut("existing").unwrap().seen_rows = 42;
+        let bot = roster.get_mut("existing").unwrap();
+        bot.name = "Native rename".into();
+        bot.seen_rows = 42;
+        bot.compaction_mode = CompactionMode::Native;
         roster.bots.retain(|m| m.id != "removed");
         let raw = serde_json::to_string(&roster).unwrap();
         let mut roster: Roster = serde_json::from_str(&raw).unwrap();
@@ -295,6 +298,7 @@ mod tests {
         assert_eq!(bot.mascot, "rocket");
         assert_eq!(bot.session_id, Some(51));
         assert_eq!(bot.seen_rows, 42);
+        assert_eq!(bot.compaction_mode, CompactionMode::Native);
         assert!(roster.get("removed").is_none());
         roster.merge_desktop(Vec::new()).unwrap();
         assert!(roster.bots.is_empty());

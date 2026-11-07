@@ -50,11 +50,12 @@ impl Protocol {
         } else {
             self.request.prompt.clone()
         };
-        write_json(
-            stdin,
-            json!({"type":"user","session_id":"","parent_tool_use_id":null,
-                "message":{"role":"user","content":self.request.claude_content(&prompt)?}}),
-        )?;
+        let mut input = json!({"type":"user","session_id":"","parent_tool_use_id":null,
+            "message":{"role":"user","content":self.request.claude_content(&prompt)?}});
+        if let Some(id) = &self.request.settings.native_prompt_id {
+            input["uuid"] = json!(id);
+        }
+        write_json(stdin, input)?;
         self.claude_prompt_sent = true;
         self.follow_up_ready = true;
         Ok(())
@@ -157,6 +158,20 @@ impl Protocol {
 
     pub(super) fn codex_access(&self) -> (Value, &'static str, Value, &'static str) {
         let (policy, sandbox, mut sandbox_policy, reviewer) = self.request.settings.access.codex();
+        if sandbox_policy["type"] == "workspaceWrite" && !self.request.settings.text_only {
+            if let Some(bot) = &self.request.settings.bot {
+                // A Bot works from its own home, rather than the user's home.
+                // Assigned projects remain writable under the selected policy.
+                let mut roots = vec![self.request.cwd.clone()];
+                for project in &bot.bot.projects {
+                    let project = std::path::PathBuf::from(project);
+                    if project.is_absolute() && !roots.contains(&project) {
+                        roots.push(project);
+                    }
+                }
+                sandbox_policy["writableRoots"] = json!(roots);
+            }
+        }
         if (self.request.settings.operator || self.request.settings.orchestrator)
             && sandbox_policy["type"] != "dangerFullAccess"
         {

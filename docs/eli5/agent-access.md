@@ -23,6 +23,26 @@ Once you type `/operator` in a thread, that agent can:
 
 Bots and Minions already have the commands they can use in their instructions. They can read their saved soul and memory through Vorkspace when you ask, including topic notes and archived facts.
 
+## How Bots Remember Long Conversations
+
+In each Bot's General settings, choose how it handles a long conversation. You can also ask the Bot to change its own setting with `bots.configure`. The change applies to later messages. **Fresh session**, the default, starts a new provider session before the next message once context is 80% full. It brings a short recap plus the Bot's instructions and saved memory. Your full app chat stays in place, and the context ring resets for the new session. Older provider sessions remain in history, using the same Bot folder.
+
+Choose **Native compaction** to keep one provider session and let the provider shorten its working context. You can also use `/compact` with Codex, Claude, Pi or OMP. Before compacting a Bot, Vorkspace catches up with its terminal conversation and waits if an external turn is unfinished. Vorkspace prevents another app turn or history import from overlapping compaction, and its context reading cannot overwrite a replacement session's reading. Neither mode discards your queued messages or draft.
+
+On the next turn after a recorded compaction attempt, Vorkspace gives the Bot its current instructions and saved memory again. This also works after reopening the app. Normal turns do not repeat those instructions unless they changed.
+
+Saved memory is for lasting things: your preferences, decisions, constraints and useful lessons. Bots are told to save these as they learn them, keep them short, and include references when useful. You can edit memory in Bot settings. Longer notes remain searchable. A remembered task status may be old, so Bots must check the app's current sessions and to-dos before relying on it. Compaction itself does not run another model to write memories.
+
+## A Folder for Each Bot
+
+When you open a Bot, Vorkspace gives it a working folder at `~/.vorkspace/bots/<name>`. Inside are its personality and instructions (`SOUL.md`), short saved memories (`MEMORY.md`), and longer notes (`memory/`). The folder points to the Bot's existing files, so editing them there changes the same files you see in Bot settings. Nothing is copied or cleared. Renaming the Bot keeps its existing folder, and duplicate names get a unique suffix.
+
+`SESSION.md` tells you how to reopen the same Codex or Claude conversation from a terminal, using the right account. The provider still keeps its conversation history in its normal location. The Bot can continue working on its assigned projects under the permissions you selected. `AGENTS.md` tells an outside agent where to read the Bot's instructions and memory; you can edit this file.
+
+Messages you add to the current Codex or Claude session through an outside CLI appear in the same Bot chat. Vorkspace checks when you open the Bot, about every 10 seconds while it is idle, and before sending another message. Repeated checks do not duplicate messages or replace your draft. In Fresh session mode, `SESSION.md` always points to the newest provider session.
+
+Finish the Bot's current turn before switching between the app and a terminal, and finish the terminal turn before returning. Vorkspace waits if it sees an unfinished external turn. If the CLI crashed or was closed, choose **Resume here** in the Bot chat after making sure the CLI has stopped. This keeps the same conversation and never resends the old message. It shows any text already saved by that CLI before your next app exchange, preserving the conversation's order. New writes from the CLI cancel that confirmation. A Bot can also check another accessible Bot with `bots.historyStatus` and recover it with `bots.recoverHistory`, using the returned token and your explicit confirmation that its CLI has stopped. Vorkspace cannot prevent another CLI from writing at the same time. App commands are available only during a turn running in Vorkspace. Existing project-based Minions keep their working folders. Development copies of the app use a separate folder beside their own database.
+
 ## How Bots Use Their Teams
 
 With **Settings › Bots › Minions** enabled, a parent Bot can hire lasting team members with `minions.hire`, giving each a name, role and optional specialties. Hiring does not start a job or require picking a project. The parent checks `minions.list`, then reuses a member with `bots.send` for each new job. Its replies normally return automatically. The older `minions.spawn` shortcut hires a member and sends a first job together. These team actions belong to Bots; typing `/operator` in an ordinary session does not grant them.

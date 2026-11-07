@@ -84,7 +84,7 @@ impl TranscriptView {
                 });
         }
         if self.streaming {
-            for prompt in known..self.source.len() {
+            for prompt in known.max(self.live_start)..self.source.len() {
                 if self.source[prompt].first && self.source[prompt].is_prompt() {
                     let turn = (prompt + 1..self.source.len())
                         .find(|&at| self.source[at].first)
@@ -134,7 +134,7 @@ impl TranscriptView {
         // history that loads or replays does not.
         if self.bot && self.streaming && self.visible {
             let now = Instant::now();
-            for ix in start.max(known)..self.source.len() {
+            for ix in start.max(known).max(self.live_start)..self.source.len() {
                 let row = &self.source[ix];
                 if !row.first || !matches!(row.role.as_str(), "user" | "assistant") {
                     continue;

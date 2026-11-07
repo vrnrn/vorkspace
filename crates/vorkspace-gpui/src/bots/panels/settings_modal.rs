@@ -1,6 +1,14 @@
 //! The Bot settings dialog and the pickers it opens.
 use super::*;
+use vorkspace_core::bot::CompactionMode;
 use vorkspace_ui::radius;
+
+fn compaction_label(mode: CompactionMode) -> &'static str {
+    match mode {
+        CompactionMode::SessionRollover => "Fresh session",
+        CompactionMode::Native => "Native compaction",
+    }
+}
 
 impl Bots {
     pub(crate) fn settings_modal(
@@ -539,6 +547,9 @@ impl Bots {
                     .hover(|s| s.bg(content(0.05)))
                     .child(name),
             );
+        let compaction_anchor = AnchorSlot::default();
+        let compaction_target = bot.id.clone();
+        let compaction_label = compaction_label(bot.compaction_mode);
         let model_controls = card()
             .id("bot-model-settings")
             .debug_selector(|| "bot-model-settings".into())
@@ -614,6 +625,28 @@ impl Bots {
                     .border_color(content(0.04)),
                 )
             }))
+            .child(
+                setting(
+                    "Context compaction",
+                    None,
+                    plain("bot-settings-compaction".into(), compaction_label.into())
+                        .debug_selector(|| "bot-settings-compaction".into())
+                        .aria_label(format!("Context compaction, {compaction_label}"))
+                        .child(compaction_anchor.probe())
+                        .child(icon("chevron-down", 12.))
+                        .on_click(cx.listener(move |this, _, w, cx| {
+                            this.open_compaction_picker(
+                                &compaction_target,
+                                compaction_anchor.clone(),
+                                w,
+                                cx,
+                            );
+                        }))
+                        .into_any_element(),
+                )
+                .border_t_1()
+                .border_color(content(0.04)),
+            )
             .child(
                 setting(
                     "Permissions",
@@ -888,6 +921,65 @@ impl Bots {
             menu,
             anchor: Anchor::Slot(anchor),
             width: 228.,
+            align: crate::popover::Align::Start,
+            _events: vec![picked],
+        });
+        cx.notify();
+    }
+    fn open_compaction_picker(
+        &mut self,
+        target: &str,
+        anchor: AnchorSlot,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if self.settings_identity().as_deref() != Some(target) {
+            return;
+        }
+        let Some(current) = self.settings_bot(target).map(|bot| bot.compaction_mode) else {
+            return;
+        };
+        let target = target.to_owned();
+        let options = vec![
+            MenuAction::new(
+                "session-rollover",
+                compaction_label(CompactionMode::SessionRollover),
+            )
+            .description("Start a fresh provider session at 80% with a brief from the chat.")
+            .checked(current == CompactionMode::SessionRollover)
+            .into(),
+            MenuAction::new(
+                "native-compaction",
+                compaction_label(CompactionMode::Native),
+            )
+            .description("Keep the provider session and let the provider compact it.")
+            .checked(current == CompactionMode::Native)
+            .into(),
+        ];
+        let menu = cx.new(|cx| {
+            Menu::new("Context compaction", options, window, cx)
+                .style(MenuStyle::Access)
+                .width(288.)
+        });
+        let picked = cx.subscribe(&menu, move |this, _, event: &MenuEvent, cx| {
+            if this.settings_identity().as_deref() != Some(target.as_str()) {
+                return;
+            }
+            this.picker = None;
+            if let MenuEvent::Picked(id, _) = event {
+                let mode = match id.as_ref() {
+                    "session-rollover" => CompactionMode::SessionRollover,
+                    "native-compaction" => CompactionMode::Native,
+                    _ => return,
+                };
+                this.edit_settings_bot(&target, |bot| bot.compaction_mode = mode, cx);
+            }
+            cx.notify();
+        });
+        self.picker = Some(OpenPicker {
+            menu,
+            anchor: Anchor::Slot(anchor),
+            width: 288.,
             align: crate::popover::Align::Start,
             _events: vec![picked],
         });

@@ -36,6 +36,21 @@ fn protocol(kind: Kind) -> Protocol {
     })
 }
 #[test]
+fn codex_compaction_rejects_missing_or_different_threads_before_provider_input() {
+    for reply in [
+        json!({"id":2,"error":{"message":"Thread not found"}}),
+        json!({"id":2,"result":{"thread":{"id":"replacement"}}}),
+    ] {
+        let mut codex = protocol(Kind::Codex);
+        codex.compact = true;
+        codex.request.provider_id = Some("saved".into());
+        let mut wire = Vec::new();
+        assert!(codex.frame(reply, &mut wire).is_err());
+        assert!(wire.is_empty());
+        assert_eq!(codex.request.provider_id.as_deref(), Some("saved"));
+    }
+}
+#[test]
 fn context_reports_use_the_latest_request_and_include_cached_tokens() {
     let mut codex = protocol(Kind::Codex);
     let events = codex.frame(json!({"method":"thread/tokenUsage/updated","params":{"tokenUsage":{"last":{"totalTokens":4200},"total":{"totalTokens":99000},"modelContextWindow":272000}}}),&mut Vec::new()).unwrap();
@@ -184,6 +199,57 @@ fn approvals_wait_for_a_decision_and_keep_the_requested_input() {
     assert_eq!(response["response"]["response"]["behavior"], "allow");
     assert_eq!(response["response"]["response"]["updatedInput"], input);
 }
+#[test]
+fn bot_home_keeps_assigned_projects_inside_the_selected_codex_policy() {
+    for access in [
+        AccessMode::Auto,
+        AccessMode::AutoAcceptEdits,
+        AccessMode::ReadOnly,
+        AccessMode::Supervised,
+    ] {
+        let mut p = protocol(Kind::Codex);
+        p.request.cwd = "/bot-home".into();
+        p.request.settings.access = access;
+        p.request.settings.bot = Some(crate::agent::BotContext {
+            bot: crate::bot::Roster::default().draft(vec![
+                "/project-a".into(),
+                "/project-b".into(),
+                "relative".into(),
+            ]),
+            root: "/bot-data".into(),
+            executable: "/vorkspace".into(),
+        });
+        let mut out = Vec::new();
+        p.frame(json!({"id":1,"result":{}}), &mut out).unwrap();
+        p.frame(
+            json!({"id":2,"result":{"thread":{"id":"bot-thread"}}}),
+            &mut out,
+        )
+        .unwrap();
+        for frame in String::from_utf8_lossy(&out)
+            .lines()
+            .map(|line| serde_json::from_str::<Value>(line).unwrap())
+            .filter(|frame| {
+                matches!(
+                    frame["method"].as_str(),
+                    Some("thread/start" | "turn/start")
+                )
+            })
+        {
+            let policy = &frame["params"]["sandboxPolicy"];
+            if matches!(access, AccessMode::Auto | AccessMode::AutoAcceptEdits) {
+                assert_eq!(
+                    policy["writableRoots"],
+                    json!(["/bot-home", "/project-a", "/project-b"])
+                );
+            } else {
+                assert_eq!(policy["type"], "readOnly");
+                assert!(policy.get("writableRoots").is_none());
+            }
+        }
+    }
+}
+
 #[test]
 fn selected_model_effort_and_access_reach_the_codex_turn() {
     let mut p = protocol(Kind::Codex);

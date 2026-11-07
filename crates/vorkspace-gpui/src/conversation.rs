@@ -16,6 +16,7 @@ mod git_context;
 mod history;
 mod local_submissions;
 mod model_menu;
+mod native_history;
 mod notifications;
 #[cfg(test)]
 pub(crate) mod receive_tests;
@@ -213,6 +214,8 @@ pub(crate) struct Conversation {
     history_actions: std::collections::VecDeque<history::HistoryAction>,
     pending_search: Option<(usize, String)>,
     loading: bool,
+    native_syncing: bool,
+    native_recovery: Option<native_history::Recovery>,
     pub(crate) busy: bool,
     /// The UI is idle; serialize the next launch behind the worker's last save.
     stopping: bool,
@@ -550,6 +553,8 @@ impl Conversation {
             history_actions: Default::default(),
             pending_search: None,
             loading: false,
+            native_syncing: false,
+            native_recovery: None,
             busy: false,
             stopping: false,
             notification_cancelled: false,

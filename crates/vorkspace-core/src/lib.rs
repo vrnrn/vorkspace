@@ -19,6 +19,7 @@ pub(crate) mod js_text;
 pub mod kind;
 pub mod limit;
 pub(crate) mod model_cache;
+pub mod native_history;
 pub mod notes;
 pub mod process;
 pub mod project_appearance;

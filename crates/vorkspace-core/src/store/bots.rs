@@ -1,7 +1,106 @@
 use super::{Session, Store};
-use rusqlite::OptionalExtension;
+use rusqlite::{params, OptionalExtension};
 
 impl Store {
+    /// Context usage belongs to a particular provider session. Replace the
+    /// thread and discard its reading in the same guarded write.
+    pub fn replace_bot_provider_session(
+        &self,
+        id: i64,
+        provider: &str,
+        account: &str,
+        expected_id: Option<&str>,
+        next_id: Option<&str>,
+    ) -> Result<bool, String> {
+        let default_account = crate::accounts::DEFAULT;
+        if self.uses_vorkspace_schema() {
+            self.shared_writable()?;
+            let mut updates = String::from("provider_session_id=?5");
+            for column in ["context_used", "context_window"] {
+                if self.shared_field(column, "") == column {
+                    updates.push_str(&format!(",{column}=NULL"));
+                }
+            }
+            let account_column = self.shared_field("provider_account_id", "NULL");
+            return self
+                .conn
+                .execute(
+                    &format!(
+                        "UPDATE sessions SET {updates}
+                         WHERE id=?1 AND harness=?2 AND COALESCE({account_column},?6)=?3
+                           AND provider_session_id IS ?4"
+                    ),
+                    params![
+                        self.persisted_session_id(id)?,
+                        provider,
+                        account,
+                        expected_id,
+                        next_id,
+                        default_account
+                    ],
+                )
+                .map(|changed| changed == 1)
+                .map_err(|e| e.to_string());
+        }
+
+        let tx = self
+            .conn
+            .unchecked_transaction()
+            .map_err(|e| e.to_string())?;
+        let changed = tx
+            .execute(
+                "UPDATE native_sessions SET provider_id=?5
+                 WHERE id=?1 AND provider=?2 AND provider_id IS ?4 AND COALESCE(
+                     (SELECT json_extract(value, '$.account.id') FROM native_settings
+                      WHERE key='agent:'||native_sessions.id), ?6
+                 )=?3",
+                params![id, provider, account, expected_id, next_id, default_account],
+            )
+            .map_err(|e| e.to_string())?;
+        if changed != 1 {
+            return Ok(false);
+        }
+        tx.execute(
+            "DELETE FROM native_settings WHERE key=?1",
+            [format!("context:{id}")],
+        )
+        .map_err(|e| e.to_string())?;
+        tx.commit().map_err(|e| e.to_string())?;
+        Ok(true)
+    }
+
+    /// Change only a Bot's workspace. Its provider identity, history and pending
+    /// input remain authoritative; never turn a directory move into a reset.
+    pub fn move_bot_home(&self, session: &Session, cwd: &str) -> Result<(), String> {
+        if session.cwd == cwd {
+            return Ok(());
+        }
+        let changed = if self.uses_vorkspace_schema() {
+            self.conn.execute(
+                "UPDATE sessions SET cwd=?2 WHERE id=?1 AND cwd=?3 AND provider_session_id IS ?4 AND harness=?5",
+                rusqlite::params![
+                    self.persisted_session_id(session.id)?,
+                    cwd,
+                    session.cwd,
+                    session.provider_id,
+                    session.provider
+                ],
+            )
+        } else {
+            self.conn.execute(
+                "UPDATE native_sessions SET cwd=?2 WHERE id=?1 AND cwd=?3 AND provider_id IS ?4 AND provider=?5",
+                rusqlite::params![session.id, cwd, session.cwd, session.provider_id, session.provider],
+            )
+        }
+        .map_err(|e| e.to_string())?;
+        if changed != 1 {
+            return Err(
+                "The Bot's session changed while preparing its home; reopen it to retry.".into(),
+            );
+        }
+        Ok(())
+    }
+
     /// Look up an existing Bot conversation independently of the sidebar.
     /// Hidden sessions are valid conversations and must never be replaced.
     pub fn bot_session(&self, id: i64) -> Result<Option<Session>, String> {
@@ -227,6 +326,113 @@ impl Store {
 mod tests {
     use super::*;
     use std::path::Path;
+
+    #[test]
+    fn bot_session_replacement_discards_only_the_current_owners_usage() {
+        use crate::{agent::Settings, context::Usage};
+        for open in [Store::open_vorkspace, Store::open] {
+            let temp = tempfile::tempdir().unwrap();
+            let path = temp.path().join("sessions.db");
+            let store = open(&path).unwrap();
+            let session = store.create("codex", "/project").unwrap();
+            if store.uses_vorkspace_schema() {
+                store
+                    .conn
+                    .execute(
+                        "UPDATE sessions SET sidebar_hidden=1 WHERE id=?1",
+                        [store.persisted_session_id(session.id).unwrap()],
+                    )
+                    .unwrap();
+                assert!(store.sessions().unwrap().is_empty());
+            }
+            let mut settings = Settings::default();
+            settings.account.id = "selected".into();
+            store.save_agent_settings(session.id, &settings).unwrap();
+            store.provider_id(session.id, "original").unwrap();
+            let usage = Usage {
+                used: 95_000,
+                window: Some(100_000),
+            };
+            store.save_context_usage(session.id, &usage).unwrap();
+            for (provider, account, expected) in [
+                ("claude", "selected", Some("original")),
+                ("codex", "superseded-account", Some("original")),
+                ("codex", "selected", Some("superseded-thread")),
+                ("codex", "selected", None),
+            ] {
+                assert!(!store
+                    .replace_bot_provider_session(session.id, provider, account, expected, None)
+                    .unwrap());
+                let saved = store.bot_session(session.id).unwrap().unwrap();
+                assert_eq!(saved.provider_id.as_deref(), Some("original"));
+                assert_eq!(store.context_usage(session.id).unwrap(), Some(usage));
+            }
+            assert!(store
+                .replace_bot_provider_session(
+                    session.id,
+                    "codex",
+                    "selected",
+                    Some("original"),
+                    Some("replacement"),
+                )
+                .unwrap());
+            let saved = store.bot_session(session.id).unwrap().unwrap();
+            assert_eq!(saved.provider_id.as_deref(), Some("replacement"));
+            assert_eq!(store.context_usage(session.id).unwrap(), None);
+            let replacement_usage = Usage {
+                used: 4_200,
+                window: Some(272_000),
+            };
+            assert!(store
+                .save_bot_context_usage_if_owner(
+                    session.id,
+                    &replacement_usage,
+                    "codex",
+                    "selected",
+                    Some("replacement"),
+                )
+                .unwrap());
+            for stale in [Some("original"), None] {
+                let saved = store
+                    .save_bot_context_usage_if_owner(session.id, &usage, "codex", "selected", stale)
+                    .unwrap();
+                assert!(!saved);
+                assert_eq!(
+                    store.context_usage(session.id).unwrap(),
+                    Some(replacement_usage)
+                );
+            }
+            assert!(store
+                .replace_bot_provider_session(
+                    session.id,
+                    "codex",
+                    "selected",
+                    Some("replacement"),
+                    None,
+                )
+                .unwrap());
+            assert!(!store
+                .save_bot_context_usage_if_owner(
+                    session.id,
+                    &replacement_usage,
+                    "codex",
+                    "selected",
+                    Some("replacement"),
+                )
+                .unwrap());
+            drop(store);
+            let reopened = open(&path).unwrap();
+            assert_eq!(
+                reopened
+                    .bot_session(session.id)
+                    .unwrap()
+                    .unwrap()
+                    .provider_id,
+                None
+            );
+            assert_eq!(reopened.context_usage(session.id).unwrap(), None);
+        }
+    }
 
     #[test]
     fn hidden_bot_summary_preserves_original_session_and_provider() {

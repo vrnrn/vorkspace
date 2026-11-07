@@ -105,6 +105,22 @@ impl Bots {
         cx: &mut Context<Self>,
     ) -> Result<Value, String> {
         match call.action.as_str() {
+            "bots.configure" => {
+                let mode: bot::CompactionMode =
+                    serde_json::from_value(call.input["compactionMode"].clone())
+                        .map_err(|e| e.to_string())?;
+                let owner = self
+                    .roster
+                    .get_mut(author)
+                    .filter(|b| !b.is_minion())
+                    .ok_or("Only a Bot can change its own context policy")?;
+                owner.compaction_mode = mode;
+                self.configure_chat(author, cx);
+                self.changed(cx);
+                // finish_call serializes roster persistence with prior writes
+                // and acknowledges only after the durable receipt is saved.
+                Ok(json!({"bot":author,"compactionMode":mode}))
+            }
             "bots.list" => Ok(
                 json!({"bots":self.roster.bots.iter().filter(|b| b.id != author && self.roster.can_communicate(author,&b.id)).map(|b| json!({"id":b.id,"name":b.label(),"mascot":b.mascot,"minion":b.minion,"status":self.chats.get(&b.id).map(|v|v.read(cx).bot_status()).unwrap_or("idle")})).collect::<Vec<_>>()}),
             ),

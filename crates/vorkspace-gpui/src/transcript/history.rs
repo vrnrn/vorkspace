@@ -258,6 +258,24 @@ impl TranscriptView {
         }
     }
 
+    pub(crate) fn patch_bot_turn_snapshot(
+        &mut self,
+        turn_start: usize,
+        mut rows: Vec<Row>,
+        cx: &mut Context<Self>,
+    ) {
+        let source_len = rows.len();
+        self.live_start = turn_start;
+        let common = self
+            .source
+            .iter()
+            .zip(&rows)
+            .take_while(|(visible, admitted)| visible == admitted)
+            .count();
+        rows.drain(..common);
+        self.patch_snapshot(common, rows, source_len, cx);
+    }
+
     /// A projected snapshot owns its end as well as its changed suffix.
     /// Ordinary provider patches remain append/replace operations.
     pub(crate) fn patch_snapshot(

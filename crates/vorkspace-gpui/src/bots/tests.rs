@@ -1599,6 +1599,50 @@ fn setup(cx: &mut TestAppContext) -> Setup {
     setup_with_channels(cx, false)
 }
 
+#[gpui::test]
+fn bot_named_home_survives_reopening_without_replacing_its_session(cx: &mut TestAppContext) {
+    let s = setup(cx);
+    let home = {
+        let store = locked(&s.store).unwrap();
+        let session = store.bot_session(s.session).unwrap().unwrap();
+        let home = PathBuf::from(&session.cwd);
+        assert_eq!(
+            home.parent(),
+            Some(Path::new(&s.project).join("bot-workspaces").as_path())
+        );
+        assert!(home.join("AGENTS.md").is_file());
+        assert!(home.join("SESSION.md").is_file());
+        store
+            .provider_id(s.session, "existing-bot-provider-thread")
+            .unwrap();
+        home
+    };
+    s.manager.update(cx, |manager, cx| {
+        manager.chats.remove(&s.id);
+        manager.ensure_chat(&s.id, cx);
+    });
+    cx.run_until_parked();
+    s.manager.read_with(cx, |manager, cx| {
+        assert!(manager.error.is_none(), "{:?}", manager.error);
+        let session = &manager.chats[&s.id].read(cx).summary;
+        assert_eq!(session.id, s.session);
+        assert_eq!(
+            session.provider_id.as_deref(),
+            Some("existing-bot-provider-thread")
+        );
+        assert_eq!(Path::new(&session.cwd), home);
+        assert_eq!(
+            manager.roster.get(&s.id).unwrap().session_id,
+            Some(s.session)
+        );
+    });
+    assert!(
+        std::fs::read_to_string(home.join("SESSION.md"))
+            .unwrap()
+            .contains("existing-bot-provider-thread")
+    );
+}
+
 fn setup_with_channels(cx: &mut TestAppContext, channels: bool) -> Setup {
     let dir = std::env::temp_dir().join(format!("native-bots-{}", bot::new_id()));
     std::fs::create_dir_all(&dir).unwrap();
@@ -3801,8 +3845,18 @@ fn create_named_bot_commits_once_with_draft_choices_and_existing_settings_show_r
     visual.simulate_input("  Ada 🧭  ");
     visual.run_until_parked();
     let draft_id = s.manager.read_with(visual, |manager, _| {
-        manager.creation.as_ref().unwrap().bot.id.clone()
+        let bot = &manager.creation.as_ref().unwrap().bot;
+        assert_eq!(bot.compaction_mode, bot::CompactionMode::SessionRollover);
+        bot.id.clone()
     });
+    let compaction = visual.debug_bounds("bot-settings-compaction").unwrap();
+    visual.simulate_click(compaction.center(), Default::default());
+    visual.run_until_parked();
+    let native = visual
+        .debug_bounds("menu-action-native-compaction")
+        .unwrap();
+    visual.simulate_click(native.center(), Default::default());
+    visual.run_until_parked();
     let soul = visual.debug_bounds("bot-settings-Soul").unwrap();
     visual.simulate_click(soul.center(), Default::default());
     visual.run_until_parked();
@@ -3844,6 +3898,7 @@ fn create_named_bot_commits_once_with_draft_choices_and_existing_settings_show_r
         assert_eq!(bot.mascot, "cat");
         assert_eq!(bot.projects, vec![s.project.clone()]);
         assert!(bot.show_started_sessions_in_sidebar);
+        assert_eq!(bot.compaction_mode, bot::CompactionMode::Native);
         assert!(bot.initial_configuration.is_none());
         let view = manager.chat().unwrap();
         assert_eq!(view.read(cx).summary.provider, "claude");
@@ -3851,6 +3906,10 @@ fn create_named_bot_commits_once_with_draft_choices_and_existing_settings_show_r
     });
     let saved = Roster::load(&locked(&s.store).unwrap()).unwrap();
     assert_eq!(saved.get(&id).unwrap().name, "Ada 🧭");
+    assert_eq!(
+        saved.get(&id).unwrap().compaction_mode,
+        bot::CompactionMode::Native
+    );
     let settings = locked(&s.store)
         .unwrap()
         .agent_settings(session)
@@ -3878,6 +3937,25 @@ fn create_named_bot_commits_once_with_draft_choices_and_existing_settings_show_r
     visual.run_until_parked();
     assert!(visual.debug_bounds("bot-reset").is_some());
     assert!(visual.debug_bounds("bot-create").is_none());
+    let compaction = visual.debug_bounds("bot-settings-compaction").unwrap();
+    visual.simulate_click(compaction.center(), Default::default());
+    visual.run_until_parked();
+    let fresh = visual.debug_bounds("menu-action-session-rollover").unwrap();
+    visual.simulate_click(fresh.center(), Default::default());
+    visual.run_until_parked();
+    s.manager.read_with(visual, |manager, cx| {
+        let chat = manager.chat().unwrap();
+        let runtime_bot = &chat.read(cx).settings.bot.as_ref().unwrap().bot;
+        assert_eq!(
+            runtime_bot.compaction_mode,
+            bot::CompactionMode::SessionRollover
+        );
+    });
+    let saved = Roster::load(&locked(&s.store).unwrap()).unwrap();
+    assert_eq!(
+        saved.get(&id).unwrap().compaction_mode,
+        bot::CompactionMode::SessionRollover
+    );
     let soul = visual.debug_bounds("bot-settings-Soul").unwrap();
     visual.simulate_click(soul.center(), Default::default());
     visual.run_until_parked();

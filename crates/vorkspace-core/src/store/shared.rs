@@ -8,6 +8,8 @@ mod edit;
 mod history_window;
 mod incremental;
 pub use history_window::{IndexedHistoryCursor, IndexedHistoryPage};
+pub(super) use incremental::HistoryAppend;
+mod native_history;
 mod ordinary;
 #[cfg(test)]
 mod tests;
@@ -843,7 +845,7 @@ impl Store {
     }
     /// Scalar preferences and native settings; historical receipts are added
     /// only for full agent reads, never while saving composer preferences.
-    fn shared_agent_preferences(&self, id: i64) -> Result<Option<Settings>, String> {
+    pub(super) fn shared_agent_preferences(&self, id: i64) -> Result<Option<Settings>, String> {
         let fields = ["harness", "model", "model_settings", "runtime_mode"]
             .into_iter()
             .map(str::to_owned)
@@ -1854,6 +1856,9 @@ impl Store {
             ("composer_drafts", "session_id"),
             ("composer_draft_recoveries", "session_id"),
             ("native_follow_up_metadata", "session_id"),
+            ("provider_history_cursors", "session_id"),
+            ("provider_history_receipts", "session_id"),
+            ("provider_history_recoveries", "session_id"),
             ("in_flight_sessions", "session_id"),
             ("orchestration_workers", "session_id"),
             ("orchestration_sidebar", "lead_id"),
