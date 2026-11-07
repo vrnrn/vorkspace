@@ -8,7 +8,7 @@ Search for a symbol, select it to read its source, then follow its callers or ca
 
 Each project checkout has its own map. The engine watches for file changes after indexing. Use **Reindex** to refresh it or recover from an error. Some files cannot be indexed, and the page tells you when coverage is incomplete. This feature currently works with local projects only.
 
-Turning the feature off stops its work and file watching but keeps the saved map. Closing its tab simply hides it. The app can keep eight working copies active at once; disable an unused project if you reach that limit.
+Turning the feature off stops its work and file watching but keeps the saved map. Closing its tab simply hides it. The app can keep eight working copies active at once; disable an unused project if you reach that limit, then retry after it finishes stopping.
 
 Bots and chats with `/operator` can use the same index through the app CLI. They can only query projects they are allowed to access. A chat working in a separate Git worktree reads that worktree's map. Read-only chats can search an existing index, but cannot enable the feature or start indexing.
 

@@ -16,7 +16,7 @@ The engine runs locally through stdio with its HTTP interface disabled before st
 
 ## Ownership and cancellation
 
-Up to eight working copies can have active clients. A client remains alive while its project is enabled, including when its tab closes, so the engine can watch file changes. Closing a pane does not disable the project. Disabling cancels that project's clients and watcher subscriptions while retaining its index files. A restored disabled pane cannot start an engine. Enabled projects are activated when opened or explicitly indexed; loading saved settings alone does not download or start anything.
+Up to eight working copies can have active clients. Draining clients retain their slot until they exit. A client remains alive while its project is enabled, including when its tab closes, so the engine can watch file changes. Closing a pane does not disable the project. Disabling cancels that project's clients and watcher subscriptions while retaining its index files. A restored disabled pane cannot start an engine. Enabled projects are activated when opened or explicitly indexed; loading saved settings alone does not download or start anything.
 
 Index requests are synchronous inside a cancellable background worker, not upstream detached asynchronous jobs. Closing a client's stdio connection cancels its request-owned work. A replacement waits for its predecessor to finish cleanup before starting. Disable does not wait in the query queue, and canceled workers cannot publish results. App shutdown cancels and joins these clients before general child-process cleanup.
 

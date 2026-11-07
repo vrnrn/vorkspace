@@ -44,6 +44,13 @@ struct Worker {
     sender: mpsc::SyncSender<Request>,
     thread: Option<JoinHandle<()>>,
 }
+impl Worker {
+    fn occupies_slot(&self) -> bool {
+        self.thread
+            .as_ref()
+            .is_some_and(|thread| !thread.is_finished())
+    }
+}
 struct State {
     enabled: HashSet<String>,
     workers: HashMap<String, Worker>,
@@ -155,6 +162,7 @@ impl Service {
             .workers
             .get(&crate::files::path_key(root))
             .filter(|w| w.project == crate::files::path_key(project))
+            .filter(|w| !w.cancel.load(Ordering::Acquire))
             .map(|w| lock(&w.snapshot).clone())
             .unwrap_or_else(|| Snapshot {
                 phase: "idle".into(),
@@ -198,18 +206,22 @@ impl Service {
                 return Ok(());
             }
         }
-        if !state.workers.contains_key(&root_key)
+        // Draining workers retain their slot until they have actually stopped.
+        // A replacement can reuse its predecessor's slot because it joins that
+        // predecessor before starting an engine client.
+        let replacing_live_worker = state
+            .workers
+            .get(&root_key)
+            .is_some_and(Worker::occupies_slot);
+        if !replacing_live_worker
             && state
                 .workers
                 .values()
-                .filter(|w| {
-                    !w.cancel.load(Ordering::Acquire)
-                        && w.thread.as_ref().is_some_and(|t| !t.is_finished())
-                })
+                .filter(|worker| worker.occupies_slot())
                 .count()
                 >= 8
         {
-            return Err("Eight working copies are already active. Disable Codebase Memory for an unused project first.".into());
+            return Err("Eight working copies are still active or stopping. Disable Codebase Memory for an unused project or retry after it stops.".into());
         }
         let previous = state.workers.remove(&root_key).and_then(|mut worker| {
             worker.cancel.store(true, Ordering::Release);

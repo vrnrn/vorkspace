@@ -226,6 +226,25 @@ fn extract(input: impl Read, destination: &Path, cancel: &AtomicBool) -> Result<
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    #[ignore = "Downloads the pinned component from GitHub into a disposable directory"]
+    fn pinned_component_installs_atomically_and_reuses_verified_files() {
+        let root = tempfile::tempdir().unwrap();
+        let cancel = AtomicBool::new(false);
+        let binary = ensure(root.path(), &cancel).unwrap();
+        let (_, _, checksum) = asset().unwrap();
+        assert!(installed(binary.parent().unwrap(), checksum));
+        let modified = fs::metadata(&binary).unwrap().modified().unwrap();
+        assert_eq!(ensure(root.path(), &cancel).unwrap(), binary);
+        assert_eq!(fs::metadata(&binary).unwrap().modified().unwrap(), modified);
+        assert!(!binary.parent().unwrap().join("install.sh").exists());
+        assert!(fs::read_dir(root.path()).unwrap().all(|entry| !entry
+            .unwrap()
+            .file_name()
+            .to_string_lossy()
+            .starts_with("component-")));
+    }
     fn archive(link: bool) -> Vec<u8> {
         let mut builder = tar::Builder::new(flate2::write::GzEncoder::new(
             Vec::new(),

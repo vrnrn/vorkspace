@@ -497,6 +497,8 @@ impl Shell {
                     let view =
                         cx.new(|cx| crate::codebase::Page::new(pane.project, pane.worktree, cx));
                     self.codebase_tabs.insert(id, view);
+                } else if let Some(view) = self.codebase_tabs.get(&id) {
+                    view.update(cx, |view, cx| view.activate(false, cx));
                 }
                 self.workspace.open(id);
                 self.remember_title_tab(TitleTab::Workspace(

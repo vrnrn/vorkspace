@@ -91,6 +91,62 @@ fn unrelated_working_copy_cannot_start_a_client() {
 }
 
 #[test]
+fn inactive_entries_cannot_bypass_capacity_and_draining_workers_keep_their_slots() {
+    let (root, mut service) = fixture();
+    Arc::get_mut(&mut service).unwrap().test_engine = Some("/usr/bin/false".into());
+    let project = root.path().to_str().unwrap();
+    service.configure(project, true).unwrap();
+    // Dropping these senders releases every barrier, including on assertion
+    // failure, before Service::drop joins the fixture workers.
+    let mut releases = Vec::new();
+    for index in 0..8 {
+        let (release, barrier) = mpsc::channel::<()>();
+        releases.push(release);
+        let (sender, _) = mpsc::sync_channel(2);
+        lock(&service.state).workers.insert(
+            format!("slot-{index}"),
+            Worker {
+                project: "other".into(),
+                cancel: Arc::new(AtomicBool::new(false)),
+                snapshot: Arc::new(Mutex::new(Snapshot::default())),
+                sender,
+                thread: Some(std::thread::spawn(move || {
+                    let _ = barrier.recv();
+                })),
+            },
+        );
+    }
+    let (sender, _) = mpsc::sync_channel(2);
+    lock(&service.state).workers.insert(
+        crate::files::path_key(project),
+        Worker {
+            project: crate::files::path_key(project),
+            cancel: Arc::new(AtomicBool::new(true)),
+            snapshot: Arc::new(Mutex::new(Snapshot {
+                phase: "indexing".into(),
+                ..Default::default()
+            })),
+            sender,
+            thread: None,
+        },
+    );
+    assert_eq!(service.snapshot(project, project).phase, "idle");
+    assert!(service
+        .activate(project, project, false)
+        .unwrap_err()
+        .contains("Eight"));
+    for worker in lock(&service.state).workers.values() {
+        worker.cancel.store(true, Ordering::Release);
+    }
+    assert!(service
+        .activate(project, project, false)
+        .unwrap_err()
+        .contains("Eight"));
+    drop(releases);
+    service.shutdown();
+}
+
+#[test]
 fn disable_during_preparation_cannot_publish_a_ready_successor() {
     let (root, mut service) = fixture();
     let script = root.path().join("fixture-engine");
@@ -193,6 +249,26 @@ fn pinned_engine_indexes_isolated_roots_and_stops_cleanly() {
         query(&projects[1], "index_status", json!({}))["status"],
         "ready"
     );
+    service.configure(&projects[0], true).unwrap();
+    assert_eq!(service.snapshot(&projects[0], &projects[0]).phase, "idle");
+    service.activate(&projects[0], &projects[0], false).unwrap();
+    loop {
+        let snapshot = service.snapshot(&projects[0], &projects[0]);
+        assert_ne!(snapshot.phase, "error", "{:?}", snapshot.error);
+        if snapshot.phase == "ready" {
+            break;
+        }
+        assert!(Instant::now() < deadline, "reactivation did not finish");
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    assert!(query(
+        &projects[0],
+        "get_code_snippet",
+        json!({"qualified_name":"alpha_greet"})
+    )["source"]
+        .as_str()
+        .unwrap()
+        .contains("return 'Hello '"));
     service.shutdown();
     assert!(lock(&service.state).workers.is_empty());
 }

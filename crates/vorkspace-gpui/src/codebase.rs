@@ -266,10 +266,14 @@ impl Page {
         }
         cx.notify();
     }
-    fn activate(&mut self, reindex: bool, cx: &mut Context<Self>) {
+    pub(crate) fn activate(&mut self, reindex: bool, cx: &mut Context<Self>) {
         let Ok(service) = self.service.clone() else {
             return;
         };
+        if !service.enabled(&self.project) {
+            self.refresh(cx);
+            return;
+        }
         let (project, root) = (self.project.clone(), self.root.clone());
         let work = cx
             .background_executor()
