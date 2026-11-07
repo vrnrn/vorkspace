@@ -46,7 +46,7 @@ its helpers, never `gpui::dither` directly.
 | `area(color)` / `bar(color)` | Chart fills: solid under the line fading to nothing; bars full at the top printing down to three-quarter tone, never the half-tone checkerboard |
 | `plate()`, `empty_mark(icon, side)` | An empty state's mark: the icon on clean paper standing above a dotted ground that fades from quarter tone to paper (`page::empty` and the Bot empty states use it) |
 | `slider_parts(fraction)` | A compact slider: dotted track, solid fill up to the value, and the upright thumb (project, Bot and channel grid scales) |
-| `field(id)` | A still fluidither aurora field above the empty session prompt |
+| `field(id)` | A still fluidither aurora field above the empty session prompt, in blue-noise grain at 2pt cells: Bayer mid-tones form a checkerboard over a field this large. Docked beside another pane the field gives way and the question stays |
 | `hint(weight)`, `hint_in(color, weight)` | Dotted washes for drop targets and split landing zones |
 | `scrim(weight)` | A flat black dim behind dialogs; a printed scrim garbles the text it covers |
 | `rule()` | Markdown's `---`: a line of dots |

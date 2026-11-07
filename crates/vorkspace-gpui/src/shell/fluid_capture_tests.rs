@@ -25,6 +25,8 @@ const SHOTS: &[(&str, Option<usize>, (f32, f32))] = &[
     ("work", Some(0), (1390., 890.)),
     ("automation-editor", Some(0), (1390., 890.)),
     ("approval-inline", Some(0), (1390., 890.)),
+    ("split", Some(0), (1390., 890.)),
+    ("split-down", Some(0), (1390., 890.)),
     ("tooltip", Some(0), (551., 271.)),
     ("explorer", Some(0), (1390., 890.)),
     ("changes", Some(0), (1390., 890.)),
@@ -481,6 +483,12 @@ fn fluid_capture() {
                         shell.open_connector(crate::workspace::Connector::Github, window, cx)
                     }
                     "search" => shell.open_app_search(window, cx),
+                    "split" => {
+                        shell.split_session(vorkspace_model::pane_layout::SplitDir::Right, cx)
+                    }
+                    "split-down" => {
+                        shell.split_session(vorkspace_model::pane_layout::SplitDir::Down, cx)
+                    }
                     "approval-inline" => {
                         let view = shell.sessions[&sessions[0].id].clone();
                         view.update(cx, |view, cx| {

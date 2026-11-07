@@ -142,10 +142,13 @@ impl gpui::RenderOnce for Field {
         use gpui::Styled;
         init(cx);
         fluidither::DitherGradient::field(self.0, FIELD_KIND)
+            // Blue noise scatters its dots like grain: Bayer's mid-tones form
+            // a checkerboard, and halftone crosses read as blocks at this size.
+            .matrix(fluidither::dither::Matrix::BlueNoise)
             // Still: an empty page is not a reason to draw frames.
             .speed(0.)
             .ink(gpui::Rgba::from(content(0.3)))
-            .cell(FIELD_CELL)
+            .cell(2.)
             .corner_radius(crate::radius::SURFACE)
             .w_full()
             .h_full()

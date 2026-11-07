@@ -834,23 +834,27 @@ impl Conversation {
                                 .mb_6()
                                 .child(vorkspace_ui::fluid::field("empty-session-field")),
                         )
-                        .child(
-                            div()
-                                .id("empty-session-title")
-                                .role(Role::Heading)
-                                .flex_shrink_0()
-                                .mb_4()
-                                .px(px(10.))
-                                .text_size(px(18.))
-                                .line_height(px(28.))
-                                .text_color(content(1.))
-                                .truncate()
-                                .child(format!(
-                                    "What should we work on in {}?",
-                                    self.project_appearance.label(&self.summary.cwd)
-                                )),
-                        )
                     })
+                    // Docked beside a pane the field gives way, but the pane
+                    // still says what it is for rather than standing blank.
+                    .child(
+                        div()
+                            .id("empty-session-title")
+                            .role(Role::Heading)
+                            .flex_shrink_0()
+                            .mb_4()
+                            .px(px(10.))
+                            .text_size(px(18.))
+                            .line_height(px(28.))
+                            .text_color(content(1.))
+                            // A narrow pane wraps the question onto a second
+                            // line rather than cutting off the project name.
+                            .line_clamp(2)
+                            .child(format!(
+                                "What should we work on in {}?",
+                                self.project_appearance.label(&self.summary.cwd)
+                            )),
+                    )
                     .child(self.composer(window, cx))
                     .when(!docked, |d| {
                         d.child(div().flex_grow(1.).flex_shrink(1.).flex_basis(px(18.)))
