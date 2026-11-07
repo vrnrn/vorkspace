@@ -56,6 +56,12 @@ const SHOTS: &[(&str, Option<usize>, (f32, f32))] = &[
     ("bot-soul", Some(0), (1390., 890.)),
     ("bot-memory", Some(0), (1390., 890.)),
     ("bot-habits", Some(0), (1390., 890.)),
+    ("rest-narrow", Some(0), (850., 610.)),
+    ("settings-narrow", None, (850., 610.)),
+    ("project-appearance-narrow", Some(0), (850., 610.)),
+    ("bot-narrow", Some(0), (850., 610.)),
+    ("bot-soul-narrow", Some(0), (850., 610.)),
+    ("palette-narrow", Some(0), (850., 610.)),
     ("project-appearance", Some(0), (1390., 890.)),
     ("project-background", Some(0), (1390., 890.)),
     ("project-codebase", Some(0), (1390., 890.)),
@@ -250,6 +256,11 @@ fn fluid_capture() {
             {
                 continue;
             }
+            // A "-narrow" shot is its base scene in a small window.
+            let file = *name;
+            let narrow = file.ends_with("-narrow");
+            let base = file.trim_end_matches("-narrow");
+            let name = &base;
             let mut state = Workspace::default();
             state.preferences.theme = theme.into();
             state.add_project(PROJECT);
@@ -263,9 +274,16 @@ fn fluid_capture() {
             let store = store.clone();
             let summaries = sessions.clone();
             let window = cx
-                .open_window(gpui::size(px(1400.), px(900.)), |_, cx| {
-                    cx.new(|cx| Shell::new(store, summaries, PROJECT.into(), Some(saved), cx))
-                })
+                .open_window(
+                    if narrow {
+                        gpui::size(px(860.), px(620.))
+                    } else {
+                        gpui::size(px(1400.), px(900.))
+                    },
+                    |_, cx| {
+                        cx.new(|cx| Shell::new(store, summaries, PROJECT.into(), Some(saved), cx))
+                    },
+                )
                 .unwrap();
             cx.run_until_parked();
             if *name == "live" {
@@ -477,7 +495,7 @@ fn fluid_capture() {
             }
             cx.capture_screenshot(window.into())
                 .unwrap()
-                .save(output.join(format!("{theme}-{name}.png")))
+                .save(output.join(format!("{theme}-{file}.png")))
                 .unwrap();
             if *name == "typed" {
                 // Drafts persist per session; later shots start clean.

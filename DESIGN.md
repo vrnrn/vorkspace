@@ -44,7 +44,8 @@ its helpers, never `gpui::dither` directly.
 | `track(weight)` | The empty part of a slider, meter or progress bar: a dotted rule (25% Bayer). The filled part is solid ink |
 | `ring_track(color)` | A gauge's unfilled ring, dotted in 1pt cells |
 | `area(color)` / `bar(color)` | Chart fills: solid under the line fading to nothing; bars full at the top printing down to three-quarter tone, never the half-tone checkerboard |
-| `plate()` | The dotted plate behind an empty state's icon, fading from quarter tone to paper |
+| `plate()`, `empty_mark(icon, side)` | An empty state's mark: the icon on clean paper standing above a dotted ground that fades from quarter tone to paper (`page::empty` and the Bot empty states use it) |
+| `slider_parts(fraction)` | A compact slider: dotted track, solid fill up to the value, and the upright thumb (project, Bot and channel grid scales) |
 | `field(id)` | A still fluidither aurora field above the empty session prompt |
 | `hint(weight)`, `hint_in(color, weight)` | Dotted washes for drop targets and split landing zones |
 | `scrim(weight)` | A flat black dim behind dialogs; a printed scrim garbles the text it covers |
@@ -56,6 +57,7 @@ its helpers, never `gpui::dither` directly.
 | `thumb(color)` | A slider's upright rounded-bar thumb, 8 by 16 |
 | `knob(on)`, `switch_off()` | A switch: a white 3pt-rounded square knob (black on a pale accent) on a solid accent track when on, a flat `content(0.16)` track when off |
 | `on_ink()` | Text and icons on a solid ink fill: primary buttons and the neutral composer submit |
+| `panel_kit::home_relative(path)` | A path as people read it, starting at `~` under the home folder; long hover-card paths also elide their middle |
 | `is_numeric(text)` | Whether a table cell is a number; numeric cells use Obel Mono's tabular digits, and a visual's all-numeric columns right-align |
 | `Count` | A whole number that rolls to each new value on the `QUICK` spring (the diff stat) |
 | `Scramble` | Text that settles from stand-in glyphs over 0.7 s when it changes after its first showing (session titles in the sidebar) |
