@@ -261,6 +261,9 @@ impl Service {
             return Err("This working copy is active through another path. Disable that project's Codebase Memory and wait for it to stop before retrying.".into());
         }
         if let Some(worker) = state.workers.get(&root_key) {
+            if worker.occupies_slot() && lock(&worker.snapshot).root != root {
+                return Err("This path now points to a different working copy. Disable Codebase Memory and wait for the previous engine to stop before retrying.".into());
+            }
             if worker.project != project_key && worker.occupies_slot() {
                 return Err("This working copy is already owned by another project".into());
             }
@@ -448,6 +451,9 @@ impl Service {
             .get(&crate::files::path_key(root))
             .filter(|w| w.project == project)
             .ok_or("Index this working copy first")?;
+        if lock(&worker.snapshot).root != canonical(root)? {
+            return Err("This path now points to a different working copy; reopen Codebase Memory for the current folder".into());
+        }
         if worker.cancel.load(Ordering::Acquire) || lock(&worker.snapshot).phase != "ready" {
             return Err("Codebase Memory is not ready; check its status".into());
         }

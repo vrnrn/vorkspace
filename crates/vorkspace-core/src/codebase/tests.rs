@@ -263,7 +263,10 @@ fn uncertain_startup_reservation_survives_a_failed_retry() {
         Worker {
             project: key.clone(),
             cancel: Arc::new(AtomicBool::new(true)),
-            snapshot: Arc::default(),
+            snapshot: Arc::new(Mutex::new(Snapshot {
+                root: canonical(project).unwrap(),
+                ..Default::default()
+            })),
             sender,
             thread: None,
             retirement: retirement.clone(),
@@ -281,6 +284,55 @@ fn uncertain_startup_reservation_survives_a_failed_retry() {
     let state = lock(&service.state);
     assert!(Arc::ptr_eq(&state.workers[&key].retirement, &retirement));
     assert!(state.workers[&key].occupies_slot());
+}
+
+#[test]
+fn retargeted_path_cannot_reuse_another_canonical_roots_reservation() {
+    let (root, mut service) = fixture();
+    Arc::get_mut(&mut service).unwrap().test_engine = Some("/usr/bin/false".into());
+    let original = root.path().join("original");
+    let successor = root.path().join("successor");
+    fs::create_dir(&original).unwrap();
+    fs::create_dir(&successor).unwrap();
+    let link = root.path().join("project");
+    std::os::unix::fs::symlink(&original, &link).unwrap();
+    let project = link.to_str().unwrap();
+    service.configure(project, true).unwrap();
+    let key = crate::files::path_key(project);
+    let (sender, _) = mpsc::sync_channel(2);
+    lock(&service.state).workers.insert(
+        key.clone(),
+        Worker {
+            project: key.clone(),
+            cancel: Arc::new(AtomicBool::new(true)),
+            snapshot: Arc::new(Mutex::new(Snapshot {
+                root: canonical(project).unwrap(),
+                ..Default::default()
+            })),
+            sender,
+            thread: None,
+            retirement: Arc::new(Mutex::new(Retirement::Unconfirmed)),
+        },
+    );
+    fs::remove_file(&link).unwrap();
+    std::os::unix::fs::symlink(&successor, &link).unwrap();
+    assert!(service
+        .query(project, project, "index_status", json!({}))
+        .unwrap_err()
+        .contains("different working copy"));
+    for reindex in [false, true] {
+        assert!(service
+            .activate(project, project, reindex)
+            .unwrap_err()
+            .contains("different working copy"));
+    }
+    *lock(&lock(&service.state).workers[&key].retirement) = Retirement::Clear;
+    service.activate(project, project, false).unwrap();
+    assert_eq!(
+        service.snapshot(project, project).root,
+        canonical(project).unwrap()
+    );
+    service.shutdown();
 }
 
 #[test]
