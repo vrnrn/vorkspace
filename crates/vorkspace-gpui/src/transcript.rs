@@ -539,6 +539,19 @@ impl TranscriptView {
     pub(super) fn work_open(&self, turn: usize, expandable: bool) -> bool {
         expandable && self.work_folds.get(&turn).copied().unwrap_or(false)
     }
+    /// Opens the first collapsed run of steps, as clicking its summary
+    /// does. For captures, which cannot reach the phase state.
+    #[cfg(test)]
+    pub(crate) fn open_first_phase(&mut self, cx: &mut Context<Self>) -> bool {
+        let group = self.rows.iter().find_map(|r| match r.body {
+            Body::Phase { group, .. } => Some(group),
+            _ => None,
+        });
+        if let Some(group) = group {
+            self.toggle_phase(group, true, cx);
+        }
+        group.is_some()
+    }
     /// Opens a finished turn's work, as clicking its receipt does. For tests
     /// in other modules, which cannot reach the fold state.
     #[cfg(test)]

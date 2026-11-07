@@ -31,7 +31,9 @@ opt-level = 3
 [profile.native-dev]
 inherits = "dev"
 debug = 0
-incremental = true
+# Off: the incremental cache grows with every rebuild and is never pruned,
+# reaching tens of GB in a day of iteration. Rebuilds are slower without it.
+incremental = false
 
 [profile.native-dev.package."*"]
 opt-level = 1

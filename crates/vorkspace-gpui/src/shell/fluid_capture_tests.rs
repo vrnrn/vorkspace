@@ -312,7 +312,9 @@ fn fluid_capture() {
                 window
                     .update(&mut cx, |shell, _, cx| {
                         let transcript = shell.sessions[&id].read(cx).transcript.clone();
-                        transcript.update(cx, |view, cx| view.open_work(1, cx));
+                        transcript.update(cx, |view, cx| {
+                            assert!(view.open_first_phase(cx), "a run of steps");
+                        });
                     })
                     .unwrap();
                 cx.run_until_parked();
