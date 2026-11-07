@@ -883,6 +883,7 @@ impl Conversation {
             })
             .child(
                 composer_column()
+                    .children(self.native_history_banner(cx))
                     .when_some(self.bot_ui.draft_error.clone(), |d, error| {
                         d.child(
                             div()

@@ -16,6 +16,7 @@ mod compaction_tests;
 #[cfg(test)]
 mod follow_up_tests;
 mod handoff;
+pub mod manual_compaction;
 pub mod native_history;
 mod persistence;
 pub mod remote;
@@ -194,13 +195,14 @@ fn run_turn_using(
                 "This provider account was removed. Choose another account to continue.".into(),
             );
         }
-        native_history::before_turn(&store, &summary, &settings, &cancel)?;
-        context = locked(&store)?
-            .context_usage(summary.id)?
-            .unwrap_or_default();
-        (transcript, pending.writer) = locked(&store)?.load_turn_history(summary.id)?;
-        history_loaded = true;
-        turn_start = transcript.rows.len();
+        let native_history = native_history::before_turn(&store, &summary, &settings, &cancel)?;
+        if settings.bot.is_none() {
+            let store = locked(&store)?;
+            context = store.context_usage(summary.id)?.unwrap_or_default();
+            (transcript, pending.writer) = store.load_turn_history(summary.id)?;
+            history_loaded = true;
+            turn_start = transcript.rows.len();
+        }
         settings.ticket_context_data_dir =
             locked(&store)?.data_dir().map(std::path::Path::to_path_buf);
         settings.ticket_context = Some(vorkspace_core::ticket_context::admit(
@@ -210,7 +212,13 @@ fn run_turn_using(
             &cancel,
             settings.ticket_context.take(),
         )?);
-        submissions.reserve_initial(&prompt, &settings)?;
+        if let Err(error) = submissions.reserve_initial(&prompt, &settings, native_history.as_ref())
+        {
+            // Rejected admission owns no transcript rows, even when the
+            // ordinary chat loaded a read baseline during preparation.
+            history_loaded = false;
+            return Err(error);
+        }
         if settings.bot.is_some() {
             // Reservation excludes background import before this writer takes
             // its baseline, including imports finishing during preparation.
@@ -233,6 +241,7 @@ fn run_turn_using(
                 (transcript, pending.writer) = store.load_turn_history(summary.id)?;
                 settings.turns = saved.turns;
             }
+            history_loaded = true;
             turn_start = transcript.rows.len();
             if kind == Kind::Claude {
                 settings.native_prompt_id = Some(vorkspace_core::native_history::input_uuid(

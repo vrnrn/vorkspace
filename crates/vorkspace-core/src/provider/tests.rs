@@ -36,6 +36,21 @@ fn protocol(kind: Kind) -> Protocol {
     })
 }
 #[test]
+fn codex_compaction_rejects_missing_or_different_threads_before_provider_input() {
+    for reply in [
+        json!({"id":2,"error":{"message":"Thread not found"}}),
+        json!({"id":2,"result":{"thread":{"id":"replacement"}}}),
+    ] {
+        let mut codex = protocol(Kind::Codex);
+        codex.compact = true;
+        codex.request.provider_id = Some("saved".into());
+        let mut wire = Vec::new();
+        assert!(codex.frame(reply, &mut wire).is_err());
+        assert!(wire.is_empty());
+        assert_eq!(codex.request.provider_id.as_deref(), Some("saved"));
+    }
+}
+#[test]
 fn context_reports_use_the_latest_request_and_include_cached_tokens() {
     let mut codex = protocol(Kind::Codex);
     let events = codex.frame(json!({"method":"thread/tokenUsage/updated","params":{"tokenUsage":{"last":{"totalTokens":4200},"total":{"totalTokens":99000},"modelContextWindow":272000}}}),&mut Vec::new()).unwrap();

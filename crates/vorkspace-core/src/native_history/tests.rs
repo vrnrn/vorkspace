@@ -6,7 +6,7 @@ use crate::{
 use serde_json::json;
 use std::io::Write;
 
-fn append(path: &Path, values: &[Value]) {
+pub(crate) fn append(path: &Path, values: &[Value]) {
     let mut file = std::fs::OpenOptions::new()
         .append(true)
         .create(true)
@@ -16,10 +16,10 @@ fn append(path: &Path, values: &[Value]) {
         writeln!(file, "{value}").unwrap();
     }
 }
-fn meta() -> Value {
+pub(crate) fn meta() -> Value {
     json!({"type":"session_meta","payload":{"id":"thread"}})
 }
-fn turn(id: &str, prompt: &str, answer: &str) -> Vec<Value> {
+pub(crate) fn turn(id: &str, prompt: &str, answer: &str) -> Vec<Value> {
     vec![
         json!({"timestamp":"2026-11-06T00:00:00Z","type":"event_msg","payload":{"type":"task_started","turn_id":id}}),
         json!({"type":"turn_context","payload":{"turn_id":id,"model":"test-model"}}),
@@ -30,7 +30,7 @@ fn turn(id: &str, prompt: &str, answer: &str) -> Vec<Value> {
         json!({"timestamp":"2026-11-06T00:00:02Z","type":"event_msg","payload":{"type":"task_complete","turn_id":id}}),
     ]
 }
-fn fixture(
+pub(crate) fn fixture(
     root: &Path,
     shared: bool,
     provider: &str,
@@ -70,15 +70,133 @@ fn fixture(
     });
     (store, session, source, path)
 }
-fn sync(store: &mut Store, id: i64, root: &Path) -> crate::store::NativeHistoryResult {
-    let request = store
+pub(crate) fn sync(store: &mut Store, id: i64, root: &Path) -> crate::store::NativeHistoryResult {
+    let mut request = store
         .native_history_request(id, &root.join("bots"))
         .unwrap()
         .unwrap();
     let batch = read(&request.binding, request.cursor.as_ref())
         .unwrap()
         .unwrap();
-    store.import_native_history(&request, batch).unwrap()
+    store.import_native_history(&mut request, batch).unwrap()
+}
+
+fn claude_user(id: &str, body: Value) -> Value {
+    json!({"type":"user","uuid":id,"sessionId":"thread","message":{"content":body}})
+}
+
+fn claude_answer(id: &str, kind: &str, body: &str) -> Value {
+    json!({"type":"assistant","uuid":id,"sessionId":"thread","message":{"model":"claude-test","stop_reason":"end_turn","content":[{"type":kind,"text":body}]}})
+}
+
+#[test]
+fn native_history_claude_rescans_keep_each_message_once_after_reopen() {
+    for shared in [false, true] {
+        for (legacy_receipt, remove_leaf) in [(false, false), (true, false), (true, true)] {
+            let dir = tempfile::tempdir().unwrap();
+            let root = dir.path();
+            let (mut store, session, source, path) = fixture(root, shared, "claude");
+            let mut records = vec![
+                claude_user("u1", json!("Question")),
+                claude_answer("a1", "text", "First answer"),
+                claude_user("tool", json!([{"type":"tool_result","content":"hidden"}])),
+            ];
+            append(&source, &records);
+            assert_eq!(sync(&mut store, session.id, root).imported, 1);
+            let before = store.load(session.id).unwrap().rows;
+            assert_eq!(before.len(), 2);
+            if legacy_receipt {
+                let conn = rusqlite::Connection::open(&path).unwrap();
+                // The old importer recorded only the final leaf, even when
+                // that record had no visible text of its own.
+                conn.execute_batch(
+                    "DELETE FROM provider_history_receipts WHERE native_id='claude-message:u1';
+                     UPDATE provider_history_receipts SET native_id='tool' WHERE native_id='claude-message:a1';
+                     UPDATE provider_history_cursors SET cursor_json=json_set(
+                        json_remove(cursor_json,'$.claude_message_receipts'),'$.claude_leaf','tool');"
+                ).unwrap();
+            }
+            drop(store);
+            if remove_leaf {
+                records.pop();
+            }
+            records.push(claude_answer("a2", "text", "Late answer"));
+            let replacement = source.with_extension("replacement");
+            append(&replacement, &records);
+            std::fs::rename(replacement, &source).unwrap();
+
+            let mut store = if shared {
+                Store::open_vorkspace(&path)
+            } else {
+                Store::open(&path)
+            }
+            .unwrap();
+            let result = sync(&mut store, session.id, root);
+            assert_eq!(result.imported, 1);
+            assert!(result.reload_provider);
+            let after = store.load(session.id).unwrap().rows;
+            assert_eq!(&after[..before.len()], &before);
+            assert_eq!(after.len(), 3);
+            assert_eq!(after[2].text, "Late answer");
+
+            let replacement = source.with_extension("replacement");
+            append(&replacement, &records);
+            std::fs::rename(replacement, &source).unwrap();
+            let result = sync(&mut store, session.id, root);
+            assert_eq!(result.imported, 0);
+            assert!(!result.reload_provider);
+            assert_eq!(store.load(session.id).unwrap().rows, after);
+        }
+    }
+}
+
+#[test]
+fn native_history_claude_late_blocks_preserve_managed_ownership() {
+    for has_identity in [false, true] {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        let (mut store, session, source, _) = fixture(root, true, "claude");
+        let mut local = Transcript::default();
+        local.begin("user");
+        local.append("Managed prompt");
+        local.begin("assistant");
+        local.append("Managed rich answer");
+        store.write_rows(session.id, 0, &local.rows).unwrap();
+        let mut settings = store.agent_settings(session.id).unwrap().unwrap();
+        settings.turns.insert(
+            1,
+            TurnInfo {
+                provider_turn_id: has_identity.then(|| "managed".into()),
+                provider: "claude".into(),
+                started_at: Some(100),
+                completed_at: Some(200),
+                duration_ms: 100,
+                ..Default::default()
+            },
+        );
+        store.save_agent_settings(session.id, &settings).unwrap();
+        let before = store.load(session.id).unwrap().rows;
+        let mut prompt = claude_user("managed", json!("Managed prompt from provider"));
+        prompt["timestamp"] = json!(110);
+        append(
+            &source,
+            &[
+                prompt,
+                claude_answer("a1", "text", "Managed answer from provider"),
+            ],
+        );
+        let result = sync(&mut store, session.id, root);
+        assert_eq!(result.imported, 0);
+        assert!(!result.reload_provider);
+        append(
+            &source,
+            &[claude_answer("a2", "text", "Managed late block")],
+        );
+        let result = sync(&mut store, session.id, root);
+        assert_eq!(result.imported, 0);
+        assert!(!result.reload_provider);
+        assert_eq!(store.load(session.id).unwrap().rows, before);
+    }
 }
 
 #[test]
@@ -193,7 +311,7 @@ fn native_history_waits_for_complete_records_and_commits_cursor_with_rows() {
     file.write_all(b"\n").unwrap();
     let connection = rusqlite::Connection::open(&path).unwrap();
     connection.execute_batch("CREATE TRIGGER fail_cursor BEFORE UPDATE ON provider_history_cursors BEGIN SELECT RAISE(ABORT,'injected cursor write failure'); END;").unwrap();
-    let request = store
+    let mut request = store
         .native_history_request(session.id, &root.join("bots"))
         .unwrap()
         .unwrap();
@@ -201,7 +319,7 @@ fn native_history_waits_for_complete_records_and_commits_cursor_with_rows() {
         .unwrap()
         .unwrap();
     assert!(store
-        .import_native_history(&request, batch)
+        .import_native_history(&mut request, batch)
         .unwrap_err()
         .contains("injected"));
     assert!(store.load(session.id).unwrap().rows.is_empty());
@@ -219,7 +337,7 @@ fn native_history_rejects_changed_binding_cursor_and_local_writer() {
     let (mut store, session, source, _) = fixture(root, true, "codex");
     append(&source, &[meta()]);
     append(&source, &turn("outside", "Question", "Answer"));
-    let request = store
+    let mut request = store
         .native_history_request(session.id, &root.join("bots"))
         .unwrap()
         .unwrap();
@@ -227,7 +345,7 @@ fn native_history_rejects_changed_binding_cursor_and_local_writer() {
     store.provider_id(session.id, "replacement").unwrap();
     assert!(
         store
-            .import_native_history(&request, batch)
+            .import_native_history(&mut request, batch)
             .unwrap()
             .superseded
     );
@@ -249,7 +367,7 @@ fn native_history_rejects_changed_binding_cursor_and_local_writer() {
     store
         .settle_local_submission("local", "failed", None)
         .unwrap();
-    let stale = store
+    let mut stale = store
         .native_history_request(session.id, &root.join("bots"))
         .unwrap()
         .unwrap();
@@ -257,7 +375,7 @@ fn native_history_rejects_changed_binding_cursor_and_local_writer() {
     assert_eq!(sync(&mut store, session.id, root).imported, 1);
     assert!(
         store
-            .import_native_history(&stale, old_batch)
+            .import_native_history(&mut stale, old_batch)
             .unwrap()
             .superseded
     );
@@ -269,19 +387,17 @@ fn native_history_claude_ignores_tools_and_sidechains_but_keeps_late_final_block
     let dir = tempfile::tempdir().unwrap();
     let root = dir.path();
     let (mut store, session, source, _) = fixture(root, true, "claude");
-    let user = |id: &str, body: &str| json!({"type":"user","uuid":id,"sessionId":"thread","message":{"content":body}});
-    let answer = |id: &str, kind: &str, body: &str| json!({"type":"assistant","uuid":id,"sessionId":"thread","message":{"model":"claude-test","stop_reason":"end_turn","content":[{"type":kind,"text":body}]}});
     append(
         &source,
         &[
-            user("u1", "Question"),
-            answer("a1", "thinking", "Private reasoning"),
+            claude_user("u1", json!("Question")),
+            claude_answer("a1", "thinking", "Private reasoning"),
         ],
     );
     assert_eq!(sync(&mut store, session.id, root).imported, 1);
-    append(&source, &[answer("a2", "text", "Answer")]);
+    append(&source, &[claude_answer("a2", "text", "Answer")]);
     assert_eq!(sync(&mut store, session.id, root).imported, 1);
-    let mut sidechain = answer("side", "text", "Ignore subagent");
+    let mut sidechain = claude_answer("side", "text", "Ignore subagent");
     sidechain["isSidechain"] = json!(true);
     append(&source, &[sidechain]);
     assert_eq!(sync(&mut store, session.id, root).imported, 0);
@@ -298,9 +414,12 @@ fn native_history_claude_ignores_tools_and_sidechains_but_keeps_late_final_block
     append(
         &source,
         &[
-            user("u2", "Next question"),
-            json!({"type":"user","uuid":"tool","sessionId":"thread","message":{"content":[{"type":"tool_result","content":"not a prompt"}]}}),
-            answer("a3", "text", "Next answer"),
+            claude_user("u2", json!("Next question")),
+            claude_user(
+                "tool",
+                json!([{"type":"tool_result","content":"not a prompt"}]),
+            ),
+            claude_answer("a3", "text", "Next answer"),
         ],
     );
     assert_eq!(sync(&mut store, session.id, root).imported, 1);

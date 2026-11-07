@@ -33,6 +33,85 @@ fn fixture_at(path: &Path, bot: bool) -> (Store, i64, String, Transcript) {
 }
 
 #[test]
+fn native_history_append_preserves_rich_prefix_and_extends_indexed_boundaries() {
+    use crate::native_history::tests as native;
+
+    for bot in [false, true] {
+        for warm in [false, true] {
+            let directory = tempfile::tempdir().unwrap();
+            let root = directory.path();
+            let (mut store, session, source, path) = native::fixture(root, true, "codex");
+            let id = session.id;
+            let original = store.persisted_session_id(id).unwrap();
+            if bot {
+                store
+                    .conn
+                    .execute_batch(include_str!("../../../../tests/fixtures/bot-schema.sql"))
+                    .unwrap();
+                store
+                    .conn
+                    .execute("INSERT INTO bot_transcripts VALUES(?1)", [&original])
+                    .unwrap();
+            }
+            store.shared_history_schema().unwrap();
+            let before = rich_source();
+            store.shared_store_blocks(id, &before).unwrap();
+            let mut stale = store.load(id).unwrap();
+            if warm {
+                store.write_rows(id, stale.rows.len(), &[]).unwrap();
+            }
+
+            native::append(&source, &[native::meta()]);
+            native::append(
+                &source,
+                &native::turn("saved-turn", "Managed prompt", "Managed answer"),
+            );
+            native::append(
+                &source,
+                &native::turn("external-turn", "CLI prompt", "CLI answer"),
+            );
+            HISTORY_READ_BYTES.with(|count| count.set(0));
+            HISTORY_ENCODE_BYTES.with(|count| count.set(0));
+            HISTORY_REVISION_HASH_BLOCKS.with(|count| count.set(0));
+            assert_eq!(native::sync(&mut store, id, root).imported, 1);
+            let read = HISTORY_READ_BYTES.with(|count| count.get());
+            let encoded = HISTORY_ENCODE_BYTES.with(|count| count.get());
+            let hashed = HISTORY_REVISION_HASH_BLOCKS.with(|count| count.get());
+            assert!(read < 16_000, "Rich prefix was read: {read} bytes");
+            assert!(
+                encoded < 16_000,
+                "Rich prefix was serialized: {encoded} bytes"
+            );
+            assert_eq!(hashed, if warm { 2 } else { 0 });
+
+            let start = stale.begin("user");
+            stale.append("Stale write");
+            assert!(store
+                .write_rows(id, start, &stale.rows[start..])
+                .unwrap_err()
+                .contains("changed in another window"));
+            drop(store);
+
+            let store = Store::open_vorkspace(&path).unwrap();
+            let id = store.resolve_session_id(&original).unwrap();
+            let blocks = store.shared_blocks(id).unwrap();
+            assert_eq!(&blocks[..before.len()], before.as_slice());
+            assert_eq!(blocks.len(), before.len() + 2);
+            assert_eq!(blocks[before.len()]["providerTurnId"], "external-turn");
+            let rows = store.load(id).unwrap().rows;
+            assert_eq!(rows[rows.len() - 2].text, "CLI prompt");
+            assert_eq!(rows[rows.len() - 1].text, "CLI answer");
+            if bot {
+                let page = store.indexed_history_page(id, None, 1).unwrap().unwrap();
+                assert_eq!(page.rows, rows[rows.len() - 2..]);
+                assert_eq!(page.global_start, rows.len() - 2);
+                assert!(page.before.is_some());
+            }
+        }
+    }
+}
+
+#[test]
 fn first_bookkeeping_writes_preserve_other_active_histories_and_reopen() {
     for bot in [false, true] {
         for (operation, separate_writer) in [

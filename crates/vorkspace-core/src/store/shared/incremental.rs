@@ -33,6 +33,12 @@ impl Kind {
             Self::Bot => "seq",
         }
     }
+    fn user_flag(self) -> &'static str {
+        match self {
+            Self::Ordinary => "has_user",
+            Self::Bot => "is_user",
+        }
+    }
 }
 #[derive(Clone, Debug)]
 pub(super) struct Entry {
@@ -49,6 +55,19 @@ pub(super) struct HistoryIndex {
     pub kind: Kind,
     pub entries: Vec<Entry>,
     pub rows: usize,
+}
+
+pub(in crate::store) struct HistoryAppend {
+    revision: i64,
+    entries: Vec<Entry>,
+    rows: usize,
+}
+
+fn bot_turn_boundary(block: &Value, first: bool, after_handoff: bool) -> bool {
+    first
+        || after_handoff
+        || (block["role"] == "user" && block["internal"] != true)
+        || block.get("botHabit").is_some()
 }
 
 impl HistoryIndex {
@@ -339,6 +358,7 @@ impl Store {
         // All normal writers of this database must finish their lazy schema
         // work before a whole-database schema version guards active history.
         sql(super::super::local_submissions::ensure_table(&tx))?;
+        super::super::native_history::ensure_receipt_schema(&tx)?;
         sql(super::super::notes::ensure_notes_table(&tx))?;
         sql(super::super::todos::ensure_schema(&tx))?;
         // Prepare automation DDL only; its service still owns run/claim backfill.
@@ -569,6 +589,7 @@ impl Store {
             .collect::<Result<Vec<Value>, String>>()?;
         drop(query);
         let next = blocks::merge(&previous, start - offset, rows)?;
+        let table = self.shared_history_table(index.kind, &original)?;
         let mut entries = Vec::with_capacity(next.len());
         let mut writer_rows = Vec::new();
         let mut row_offset = offset;
@@ -592,21 +613,14 @@ impl Store {
             );
             let changed = previous.get(local) != Some(block);
             if changed {
-                self.shared_write_indexed_block(&original, index.kind, position, block)?;
+                self.shared_write_indexed_block(
+                    &original, index.kind, &table, position, block, true,
+                )?;
             }
-            if index.kind == Kind::Bot
-                && (from + local == 0
-                    || after_handoff
-                    || (block["role"] == "user" && block["internal"] != true)
-                    || block.get("botHabit").is_some())
+            if index.kind == Kind::Bot && bot_turn_boundary(block, from + local == 0, after_handoff)
             {
-                sql(self.conn.execute(
-                    &format!(
-                        "INSERT OR IGNORE INTO {}(session_id,seq) VALUES(?1,?2)",
-                        self.shared_bot_tables(&original)?.ok_or(CHANGED)?.turns
-                    ),
-                    params![original, position],
-                ))?;
+                let tables = self.shared_bot_tables(&original)?.ok_or(CHANGED)?;
+                self.shared_insert_bot_turn(&tables.turns, &original, position)?;
             }
             let projected = blocks::project(std::slice::from_ref(block))?;
             let len = projected.len();
@@ -629,26 +643,7 @@ impl Store {
         }
         // merge() preserves original blocks; all mutation/removal owners use the
         // full guarded path. Advancing the public desktop revision is atomic too.
-        if index.kind == Kind::Ordinary {
-            sql(self.conn.execute("UPDATE ordinary_transcripts SET revision=CASE WHEN revision>=9007199254740990 THEN 0 ELSE revision+1 END WHERE session_id=?1",[&original]))?;
-        }
-        let flags = match index.kind {
-            Kind::Ordinary => "EXISTS(SELECT 1 FROM ordinary_blocks WHERE session_id=?1 AND has_user=1),EXISTS(SELECT 1 FROM ordinary_blocks WHERE session_id=?1 AND has_user=1 AND is_draft=1)".to_owned(),
-            Kind::Bot => format!("EXISTS(SELECT 1 FROM {table} WHERE session_id=?1 AND is_user=1),EXISTS(SELECT 1 FROM {table} WHERE session_id=?1 AND is_user=1 AND is_draft=1)",table=self.shared_history_table(index.kind,&original)?),
-        };
-        let (user, draft): (bool, bool) =
-            sql(self
-                .conn
-                .query_row(&format!("SELECT {flags}"), [&original], |row| {
-                    Ok((row.get(0)?, row.get(1)?))
-                }))?;
-        self.shared_patch(
-            id,
-            &[
-                ("has_user_message", json!(user)),
-                ("is_draft", json!(draft)),
-            ],
-        )?;
+        self.shared_update_indexed_flags(id, &original, index.kind, &table)?;
         if !rows.is_empty() {
             self.shared_patch(id, &[("updated_at", json!(crate::time::now_ms()))])?;
         }
@@ -673,6 +668,125 @@ impl Store {
         Ok(true)
     }
 
+    /// Append under the caller's transaction. Only the tail position, new
+    /// blocks, and their turn boundaries are needed for an indexed owner.
+    pub(super) fn shared_append_indexed_blocks(
+        &self,
+        id: i64,
+        original: &str,
+        kind: Kind,
+        blocks: &[Value],
+    ) -> Result<Option<HistoryAppend>, String> {
+        let table = self.shared_history_table(kind, original)?;
+        let position = kind.position();
+        let check_handoff = kind == Kind::Bot
+            && blocks
+                .first()
+                .is_some_and(|block| !bot_turn_boundary(block, false, false));
+        let tail: Option<(i64, bool)> = sql(self.conn.query_row(
+            &format!(
+                "SELECT {position}, CASE WHEN ?2 THEN json_extract(block_json,'$.role') IS 'handoff' ELSE 0 END
+                 FROM {table} WHERE session_id=?1 ORDER BY {position} DESC LIMIT 1"
+            ),
+            params![original, check_handoff],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        ).optional())?;
+        let base_revision = self.history_revision(original)?;
+        let schema = self.shared_schema_version()?;
+        let indices = self.shared.as_ref().unwrap().incremental.borrow();
+        let mut append = indices
+            .get(&id)
+            .filter(|index| {
+                index.kind == kind && index.revision == base_revision && index.schema == schema
+            })
+            .map(|index| HistoryAppend {
+                revision: base_revision,
+                entries: Vec::with_capacity(blocks.len()),
+                rows: index.rows,
+            });
+        let bot_turns = if kind == Kind::Bot {
+            Some(self.shared_bot_tables(original)?.ok_or(CHANGED)?.turns)
+        } else {
+            None
+        };
+        let (mut key, mut after_handoff) =
+            tail.unwrap_or((if kind == Kind::Bot { 0 } else { -1 }, false));
+        for (index, block) in blocks.iter().enumerate() {
+            key = key
+                .checked_add(1)
+                .ok_or("History block position overflow")?;
+            self.shared_write_indexed_block(original, kind, &table, key, block, false)?;
+            if let Some(turns) = &bot_turns {
+                if bot_turn_boundary(block, index == 0 && tail.is_none(), after_handoff) {
+                    self.shared_insert_bot_turn(turns, original, key)?;
+                }
+            }
+            after_handoff = block["role"] == "handoff";
+            if let Some(append) = &mut append {
+                let rows = blocks::project(std::slice::from_ref(block))?.len();
+                append.entries.push(Entry {
+                    key,
+                    offset: append.rows,
+                    rows,
+                    handoff: after_handoff,
+                    digest: HistoryRevision::of(std::slice::from_ref(block)),
+                });
+                append.rows += rows;
+            }
+        }
+        self.shared_update_indexed_flags(id, original, kind, &table)?;
+        if let Some(append) = &mut append {
+            append.revision = self.history_revision(original)?;
+        }
+        Ok(append)
+    }
+
+    pub(super) fn shared_publish_indexed_append(&self, id: i64, append: Option<HistoryAppend>) {
+        let mut indices = self.shared.as_ref().unwrap().incremental.borrow_mut();
+        if let Some(append) = append {
+            let index = indices.get_mut(&id).unwrap();
+            index.entries.extend(append.entries);
+            index.rows = append.rows;
+            index.revision = append.revision;
+        } else {
+            indices.remove(&id);
+        }
+    }
+
+    fn shared_insert_bot_turn(&self, table: &str, original: &str, key: i64) -> Result<(), String> {
+        sql(self.conn.execute(
+            &format!("INSERT OR IGNORE INTO {table}(session_id,seq) VALUES(?1,?2)"),
+            params![original, key],
+        ))?;
+        Ok(())
+    }
+
+    fn shared_update_indexed_flags(
+        &self,
+        id: i64,
+        original: &str,
+        kind: Kind,
+        table: &str,
+    ) -> Result<(), String> {
+        if kind == Kind::Ordinary {
+            sql(self.conn.execute("UPDATE ordinary_transcripts SET revision=CASE WHEN revision>=9007199254740990 THEN 0 ELSE revision+1 END WHERE session_id=?1",[original]))?;
+        }
+        let user = kind.user_flag();
+        let (user, draft): (bool, bool) = sql(self.conn.query_row(
+            &format!("SELECT EXISTS(SELECT 1 FROM {table} WHERE session_id=?1 AND {user}=1),
+                             EXISTS(SELECT 1 FROM {table} WHERE session_id=?1 AND {user}=1 AND is_draft=1)"),
+            [original],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        ))?;
+        self.shared_patch(
+            id,
+            &[
+                ("has_user_message", json!(user)),
+                ("is_draft", json!(draft)),
+            ],
+        )
+    }
+
     fn shared_history_table(&self, kind: Kind, original: &str) -> Result<String, String> {
         match kind {
             Kind::Ordinary => Ok("ordinary_blocks".into()),
@@ -684,8 +798,10 @@ impl Store {
         &self,
         original: &str,
         kind: Kind,
+        table: &str,
         position: i64,
         block: &Value,
+        replace: bool,
     ) -> Result<(), String> {
         let id = block["id"]
             .as_str()
@@ -693,8 +809,12 @@ impl Store {
         let raw = encode(block)?;
         match kind {
             Kind::Ordinary => {
-                sql(self.conn.execute("INSERT INTO ordinary_blocks(session_id,block_id,position,block_json,has_user,is_draft) VALUES(?1,?2,?3,?4,?5,?6)
-                    ON CONFLICT(session_id,block_id) DO UPDATE SET position=excluded.position,block_json=excluded.block_json,has_user=excluded.has_user,is_draft=excluded.is_draft",
+                let conflict = if replace {
+                    "ON CONFLICT(session_id,block_id) DO UPDATE SET position=excluded.position,block_json=excluded.block_json,has_user=excluded.has_user,is_draft=excluded.is_draft"
+                } else {
+                    ""
+                };
+                sql(self.conn.execute(&format!("INSERT INTO {table}(session_id,block_id,position,block_json,has_user,is_draft) VALUES(?1,?2,?3,?4,?5,?6) {conflict}"),
                     params![original,id,position,raw,block["role"] == "user",block["role"] == "user" && block["draft"] == true]))?;
             }
             Kind::Bot => {
@@ -713,8 +833,12 @@ impl Store {
                 .collect::<Vec<_>>()
                 .join("\n")
                 .to_lowercase();
-                sql(self.conn.execute(&format!("INSERT INTO {table}(session_id,seq,block_id,block_json,search_text,is_user,is_draft) VALUES(?1,?2,?3,?4,?5,?6,?7)
-                    ON CONFLICT(session_id,seq) DO UPDATE SET block_json=excluded.block_json,search_text=excluded.search_text,is_user=excluded.is_user,is_draft=excluded.is_draft",table=self.shared_history_table(kind,original)?),
+                let conflict = if replace {
+                    "ON CONFLICT(session_id,seq) DO UPDATE SET block_json=excluded.block_json,search_text=excluded.search_text,is_user=excluded.is_user,is_draft=excluded.is_draft"
+                } else {
+                    ""
+                };
+                sql(self.conn.execute(&format!("INSERT INTO {table}(session_id,seq,block_id,block_json,search_text,is_user,is_draft) VALUES(?1,?2,?3,?4,?5,?6,?7) {conflict}"),
                     params![original,position,id,raw,search,block["role"] == "user",block["draft"] == true]))?;
             }
         }

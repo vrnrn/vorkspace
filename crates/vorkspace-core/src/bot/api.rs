@@ -4,6 +4,8 @@ pub fn validate(action: &str, input: &Value) -> Result<(), String> {
     let fields = match action {
         "models.list" | "soul.read" | "habits.list" | "channels.list" | "bots.list" => "",
         "bots.read" => "bot before limit maxChars",
+        "bots.historyStatus" => "bot",
+        "bots.recoverHistory" => "bot expectedHistory confirmStopped",
         "bots.send" => "to message expectReply",
         "bots.configure" => "compactionMode",
         "channels.create" => "name topic members",
@@ -18,7 +20,9 @@ pub fn validate(action: &str, input: &Value) -> Result<(), String> {
         "sessions.draft" => "sessionId prompt project",
         "sessions.stop" | "sessions.archive" | "sessions.delete" => "sessionId project",
         "workspace.list" => "project",
-        "workspace.open" => "project kind sessionId noteId provider itemKey bot document path placement targetPaneId",
+        "workspace.open" => {
+            "project kind sessionId noteId provider itemKey bot document path placement targetPaneId"
+        }
         "workspace.focus" => "project paneId",
         "workspace.close" => "project paneId confirmRunning expectedProcess",
         "workspace.move" => "project paneId tabId targetPaneId edge",
@@ -79,6 +83,7 @@ pub fn validate(action: &str, input: &Value) -> Result<(), String> {
             "confirmNoEffect",
             "confirmChecked",
             "confirmRunning",
+            "confirmStopped",
         ]
         .contains(&key.as_str())
             && !value.is_boolean()
@@ -104,6 +109,7 @@ pub fn validate(action: &str, input: &Value) -> Result<(), String> {
                 "confirmNoEffect",
                 "confirmChecked",
                 "confirmRunning",
+                "confirmStopped",
                 "before",
                 "limit",
                 "offset",
@@ -245,6 +251,12 @@ pub fn validate(action: &str, input: &Value) -> Result<(), String> {
     {
         return Err("compactionMode must be sessionRollover or native".into());
     }
+    if action == "bots.recoverHistory"
+        && (input["confirmStopped"].as_bool() != Some(true)
+            || input["expectedHistory"].as_str().is_none_or(str::is_empty))
+    {
+        return Err("Stop or close the external CLI, then provide confirmStopped:true and expectedHistory from bots.historyStatus".into());
+    }
     Ok(())
 }
 
@@ -359,6 +371,7 @@ pub fn is_read_only(action: &str) -> bool {
         "models.list"
             | "bots.list"
             | "bots.read"
+            | "bots.historyStatus"
             | "sessions.list"
             | "sessions.read"
             | "workspace.list"
@@ -410,6 +423,25 @@ pub fn minion_allowed(action: &str) -> bool {
 mod tests {
     use super::*;
     use serde_json::json;
+    #[test]
+    fn native_recovery_requires_explicit_confirmation_and_is_not_a_minion_action() {
+        assert!(is_read_only("bots.historyStatus"));
+        assert!(!is_read_only("bots.recoverHistory"));
+        assert!(!minion_allowed("bots.recoverHistory"));
+        assert!(validate(
+            "bots.recoverHistory",
+            &json!({"bot":"Helper","expectedHistory":"snapshot","confirmStopped":true})
+        )
+        .is_ok());
+        for input in [
+            json!({"bot":"Helper","expectedHistory":"snapshot"}),
+            json!({"bot":"Helper","expectedHistory":"snapshot","confirmStopped":false}),
+            json!({"bot":"Helper","expectedHistory":"snapshot","confirmStopped":"true"}),
+            json!({"bot":"Helper","confirmStopped":true}),
+        ] {
+            assert!(validate("bots.recoverHistory", &input).is_err());
+        }
+    }
     #[test]
     fn removing_a_worktree_needs_a_path_and_is_a_mutation() {
         assert!(validate("worktrees.remove", &json!({"path":"/tree","project":"/p"})).is_ok());

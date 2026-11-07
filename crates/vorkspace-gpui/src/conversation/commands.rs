@@ -1,8 +1,7 @@
 //! Composer commands are handled before taking a draft or entering the turn queue.
 use super::*;
-use vorkspace_core::provider::{self, Event, Request};
-use vorkspace_core::tool::{ToolCall, ToolState};
-use vorkspace_core::transcript::Row;
+use vorkspace_core::provider;
+use vorkspace_runtime::runtime::manual_compaction::{self, Started};
 
 impl Conversation {
     /// Returns true when this input belongs to a local command, including failures.
@@ -72,138 +71,95 @@ impl Conversation {
         if self.settings.worktree_removed || self.preparing_worktree || !self.loaded {
             return;
         }
-        match locked(&self.store).and_then(|store| store.edit_recovery_reason(self.summary.id)) {
-            Ok(Some(reason)) => {
-                self.status = reason;
-                cx.notify();
-                return;
-            }
-            Err(error) => {
-                self.status = error;
-                cx.notify();
-                return;
-            }
-            Ok(None) => {}
-        }
         self.attach_account(cx);
         let mut settings = self.settings.clone();
+        settings.model = self.model.clone();
         settings.environment.extend(self.app_environment.clone());
         settings.disable_claude_hooks = cx
             .try_global::<vorkspace_ui::preferences::Preferences>()
             .is_some_and(|preferences| !preferences.claude_hooks);
+        let source = self.summary.clone();
+        let summary = source.clone();
+        let account = settings.account.id.clone();
         let cwd = self.execution_cwd().to_owned();
-        let provider_id = self.summary.provider_id.clone();
-        let model = self.model.clone();
         self.cancel = Arc::new(AtomicBool::new(false));
         let cancel = self.cancel.clone();
-        let mut context = self.context.unwrap_or_default();
         self.busy = true;
         self.submission_generation = self.submission_generation.wrapping_add(1);
         let generation = self.submission_generation;
         self.status = "Compacting context…".into();
-        let compact_start = self.transcript.read(cx).source_rows().len();
-        let mut compact_tool = ToolCall::new(
-            &format!(
-                "manual-compaction-{}-{generation}",
-                vorkspace_core::time::now_ms()
-            ),
-            "contextCompaction",
-        );
-        let mut compact_row = Row {
-            role: "tool".into(),
-            text: serde_json::to_string(&compact_tool).unwrap(),
-            first: true,
-            sent_at: Some(vorkspace_core::time::now_ms()),
-        };
-        self.transcript.update(cx, |view, cx| {
-            view.patch(compact_start, vec![compact_row.clone()], cx);
-        });
         let compact_draft = self.input.read(cx).content.clone();
         let clear_command = compact_draft.trim().eq_ignore_ascii_case("/compact");
         let store = self.store.clone();
-        let session = self.summary.id;
-        let source_provider = self.summary.provider.clone();
-        let source_account = self.settings.account.id.clone();
-        let persist_provider = source_provider.clone();
-        let persist_account = source_account.clone();
         self.completion
             .update(cx, |completion, cx| completion.dismiss(cx));
+        let (publish, progress) = async_channel::bounded(1);
         let work = cx.background_executor().spawn(async move {
-            let mut commands = None;
-            let cancelled = cancel.clone();
-            let result = (|| {
-                locked(&store)?.write_rows(session, compact_start, &[compact_row.clone()])?;
-                let binary = provider::resolve(kind)
-                    .ok_or_else(|| format!("{} CLI not found.", kind.label()))?;
-                let request = Request {
-                    kind,
-                    binary,
-                    cwd: cwd.into(),
-                    prompt: String::new(),
-                    provider_id,
-                    model,
-                    settings,
-                };
-                provider::compact(request, cancel, |events| {
-                    for event in events {
-                        match event {
-                            Event::Context { used, window } => context.merge(used, window),
-                            Event::Commands(discovered) => commands = Some(discovered),
-                            _ => {}
-                        }
-                    }
-                    Ok(())
-                })?;
-                let store = locked(&store)?;
-                if store
-                    .agent_settings(session)?
-                    .is_some_and(|settings| settings.account.id == persist_account)
-                    && store.sessions()?.iter().any(|current| {
-                        current.id == session && current.provider == persist_provider
-                    })
-                {
-                    store.save_context_usage(session, &context)?;
-                }
-                Ok(())
-            })();
-            compact_tool.state = if cancelled.load(Ordering::Relaxed) {
-                ToolState::Cancelled
-            } else if result.is_ok() {
-                ToolState::Completed
-            } else {
-                ToolState::Failed
-            };
-            compact_tool.output = result.as_ref().err().cloned().unwrap_or_default();
-            compact_row.text = serde_json::to_string(&compact_tool).unwrap();
-            let saved = locked(&store).and_then(|mut store| {
-                store.write_rows(session, compact_start, &[compact_row.clone()])
-            });
-            (result.and(saved), context, commands, compact_row)
+            manual_compaction::run(summary, settings, store, cancel, move |history| {
+                let _ = publish.try_send(history);
+            })
         });
         cx.spawn(async move |this, cx| {
-            let (result, context, commands, compact_row) = work.await;
+            let source_selected = |chat: &Self| {
+                chat.summary.provider == source.provider
+                    && chat.summary.provider_id == source.provider_id
+                    && chat.summary.cwd == source.cwd
+                    && chat.settings.account.id == account
+                    && !chat.settings.worktree_removed
+                    && chat.execution_cwd() == cwd
+            };
+            let mut started = progress.recv().await.ok();
+            let saw_start = started.is_some();
+            let mut visible_row = None;
             let _ = this.update(cx, |this, cx| {
-                if this.submission_generation != generation {
+                if this.submission_generation == generation
+                    && this.summary.id == source.id
+                    && source_selected(this)
+                    && !this.stopping
+                    && let Some(history) = started.take()
+                {
+                    visible_row = history.rows.last().cloned();
+                    this.install_compaction_history(history, cx);
+                }
+            });
+            let finished = work.await;
+            let _ = this.update(cx, |this, cx| {
+                if this.submission_generation != generation || this.summary.id != source.id {
                     return;
                 }
                 this.busy = false;
                 this.stopping = false;
-                this.transcript.update(cx, |view, cx| {
-                    view.patch(compact_start, vec![compact_row], cx);
-                });
-                let source_selected = this.summary.provider == source_provider
-                    && this.settings.account.id == source_account;
-                if let Some(commands) = commands.filter(|_| source_selected) {
+                let source_selected = source_selected(this);
+                let mut refresh_history = finished.row.is_none() || !source_selected;
+                if let Some((start, row)) = finished.row.filter(|_| source_selected) {
+                    if let Some(mut history) = started {
+                        // Stop may beat the first UI update. Install only the
+                        // settled snapshot, including any imported prefix.
+                        history.rows[start] = row;
+                        this.install_compaction_history(history, cx);
+                    } else if this.transcript.read(cx).source_rows().get(start)
+                        == visible_row.as_ref()
+                    {
+                        this.transcript
+                            .update(cx, |view, cx| view.patch(start, vec![row], cx));
+                    } else {
+                        refresh_history = true;
+                    }
+                }
+                if let Some(commands) = finished.commands.filter(|_| source_selected) {
                     this.completion.update(cx, |completion, cx| {
                         completion.set_native_commands(commands, cx)
                     });
                 }
-                if source_selected {
+                if let Some(context) = finished.context.filter(|_| source_selected) {
                     this.context = Some(context);
                 }
-                this.status = match result {
+                this.status = match finished.result {
                     Ok(()) => {
-                        if clear_command && this.input.read(cx).content == compact_draft {
+                        if source_selected
+                            && clear_command
+                            && this.input.read(cx).content == compact_draft
+                        {
                             this.input.update(cx, |input, cx| {
                                 input.take(cx);
                             });
@@ -213,6 +169,14 @@ impl Conversation {
                     Err(error) if error == "Stopped" => "Ready".into(),
                     Err(error) => error,
                 };
+                if refresh_history {
+                    if saw_start || this.settings.bot.is_none() {
+                        this.refresh_if_stale(cx);
+                    } else {
+                        this.sync_native_history(cx);
+                    }
+                }
+                this.refresh_submission_recovery(cx);
                 if this.status == "Ready" {
                     this.run_history_actions(cx);
                     this.pump_follow_ups(cx);
@@ -223,5 +187,14 @@ impl Conversation {
         })
         .detach();
         cx.notify();
+    }
+
+    fn install_compaction_history(&mut self, history: Started, cx: &mut Context<Self>) {
+        self.settings.turns = history.turns.clone();
+        let len = history.rows.len();
+        self.transcript.update(cx, |view, cx| {
+            view.turns = history.turns;
+            view.patch_snapshot(0, history.rows, len, cx);
+        });
     }
 }

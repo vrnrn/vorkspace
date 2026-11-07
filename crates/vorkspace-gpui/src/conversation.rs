@@ -215,6 +215,7 @@ pub(crate) struct Conversation {
     pending_search: Option<(usize, String)>,
     loading: bool,
     native_syncing: bool,
+    native_recovery: Option<native_history::Recovery>,
     pub(crate) busy: bool,
     /// The UI is idle; serialize the next launch behind the worker's last save.
     stopping: bool,
@@ -553,6 +554,7 @@ impl Conversation {
             pending_search: None,
             loading: false,
             native_syncing: false,
+            native_recovery: None,
             busy: false,
             stopping: false,
             notification_cancelled: false,

@@ -314,6 +314,9 @@ impl Protocol {
         if self.request.kind == Kind::Codex {
             if v["id"] == 2 {
                 if let Some(id) = v["result"]["thread"]["id"].as_str() {
+                    if self.compact && self.request.provider_id.as_deref() != Some(id) {
+                        return Err("Codex resumed a different thread during compaction.".into());
+                    }
                     self.request.provider_id = Some(id.into());
                 }
             }
@@ -373,6 +376,12 @@ impl Protocol {
                         && self.request.provider_id.is_some()
                         && lifecycle::recoverable_codex_resume(&message)
                     {
+                        if self.compact {
+                            return Err(
+                                "The saved Codex context could not be resumed for compaction."
+                                    .into(),
+                            );
+                        }
                         if self.request.settings.bot.is_some() {
                             return Err("The saved Bot Codex context could not be resumed. Retry to keep its saved context.".into());
                         }
@@ -1575,7 +1584,7 @@ fn run_operation(
                 if !protocol.interrupt(&mut stdin)? {
                     return Err("Stopped".into());
                 }
-                if protocol.request.kind == Kind::Claude {
+                if compact || protocol.request.kind == Kind::Claude {
                     return Err("Stopped".into());
                 }
             }
@@ -1795,6 +1804,11 @@ fn run_operation(
     }
     if !pending.is_empty() {
         let _ = emit(std::mem::take(&mut pending));
+    }
+    // Compaction releases its exclusive local claim when this worker returns.
+    // Reap an unfinished cancelled child here instead of parking its drain.
+    if compact && cancel.load(Ordering::Relaxed) && !protocol.done {
+        return result;
     }
     if eligible
         && cancel.load(Ordering::Relaxed)

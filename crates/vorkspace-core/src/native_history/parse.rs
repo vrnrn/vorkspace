@@ -107,7 +107,7 @@ pub(super) fn codex(
                     } else {
                         text(&item["content"])
                     };
-                    turn.push(role, body, at)?;
+                    turn.push(role, body, at, None)?;
                 }
             }
             Some("user_message" | "agent_message") => {
@@ -122,6 +122,7 @@ pub(super) fn codex(
                         role: role.into(),
                         text: data["message"].as_str().unwrap_or_default().into(),
                         at,
+                        claude_uuid: None,
                     };
                     if turn
                         .event_messages
@@ -149,7 +150,7 @@ pub(super) fn codex(
                         .any(|m| m.role == "assistant")
                     {
                         if let Some(last) = data["last_agent_message"].as_str() {
-                            turn.push("assistant", last.into(), at)?;
+                            turn.push("assistant", last.into(), at, None)?;
                         }
                     }
                     turns.push(finish_codex(turn, time(&data["completed_at"]).or(at)));
@@ -215,7 +216,6 @@ pub(super) fn claude(
     if kind == "user" && !tool_result {
         if let Some(mut turn) = cursor.pending.take() {
             if !turn.messages.is_empty() {
-                turn.part = cursor.claude_leaf.clone();
                 turn.completed_at = turn.completed_at.or(at);
                 turns.push(turn);
             }
@@ -229,7 +229,7 @@ pub(super) fn claude(
             .pending
             .as_mut()
             .unwrap()
-            .push("user", text(content), at)?;
+            .push("user", text(content), at, Some(id))?;
     } else if kind == "assistant" {
         if let Some(used) = crate::context::claude_used(&value["message"]["usage"]) {
             cursor
@@ -243,7 +243,7 @@ pub(super) fn claude(
         // The provider's main-chain UUIDs distinguish final blocks from tool
         // results, sidechains and reasoning; none of those become user prose.
         if turn.item_ids.insert(id.into()) {
-            turn.push("assistant", text(content), at)?;
+            turn.push("assistant", text(content), at, Some(id))?;
         }
         turn.model = value["message"]["model"]
             .as_str()
@@ -257,6 +257,15 @@ pub(super) fn claude(
             turn.completed_at = at;
         }
     }
-    cursor.claude_leaf = Some(id.into());
+    if let Some(turn) = cursor
+        .pending
+        .as_mut()
+        .filter(|turn| !turn.messages.is_empty())
+    {
+        turn.claude_records.push(ClaudeRecord {
+            uuid: id.into(),
+            messages: turn.messages.len(),
+        });
+    }
     Ok(())
 }

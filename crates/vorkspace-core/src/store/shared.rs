@@ -1857,6 +1857,7 @@ impl Store {
             ("native_follow_up_metadata", "session_id"),
             ("provider_history_cursors", "session_id"),
             ("provider_history_receipts", "session_id"),
+            ("provider_history_recoveries", "session_id"),
             ("in_flight_sessions", "session_id"),
             ("orchestration_workers", "session_id"),
             ("orchestration_sidebar", "lead_id"),

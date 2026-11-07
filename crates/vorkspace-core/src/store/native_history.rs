@@ -5,8 +5,26 @@ use crate::native_history::{Batch, Binding, Cursor, Turn};
 use rusqlite::{OptionalExtension, TransactionBehavior};
 use std::collections::HashSet;
 
+pub(super) fn ensure_receipt_schema(conn: &rusqlite::Connection) -> Result<(), String> {
+    conn.execute_batch("CREATE TABLE IF NOT EXISTS provider_history_cursors(
+        session_id TEXT NOT NULL,binding TEXT NOT NULL,cursor_json TEXT NOT NULL,
+        PRIMARY KEY(session_id,binding));
+        CREATE TABLE IF NOT EXISTS provider_history_receipts(
+        session_id TEXT NOT NULL,binding TEXT NOT NULL,native_id TEXT NOT NULL,native_turn_id TEXT NOT NULL,imported INTEGER NOT NULL,
+        PRIMARY KEY(session_id,binding,native_id));
+        CREATE TABLE IF NOT EXISTS provider_history_recoveries(
+        session_id TEXT NOT NULL,binding TEXT NOT NULL,cursor_hash TEXT NOT NULL,
+        PRIMARY KEY(session_id,binding));
+        CREATE INDEX IF NOT EXISTS provider_history_receipt_turn
+        ON provider_history_receipts(session_id,binding,native_turn_id,imported);").map_err(|e|e.to_string())
+}
+
 pub(super) fn delete_if_present(conn: &rusqlite::Connection, id: &str) -> Result<(), String> {
-    for table in ["provider_history_cursors", "provider_history_receipts"] {
+    for table in [
+        "provider_history_cursors",
+        "provider_history_receipts",
+        "provider_history_recoveries",
+    ] {
         let exists: bool = conn
             .query_row(
                 "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type='table' AND name=?1)",
@@ -35,16 +53,13 @@ pub struct NativeHistoryResult {
     pub active: bool,
     pub more: bool,
     pub superseded: bool,
+    /// An unfinished log is evidence of uncertainty, not a live process.
+    pub recovery: Option<String>,
 }
 impl Store {
     fn native_history_schema(&self) -> Result<(), String> {
         super::local_submissions::ensure_table(&self.conn).map_err(|e| e.to_string())?;
-        self.conn.execute_batch("CREATE TABLE IF NOT EXISTS provider_history_cursors(
-            session_id TEXT NOT NULL,binding TEXT NOT NULL,cursor_json TEXT NOT NULL,
-            PRIMARY KEY(session_id,binding));
-            CREATE TABLE IF NOT EXISTS provider_history_receipts(
-            session_id TEXT NOT NULL,binding TEXT NOT NULL,native_id TEXT NOT NULL,native_turn_id TEXT NOT NULL,imported INTEGER NOT NULL,
-            PRIMARY KEY(session_id,binding,native_id));").map_err(|e|e.to_string())
+        ensure_receipt_schema(&self.conn)
     }
     fn native_cursor(&self, id: i64, binding: &Binding) -> Result<Option<String>, String> {
         self.conn.query_row("SELECT cursor_json FROM provider_history_cursors WHERE session_id=?1 AND binding=?2",
@@ -87,6 +102,68 @@ impl Store {
         }))
     }
 
+    pub fn native_history_current(&self, request: &NativeHistoryRequest) -> Result<bool, String> {
+        let id = request.session.id;
+        let current = self.bot_session(id)?;
+        let settings = if self.shared.is_some() {
+            self.shared_agent_preferences(id)?
+        } else {
+            self.agent_settings(id)?
+        }
+        .unwrap_or_default();
+        let active: bool = self.conn.query_row(
+            "SELECT EXISTS(SELECT 1 FROM local_submissions WHERE session_id=?1 AND phase IN ('reserved','dispatching'))",
+            [self.persisted_session_id(id)?], |r| r.get(0),
+        ).map_err(|e| e.to_string())?;
+        Ok(!active
+            && current.as_ref().is_some_and(|s| {
+                s.provider == request.binding.provider
+                    && s.provider_id.as_deref() == Some(&request.binding.thread)
+                    && s.cwd == request.session.cwd
+                    && settings.account.id == request.binding.account
+            })
+            && self.native_cursor(id, &request.binding)? == request.expected)
+    }
+
+    pub fn native_history_recovery_token(request: &NativeHistoryRequest) -> Option<String> {
+        request.expected.as_ref().map(|cursor| {
+            crate::bot::files::content_hash(&format!("{}:{cursor}", request.binding.key()))
+        })
+    }
+
+    pub fn native_history_acknowledged(
+        &self,
+        request: &NativeHistoryRequest,
+        token: &str,
+    ) -> Result<bool, String> {
+        self.conn.query_row(
+            "SELECT EXISTS(SELECT 1 FROM provider_history_recoveries WHERE session_id=?1 AND binding=?2 AND cursor_hash=?3)",
+            params![self.persisted_session_id(request.session.id)?, request.binding.key(), token],
+            |row| row.get(0),
+        ).map_err(|e| e.to_string())
+    }
+
+    /// The user confirmed the external CLI has stopped. This only releases
+    /// admission for this exact snapshot; it never sends or replays a message.
+    pub fn acknowledge_native_history(
+        &self,
+        request: &NativeHistoryRequest,
+        expected: &str,
+    ) -> Result<(), String> {
+        let tx = rusqlite::Transaction::new_unchecked(&self.conn, TransactionBehavior::Immediate)
+            .map_err(|e| e.to_string())?;
+        if !self.native_history_current(request)?
+            || Self::native_history_recovery_token(request).as_deref() != Some(expected)
+        {
+            return Err("The native conversation changed. Refresh before recovering it.".into());
+        }
+        self.conn.execute(
+            "INSERT INTO provider_history_recoveries(session_id,binding,cursor_hash) VALUES(?1,?2,?3) ON CONFLICT(session_id,binding) DO UPDATE SET cursor_hash=excluded.cursor_hash",
+            params![self.persisted_session_id(request.session.id)?, request.binding.key(), expected],
+        ).map_err(|e| e.to_string())?;
+        tx.commit().map_err(|e| e.to_string())
+    }
+
     /// A native turn already recorded by the managed runtime is not an import.
     /// Legacy Claude receipts lack UUIDs; their recorded execution intervals are
     /// used only for those old managed turns, never as a general history cutoff.
@@ -106,7 +183,7 @@ impl Store {
 
     pub fn import_native_history(
         &mut self,
-        request: &NativeHistoryRequest,
+        request: &mut NativeHistoryRequest,
         batch: Batch,
     ) -> Result<NativeHistoryResult, String> {
         let id = request.session.id;
@@ -145,42 +222,94 @@ impl Store {
                     .as_ref()
                     .and_then(|cursor| cursor.compaction.clone());
         if !batch.turns.is_empty() {
-            let settings = self.agent_settings(id)?.unwrap_or_default();
-            let mut known: HashSet<_> = settings
-                .turns
-                .values()
+            let owners = if self.shared.is_some() {
+                self.shared_native_turn_owners(id, &request.binding, &batch.turns, &settings)?
+            } else {
+                settings.turns.into_values().collect()
+            };
+            let known: HashSet<_> = owners
+                .iter()
                 .filter_map(|t| t.provider_turn_id.clone())
                 .collect();
-            let mut statement=self.conn.prepare("SELECT DISTINCT native_turn_id FROM provider_history_receipts WHERE session_id=?1 AND binding=?2 AND imported=1").map_err(|e|e.to_string())?;
-            for id in statement
-                .query_map(params![source, key], |r| r.get::<_, String>(0))
-                .map_err(|e| e.to_string())?
-            {
-                known.remove(&id.map_err(|e| e.to_string())?);
-            }
-            let legacy = settings
-                .turns
-                .values()
+            let legacy = owners
+                .into_iter()
                 .filter(|t| t.provider_turn_id.is_none() && request.binding.provider == "claude")
-                .cloned()
                 .collect::<Vec<_>>();
-            for turn in &batch.turns {
-                let seen:bool=self.conn.query_row("SELECT EXISTS(SELECT 1 FROM provider_history_receipts WHERE session_id=?1 AND binding=?2 AND native_id=?3)",params![source,key,turn.receipt()],|r|r.get(0)).map_err(|e|e.to_string())?;
-                let imported = !Self::native_owned(turn, &known, &legacy);
-                reload_provider |= !seen && imported;
-                if !seen && imported && !turn.messages.is_empty() {
+            let mut ownership = self.conn.prepare(
+                "SELECT imported FROM provider_history_receipts WHERE session_id=?1 AND binding=?2 AND native_turn_id=?3 ORDER BY imported DESC LIMIT 1",
+            ).map_err(|e|e.to_string())?;
+            let mut receipt = self.conn.prepare(
+                "INSERT INTO provider_history_receipts(session_id,binding,native_id,native_turn_id,imported)
+                 VALUES(?1,?2,?3,?4,?5) ON CONFLICT(session_id,binding,native_id) DO NOTHING",
+            ).map_err(|e|e.to_string())?;
+            let mut legacy_receipt = self.conn.prepare(
+                "SELECT 1 FROM provider_history_receipts WHERE session_id=?1 AND binding=?2 AND native_id=?3 AND native_turn_id=?4",
+            ).map_err(|e|e.to_string())?;
+            for mut turn in batch.turns {
+                let prior: Option<bool> = ownership
+                    .query_row(params![source, key, turn.id], |r| r.get(0))
+                    .optional()
+                    .map_err(|e| e.to_string())?;
+                let imported = prior.unwrap_or_else(|| !Self::native_owned(&turn, &known, &legacy));
+                if request.binding.provider == "claude" {
+                    // Backfill receipts from the prefix represented by a leaf
+                    // receipt written by the earlier importer. This also
+                    // works for leaves with no visible text, such as a tool result.
+                    let mut legacy_prefix = 0;
+                    if prior.is_some() {
+                        for record in turn.claude_records.iter().rev() {
+                            if legacy_receipt
+                                .exists(params![source, key, record.uuid, turn.id])
+                                .map_err(|e| e.to_string())?
+                            {
+                                legacy_prefix = record.messages;
+                                break;
+                            }
+                        }
+                    }
+                    let messages = std::mem::take(&mut turn.messages);
+                    for (index, message) in messages.into_iter().enumerate() {
+                        let native_id = message
+                            .claude_receipt()
+                            .ok_or("Claude message has no receipt identity")?;
+                        let inserted = receipt
+                            .execute(params![source, key, native_id, turn.id, imported])
+                            .map_err(|e| e.to_string())?
+                            != 0;
+                        let legacy_published = index < legacy_prefix
+                            || (legacy_prefix == 0
+                                && prior == Some(true)
+                                && request.cursor.as_ref().is_some_and(|cursor| {
+                                    cursor.legacy_claude_published(&turn.id, &message)
+                                }));
+                        if inserted && imported && !legacy_published {
+                            turn.messages.push(message);
+                        }
+                    }
+                    reload_provider |= !turn.messages.is_empty();
+                } else {
+                    let inserted = receipt
+                        .execute(params![source, key, turn.id, turn.id, imported])
+                        .map_err(|e| e.to_string())?
+                        != 0;
+                    reload_provider |= inserted && imported;
+                    if !inserted || !imported {
+                        continue;
+                    }
+                }
+                if !turn.messages.is_empty() {
                     unseen.push(turn);
                 }
-                self.conn.execute("INSERT OR IGNORE INTO provider_history_receipts(session_id,binding,native_id,native_turn_id,imported) VALUES(?1,?2,?3,?4,?5)",params![source,key,turn.receipt(),turn.id,imported]).map_err(|e|e.to_string())?;
             }
         }
-        if !unseen.is_empty() {
-            if self.shared.is_some() {
-                self.shared_append_native(id, &request.binding, &unseen)?;
-            } else {
-                self.append_native_rows(id, &request.binding, &unseen)?;
-            }
-        }
+        let append = if unseen.is_empty() {
+            None
+        } else if self.shared.is_some() {
+            self.shared_append_native(id, &request.binding, &unseen)?
+        } else {
+            self.append_native_rows(id, &request.binding, &unseen)?;
+            None
+        };
         if let Some(context) = batch.cursor.context {
             // This transaction already validated the exact native binding and
             // excluded a managed writer. Never preserve usage from before an
@@ -191,11 +320,16 @@ impl Store {
             }
             self.save_context_usage(id, &context)?;
         }
+        let published_cursor = serde_json::to_string(&batch.cursor).map_err(|e| e.to_string())?;
         self.conn.execute("INSERT INTO provider_history_cursors(session_id,binding,cursor_json) VALUES(?1,?2,?3) ON CONFLICT(session_id,binding) DO UPDATE SET cursor_json=excluded.cursor_json",
-            params![source,key,serde_json::to_string(&batch.cursor).map_err(|e|e.to_string())?]).map_err(|e|e.to_string())?;
+            params![source,key,published_cursor]).map_err(|e|e.to_string())?;
         tx.commit().map_err(|e| e.to_string())?;
+        // Admission must check this commit, even when a separate connection
+        // publishes another cursor before the caller reserves its operation.
+        request.expected = Some(published_cursor);
+        request.cursor = Some(batch.cursor);
         if !unseen.is_empty() && self.shared.is_some() {
-            self.shared_native_published(id);
+            self.shared_native_published(id, append);
         }
         Ok(NativeHistoryResult {
             imported: unseen.len(),
@@ -203,14 +337,10 @@ impl Store {
             active: batch.active,
             more: batch.more,
             superseded: false,
+            recovery: None,
         })
     }
-    fn append_native_rows(
-        &self,
-        id: i64,
-        binding: &Binding,
-        turns: &[&Turn],
-    ) -> Result<(), String> {
+    fn append_native_rows(&self, id: i64, binding: &Binding, turns: &[Turn]) -> Result<(), String> {
         let mut at = self
             .conn
             .query_row(

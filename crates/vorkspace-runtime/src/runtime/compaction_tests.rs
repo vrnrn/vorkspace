@@ -1,5 +1,10 @@
 use super::*;
-use std::{os::unix::fs::PermissionsExt, path::Path};
+use serde_json::{Value, json};
+use std::{
+    io::Write,
+    os::unix::fs::PermissionsExt,
+    path::{Path, PathBuf},
+};
 use vorkspace_core::{
     agent::{BotContext, MinionContext},
     bot::{self, CompactionMode, Roster},
@@ -43,10 +48,7 @@ fn fixture(root: &Path) -> (Database, Session, Settings) {
     (Arc::new(Mutex::new(store)), summary, settings)
 }
 
-#[test]
-fn external_native_messages_are_in_the_admitted_chat_before_the_next_managed_turn() {
-    let directory = tempfile::tempdir().unwrap();
-    let root = directory.path();
+fn native_fixture(root: &Path) -> (Database, Session, Settings, PathBuf) {
     let (store, summary, mut settings) = fixture(root);
     settings.text_only = false;
     {
@@ -60,18 +62,42 @@ fn external_native_messages_are_in_the_admitted_chat_before_the_next_managed_tur
     let home = settings.account.home(Kind::Codex).unwrap();
     std::fs::create_dir_all(home.join("sessions")).unwrap();
     let source = home.join("sessions/rollout-2026-11-06-durable-bot-thread.jsonl");
-    let native = [
-        serde_json::json!({"type":"session_meta","payload":{"id":"durable-bot-thread"}}),
-        serde_json::json!({"type":"event_msg","payload":{"type":"task_started","turn_id":"outside"}}),
-        serde_json::json!({"type":"event_msg","payload":{"type":"user_message","message":"From the terminal"}}),
-        serde_json::json!({"type":"event_msg","payload":{"type":"agent_message","message":"Terminal answer"}}),
-        serde_json::json!({"type":"event_msg","payload":{"type":"task_complete","turn_id":"outside"}}),
-    ];
-    std::fs::write(
-        source,
-        native.iter().map(|v| format!("{v}\n")).collect::<String>(),
-    )
-    .unwrap();
+    append_native(
+        &source,
+        &[json!({"type":"session_meta","payload":{"id":"durable-bot-thread"}})],
+    );
+    (store, summary, settings, source)
+}
+
+fn append_native(source: &Path, records: &[Value]) {
+    let mut file = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(source)
+        .unwrap();
+    for record in records {
+        writeln!(file, "{record}").unwrap();
+    }
+}
+
+fn external_turn(id: &str, prompt: &str, answer: &str) -> [Value; 4] {
+    [
+        json!({"type":"event_msg","payload":{"type":"task_started","turn_id":id}}),
+        json!({"type":"event_msg","payload":{"type":"user_message","message":prompt}}),
+        json!({"type":"event_msg","payload":{"type":"agent_message","message":answer}}),
+        json!({"type":"event_msg","payload":{"type":"task_complete","turn_id":id}}),
+    ]
+}
+
+#[test]
+fn external_native_messages_are_in_the_admitted_chat_before_the_next_managed_turn() {
+    let directory = tempfile::tempdir().unwrap();
+    let root = directory.path();
+    let (store, summary, settings, source) = native_fixture(root);
+    append_native(
+        &source,
+        &external_turn("outside", "From the terminal", "Terminal answer"),
+    );
     let binary = root.join("mock-provider");
     std::fs::write(&binary,r#"#!/usr/bin/env python3
 import json, sys
@@ -128,6 +154,330 @@ for line in sys.stdin:
             "Managed answer"
         ]
     );
+}
+
+#[test]
+fn manual_compaction_resumes_external_history_and_excludes_a_concurrent_import() {
+    struct IdlePool;
+    impl Drop for IdlePool {
+        fn drop(&mut self) {
+            provider::configure_idle_agents(0);
+        }
+    }
+    let directory = tempfile::tempdir().unwrap();
+    let root = directory.path();
+    let (store, summary, settings, source) = native_fixture(root);
+    let binary = root.join("mock-provider");
+    std::fs::write(&binary, r#"#!/usr/bin/env python3
+import json, os, pathlib, sys
+def send(message):
+    print(json.dumps(message), flush=True)
+source = pathlib.Path(os.environ['CODEX_HOME']) / 'sessions/rollout-2026-11-06-durable-bot-thread.jsonl'
+fresh = 'From the terminal' in source.read_text()
+with pathlib.Path('launches.txt').open('a') as launches:
+    launches.write(str(os.getpid()) + '\n')
+turn = 0
+for line in sys.stdin:
+    value = json.loads(line)
+    method = value.get('method')
+    if method == 'initialize':
+        send({'id': value['id'], 'result': {}})
+    elif method == 'thread/resume':
+        assert value['params']['threadId'] == 'durable-bot-thread', value
+        send({'id': value['id'], 'result': {'thread': {'id': 'durable-bot-thread'}}})
+    elif method == 'turn/start':
+        turn += 1
+        identity = 'warm-' + str(turn)
+        send({'id': value['id'], 'result': {'turn': {'id': identity}}})
+        send({'method': 'turn/completed', 'params': {'turn': {'id': identity, 'status': 'completed'}}})
+    elif method == 'thread/compact/start':
+        assert fresh, 'Compaction used a process parked before the external turn'
+        assert value['params']['threadId'] == 'durable-bot-thread', value
+        send({'id': value['id'], 'result': {}})
+        send({'method': 'turn/started', 'params': {'turn': {'id': 'compact'}}})
+        send({'method': 'thread/tokenUsage/updated', 'params': {'tokenUsage': {
+            'last': {'totalTokens': 2000}, 'modelContextWindow': 100000}}})
+        if not pathlib.Path('cancel-mode').exists():
+            send({'method': 'turn/completed', 'params': {'turn': {'id': 'compact', 'status': 'completed'}}})
+    elif method == 'turn/interrupt':
+        send({'id': value['id'], 'result': {}})
+    elif method == 'thread/start':
+        raise AssertionError('Compaction discarded the existing thread')
+"#).unwrap();
+    std::fs::set_permissions(&binary, std::fs::Permissions::from_mode(0o700)).unwrap();
+    provider::configure_idle_agents(5);
+    let _idle_pool = IdlePool;
+    let cancel = Arc::new(AtomicBool::new(false));
+    vorkspace_core::process::owned_by(summary.id, || {
+        let request = Request {
+            kind: Kind::Codex,
+            binary: binary.clone(),
+            cwd: root.into(),
+            prompt: "Warm the existing thread".into(),
+            provider_id: summary.provider_id.clone(),
+            model: settings.model.clone(),
+            settings: settings.clone(),
+        };
+        for _ in 0..2 {
+            provider::run(request.clone(), cancel.clone(), |_| Ok(())).unwrap();
+        }
+    });
+    let launches = || {
+        std::fs::read_to_string(root.join("launches.txt"))
+            .unwrap()
+            .lines()
+            .count()
+    };
+    assert_eq!(
+        launches(),
+        1,
+        "The fixture must actually reuse a parked process"
+    );
+    append_native(
+        &source,
+        &external_turn("outside", "From the terminal", "Terminal answer"),
+    );
+
+    let id = summary.id;
+    let other = std::cell::RefCell::new(Store::open_vorkspace(&root.join("sessions.db")).unwrap());
+    let pending = std::cell::RefCell::new(None);
+    let result = manual_compaction::run_using(
+        summary.clone(),
+        settings.clone(),
+        store.clone(),
+        cancel,
+        |started| {
+            assert_eq!(started.rows[0].text, "From the terminal");
+            assert_eq!(started.rows[1].text, "Terminal answer");
+            assert_eq!(started.rows[2].role, "tool");
+            assert_eq!(
+                other.borrow().local_submissions(id).unwrap()[0].phase,
+                "reserved"
+            );
+            append_native(
+                &source,
+                &external_turn("later", "Later terminal prompt", "Later answer"),
+            );
+            let request = other
+                .borrow()
+                .native_history_request(id, root)
+                .unwrap()
+                .unwrap();
+            let batch =
+                vorkspace_core::native_history::read(&request.binding, request.cursor.as_ref())
+                    .unwrap()
+                    .unwrap();
+            assert!(batch.changed);
+            let receipt = vorkspace_core::store::SubmissionInput {
+                attempt_id: "other-turn".into(),
+                user_turn_id: "other-turn".into(),
+                session_id: String::new(),
+                payload_json: "{}".into(),
+                user_turn: Some(json!({"id":"other-turn","role":"user","text":"another window"})),
+            };
+            assert!(
+                other
+                    .borrow()
+                    .reserve_local_submission(id, receipt)
+                    .is_err()
+            );
+            *pending.borrow_mut() = Some((request, batch));
+        },
+        |_| Some(binary.clone()),
+        |request, cancel, emit| {
+            provider::compact(request, cancel, |events| {
+                if events
+                    .iter()
+                    .any(|event| matches!(event, Event::Context { .. }))
+                {
+                    let mut other = other.borrow_mut();
+                    assert_eq!(other.local_submissions(id).unwrap()[0].phase, "dispatching");
+                    let (mut request, batch) = pending.borrow_mut().take().unwrap();
+                    assert!(
+                        other
+                            .import_native_history(&mut request, batch)
+                            .unwrap()
+                            .superseded
+                    );
+                    assert_eq!(other.load(id).unwrap().rows.len(), 3);
+                }
+                emit(events)
+            })
+        },
+    );
+    result.result.unwrap();
+    assert_eq!(launches(), 2);
+    assert!(pending.borrow().is_none());
+    assert_eq!(
+        result.context,
+        Some(Usage {
+            used: 2000,
+            window: Some(100_000)
+        })
+    );
+    let owner = locked(&store).unwrap();
+    assert_eq!(
+        owner.bot_session(id).unwrap().unwrap().provider_id,
+        summary.provider_id
+    );
+    let rows = owner.load(id).unwrap().rows;
+    let tool: ToolCall = serde_json::from_str(&rows[2].text).unwrap();
+    assert_eq!(tool.state, ToolState::Completed);
+    let receipts = owner.local_submissions(id).unwrap();
+    assert_eq!(receipts.len(), 1);
+    assert_eq!(receipts[0].attempt_id, tool.id);
+    assert_eq!(receipts[0].outcome.as_deref(), Some("completed"));
+    assert!(receipts[0].user_turn.is_none());
+    drop(owner);
+    assert_eq!(native_history::sync(&store, id, root).unwrap().imported, 1);
+    let rows = locked(&store).unwrap().load(id).unwrap().rows;
+    assert_eq!(rows[3].text, "Later terminal prompt");
+    assert_eq!(rows[4].text, "Later answer");
+
+    // A Stop can interrupt a live compaction without a terminal frame. The
+    // child must be gone while this attempt still owns its durable claim.
+    std::fs::write(root.join("cancel-mode"), "").unwrap();
+    let stopped = manual_compaction::run_using(
+        summary,
+        settings,
+        store.clone(),
+        Arc::new(AtomicBool::new(false)),
+        |_| {},
+        |_| Some(binary),
+        |request, cancel, emit| {
+            let stop = cancel.clone();
+            let mut process = None;
+            let result = provider::compact(request, cancel, |events| {
+                if events
+                    .iter()
+                    .any(|event| matches!(event, Event::Context { .. }))
+                {
+                    let pids = std::fs::read_to_string(root.join("launches.txt")).unwrap();
+                    let pid = pids.lines().last().unwrap().parse().unwrap();
+                    let identity = vorkspace_core::process::identity(pid).unwrap();
+                    process = Some((pid, identity));
+                    stop.store(true, Ordering::Relaxed);
+                }
+                emit(events)
+            });
+            let (pid, identity) = process.unwrap();
+            assert_ne!(vorkspace_core::process::identity(pid), Some(identity));
+            assert!(
+                other
+                    .borrow()
+                    .local_submissions(id)
+                    .unwrap()
+                    .iter()
+                    .any(|r| r.phase == "dispatching")
+            );
+            result
+        },
+    );
+    assert_eq!(stopped.result.unwrap_err(), "Stopped");
+    let owner = locked(&store).unwrap();
+    let rows = owner.load(id).unwrap().rows;
+    let tool: ToolCall = serde_json::from_str(&rows[5].text).unwrap();
+    assert_eq!(tool.state, ToolState::Cancelled);
+    let receipt = owner.latest_unconfirmed_submission(id).unwrap().unwrap();
+    assert_eq!(receipt.attempt_id, tool.id);
+    assert!(receipt.user_turn.is_none());
+}
+
+#[test]
+fn native_cursor_advance_blocks_stale_bot_and_compaction_admission() {
+    let directory = tempfile::tempdir().unwrap();
+    let root = directory.path();
+    let (store, summary, settings, source) = native_fixture(root);
+    let cancel = Arc::new(AtomicBool::new(false));
+    let checked = native_history::before_turn(&store, &summary, &settings, &cancel)
+        .unwrap()
+        .unwrap();
+    append_native(
+        &source,
+        &external_turn("unfinished", "New external prompt", "Reply")[..2],
+    );
+    let other = Arc::new(Mutex::new(
+        Store::open_vorkspace(&root.join("sessions.db")).unwrap(),
+    ));
+    assert!(
+        native_history::sync(&other, summary.id, root)
+            .unwrap()
+            .active
+    );
+    let mut submissions = submissions::Submissions::new(store.clone(), summary.id);
+    assert!(
+        submissions
+            .reserve_initial("Stale prompt", &settings, Some(&checked))
+            .is_err()
+    );
+    assert!(
+        submissions
+            .reserve_compaction("stale-compaction", Some(&checked))
+            .is_err()
+    );
+    let rejected = manual_compaction::run_using(
+        summary.clone(),
+        settings,
+        store.clone(),
+        cancel,
+        |_| panic!("An unfinished external turn cannot start compaction"),
+        |_| panic!("An unfinished external turn cannot resolve a provider"),
+        |_, _, _| panic!("An unfinished external turn cannot reach the provider"),
+    );
+    assert!(rejected.result.unwrap_err().contains("unfinished turn"));
+    let owner = locked(&store).unwrap();
+    assert!(owner.local_submissions(summary.id).unwrap().is_empty());
+    assert!(owner.load(summary.id).unwrap().rows.is_empty());
+}
+
+#[test]
+fn manual_compaction_does_not_publish_usage_after_its_binding_changes() {
+    for change_thread in [false, true] {
+        let directory = tempfile::tempdir().unwrap();
+        let root = directory.path();
+        let (store, summary, settings) = fixture(root);
+        let replacement_usage = Usage {
+            used: 50_000,
+            window: Some(100_000),
+        };
+        let id = summary.id;
+        let outcome = manual_compaction::run_using(
+            summary.clone(),
+            settings,
+            store.clone(),
+            Arc::new(AtomicBool::new(false)),
+            |_| {},
+            |_| Some("mock-provider".into()),
+            |_, _, emit| {
+                let other = Store::open_vorkspace(&root.join("sessions.db")).unwrap();
+                if change_thread {
+                    other.provider_id(id, "replacement-thread").unwrap();
+                } else {
+                    let mut changed = other.agent_settings(id).unwrap().unwrap();
+                    changed.worktree_cwd = Some(root.join("new-worktree").to_str().unwrap().into());
+                    other.save_agent_settings(id, &changed).unwrap();
+                }
+                other.save_context_usage(id, &replacement_usage).unwrap();
+                emit(vec![Event::Context {
+                    used: Some(2000),
+                    window: Some(100_000),
+                }])
+            },
+        );
+        assert!(
+            outcome
+                .result
+                .unwrap_err()
+                .contains("conversation changed during compaction")
+        );
+        assert!(outcome.context.is_none());
+        let owner = locked(&store).unwrap();
+        assert_eq!(owner.context_usage(id).unwrap(), Some(replacement_usage));
+        assert_eq!(
+            owner.local_submissions(id).unwrap()[0].outcome.as_deref(),
+            Some("completed")
+        );
+    }
 }
 
 fn prepare(

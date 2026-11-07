@@ -265,10 +265,20 @@ fn sanitize_user_turn(
     Ok(clean)
 }
 
+#[cfg(test)]
 fn reserve(
     conn: &Connection,
     input: SubmissionInput,
     session_table: &str,
+) -> Result<SubmissionReservation, String> {
+    reserve_checked(conn, input, session_table, || Ok(()))
+}
+
+fn reserve_checked(
+    conn: &Connection,
+    input: SubmissionInput,
+    session_table: &str,
+    check: impl FnOnce() -> Result<(), String>,
 ) -> Result<SubmissionReservation, String> {
     for value in [&input.attempt_id, &input.user_turn_id] {
         validate_id(value)?;
@@ -299,6 +309,21 @@ fn reserve(
     };
     let tx = Transaction::new_unchecked(conn, TransactionBehavior::Immediate)
         .map_err(|e| e.to_string())?;
+    check()?;
+    // Compaction has no user turn and exclusively owns the provider context.
+    // Prompt receipts can still overlap within a run to support steering.
+    let competing_operation = tx
+        .query_row(
+            "SELECT EXISTS(SELECT 1 FROM local_submissions WHERE session_id=?1
+          AND attempt_id<>?2 AND phase IN ('reserved','dispatching')
+          AND (?3 OR user_turn_json IS NULL))",
+            params![input.session_id, input.attempt_id, user_turn.is_none()],
+            |row| row.get::<_, bool>(0),
+        )
+        .map_err(|e| e.to_string())?;
+    if competing_operation {
+        return Err("A local provider operation is already active in this conversation.".into());
+    }
     let insert = format!("INSERT INTO local_submissions (attempt_id,user_turn_id,session_id,signature,phase,owner_pid,owner_instance,created_at,updated_at,user_turn_json) SELECT ?1,?2,?3,?4,'reserved',?5,?6,?7,?7,?8 WHERE NOT EXISTS (SELECT 1 FROM local_submission_deleted_sessions WHERE session_id=?3) AND EXISTS(SELECT 1 FROM {owner_table} WHERE id=?3) AND NOT EXISTS(SELECT 1 FROM local_submissions WHERE session_id=?3 AND user_turn_id=?2 AND (phase IN ('reserved','dispatching','uncertain') OR outcome='completed')) ON CONFLICT(attempt_id) DO NOTHING");
     let created = tx
         .execute(
@@ -386,7 +411,18 @@ impl Store {
     pub fn reserve_local_submission(
         &self,
         session: i64,
+        input: SubmissionInput,
+    ) -> Result<SubmissionReservation, String> {
+        self.reserve_local_submission_after_native_history(session, input, None)
+    }
+
+    /// Validate the reconciled cursor in the same transaction that excludes
+    /// native import. An importer that wins first makes the caller retry.
+    pub fn reserve_local_submission_after_native_history(
+        &self,
+        session: i64,
         mut input: SubmissionInput,
+        history: Option<&super::NativeHistoryRequest>,
     ) -> Result<SubmissionReservation, String> {
         if self.shared.is_some() {
             self.shared_writable()?;
@@ -398,7 +434,14 @@ impl Store {
             "native_sessions"
         };
         ensure_table(&self.conn).map_err(|e| e.to_string())?;
-        reserve(&self.conn, input, table)
+        reserve_checked(&self.conn, input, table, || {
+            if let Some(history) = history {
+                if history.session.id != session || !self.native_history_current(history)? {
+                    return Err("The Bot conversation changed during native history sync. Retry to continue the same session.".into());
+                }
+            }
+            Ok(())
+        })
     }
     fn submission_source_id(&self, session: i64) -> Result<String, String> {
         if self.shared.is_some() {

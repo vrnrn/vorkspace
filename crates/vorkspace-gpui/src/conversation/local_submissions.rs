@@ -54,13 +54,17 @@ impl Conversation {
             self.input.read(cx).has_message_text() || !self.attachments.is_empty() || files_pending;
         let disabled = self.reviewing_submission || self.busy;
         let draft_ready = self.composer_draft.ready_for_replacement();
+        let compaction = snapshot.is_none()
+            && receipt
+                .attempt_id
+                .starts_with(vorkspace_runtime::runtime::manual_compaction::ATTEMPT_PREFIX);
         Some(div().px_3().pt_3().flex().flex_col().gap_2().text_size(px(12.)).text_color(content(0.8))
-            .child("A local send ended without confirmation. The provider may have received it; it was not replayed.")
-            .child(format!("{preview} ({files} attachments)"))
-            .when(occupied, |d|d.child(if files_pending { "Wait for selected files to finish attaching." } else { "Clear the composer to restore a copy." }))
+            .child(if compaction { "Context compaction ended without confirmation." } else { "A local send ended without confirmation. The provider may have received it; it was not replayed." })
+            .when(!compaction, |d|d.child(format!("{preview} ({files} attachments)")))
+            .when(!compaction && occupied, |d|d.child(if files_pending { "Wait for selected files to finish attaching." } else { "Clear the composer to restore a copy." }))
             .child(div().flex().gap_2()
-                .child(crate::controls::secondary_button("submission-restore","Restore a copy",true,disabled || !draft_ready || occupied || snapshot.is_none())
-                    .child("Restore a copy").on_click(cx.listener(|this,_,_,cx|this.review_local_submission(true,cx))))
+                .when(!compaction, |d|d.child(crate::controls::secondary_button("submission-restore","Restore a copy",true,disabled || !draft_ready || occupied || snapshot.is_none())
+                    .child("Restore a copy").on_click(cx.listener(|this,_,_,cx|this.review_local_submission(true,cx)))))
                 .child(crate::controls::secondary_button("submission-dismiss","Dismiss notice",false,disabled)
                     .child("Dismiss notice").on_click(cx.listener(|this,_,_,cx|this.review_local_submission(false,cx)))))
             .into_any_element())

@@ -27,7 +27,7 @@ Bots and Minions already have the commands they can use in their instructions. T
 
 In each Bot's General settings, choose how it handles a long conversation. You can also ask the Bot to change its own setting with `bots.configure`. The change applies to later messages. **Fresh session**, the default, starts a new provider session before the next message once context is 80% full. It brings a short recap plus the Bot's instructions and saved memory. Your full app chat stays in place, and the context ring resets for the new session. Older provider sessions remain in history, using the same Bot folder.
 
-Choose **Native compaction** to keep one provider session and let the provider shorten its working context. You can also use `/compact` with Codex, Claude, Pi or OMP. Neither mode discards your queued messages or draft.
+Choose **Native compaction** to keep one provider session and let the provider shorten its working context. You can also use `/compact` with Codex, Claude, Pi or OMP. Before compacting a Bot, Vorkspace catches up with its terminal conversation and waits if an external turn is unfinished. Vorkspace prevents another app turn or history import from overlapping compaction, and its context reading cannot overwrite a replacement session's reading. Neither mode discards your queued messages or draft.
 
 On the next turn after a recorded compaction attempt, Vorkspace gives the Bot its current instructions and saved memory again. This also works after reopening the app. Normal turns do not repeat those instructions unless they changed.
 
@@ -41,7 +41,7 @@ When you open a Bot, Vorkspace gives it a working folder at `~/.vorkspace/bots/<
 
 Messages you add to the current Codex or Claude session through an outside CLI appear in the same Bot chat. Vorkspace checks when you open the Bot, about every 10 seconds while it is idle, and before sending another message. Repeated checks do not duplicate messages or replace your draft. In Fresh session mode, `SESSION.md` always points to the newest provider session.
 
-Finish the Bot's current turn before switching between the app and a terminal, and finish the terminal turn before returning. Vorkspace waits if it sees an unfinished external turn, but it cannot prevent another CLI from writing at the same time. App commands are available only during a turn running in Vorkspace. Existing project-based Minions keep their working folders. Development copies of the app use a separate folder beside their own database.
+Finish the Bot's current turn before switching between the app and a terminal, and finish the terminal turn before returning. Vorkspace waits if it sees an unfinished external turn. If the CLI crashed or was closed, choose **Resume here** in the Bot chat after making sure the CLI has stopped. This keeps the same conversation and never resends the old message. New writes from the CLI cancel that confirmation. A Bot can also check another accessible Bot with `bots.historyStatus` and recover it with `bots.recoverHistory`, using the returned token and your explicit confirmation that its CLI has stopped. Vorkspace cannot prevent another CLI from writing at the same time. App commands are available only during a turn running in Vorkspace. Existing project-based Minions keep their working folders. Development copies of the app use a separate folder beside their own database.
 
 ## How Bots Use Their Teams
 

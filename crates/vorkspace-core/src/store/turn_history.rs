@@ -63,6 +63,51 @@ pub(super) fn ensure_recovery_schema(conn: &Connection) -> Result<(), String> {
 }
 
 impl Store {
+    pub fn compaction_binding_current(
+        &self,
+        expected: &Session,
+        account: &str,
+        cwd: &str,
+    ) -> Result<bool, String> {
+        let Some(current) = self.bot_session(expected.id)? else {
+            return Ok(false);
+        };
+        let settings = if self.shared.is_some() {
+            self.shared_agent_preferences(expected.id)?
+        } else {
+            self.agent_settings(expected.id)?
+        }
+        .unwrap_or_default();
+        Ok(current.provider == expected.provider
+            && current.provider_id == expected.provider_id
+            && current.cwd == expected.cwd
+            && settings.account.id == account
+            && !settings.worktree_removed
+            && settings.worktree_cwd.as_deref().unwrap_or(&current.cwd) == cwd)
+    }
+
+    /// A thread can be replaced or moved while its old transport settles.
+    /// Verify the complete binding and save the reading in one transaction.
+    pub fn save_compaction_context_usage(
+        &self,
+        expected: &Session,
+        account: &str,
+        cwd: &str,
+        usage: &crate::context::Usage,
+    ) -> Result<bool, String> {
+        let tx = rusqlite::Transaction::new_unchecked(
+            &self.conn,
+            rusqlite::TransactionBehavior::Immediate,
+        )
+        .map_err(|e| e.to_string())?;
+        if !self.compaction_binding_current(expected, account, cwd)? {
+            return Ok(false);
+        }
+        self.save_context_usage(expected.id, usage)?;
+        tx.commit().map_err(|e| e.to_string())?;
+        Ok(true)
+    }
+
     pub fn load_turn_history(&self, id: i64) -> Result<(Transcript, Option<TurnHistory>), String> {
         if self.shared.is_none() {
             return Ok((self.load(id)?, None));

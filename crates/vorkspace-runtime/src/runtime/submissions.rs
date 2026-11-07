@@ -2,7 +2,7 @@
 //! cannot prove that an external effect did not happen, and never permits replay.
 use super::*;
 use std::collections::HashMap;
-use vorkspace_core::store::SubmissionInput;
+use vorkspace_core::store::{NativeHistoryRequest, SubmissionInput};
 
 pub(super) struct Submissions {
     store: Database,
@@ -33,26 +33,40 @@ impl Submissions {
         prepared: Option<&str>,
         attachments: &[std::path::PathBuf],
         settings: Option<&Settings>,
+        history: Option<&NativeHistoryRequest>,
     ) -> Result<String, String> {
         let attempt = uuid();
         let metadata: Vec<_> = attachments.iter().map(|path| serde_json::json!({
             "id":path.to_string_lossy(), "name":path.file_name().unwrap_or_default().to_string_lossy(),
             "kind":"file", "mimeType":"application/octet-stream", "size":std::fs::metadata(path).map(|m|m.len()).unwrap_or(0), "path":path.to_string_lossy()
         })).collect();
-        let reservation = locked(&self.store)?.reserve_local_submission(self.session, SubmissionInput {
+        self.reserve_input(SubmissionInput {
             attempt_id: attempt.clone(), user_turn_id: user_turn.into(), session_id: String::new(),
             payload_json: serde_json::json!({"text":text,"prepared":prepared,"attachments":attachments,"settings":settings}).to_string(),
             user_turn: Some(serde_json::json!({"id":user_turn,"role":"user","text":text,"attachments":metadata,"localSubmissionOwned":true}))
-        })?;
+        }, history)?;
+        Ok(attempt)
+    }
+    fn reserve_input(
+        &self,
+        input: SubmissionInput,
+        history: Option<&NativeHistoryRequest>,
+    ) -> Result<(), String> {
+        let reservation = locked(&self.store)?.reserve_local_submission_after_native_history(
+            self.session,
+            input,
+            history,
+        )?;
         if !reservation.created {
             return Err("This local attempt was already accepted and was not replayed".into());
         }
-        Ok(attempt)
+        Ok(())
     }
     pub(super) fn reserve_initial(
         &mut self,
         text: &str,
         settings: &Settings,
+        history: Option<&NativeHistoryRequest>,
     ) -> Result<(), String> {
         let user_turn = settings.bot_message_id.clone().unwrap_or_else(uuid);
         self.initial = Some(self.reserve(
@@ -61,7 +75,26 @@ impl Submissions {
             settings.prepared_prompt.as_deref(),
             &settings.attachments,
             Some(settings),
+            history,
         )?);
+        Ok(())
+    }
+    pub(super) fn reserve_compaction(
+        &mut self,
+        attempt: &str,
+        history: Option<&NativeHistoryRequest>,
+    ) -> Result<(), String> {
+        self.reserve_input(
+            SubmissionInput {
+                attempt_id: attempt.into(),
+                user_turn_id: attempt.into(),
+                session_id: String::new(),
+                payload_json: serde_json::json!({"operation": "compact"}).to_string(),
+                user_turn: None,
+            },
+            history,
+        )?;
+        self.initial = Some(attempt.into());
         Ok(())
     }
     pub(super) fn was_dispatched(&self) -> bool {
@@ -87,6 +120,7 @@ impl Submissions {
             &message.text,
             message.prepared_prompt.as_deref(),
             &message.attachments,
+            None,
             None,
         )?;
         self.follow_ups.insert(message.id.clone(), attempt.clone());
@@ -208,7 +242,7 @@ mod tests {
             ..Default::default()
         };
         let mut failed = Submissions::new(store.clone(), session);
-        failed.reserve_initial("hello", &settings).unwrap();
+        failed.reserve_initial("hello", &settings, None).unwrap();
         failed.finish(&Err("CLI missing".into()), false).unwrap();
         assert_eq!(
             locked(&store).unwrap().local_submissions(session).unwrap()[0]
@@ -217,7 +251,9 @@ mod tests {
             Some("failed")
         );
         let mut interrupted = Submissions::new(store.clone(), session);
-        interrupted.reserve_initial("hello", &settings).unwrap();
+        interrupted
+            .reserve_initial("hello", &settings, None)
+            .unwrap();
         interrupted.dispatch_initial().unwrap();
         interrupted
             .finish(&Err("Disconnected".into()), false)
@@ -231,7 +267,7 @@ mod tests {
         let mut retry = Submissions::new(store.clone(), session);
         assert!(
             retry
-                .reserve_initial("hello", &settings)
+                .reserve_initial("hello", &settings, None)
                 .unwrap_err()
                 .contains("not replayed")
         );
@@ -246,7 +282,7 @@ mod tests {
                 .unwrap()
                 .is_none()
         );
-        assert!(retry.reserve_initial("hello", &settings).is_err());
+        assert!(retry.reserve_initial("hello", &settings, None).is_err());
     }
     #[test]
     fn failed_steer_keeps_its_recovery_metadata_and_blocks_the_stable_queue_identity() {
@@ -290,7 +326,7 @@ mod unwind_tests {
         let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             let mut submissions = Submissions::new(db.clone(), session);
             submissions
-                .reserve_initial("Preserved while unwinding", &Settings::default())
+                .reserve_initial("Preserved while unwinding", &Settings::default(), None)
                 .unwrap();
             submissions.dispatch_initial().unwrap();
             let _guard = locked(&db).unwrap();

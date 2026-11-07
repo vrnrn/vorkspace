@@ -13,7 +13,7 @@ use std::{
 
 mod parse;
 #[cfg(test)]
-mod tests;
+pub(crate) mod tests;
 
 const LINE_LIMIT: u64 = 16 << 20;
 const BATCH_LIMIT: u64 = 32 << 20;
@@ -99,11 +99,30 @@ pub struct Cursor {
     verified: bool,
     caught_up: bool,
     pending: Option<Turn>,
-    /// Claude splits one assistant message into several UUID-bearing blocks.
-    claude_leaf: Option<String>,
+    /// Older cursors lack record IDs for their pending Claude messages.
+    #[serde(default)]
+    claude_message_receipts: bool,
     pub compaction: Option<String>,
     #[serde(default)]
     pub context: Option<crate::context::Usage>,
+}
+impl Cursor {
+    pub(crate) fn legacy_claude_published(&self, turn_id: &str, message: &Message) -> bool {
+        // A completed legacy cursor kept the UUIDs of its published response
+        // even after clearing its visible messages. Use these if a rewrite
+        // discarded the earlier receipt's leaf record.
+        !self.claude_message_receipts
+            && self.caught_up
+            && self.pending.as_ref().is_some_and(|turn| {
+                turn.id == turn_id
+                    && turn.complete
+                    && turn.messages.is_empty()
+                    && message
+                        .claude_uuid
+                        .as_ref()
+                        .is_some_and(|id| id == turn_id || turn.item_ids.contains(id))
+            })
+    }
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -111,6 +130,22 @@ pub struct Message {
     pub role: String,
     pub text: String,
     pub at: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    claude_uuid: Option<String>,
+}
+impl Message {
+    pub(crate) fn claude_receipt(&self) -> Option<String> {
+        self.claude_uuid
+            .as_ref()
+            .map(|uuid| format!("claude-message:{uuid}"))
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub(crate) struct ClaudeRecord {
+    pub uuid: String,
+    /// The previous importer could publish this prefix under the leaf UUID.
+    pub messages: usize,
 }
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 pub struct Turn {
@@ -119,8 +154,8 @@ pub struct Turn {
     pub completed_at: Option<u64>,
     pub model: Option<String>,
     pub messages: Vec<Message>,
-    #[serde(default)]
-    pub part: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub(crate) claude_records: Vec<ClaudeRecord>,
     #[serde(default)]
     item_ids: std::collections::HashSet<String>,
     #[serde(default)]
@@ -129,10 +164,13 @@ pub struct Turn {
     complete: bool,
 }
 impl Turn {
-    pub fn receipt(&self) -> &str {
-        self.part.as_deref().unwrap_or(&self.id)
-    }
-    fn push(&mut self, role: &str, text: String, at: Option<u64>) -> Result<(), String> {
+    fn push(
+        &mut self,
+        role: &str,
+        text: String,
+        at: Option<u64>,
+        claude_uuid: Option<&str>,
+    ) -> Result<(), String> {
         let bytes: usize = self
             .messages
             .iter()
@@ -149,6 +187,7 @@ impl Turn {
                 role: role.into(),
                 text,
                 at,
+                claude_uuid: claude_uuid.map(str::to_owned),
             });
         }
         Ok(())
@@ -207,6 +246,7 @@ pub fn read(binding: &Binding, previous: Option<&Cursor>) -> Result<Option<Batch
     }
     let same_file = previous.is_some_and(|c| {
         c.path == path
+            && (kind != Kind::Claude || c.claude_message_receipts)
             && c.stamps
                 .first()
                 .zip(stamps.first())
@@ -250,7 +290,7 @@ pub fn read(binding: &Binding, previous: Option<&Cursor>) -> Result<Option<Batch
     } else {
         let mut file = File::open(&path).map_err(|e| e.to_string())?;
         // Append-only owners can be seeked directly; rewrites start over and
-        // stable native turn IDs make that replay idempotent at the Store.
+        // stable native identities make that replay idempotent at the Store.
         if cursor.offset > 0 {
             file.seek(SeekFrom::Start(
                 cursor.offset.saturating_sub(cursor.anchor.len() as u64),
@@ -328,12 +368,17 @@ pub fn read(binding: &Binding, previous: Option<&Cursor>) -> Result<Option<Batch
         && !more
     {
         let pending = cursor.pending.as_mut().unwrap();
-        let mut completed = pending.clone();
-        completed.part = cursor.claude_leaf.clone();
-        turns.push(completed);
-        // Late blocks of this same native response retain their root turn ID
-        // and receive their own receipt. Never lose them at a polling boundary.
-        pending.messages.clear();
+        turns.push(Turn {
+            id: pending.id.clone(),
+            started_at: pending.started_at,
+            completed_at: pending.completed_at,
+            model: pending.model.clone(),
+            messages: std::mem::take(&mut pending.messages),
+            claude_records: std::mem::take(&mut pending.claude_records),
+            complete: true,
+            ..Default::default()
+        });
+        // Keep the root and UUIDs in the pending turn for late blocks.
     }
     if !cursor.verified && cursor.offset > 0 {
         return Err("Native transcript does not identify the saved provider session".into());
@@ -342,6 +387,7 @@ pub fn read(binding: &Binding, previous: Option<&Cursor>) -> Result<Option<Batch
     // A bounded catch-up must resume even if the file has not changed again.
     cursor.stamps = stamps;
     cursor.caught_up = !more;
+    cursor.claude_message_receipts = kind == Kind::Claude;
     let active = cursor.pending.as_ref().is_some_and(|t| !t.complete);
     Ok(Some(Batch {
         cursor,
