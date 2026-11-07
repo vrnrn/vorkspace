@@ -54,30 +54,13 @@ impl SettingsView {
             );
         } else if self.discovery.worktrees.trees.is_empty() {
             page.push(
-                div()
-                    .mt_4()
-                    .rounded(px(radius::SURFACE))
-                    .border_1()
-                    .border_color(content(0.1))
-                    .px_4()
-                    .py_8()
-                    .flex()
-                    .flex_col()
-                    .items_center()
-                    .gap_2()
-                    .child(icon("folder-tree", 20.))
-                    .child(
-                        div()
-                            .text_size(px(13.))
-                            .font_weight(gpui::FontWeight::MEDIUM)
-                            .child("No additional worktrees"),
-                    )
-                    .child(
-                        div().text_size(px(12.)).text_color(content(0.5)).child(
-                            "Create a worktree to work on another branch in a separate folder.",
-                        ),
-                    )
-                    .into_any_element(),
+                super::super::widgets::empty_card(
+                    "folder-tree",
+                    "No additional worktrees",
+                    "Create a worktree to work on another branch in a separate folder.",
+                )
+                .mt_4()
+                .into_any_element(),
             );
         } else {
             let trees = self.discovery.worktrees.trees.clone();

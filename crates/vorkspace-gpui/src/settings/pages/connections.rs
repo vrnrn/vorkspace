@@ -782,18 +782,13 @@ impl SettingsView {
             page.push(list.into_any_element());
         } else if self.connections.loaded && !self.connections.adding {
             page.push(
-                div()
-                    .mt_5()
-                    .rounded(px(radius::SURFACE))
-                    .border_1()
-                    .border_color(content(0.15))
-                    .px_5()
-                    .py_8()
-                    .text_center()
-                    .text_size(px(13.))
-                    .text_color(content(0.45))
-                    .child("No machines connected.")
-                    .into_any_element(),
+                super::super::widgets::empty_card(
+                    "internet",
+                    "No machines connected",
+                    "Add a machine to run agents on it over SSH.",
+                )
+                .mt_5()
+                .into_any_element(),
             );
         }
         if self.connections.adding {

@@ -57,6 +57,41 @@ pub(super) fn note(text: impl Into<SharedString>) -> AnyElement {
         .into_any_element()
 }
 
+/// An empty list in a settings section: the shared empty-state mark, a
+/// title and what to do next, in a bordered card where the list would be.
+pub(super) fn empty_card(
+    glyph: &'static str,
+    title: impl Into<SharedString>,
+    detail: impl Into<SharedString>,
+) -> Div {
+    div()
+        .rounded(px(vorkspace_ui::radius::SURFACE))
+        .border_1()
+        .border_color(content(0.1))
+        .px_4()
+        .py_6()
+        .flex()
+        .flex_col()
+        .items_center()
+        .gap_1()
+        .text_center()
+        .child(
+            vorkspace_ui::fluid::empty_mark(icon(glyph, 20.).text_color(content(0.55)), 40.).mb_2(),
+        )
+        .child(
+            div()
+                .text_size(px(13.))
+                .font_weight(gpui::FontWeight::MEDIUM)
+                .child(title.into()),
+        )
+        .child(
+            div()
+                .text_size(px(12.))
+                .text_color(content(0.5))
+                .child(detail.into()),
+        )
+}
+
 /// A muted line on the page itself, aligned with section text rather than
 /// inset like `note` inside a card.
 pub(super) fn page_note(text: impl Into<SharedString>) -> AnyElement {
