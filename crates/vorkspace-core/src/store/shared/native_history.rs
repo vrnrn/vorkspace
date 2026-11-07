@@ -93,7 +93,7 @@ impl Store {
         for turn in turns {
             for (index, message) in turn.messages.iter().enumerate() {
                 let suffix = message
-                    .claude_receipt()
+                    .receipt()
                     .unwrap_or_else(|| format!("{}-{index}", turn.id));
                 let mut block = json!({"id":format!("native-{binding_key}-{suffix}"),"role":message.role,"text":message.text,"sentAt":message.at,
                     "nativeHistorySource":{"provider":binding.provider,"thread":binding.thread,"turn":turn.id}});

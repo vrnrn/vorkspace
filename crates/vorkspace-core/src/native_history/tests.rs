@@ -331,6 +331,84 @@ fn native_history_waits_for_complete_records_and_commits_cursor_with_rows() {
 }
 
 #[test]
+fn native_history_recovery_commits_saved_text_with_confirmation_and_keeps_codex_suffix() {
+    for shared in [false, true] {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        let (mut store, session, source, path) = fixture(root, shared, "codex");
+        let records = turn("outside", "Question", "Repeated answer");
+        append(&source, &[meta()]);
+        append(&source, &records[..6]);
+        assert!(sync(&mut store, session.id, root).active);
+        let request = store
+            .native_history_request(session.id, &root.join("bots"))
+            .unwrap()
+            .unwrap();
+        let token = Store::native_history_recovery_token(&request).unwrap();
+
+        let connection = rusqlite::Connection::open(&path).unwrap();
+        let (session_key, binding, saved_cursor): (String, String, String) = connection
+            .query_row(
+                "SELECT session_id,binding,cursor_json FROM provider_history_cursors",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+            )
+            .unwrap();
+        let old_token = crate::bot::files::content_hash(&format!("{binding}:{saved_cursor}"));
+        connection
+            .execute(
+                "INSERT INTO provider_history_recoveries VALUES(?1,?2,?3)",
+                rusqlite::params![session_key, binding, old_token],
+            )
+            .unwrap();
+        assert!(!store.native_history_acknowledged(&request, &token).unwrap());
+        connection
+            .execute_batch(
+                "CREATE TRIGGER fail_recovery BEFORE INSERT ON provider_history_recoveries
+             BEGIN SELECT RAISE(ABORT,'injected recovery write failure'); END;",
+            )
+            .unwrap();
+        assert!(store
+            .acknowledge_native_history(&request, &token)
+            .unwrap_err()
+            .contains("injected"));
+        assert!(store.load(session.id).unwrap().rows.is_empty());
+        assert!(!store.native_history_acknowledged(&request, &token).unwrap());
+        connection
+            .execute_batch("DROP TRIGGER fail_recovery")
+            .unwrap();
+
+        let original = std::fs::read(&source).unwrap();
+        store.acknowledge_native_history(&request, &token).unwrap();
+        assert_eq!(std::fs::read(&source).unwrap(), original);
+        assert!(store.native_history_acknowledged(&request, &token).unwrap());
+        let prefix = store.load(session.id).unwrap().rows;
+        assert_eq!(
+            prefix
+                .iter()
+                .map(|row| row.text.as_str())
+                .collect::<Vec<_>>(),
+            ["Question", "Repeated answer"]
+        );
+
+        append(
+            &source,
+            &[
+                json!({"type":"event_msg","payload":{"type":"item_completed","turn_id":"outside","item":{"type":"AgentMessage","id":"second-answer","text":"Repeated answer"}}}),
+                records[6].clone(),
+            ],
+        );
+        let result = sync(&mut store, session.id, root);
+        assert!(!result.active);
+        assert_eq!(result.imported, 1);
+        let rows = store.load(session.id).unwrap().rows;
+        assert_eq!(&rows[..2], prefix.as_slice());
+        assert_eq!(rows.len(), 3);
+        assert_eq!(rows[2].text, "Repeated answer");
+    }
+}
+
+#[test]
 fn native_history_rejects_changed_binding_cursor_and_local_writer() {
     let dir = tempfile::tempdir().unwrap();
     let root = dir.path();

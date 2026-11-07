@@ -8,6 +8,7 @@ mod edit;
 mod history_window;
 mod incremental;
 pub use history_window::{IndexedHistoryCursor, IndexedHistoryPage};
+pub(super) use incremental::HistoryAppend;
 mod native_history;
 mod ordinary;
 #[cfg(test)]

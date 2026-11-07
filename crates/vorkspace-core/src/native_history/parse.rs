@@ -123,6 +123,7 @@ pub(super) fn codex(
                         text: data["message"].as_str().unwrap_or_default().into(),
                         at,
                         claude_uuid: None,
+                        codex_receipt: None,
                     };
                     if turn
                         .event_messages
@@ -162,7 +163,7 @@ pub(super) fn codex(
     }
     Ok(())
 }
-fn finish_codex(mut turn: Turn, at: Option<u64>) -> Turn {
+pub(super) fn finish_codex(mut turn: Turn, at: Option<u64>) -> Turn {
     if turn.messages.is_empty() {
         turn.messages = std::mem::take(&mut turn.event_messages);
     } else if !turn.messages.iter().any(|m| m.role == "user") {
@@ -174,6 +175,13 @@ fn finish_codex(mut turn: Turn, at: Option<u64>) -> Turn {
             .collect::<Vec<_>>();
         users.append(&mut turn.messages);
         turn.messages = users;
+    }
+    if !turn.messages.iter().any(|m| m.role == "assistant") {
+        turn.messages.extend(
+            turn.event_messages
+                .drain(..)
+                .filter(|m| m.role == "assistant"),
+        );
     }
     turn.event_messages.clear();
     turn.item_ids.clear();

@@ -107,6 +107,18 @@ pub struct Cursor {
     pub context: Option<crate::context::Usage>,
 }
 impl Cursor {
+    pub(crate) fn pending_for_recovery(&self, provider: &str) -> Option<Turn> {
+        let pending = self
+            .pending
+            .as_ref()
+            .filter(|turn| self.caught_up && !turn.complete)?;
+        Some(if provider == "codex" {
+            parse::finish_codex(pending.clone(), None)
+        } else {
+            pending.clone()
+        })
+    }
+
     pub(crate) fn legacy_claude_published(&self, turn_id: &str, message: &Message) -> bool {
         // A completed legacy cursor kept the UUIDs of its published response
         // even after clearing its visible messages. Use these if a rewrite
@@ -132,12 +144,16 @@ pub struct Message {
     pub at: Option<u64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     claude_uuid: Option<String>,
+    #[serde(skip)]
+    codex_receipt: Option<String>,
 }
 impl Message {
-    pub(crate) fn claude_receipt(&self) -> Option<String> {
-        self.claude_uuid
-            .as_ref()
-            .map(|uuid| format!("claude-message:{uuid}"))
+    pub(crate) fn receipt(&self) -> Option<String> {
+        self.codex_receipt.clone().or_else(|| {
+            self.claude_uuid
+                .as_ref()
+                .map(|uuid| format!("claude-message:{uuid}"))
+        })
     }
 }
 
@@ -164,6 +180,24 @@ pub struct Turn {
     complete: bool,
 }
 impl Turn {
+    pub(crate) fn assign_codex_message_receipts(&mut self) {
+        // A legacy event and a completed item can project the same message.
+        // Use the projected role, text and occurrence within the native turn
+        // so an item arriving after recovery cannot republish its earlier event.
+        let mut occurrences = std::collections::HashMap::new();
+        for message in &mut self.messages {
+            let mut hash = Sha256::new();
+            hash.update(message.role.as_bytes());
+            hash.update([0]);
+            hash.update(message.text.as_bytes());
+            let hash = hash.finalize();
+            let occurrence = occurrences.entry(hash).or_insert(0usize);
+            message.codex_receipt =
+                Some(format!("codex-message:{}:{hash:x}:{occurrence}", self.id));
+            *occurrence += 1;
+        }
+    }
+
     fn push(
         &mut self,
         role: &str,
@@ -188,6 +222,7 @@ impl Turn {
                 text,
                 at,
                 claude_uuid: claude_uuid.map(str::to_owned),
+                codex_receipt: None,
             });
         }
         Ok(())
