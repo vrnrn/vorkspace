@@ -42,7 +42,7 @@ opt-level = 3
 inherits = "dev"
 debug = 0
 # Fast relinks after small edits. Cargo never prunes this cache, so
-# scripts/desktop/prune-target.sh keeps it bounded (see docs/building.md).
+# scripts/desktop/prune-target.mjs keeps it bounded (see docs/building.md).
 incremental = true
 
 [profile.native-dev.package."*"]
