@@ -56,21 +56,22 @@ const SHOTS: &[(&str, Option<usize>, (f32, f32))] = &[
     ("search", Some(0), (1390., 890.)),
     ("typed", Some(0), (1390., 890.)),
     ("project-menu", Some(0), (1390., 890.)),
-    ("bot", Some(0), (1390., 890.)),
-    ("bot-new", Some(0), (1390., 890.)),
-    ("bot-soul", Some(0), (1390., 890.)),
-    ("bot-memory", Some(0), (1390., 890.)),
-    ("bot-habits", Some(0), (1390., 890.)),
     ("rest-narrow", Some(0), (850., 610.)),
     ("settings-narrow", None, (850., 610.)),
     ("project-appearance-narrow", Some(0), (850., 610.)),
-    ("bot-narrow", Some(0), (850., 610.)),
-    ("bot-soul-narrow", Some(0), (850., 610.)),
     ("palette-narrow", Some(0), (850., 610.)),
     ("project-appearance", Some(0), (1390., 890.)),
     ("project-background", Some(0), (1390., 890.)),
     ("project-codebase", Some(0), (1390., 890.)),
     ("project-notifications", Some(0), (1390., 890.)),
+    // Bots persist in the shared store, so their scenes run last.
+    ("bot", Some(0), (1390., 890.)),
+    ("bot-new", Some(0), (1390., 890.)),
+    ("bot-soul", Some(0), (1390., 890.)),
+    ("bot-memory", Some(0), (1390., 890.)),
+    ("bot-habits", Some(0), (1390., 890.)),
+    ("bot-narrow", Some(0), (850., 610.)),
+    ("bot-soul-narrow", Some(0), (850., 610.)),
 ];
 
 /// A small committed project with uncommitted edits, so Explorer and Changes
@@ -312,8 +313,8 @@ fn fluid_capture() {
     // Screens that keep asking for frames once settled: an idle app should
     // draw nothing until something changes.
     let mut busy: Vec<String> = Vec::new();
-    for theme in ["dark", "light"] {
-        for (name, open, at) in SHOTS {
+    for (name, open, at) in SHOTS {
+        for theme in ["dark", "light"] {
             if only
                 .as_deref()
                 .is_some_and(|only| !only.split(',').any(|o| o == *name))
