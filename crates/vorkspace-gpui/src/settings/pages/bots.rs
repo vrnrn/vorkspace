@@ -1,7 +1,6 @@
 use crate::settings::SettingsView;
 use crate::settings::{SettingsEvent, management::Target, widgets::icon_action};
 use gpui::{AnyElement, Context, SharedString, div, prelude::*, px};
-use vorkspace_ui::radius;
 use vorkspace_ui::theme::*;
 impl SettingsView {
     pub(super) fn bots_page(&mut self, cx: &mut Context<Self>) -> Vec<AnyElement> {
@@ -39,14 +38,10 @@ impl SettingsView {
                 Some("bot-channels"),
                 false,
                 div().flex().items_center().gap_2().child("Channels").child(
-                    div()
-                        .px_1p5()
-                        .rounded(px(radius::SMALL))
-                        .border_1()
-                        .border_color(content(0.1))
-                        .text_size(px(11.))
-                        .text_color(content(0.5))
-                        .child("Experimental"),
+                    vorkspace_ui::fluid::badge(
+                        "Experimental",
+                        vorkspace_ui::theme::status(vorkspace_ui::theme::StatusColor::Warning, 1.),
+                    ),
                 ),
                 Some("Shared conversations with your Bots.".into()),
                 vec![self.toggle(
@@ -62,14 +57,10 @@ impl SettingsView {
                 Some("bot-minions"),
                 false,
                 div().flex().items_center().gap_2().child("Minions").child(
-                    div()
-                        .px_1p5()
-                        .rounded(px(radius::SMALL))
-                        .border_1()
-                        .border_color(content(0.1))
-                        .text_size(px(11.))
-                        .text_color(content(0.5))
-                        .child("Experimental"),
+                    vorkspace_ui::fluid::badge(
+                        "Experimental",
+                        vorkspace_ui::theme::status(vorkspace_ui::theme::StatusColor::Warning, 1.),
+                    ),
                 ),
                 Some("Let Bots delegate work to Minions that share their memory.".into()),
                 vec![self.toggle(

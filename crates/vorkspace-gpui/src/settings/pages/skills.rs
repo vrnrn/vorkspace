@@ -386,23 +386,20 @@ impl SettingsView {
                                             cx.notify();
                                         })),
                                 )
-                                .child(
-                                    div()
-                                        .flex_shrink_0()
-                                        .rounded_full()
-                                        .bg(content(0.1))
-                                        .px(px(6.))
-                                        .py(px(2.))
-                                        .text_size(px(10.))
-                                        .text_color(content(0.6))
-                                        .child(if skill.scope == "user" {
-                                            "PERSONAL"
-                                        } else if skill.scope == "builtin" {
-                                            "VORKSPACE"
-                                        } else {
-                                            "PROJECT"
-                                        }),
-                                )
+                                .child(match skill.scope.as_str() {
+                                    "user" => vorkspace_ui::fluid::badge("Personal", content(0.45)),
+                                    "builtin" => vorkspace_ui::fluid::badge(
+                                        "vorkspace",
+                                        vorkspace_ui::theme::accent_color(),
+                                    ),
+                                    _ => vorkspace_ui::fluid::badge(
+                                        "Project",
+                                        vorkspace_ui::theme::status(
+                                            vorkspace_ui::theme::StatusColor::Success,
+                                            1.,
+                                        ),
+                                    ),
+                                })
                                 .child(
                                     div()
                                         .w(px(80.))
@@ -452,7 +449,7 @@ impl SettingsView {
                                         .truncate()
                                         .text_size(px(11.))
                                         .text_color(content(0.35))
-                                        .child(path.display().to_string()),
+                                        .child(crate::panel_kit::home_relative(&path)),
                                 )
                                 .child(
                                     icon_action(
@@ -654,7 +651,7 @@ impl SettingsView {
                                     .text_size(px(11.))
                                     .line_height(px(16.))
                                     .text_color(content(0.5))
-                                    .child(skill.path.display().to_string()),
+                                    .child(crate::panel_kit::home_relative(&skill.path)),
                             )
                             .child(
                                 div()

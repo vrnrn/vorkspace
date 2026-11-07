@@ -252,3 +252,18 @@ pub(crate) fn diff_stat(
             |n| format!("-{}", format_integer(n)),
         )))
 }
+
+/// A path as people read it: under the home folder it starts with `~`.
+pub(crate) fn home_relative(path: &std::path::Path) -> String {
+    std::env::var_os("HOME")
+        .and_then(|home| {
+            path.strip_prefix(home).ok().map(|rest| {
+                if rest.as_os_str().is_empty() {
+                    "~".to_owned()
+                } else {
+                    format!("~/{}", rest.display())
+                }
+            })
+        })
+        .unwrap_or_else(|| path.display().to_string())
+}

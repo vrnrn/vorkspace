@@ -408,12 +408,12 @@ impl SettingsView {
                 .bg(content(0.05))
                 .px_4()
                 .py_2()
-                .text_size(px(11.))
-                .font_weight(FontWeight::SEMIBOLD)
-                .text_color(content(0.4))
-                .child(div().min_w_0().flex_1().child("COMMAND"))
-                .child(div().w(px(160.)).flex_shrink_0().child("KEYBINDING"))
-                .child(div().w(px(112.)).flex_shrink_0().child("WHEN"))
+                .text_size(px(12.))
+                .font_weight(FontWeight::MEDIUM)
+                .text_color(content(0.5))
+                .child(div().min_w_0().flex_1().child("Command"))
+                .child(div().w(px(160.)).flex_shrink_0().child("Keybinding"))
+                .child(div().w(px(112.)).flex_shrink_0().child("When"))
                 .into_any_element(),
         ];
         if rows.is_empty() {

@@ -202,7 +202,7 @@ impl SettingsView {
                                             .truncate()
                                             .text_size(px(11.))
                                             .text_color(content(0.35))
-                                            .child(server.path.display().to_string()),
+                                            .child(crate::panel_kit::home_relative(&server.path)),
                                     ),
                             );
                         if server.provider != "claude_desktop"
