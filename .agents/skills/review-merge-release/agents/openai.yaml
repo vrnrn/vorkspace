@@ -1,0 +1,4 @@
+interface:
+  display_name: "Review, Merge, and Release"
+  short_description: "Ship reviewed PR stacks with an independent Astra review"
+  default_prompt: "Use $review-merge-release to prepare the changes, review and fix the PR stack, merge it, and publish a GitHub release."
