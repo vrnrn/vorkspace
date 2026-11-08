@@ -109,7 +109,10 @@ pub(super) fn render(
                     div()
                         .flex_1()
                         .min_w_0()
-                        .truncate()
+                        // Clip from the left so the project folder stays.
+                        .overflow_hidden()
+                        .whitespace_nowrap()
+                        .text_ellipsis_start()
                         .text_color(content(0.8))
                         .child(directory),
                 ),
