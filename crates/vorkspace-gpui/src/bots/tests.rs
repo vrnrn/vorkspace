@@ -4945,3 +4945,34 @@ fn sidebar_pages_open_from_a_visible_bot(cx: &mut TestAppContext) {
         );
     }
 }
+
+#[gpui::test]
+fn new_session_from_a_visible_bot_shows_the_new_session(cx: &mut TestAppContext) {
+    let s = setup(cx);
+    let visual = &mut gpui::VisualTestContext::from_window(s.window.into(), cx);
+    s.window
+        .update(visual, |_, w, cx| {
+            s.manager.update(cx, |m, cx| m.dismiss_settings(w, cx))
+        })
+        .unwrap();
+    visual.run_until_parked();
+    visual.refresh().unwrap();
+    // The app menu's New Session (⌘N) while the Bot fills the pane.
+    visual.dispatch_action(crate::shell::NewCodex);
+    visual.run_until_parked();
+    visual.refresh().unwrap();
+    let (on_bot, active) = s
+        .window
+        .update(visual, |shell, _, _| {
+            (
+                shell
+                    .workspace
+                    .active
+                    .is_some_and(|id| shell.is_bot_pane(id)),
+                shell.workspace.active,
+            )
+        })
+        .unwrap();
+    assert!(active.is_some());
+    assert!(!on_bot, "the new session is shown, not the Bot");
+}
