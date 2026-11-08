@@ -331,7 +331,7 @@ impl Render for AppearanceControls {
                                     .child(if self.busy {
                                         "Saving image…"
                                     } else {
-                                        "Soft Hex · Shown in sidebar and tabs"
+                                        "Rounded hexagon · Shown in sidebar and tabs"
                                     }),
                             ),
                     )
@@ -354,8 +354,8 @@ impl Render for AppearanceControls {
                     .justify_between()
                     .child(
                         div()
-                            .text_size(px(12.))
-                            .text_color(content(0.75))
+                            .text_size(px(11.))
+                            .text_color(content(0.5))
                             .child("Texture"),
                     )
                     .child(
@@ -377,7 +377,7 @@ impl Render for AppearanceControls {
                         })),
                     ),
             )
-            // Grid Scale Slider (2x2..8x8) + Seed Die shown only when Texture is enabled
+            // Grid scale slider (2x2..8x8) + Seed Die shown only when Texture is enabled
             .when(textured, |d| {
                 d.child(
                     div()
@@ -392,7 +392,7 @@ impl Render for AppearanceControls {
                                 .justify_between()
                                 .text_size(px(11.))
                                 .text_color(content(0.5))
-                                .child("Grid Scale")
+                                .child("Grid scale")
                                 .child(
                                     div()
                                         .flex()

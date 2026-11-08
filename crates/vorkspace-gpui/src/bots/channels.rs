@@ -172,8 +172,8 @@ impl gpui::Render for ChannelLookEditor {
                     .justify_between()
                     .child(
                         div()
-                            .text_size(px(12.))
-                            .text_color(content(0.75))
+                            .text_size(px(11.))
+                            .text_color(content(0.5))
                             .child("Texture"),
                     )
                     .child(
@@ -195,7 +195,7 @@ impl gpui::Render for ChannelLookEditor {
                         })),
                     ),
             )
-            // Grid Scale Slider + Seed Die when textured
+            // Grid scale slider + Seed Die when textured
             .when(textured, |d| {
                 d.child(
                     div()
@@ -210,7 +210,7 @@ impl gpui::Render for ChannelLookEditor {
                                 .justify_between()
                                 .text_size(px(11.))
                                 .text_color(content(0.5))
-                                .child("Grid Scale")
+                                .child("Grid scale")
                                 .child(
                                     div()
                                         .flex()
