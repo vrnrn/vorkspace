@@ -299,7 +299,28 @@ impl Inbox {
         )
     }
 
+    /// A disabled or unconnected source has no items to open, so its page is
+    /// only the explanation and the way to connect, across the full width.
+    fn unavailable(&self) -> bool {
+        let source = &self.state.source;
+        if self
+            .snapshot
+            .items
+            .iter()
+            .any(|item| &item.provider == source)
+        {
+            return false;
+        }
+        !self.state.connectors.enabled(source)
+            || !self
+                .snapshot
+                .connections
+                .get(&self.state.source)
+                .is_some_and(|status| status.connected)
+    }
+
     fn list_view(&self, narrow: bool, cx: &mut Context<Self>) -> AnyElement {
+        let full = narrow || self.unavailable();
         let provider = model::provider_label(&self.state.source);
         let connected = self
             .snapshot
@@ -308,12 +329,15 @@ impl Inbox {
             .is_some_and(|status| status.connected);
         let items = self.visible_items(cx);
         let tools = page::toolbar()
-            .child(
-                page::search_frame(&self.search.focus_handle(cx))
-                    .flex_1()
-                    .child(action_icon("search", page::secondary_ink()))
-                    .child(self.search.clone()),
-            )
+            .when(!self.unavailable(), |d| {
+                d.child(
+                    page::search_frame(&self.search.focus_handle(cx))
+                        .flex_1()
+                        .child(action_icon("search", page::secondary_ink()))
+                        .child(self.search.clone()),
+                )
+            })
+            .when(self.unavailable(), |d| d.child(div().flex_1()))
             .when(connected, |d| {
                 d.child(
                     icon_button("inbox-filter", "Filter items", "filter")
@@ -511,8 +535,8 @@ impl Inbox {
             .collect::<Vec<_>>();
         div()
             .relative()
-            .when(narrow, |d| d.w_full())
-            .when(!narrow, |d| {
+            .when(full, |d| d.w_full())
+            .when(!full, |d| {
                 d.w(px(self
                     .state
                     .list_width
@@ -577,7 +601,7 @@ impl Inbox {
                     })
                     .children(rows),
             )
-            .when(!narrow, |d| {
+            .when(!full, |d| {
                 d.child(
                     page::detail_resize_handle(
                         "inbox-list-resize",
@@ -704,35 +728,36 @@ impl gpui::Render for Inbox {
                     .when(!pinned && (!narrow || !showing_detail), |d| {
                         d.child(self.list_view(narrow, cx))
                     })
-                    .when(pinned || !narrow || showing_detail, |d| {
-                        d.child(
-                            page::detail_pane(!narrow && !pinned)
-                                .when(narrow && !pinned, |d| {
-                                    d.child(
-                                        page::toolbar().child(
-                                            icon_action(
-                                                "inbox-back",
-                                                "Back to items",
-                                                "arrow-left",
-                                                true,
-                                            )
-                                            .on_click(
-                                                cx.listener(|this, _, window, cx| {
+                    .when(
+                        pinned || ((!narrow || showing_detail) && !self.unavailable()),
+                        |d| {
+                            d.child(
+                                page::detail_pane(!narrow && !pinned)
+                                    .when(narrow && !pinned, |d| {
+                                        d.child(
+                                            page::toolbar().child(
+                                                icon_action(
+                                                    "inbox-back",
+                                                    "Back to items",
+                                                    "arrow-left",
+                                                    true,
+                                                )
+                                                .on_click(cx.listener(|this, _, window, cx| {
                                                     this.back_to_list(window, cx);
-                                                }),
+                                                })),
                                             ),
-                                        ),
-                                    )
-                                })
-                                .child(
-                                    div()
-                                        .flex_1()
-                                        .min_h_0()
-                                        .min_w_0()
-                                        .child(self.detail_view(window, cx)),
-                                ),
-                        )
-                    }),
+                                        )
+                                    })
+                                    .child(
+                                        div()
+                                            .flex_1()
+                                            .min_h_0()
+                                            .min_w_0()
+                                            .child(self.detail_view(window, cx)),
+                                    ),
+                            )
+                        },
+                    ),
             )
             .when_some(self.error.clone(), |d, text| d.child(error(text)))
             .when(self.filters_open, |d| d.child(self.filters_menu(cx)))

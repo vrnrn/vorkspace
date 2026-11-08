@@ -23,6 +23,7 @@ impl Conversation {
                 request_id: approval.id.clone(),
                 kind: InputKind::Approval,
                 label: approval.title.clone(),
+                detail: approval.detail.clone(),
             })
             .chain(self.questions.iter().map(|(card, _)| {
                 let question = card.read(cx);
@@ -30,6 +31,7 @@ impl Conversation {
                     request_id: question.id().to_owned(),
                     kind: InputKind::Question,
                     label: question.notification_label().to_owned(),
+                    detail: String::new(),
                 }
             }))
             .collect()

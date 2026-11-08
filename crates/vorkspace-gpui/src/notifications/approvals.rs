@@ -19,6 +19,8 @@ pub(crate) struct PendingInput {
     pub request_id: String,
     pub kind: InputKind,
     pub label: String,
+    /// The exact command or path being approved, shown in the fixed font.
+    pub detail: String,
 }
 
 #[derive(Clone, PartialEq, Eq)]
@@ -233,6 +235,17 @@ impl Render for ApprovalNotices {
                                             .text_color(content(0.7))
                                             .child(input.label.clone()),
                                     )
+                                    .when(!input.detail.is_empty(), |d| {
+                                        d.child(
+                                            div()
+                                                .font_family(vorkspace_ui::fonts::FIXED_FONT)
+                                                .text_size(px(11.5))
+                                                .line_height(px(17.))
+                                                .line_clamp(2)
+                                                .text_color(content(0.85))
+                                                .child(input.detail.clone()),
+                                        )
+                                    })
                                     .child(
                                         div()
                                             .text_size(px(11.))
@@ -321,6 +334,7 @@ mod tests {
                 request_id: "request".into(),
                 kind: InputKind::Approval,
                 label: "Approve".into(),
+                detail: String::new(),
             }],
             inbox_ask: false,
             orchestration_worker: false,

@@ -1265,3 +1265,21 @@ fn toolbar_icons_have_explicit_ink_and_the_original_distinct_assets() {
         assert!(std::str::from_utf8(&bytes).unwrap().contains("<svg"));
     }
 }
+
+#[gpui::test]
+fn an_unconnected_source_spans_the_page_without_a_detail_pane(cx: &mut TestAppContext) {
+    let window = inbox_window(cx);
+    let visual = &mut gpui::VisualTestContext::from_window(window.into(), cx);
+    visual.run_until_parked();
+    visual.refresh().unwrap();
+    assert!(
+        window
+            .update(visual, |inbox, _, _| inbox.unavailable())
+            .unwrap()
+    );
+    let list = visual.debug_bounds("connector-list").unwrap();
+    assert!(
+        f32::from(list.size.width) > 1000.,
+        "the explanation uses the whole page, not the list column: {list:?}"
+    );
+}

@@ -688,7 +688,8 @@ fn fluid_capture() {
                             pending: vec![PendingInput {
                                 request_id: "capture".into(),
                                 kind: InputKind::Approval,
-                                label: "Run cargo nextest run -p vorkspace-gpui".into(),
+                                label: "Run a command".into(),
+                                detail: "cargo nextest run -p vorkspace-gpui".into(),
                             }],
                             inbox_ask: false,
                             orchestration_worker: false,
