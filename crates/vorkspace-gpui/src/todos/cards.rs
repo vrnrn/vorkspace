@@ -49,13 +49,22 @@ impl TodoBoardView {
             .rounded(px(radius::CONTAINER))
             .border_1()
             .border_color(content(0.1))
-            .bg(content(0.035))
+            // Finished work recedes so what is left reads first; hovering
+            // or focusing a done card brings it back to full ink.
+            .map(|d| {
+                if status == TodoStatus::Done {
+                    d.bg(content(0.015)).opacity(0.6)
+                } else {
+                    d.bg(content(0.035))
+                }
+            })
             .cursor_pointer()
             .hover(|s| {
                 s.bg(vorkspace_ui::fluid::hover(0.065))
                     .border_color(content(0.18))
+                    .opacity(1.)
             })
-            .focus_visible(|s| s.border_color(accent_color()))
+            .focus_visible(|s| s.border_color(accent_color()).opacity(1.))
             .drag_over::<DraggedTodo>(|s, _, _, _| s.border_color(accent_color()))
             .on_drop(cx.listener(move |this, dragged: &DraggedTodo, _, cx| {
                 this.move_to(dragged, status, Some(before.clone()), cx)
