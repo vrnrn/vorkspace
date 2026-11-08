@@ -120,8 +120,8 @@ fn review_overview_has_no_change_markers_and_supports_scrolling_and_dragging(
                 .collect();
             assert!(!rail_quads.is_empty());
             assert!(rail_quads.iter().all(|quad| {
-                quad.background != gpui::Hsla::from(rgb(add)).into()
-                    && quad.background != gpui::Hsla::from(rgb(del)).into()
+                quad.background != gpui::Hsla::from(gpui::rgb(add)).into()
+                    && quad.background != gpui::Hsla::from(gpui::rgb(del)).into()
             }));
         })
         .unwrap();

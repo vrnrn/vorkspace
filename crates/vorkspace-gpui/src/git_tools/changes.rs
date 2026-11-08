@@ -12,7 +12,7 @@ use crate::{
 };
 use gpui::{
     AnyElement, App, Context, Entity, EventEmitter, FontWeight, Hsla, PromptLevel, Role,
-    SharedString, Subscription, Task, Window, div, prelude::*, px, rgb, uniform_list,
+    SharedString, Subscription, Task, Window, div, prelude::*, px, uniform_list,
 };
 use serde::{Deserialize, Serialize};
 use std::{
@@ -1078,7 +1078,8 @@ impl Changes {
         // `bg-content` buttons with `text-background-base`, 40% when unavailable.
         let solid: Hsla = content(1.);
         let face = if can_commit { solid } else { content(0.4) };
-        let ink: Hsla = rgb(BACKGROUND_BASE).into();
+        // Paper on the ink button, in either theme.
+        let ink: Hsla = vorkspace_ui::fluid::on_ink();
         let generate_label = if generating {
             "Cancel commit message generation"
         } else {
@@ -1202,7 +1203,7 @@ impl Changes {
                             .justify_center()
                             .rounded_r_md()
                             .border_l_1()
-                            .border_color(rgb(BACKGROUND_BASE).opacity(0.1))
+                            .border_color(vorkspace_ui::fluid::on_ink().opacity(0.1))
                             .bg(if menu_open { solid } else { face })
                             .when(can_open_menu && !menu_open, |d| {
                                 d.hover(move |s| {

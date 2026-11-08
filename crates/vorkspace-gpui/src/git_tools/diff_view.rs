@@ -13,7 +13,7 @@ use gpui::{
     AnyElement, App, Bounds, Context, EventEmitter, FocusHandle, Focusable, FontWeight,
     HighlightStyle, Hsla, KeyBinding, ListAlignment, ListOffset, ListState, MouseButton,
     MouseDownEvent, MouseMoveEvent, Pixels, Role, ScrollWheelEvent, SharedString, StyledText,
-    Subscription, Task, Window, actions, canvas, div, list, prelude::*, px, rgb,
+    Subscription, Task, Window, actions, canvas, div, list, prelude::*, px,
 };
 use std::{
     borrow::Cow,
@@ -2005,12 +2005,12 @@ impl Render for DiffView {
                                     .bg(content(1.))
                                     .text_size(px(12.))
                                     .font_weight(FontWeight::MEDIUM)
-                                    .text_color(rgb(crate::panel_kit::BACKGROUND_BASE))
+                                    .text_color(vorkspace_ui::fluid::on_ink())
                                     .when(!can_add, |d| d.opacity(0.4))
                                     .when(can_add, |d| d.hover(|s| s.opacity(0.8)))
                                     .child(
                                         icon("comment-add", 14.)
-                                            .text_color(rgb(crate::panel_kit::BACKGROUND_BASE)),
+                                            .text_color(vorkspace_ui::fluid::on_ink()),
                                     )
                                     .child("Add to chat")
                                     .when(can_add, |d| {
