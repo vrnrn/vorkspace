@@ -31,6 +31,7 @@ const SHOTS: &[(&str, Option<usize>, (f32, f32))] = &[
     ("split-down", Some(0), (1390., 890.)),
     ("tooltip", Some(0), (551., 271.)),
     ("explorer", Some(0), (1390., 890.)),
+    ("first-run", None, (1390., 890.)),
     ("changes", Some(0), (1390., 890.)),
     ("history", Some(0), (1390., 890.)),
     ("notes", Some(0), (1390., 890.)),
@@ -336,16 +337,29 @@ fn fluid_capture() {
             state.preferences.theme = theme.into();
             // Channels are opt-in; the channel scene turns them on.
             state.preferences.channels = *name == "bot-channel";
-            state.add_project(PROJECT);
-            state.project = PROJECT.into();
-            if *name == "glide" {
-                // Two tabs, so the title strip's thumb has somewhere to go.
-                state.open(sessions[0].id);
+            // A first launch: no project, no session, nothing open.
+            let first_run = *name == "first-run";
+            if !first_run {
+                state.add_project(PROJECT);
+                state.project = PROJECT.into();
+                if *name == "glide" {
+                    // Two tabs, so the title strip's thumb has somewhere to go.
+                    state.open(sessions[0].id);
+                }
+                state.open(sessions[open.unwrap_or(0)].id);
             }
-            state.open(sessions[open.unwrap_or(0)].id);
             let saved = serde_json::to_string(&state).unwrap();
             let store = store.clone();
-            let summaries = sessions.clone();
+            let summaries = if first_run {
+                Vec::new()
+            } else {
+                sessions.clone()
+            };
+            let cwd: String = if first_run {
+                String::new()
+            } else {
+                PROJECT.into()
+            };
             let window = cx
                 .open_window(
                     if narrow {
@@ -353,9 +367,7 @@ fn fluid_capture() {
                     } else {
                         gpui::size(px(1400.), px(900.))
                     },
-                    |_, cx| {
-                        cx.new(|cx| Shell::new(store, summaries, PROJECT.into(), Some(saved), cx))
-                    },
+                    |_, cx| cx.new(|cx| Shell::new(store, summaries, cwd, Some(saved), cx)),
                 )
                 .unwrap();
             cx.run_until_parked();
@@ -427,7 +439,7 @@ fn fluid_capture() {
                     .unwrap();
                 cx.run_until_parked();
             }
-            if open.is_none() {
+            if open.is_none() && *name != "first-run" {
                 use crate::settings::Section;
                 let section = match *name {
                     "settings-general" => Section::General,

@@ -93,7 +93,14 @@ impl Shell {
                         div()
                             .min_w_0()
                             .truncate()
-                            .child(self.project_label(&self.workspace.project)),
+                            .when(self.workspace.project.is_empty(), |d| {
+                                d.text_color(content(0.5)).font_weight(FontWeight::NORMAL)
+                            })
+                            .child(if self.workspace.project.is_empty() {
+                                "No project".into()
+                            } else {
+                                self.project_label(&self.workspace.project)
+                            }),
                     )
                     .child(icon("chevron-down", 12.).text_color(content(0.45)))
                     .child(self.project_anchor.probe())

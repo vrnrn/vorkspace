@@ -555,7 +555,8 @@ impl Conversation {
                 )
             })
             // A Bot works across its projects; a session owns one checkout.
-            .when(!bot, |d| d.child(workspace))
+            // Without a project there is no checkout to show or choose.
+            .when(!bot && !self.summary.cwd.is_empty(), |d| d.child(workspace))
             .when_some(branch.filter(|_| !bot), |d, branch| {
                 let detached = !new && self.git.as_ref().is_some_and(|s| s.detached);
                 let label = if detached {
@@ -850,15 +851,20 @@ impl Conversation {
                             // A narrow pane wraps the question onto a second
                             // line rather than cutting off the project name.
                             .line_clamp(2)
-                            .child(format!(
-                                "What should we work on in {}?",
-                                self.project_appearance.label(&self.summary.cwd)
-                            )),
+                            .child(if self.summary.cwd.is_empty() {
+                                "What should we work on?".to_owned()
+                            } else {
+                                format!(
+                                    "What should we work on in {}?",
+                                    self.project_appearance.label(&self.summary.cwd)
+                                )
+                            }),
                     )
                     .child(self.composer(window, cx))
                     // Three ways to begin, below the prompt; hidden once the
                     // pane is too narrow to show them on one or two rows.
-                    .when(!narrow, |d| {
+                    // Project-shaped prompts need a project to be about.
+                    .when(!narrow && !self.summary.cwd.is_empty(), |d| {
                         d.child(div().mt_4().flex().justify_center().child(self.starters(
                             "session-starter",
                             vec![

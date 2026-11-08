@@ -354,6 +354,35 @@ impl Shell {
                                 .on_click(cx.listener(|this, _, _, cx| this.open_project(cx))),
                         ),
                     )
+                    // With no project yet, the section offers its own way
+                    // in, like Bots' New bot row.
+                    .when(projects.is_empty(), |d| {
+                        d.child(
+                            div().px_2().child(
+                                div()
+                                    .id("classic-open-first-project")
+                                    .debug_selector(|| "classic-open-first-project".into())
+                                    .role(Role::Button)
+                                    .aria_label("Open project")
+                                    .h(px(32.))
+                                    .px_2()
+                                    .rounded(px(radius::CONTROL))
+                                    .flex()
+                                    .items_center()
+                                    .gap_2()
+                                    .text_size(px(14.))
+                                    .text_color(content(0.5))
+                                    .cursor_pointer()
+                                    .hover(|s| {
+                                        s.bg(vorkspace_ui::fluid::hover(0.08))
+                                            .text_color(content(1.))
+                                    })
+                                    .child(icon("folder-open", 16.))
+                                    .child("Open project…")
+                                    .on_click(cx.listener(|this, _, _, cx| this.open_project(cx))),
+                            ),
+                        )
+                    })
                     .child(
                         div().px_2().flex().flex_col().gap_px().children(
                             projects
