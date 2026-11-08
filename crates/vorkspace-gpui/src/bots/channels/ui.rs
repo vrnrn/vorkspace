@@ -485,36 +485,42 @@ impl Bots {
             .border_color(composer_border(focus.is_focused(window)))
             .rounded(px(radius::SURFACE))
             .bg(composer_fill())
-            .px_3()
-            .pt_3()
-            .pb_2()
+            .pl_3()
+            .pr_2()
+            .py_2()
             .flex()
-            .flex_col()
+            .items_end()
             .gap_2()
             .on_mouse_down(MouseButton::Left, move |_, window, cx| {
                 window.focus(&focus, cx)
             })
-            .child(completion)
+            .child(div().flex_1().min_w_0().py_1().child(completion))
+            // The same square submit as a session's composer: ink when there
+            // is something to send, a faint well when there is not.
             .child(
                 div()
+                    .id("send-channel")
+                    .debug_selector(|| "send-channel".into())
+                    .role(gpui::Role::Button)
+                    .aria_label("Send")
+                    .flex_shrink_0()
+                    .size(px(26.))
+                    .rounded(px(radius::CONTROL))
                     .flex()
                     .items_center()
-                    .justify_between()
-                    .child(
-                        div()
-                            .text_size(px(11.))
-                            .text_color(content(0.4))
-                            .child("Enter to send · Shift+Enter for a new line"),
-                    )
-                    .child(
-                        panels::button("send-channel", "Send")
-                            .debug_selector(|| "send-channel".into())
-                            .bg(accent_color().opacity(if has_draft { 1. } else { 0.3 }))
-                            .text_color(gpui::white())
-                            .opacity(if has_draft { 1. } else { 0.5 })
-                            .on_click(cx.listener(move |this, _, _, cx| {
-                                this.send_channel_message(&send, cx)
-                            })),
+                    .justify_center()
+                    .bg(content(if has_draft { 1. } else { 0.1 }))
+                    .when(has_draft, |d| {
+                        d.cursor_pointer().hover(|s| s.bg(content(0.85)))
+                    })
+                    .child(icon("send", 14.).text_color(if has_draft {
+                        vorkspace_ui::fluid::on_ink()
+                    } else {
+                        content(0.35)
+                    }))
+                    .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+                    .on_click(
+                        cx.listener(move |this, _, _, cx| this.send_channel_message(&send, cx)),
                     ),
             );
         let mut footer = div()

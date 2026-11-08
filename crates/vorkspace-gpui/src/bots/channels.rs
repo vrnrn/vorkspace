@@ -697,7 +697,7 @@ impl Bots {
                             .truncate()
                             .group_hover("classic-channel-row", |s| s.pr(px(24.)))
                             .font_weight(gpui::FontWeight::MEDIUM)
-                            .child(format!("# {}", channel.name)),
+                            .child(format!("#{}", channel.name)),
                     )
                     .when(unread, |d| {
                         d.child(
