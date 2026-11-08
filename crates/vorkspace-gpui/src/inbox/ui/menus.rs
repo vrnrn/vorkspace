@@ -254,7 +254,7 @@ impl Inbox {
         );
         let hint = match provider.as_str() {
             "github" => {
-                "Install GitHub CLI, then run gh auth login in a terminal. Check again when signed in."
+                "Install GitHub CLI, then run “gh auth login” in a terminal. Check again when signed in."
             }
             "jira" => "Connect your Jira Cloud site with your Atlassian email and an API token.",
             "gitlab" => {

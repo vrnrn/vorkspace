@@ -1404,7 +1404,7 @@ impl Inbox {
                             this.connect_provider = None;
                             if connected { this.change_source(provider, cx); }
                             this.refresh(cx);
-                        } else { this.connect_error = Some("GitHub is not connected. Run gh auth login in a terminal, then check again.".into()); }
+                        } else { this.connect_error = Some("GitHub is not connected. Run “gh auth login” in a terminal, then check again.".into()); }
                     }
                     Err(error) => this.connect_error = Some(error),
                 }

@@ -258,7 +258,7 @@ impl SettingsView {
     ) -> Vec<AnyElement> {
         let id = connector.id();
         let hint = match connector {
-            crate::workspace::Connector::Github => "Sign in with gh auth login in a terminal.",
+            crate::workspace::Connector::Github => "Run “gh auth login” in a terminal to sign in.",
             crate::workspace::Connector::Gitlab => "Use a personal access token with API access.",
             crate::workspace::Connector::Jira => "Use your site URL, email, and API token.",
         };
