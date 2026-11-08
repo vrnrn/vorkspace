@@ -13,7 +13,7 @@ impl Shell {
         self.workspace.active.is_some_and(|id| self.is_bot_pane(id))
     }
     /// A Bot or Channels pane: the surfaces a project click leaves behind.
-    pub(super) fn is_bot_pane(&self, id: i64) -> bool {
+    pub(crate) fn is_bot_pane(&self, id: i64) -> bool {
         self.workspace.app_panes.get(&id).is_some_and(|pane| {
             matches!(
                 pane.content,

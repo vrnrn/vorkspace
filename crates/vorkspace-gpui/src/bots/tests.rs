@@ -4902,3 +4902,46 @@ fn clicking_a_project_row_from_a_bot_leaves_the_bot_for_that_project(cx: &mut Te
     assert!(!bot_open, "clicking the project row left the Bot");
     assert!(active.is_some(), "the project's session is shown");
 }
+
+#[gpui::test]
+fn sidebar_pages_open_from_a_visible_bot(cx: &mut TestAppContext) {
+    let s = setup(cx);
+    let visual = &mut gpui::VisualTestContext::from_window(s.window.into(), cx);
+    s.window
+        .update(visual, |_, w, cx| {
+            s.manager.update(cx, |m, cx| m.dismiss_settings(w, cx))
+        })
+        .unwrap();
+    visual.run_until_parked();
+    visual.refresh().unwrap();
+    for label in ["Notes", "To-dos", "Automations"] {
+        // Back to the Bot before each page.
+        let bot_row = format!("bot-rail-{}", s.id);
+        if let Some(row) = visual.debug_bounds(Box::leak(bot_row.into_boxed_str())) {
+            visual.simulate_click(row.center(), Default::default());
+            visual.run_until_parked();
+            visual.refresh().unwrap();
+        }
+        let nav = format!("sidebar-navigation-{label}");
+        let bounds = visual
+            .debug_bounds(Box::leak(nav.into_boxed_str()))
+            .unwrap_or_else(|| panic!("{label} is in the sidebar"));
+        visual.simulate_click(bounds.center(), Default::default());
+        visual.run_until_parked();
+        visual.refresh().unwrap();
+        assert!(
+            !s.window
+                .update(visual, |shell, _, cx| shell
+                    .bot_manager()
+                    .read(cx)
+                    .active
+                    .is_some()
+                    && shell
+                        .workspace
+                        .active
+                        .is_some_and(|id| shell.is_bot_pane(id)))
+                .unwrap(),
+            "{label} replaced the Bot"
+        );
+    }
+}
