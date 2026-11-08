@@ -699,11 +699,7 @@ impl Shell {
                 crate::avatar::bot_avatar(&bot, "idle", 14., true),
             )
             .on_click(cx.listener(move |this, _, _, cx| {
-                if let Some(v) = this.workspace.vorkspace_mut(&editing)
-                    && !v.bots.contains(&id)
-                {
-                    v.bots.push(id.clone());
-                }
+                this.workspace.move_bot_to_vorkspace(&editing, &id);
                 this.reconcile_after_bot_move(cx);
             }))
         });
@@ -758,14 +754,17 @@ impl Shell {
                             .children(add_projects),
                     )
                     .child(section("Bots"))
-                    .when(no_bots, |d| {
-                        d.child(
-                            div()
-                                .text_size(px(12.))
-                                .text_color(content(0.5))
-                                .child("A Bot created while this vorkspace is open belongs to it."),
-                        )
-                    })
+                    .child(
+                        div()
+                            .text_size(px(12.))
+                            .text_color(content(0.5))
+                            .mb_2()
+                            .child(if no_bots {
+                                "A Bot created while this vorkspace is open belongs to it."
+                            } else {
+                                "A Bot belongs to one vorkspace; adding one here moves it."
+                            }),
+                    )
                     .children(member_rows)
                     .child(div().mt_2().flex().flex_wrap().gap_2().children(add_bots)),
             )

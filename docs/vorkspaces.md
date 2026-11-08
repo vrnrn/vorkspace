@@ -11,7 +11,7 @@ A vorkspace is a named set of projects (folders or repositories) and Bots: the w
 - `vorkspace_project`: the project each vorkspace last showed, so switching back returns there.
 - `seen_bots`: Bots already placed once.
 
-Membership is a view, not ownership. A folder can belong to several vorkspaces and its sessions appear in each. Removing a folder from a vorkspace only hides it there; its sessions, appearance and data stay. Bots keep running whichever vorkspace lists them.
+Membership is a view, not ownership. A folder can belong to several vorkspaces and its sessions appear in each. Removing a folder from a vorkspace only hides it there; its sessions, appearance and data stay. A Bot belongs to one vorkspace at a time: adding it to another moves it. Bots keep running whichever vorkspace lists them.
 
 On the first launch with vorkspaces, every existing project goes into one vorkspace named **Main**. A project the app has never seen before joins the active vorkspace, however it arrives: Open project, a remote host, or an agent command. A Bot never seen before joins the active vorkspace when the roster loads, so existing Bots also land in Main. A Bot deliberately removed from every vorkspace stays out until it is added back. The last vorkspace cannot be deleted.
 

@@ -124,6 +124,20 @@ impl Workspace {
         }
     }
 
+    /// A Bot belongs to one vorkspace: adding it here takes it out of any other.
+    pub(crate) fn move_bot_to_vorkspace(&mut self, id: &str, bot: &str) {
+        for v in &mut self.vorkspaces {
+            if v.id == id {
+                if !v.bots.iter().any(|b| b == bot) {
+                    v.bots.push(bot.to_owned());
+                }
+            } else {
+                v.bots.retain(|b| b != bot);
+            }
+        }
+        self.seen_bots.insert(bot.to_owned());
+    }
+
     pub(crate) fn create_vorkspace(&mut self, name: &str) -> String {
         let id = new_id();
         self.vorkspaces.push(VorkspaceDef {
@@ -261,6 +275,23 @@ mod tests {
                 .iter()
                 .any(|v| v.bots.contains(&"new".to_owned()))
         );
+    }
+
+    #[test]
+    fn a_bot_moves_rather_than_spreads_across_vorkspaces() {
+        let mut w = workspace(&["/a"]);
+        let first = w.active_vorkspace.clone();
+        w.assign_unowned_bots(&["bot".into()]);
+        let second = w.create_vorkspace("Side");
+        w.move_bot_to_vorkspace(&second, "bot");
+        let holders: Vec<_> = w
+            .vorkspaces
+            .iter()
+            .filter(|v| v.bots.contains(&"bot".to_owned()))
+            .map(|v| v.id.clone())
+            .collect();
+        assert_eq!(holders, [second]);
+        assert!(!w.vorkspace_has_bot("bot"), "{first} no longer lists it");
     }
 
     #[test]
