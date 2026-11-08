@@ -12,31 +12,40 @@ impl SettingsView {
         let ready = !self.discovery_loading
             && self.discovery.worktrees.error.is_none()
             && !self.discovery.worktrees.main.is_empty();
-        let mut page=vec![div().relative().child(self.reveal_probe("project-worktrees")).flex().items_center().gap_1().child(project).child(secondary_button("create-settings-worktree","Create worktree",false,!ready).child(icon("plus",12.)).child("Create worktree").on_click(cx.listener(move|this,_,window,cx|{if ready{this.open_management(Target::Worktree,window,cx);}}))).into_any_element(),div().mt_4().flex().items_center().justify_between().gap_3().child(div().min_w_0().flex_1().text_size(px(12.)).line_height(px(18.)).text_color(content(0.5)).child("Sessions can share a worktree. Deleting one keeps its sessions by default and discards uncommitted changes. Its branch and commits are kept.")).child(self.refresh_button("refresh-settings-worktrees","Refresh",cx)).into_any_element()];
+        let has_project = !self.selected_project.is_empty();
+        // One toolbar holds every action; the explanations live in a single
+        // footnote under the list instead of beside stray buttons.
+        let toolbar = div()
+            .relative()
+            .child(self.reveal_probe("project-worktrees"))
+            .flex()
+            .items_center()
+            .gap_1()
+            .child(project)
+            .child(
+                secondary_button("create-settings-worktree", "Create worktree", false, !ready)
+                    .child(icon("plus", 12.))
+                    .child("Create worktree")
+                    .on_click(cx.listener(move |this, _, window, cx| {
+                        if ready {
+                            this.open_management(Target::Worktree, window, cx);
+                        }
+                    })),
+            )
+            .when(has_project && ready, |d| {
+                d.child(
+                    secondary_button("worktree-setup", "Worktree setup command", false, false)
+                        .child(icon("terminal", 12.))
+                        .child("Setup command")
+                        .on_click(cx.listener(|this, _, window, cx| {
+                            this.open_management(Target::WorktreeSetup, window, cx)
+                        })),
+                )
+            })
+            .child(div().flex_1())
+            .child(self.refresh_button("refresh-settings-worktrees", "Refresh", cx));
+        let mut page = vec![toolbar.into_any_element()];
         self.load_worktree_sizes(cx);
-        if !self.selected_project.is_empty() && ready {
-            let command = self.prefs.worktree_setup.get(&self.selected_project);
-            page.push(
-                div()
-                    .mt_4()
-                    .flex()
-                    .items_center()
-                    .justify_between()
-                    .gap_3()
-                    .child(page_note(match command {
-                        Some(command) => format!("New worktrees run: {command}"),
-                        None => "New worktrees only contain tracked files. Add a setup command to install dependencies or restore local files.".into(),
-                    }))
-                    .child(
-                        secondary_button("worktree-setup", "Worktree setup command", false, false)
-                            .child("Setup command")
-                            .on_click(cx.listener(|this, _, window, cx| {
-                                this.open_management(Target::WorktreeSetup, window, cx)
-                            })),
-                    )
-                    .into_any_element(),
-            );
-        }
         if self.selected_project.is_empty() {
             page.push(super::super::widgets::page_hint(
                 "Add a project to manage its worktrees.",
@@ -212,13 +221,26 @@ impl SettingsView {
             );
         }
         if ready {
+            let setup = match self.prefs.worktree_setup.get(&self.selected_project) {
+                Some(command) => format!("They run {command} after checkout."),
+                None => "They only contain tracked files; a setup command can install \
+                         dependencies or restore local files."
+                    .into(),
+            };
             page.push(
                 div()
                     .mt_3()
+                    .flex()
+                    .flex_col()
+                    .gap_1()
                     .child(page_note(format!(
-                        "New worktrees are created in {}.",
+                        "New worktrees are created in {}. {setup}",
                         crate::panel_kit::home_relative(&self.discovery.worktrees.default_root)
                     )))
+                    .child(page_note(
+                        "Sessions can share a worktree. Deleting one discards uncommitted \
+                         changes but keeps its branch, its commits and, by default, its sessions.",
+                    ))
                     .into_any_element(),
             );
         }
