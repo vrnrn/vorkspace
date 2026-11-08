@@ -836,7 +836,7 @@ pub(crate) struct ProjectPicker {
 impl EventEmitter<ProjectPicked> for ProjectPicker {}
 impl ProjectPicker {
     pub(crate) fn new(projects: &[String], current: &str, cx: &mut Context<Self>) -> Self {
-        let search = search_field("Search projects", "Search projects...", 0.35, cx);
+        let search = search_field("Search projects", "Search projects…", 0.35, cx);
         let changed = cx.subscribe(&search, |this, _, _: &input::Changed, cx| {
             this.active = 0;
             cx.notify();

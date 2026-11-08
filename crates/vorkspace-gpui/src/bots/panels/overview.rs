@@ -170,7 +170,7 @@ impl Bots {
                                 .into_any_element(),
                             Some(s) if s.busy => div()
                                 .text_color(vorkspace_ui::theme::accent_color())
-                                .child("Working...")
+                                .child("Working…")
                                 .into_any_element(),
                             Some(s) => div()
                                 .text_color(content(0.45))

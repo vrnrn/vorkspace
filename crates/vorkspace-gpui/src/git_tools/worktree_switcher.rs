@@ -136,7 +136,7 @@ impl WorktreeSwitcher {
         let search = cx.new(|cx| {
             let mut input = input::Input::field(
                 "Search working copies",
-                "Search or create a worktree...",
+                "Search or create a worktree…",
                 content(0.35),
                 cx,
             );
