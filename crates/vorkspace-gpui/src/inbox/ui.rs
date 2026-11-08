@@ -382,12 +382,12 @@ impl Inbox {
         let (empty_title, empty_detail) = if !self.state.connectors.enabled(&self.state.source) {
             (
                 format!("{provider} is disabled"),
-                "Enable it in Settings → Connectors.".into(),
+                "Turn it on in Settings → Plugins.".into(),
             )
         } else if let Some(error) = self.snapshot.errors.get(&self.state.source) {
             (
                 format!("Could not load {provider}"),
-                format!("{error}. Check Settings → Connectors or refresh."),
+                format!("{error}. Check Settings → {provider} or refresh."),
             )
         } else if self.loading && items.is_empty() {
             (format!("Loading {provider}…"), String::new())

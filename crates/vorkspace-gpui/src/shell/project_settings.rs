@@ -493,7 +493,7 @@ impl Shell {
                     .text_size(px(12.))
                     .line_height(px(18.))
                     .text_color(content(0.45))
-                    .child("Which events notify you is set for every project in Settings → Connectors."),
+                    .child("Which events notify you is set for every project in Settings → Plugins."),
             )
             .into_any_element()
     }
