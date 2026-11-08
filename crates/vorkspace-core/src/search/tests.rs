@@ -208,3 +208,45 @@ fn unopened_titles_are_searchable_and_the_reader_sees_new_writes() {
             row: 1
         }));
 }
+
+#[test]
+fn an_empty_query_offers_recent_conversations_files_and_projects() {
+    let store = Store::open_vorkspace(std::path::Path::new(":memory:")).unwrap();
+    let mut older = store.create("codex", "/project").unwrap();
+    older.title = "Older".into();
+    older.has_messages = true;
+    older.updated_at = 10;
+    let mut newer = older.clone();
+    newer.id += 1;
+    newer.title = "Newer".into();
+    newer.updated_at = 20;
+    let mut blank = older.clone();
+    blank.id += 2;
+    blank.has_messages = false;
+    let mut archived = older.clone();
+    archived.id += 3;
+    archived.archived = true;
+    let file = |name: &str| ProjectFile {
+        name: name.into(),
+        path: format!("/project/{name}"),
+        relative: name.into(),
+    };
+    let files = [file("a.rs"), file("b.rs"), file("c.rs")];
+    // Most recently opened first; a path no longer listed is skipped.
+    let recent = [
+        "/project/c.rs".into(),
+        "/gone.rs".into(),
+        "/project/a.rs".into(),
+    ];
+    let hits = recents(
+        &[older, newer, blank, archived],
+        &files,
+        &recent,
+        &["/project".into()],
+        Scope::All,
+    );
+    let titles: Vec<_> = hits.iter().map(|h| h.title.as_str()).collect();
+    assert_eq!(titles, ["Newer", "Older", "c.rs", "a.rs", "project"]);
+    let only_files = recents(&[], &files, &recent, &[], Scope::Files);
+    assert_eq!(only_files.len(), 2);
+}
