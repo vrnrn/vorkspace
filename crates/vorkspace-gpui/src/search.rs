@@ -157,7 +157,9 @@ impl SearchView {
     fn reload_files(&mut self, cx: &mut Context<Self>) {
         self.listing_cancel.store(true, Ordering::Release);
         self.listing_cancel = Arc::new(AtomicBool::new(false));
-        self.files.clear();
+        // A view searches one root for its whole life, so the previous listing
+        // stays usable while the refreshed one loads; clearing it would empty
+        // recents and file results for the length of a large repository scan.
         self.listing_pending = true;
         let flag = self.listing_cancel.clone();
         let check = flag.clone();

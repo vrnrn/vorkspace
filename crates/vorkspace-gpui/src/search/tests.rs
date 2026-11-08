@@ -277,3 +277,26 @@ fn app_search_debounce_scope_keyboard_and_stale_results(cx: &mut TestAppContext)
         .update(cx, |view, _, _| assert!(view.hits.is_empty()))
         .unwrap();
 }
+
+#[gpui::test]
+fn reactivating_search_keeps_the_previous_file_listing_while_it_refreshes(cx: &mut TestAppContext) {
+    let dir = TempDir::new();
+    std::fs::write(dir.path().join("kept.rs"), "").unwrap();
+    let cwd = dir.path().to_string_lossy().into_owned();
+    let store = Store::open(std::path::Path::new(":memory:")).unwrap();
+    let view = cx.update(|cx| {
+        input::bind(cx);
+        cx.new(|cx| SearchView::new(cwd, Arc::new(Mutex::new(store)), Sources::default(), cx))
+    });
+    view.update(cx, |view, cx| view.set_active(Some(Sources::default()), cx));
+    cx.run_until_parked();
+    assert_eq!(view.read_with(cx, |view, _| view.files.len()), 1);
+    // A refresh starts; until it lands the earlier listing is still there.
+    view.update(cx, |view, cx| {
+        view.set_active(Some(Sources::default()), cx);
+        assert!(view.listing_pending);
+        assert_eq!(view.files.len(), 1);
+    });
+    cx.run_until_parked();
+    assert_eq!(view.read_with(cx, |view, _| view.files.len()), 1);
+}
