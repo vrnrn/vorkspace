@@ -1077,9 +1077,14 @@ impl Changes {
             .update(cx, |m, cx| m.set_placeholder(placeholder, cx));
         // `bg-content` buttons with `text-background-base`, 40% when unavailable.
         let solid: Hsla = content(1.);
-        let face = if can_commit { solid } else { content(0.4) };
-        // Paper on the ink button, in either theme.
-        let ink: Hsla = vorkspace_ui::fluid::on_ink();
+        // Ink when there is something to commit; otherwise the faint well
+        // and dim glyphs of the composer's idle submit.
+        let face = if can_commit { solid } else { content(0.1) };
+        let ink: Hsla = if can_commit {
+            vorkspace_ui::fluid::on_ink()
+        } else {
+            content(0.4)
+        };
         let generate_label = if generating {
             "Cancel commit message generation"
         } else {
@@ -1203,11 +1208,19 @@ impl Changes {
                             .justify_center()
                             .rounded_r_md()
                             .border_l_1()
-                            .border_color(vorkspace_ui::fluid::on_ink().opacity(0.1))
-                            .bg(if menu_open { solid } else { face })
+                            .border_color(ink.opacity(0.15))
+                            .bg(match (menu_open, can_commit) {
+                                (true, true) => solid,
+                                (true, false) => content(0.16),
+                                (false, _) => face,
+                            })
                             .when(can_open_menu && !menu_open, |d| {
                                 d.hover(move |s| {
-                                    s.bg(if can_commit { content(0.8) } else { solid })
+                                    s.bg(if can_commit {
+                                        content(0.8)
+                                    } else {
+                                        content(0.16)
+                                    })
                                 })
                             })
                             .child(icon("chevron-down-2", 14.).text_color(ink))
