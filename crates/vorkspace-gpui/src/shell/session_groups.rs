@@ -477,14 +477,26 @@ impl Shell {
             .all(|id| self.session_metadata(*id, cx).summary.archived);
         let mut items = Vec::new();
         if self.reminders.iter().any(|r| ids.contains(&r.session_id)) {
-            items.push(MenuAction::new("reminder:cancel", "Cancel reminder").into());
+            items.push(
+                MenuAction::new("reminder:cancel", "Cancel reminder")
+                    .icon("circle-x")
+                    .into(),
+            );
             items.push(MenuItem::Separator);
         }
-        items.push(MenuAction::new("pin", if all_pinned { "Unpin" } else { "Pin" }).into());
+        items.push(
+            MenuAction::new("pin", if all_pinned { "Unpin" } else { "Pin" })
+                .icon("pin")
+                .into(),
+        );
         if !multiple {
             items.extend([
-                MenuAction::new("rename", "Rename").shortcut("F2").into(),
+                MenuAction::new("rename", "Rename")
+                    .icon("pencil-edit")
+                    .shortcut("F2")
+                    .into(),
                 MenuAction::new("copy-session-id", "Copy session ID")
+                    .icon("response-copy")
                     .submenu(vec![
                         MenuAction::new("copy-harness-session-id", "Harness session ID")
                             .disabled(summary.provider_id.is_none()),
@@ -499,11 +511,13 @@ impl Shell {
                         "Link GitHub issue or PR…"
                     },
                 )
+                .icon("external-link")
                 .into(),
             ]);
         }
         items.extend([
             MenuAction::new("reminder", "Remind me")
+                .icon("clock")
                 .submenu(
                     reminder_presets(Local::now().naive_local())
                         .into_iter()
@@ -512,7 +526,9 @@ impl Shell {
                 )
                 .into(),
             MenuItem::Separator,
-            MenuAction::new("folder-new", "New folder").into(),
+            MenuAction::new("folder-new", "New folder")
+                .icon("folder-add")
+                .into(),
         ]);
         if !groups.folders.is_empty() {
             items.push(MenuItem::Separator);
@@ -521,6 +537,7 @@ impl Shell {
                     format!("folder-add:{}", folder.id),
                     format!("Add to {}", folder.name),
                 )
+                .icon("folder-01")
                 .checked(ids.iter().all(|id| folder.session_ids.contains(id)))
                 .into()
             }));
@@ -535,6 +552,7 @@ impl Shell {
                         "Remove from folder"
                     },
                 )
+                .icon("minus-sign")
                 .into(),
             );
         }
@@ -544,8 +562,10 @@ impl Shell {
                 "archive",
                 if all_archived { "Unarchive" } else { "Archive" },
             )
+            .icon("archive")
             .into(),
             MenuAction::new("delete", "Delete")
+                .icon("trash")
                 .shortcut("⌫")
                 .danger()
                 .into(),
