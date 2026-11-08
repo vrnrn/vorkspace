@@ -498,8 +498,7 @@ impl Bots {
             // The same square submit as a session's composer: ink when there
             // is something to send, a faint well when there is not.
             .child(
-                div()
-                    .id("send-channel")
+                vorkspace_ui::theme::keyboard_reachable(div().id("send-channel"), has_draft)
                     .debug_selector(|| "send-channel".into())
                     .role(gpui::Role::Button)
                     .aria_label("Send")
