@@ -368,12 +368,10 @@ impl Render for QuickComposer {
                         })),
                     )
                     .child(div().flex_1())
-                    .child(
-                        div()
-                            .text_size(px(10.))
-                            .text_color(content(0.35))
-                            .child("↵ start · ⌘↵ open"),
-                    )
+                    .child(vorkspace_ui::fluid::key_hints(&[
+                        ("↵", "start"),
+                        ("⌘↵", "open"),
+                    ]))
                     .child(
                         crate::controls::primary_button(
                             "quick-send",

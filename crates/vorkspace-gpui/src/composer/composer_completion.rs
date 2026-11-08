@@ -1152,9 +1152,12 @@ impl Render for Completion {
                                     .pb_1()
                                     .border_t_1()
                                     .border_color(content(0.07))
-                                    .text_size(px(10.))
-                                    .text_color(content(0.35))
-                                    .child("↑ ↓ navigate    ↵ / Tab select    Esc dismiss"),
+                                    .child(vorkspace_ui::fluid::key_hints(&[
+                                        ("↑↓", "navigate"),
+                                        ("↵", "select"),
+                                        ("tab", "select"),
+                                        ("esc", "dismiss"),
+                                    ])),
                             ),
                     ),
             );

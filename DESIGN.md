@@ -53,6 +53,7 @@ its helpers, never `gpui::dither` directly.
 | `strip(tone, radius)` | A notice's leading edge, as fluidither's Banner: a 3pt tone bar over a dotted column, one quad that follows the card's corners (error and approval toasts) |
 | `badge(label, tone)` | A status label, as fluidither's Badge: a square tone cell, label at full contrast (inbox status) |
 | `kbd(keys)` | A shortcut chip in Obel Mono on a soft pill (menu shortcuts); chips with macOS key symbols use the system font, which has them |
+| `key_hints(&[(keys, what)])` | A picker's or field's keyboard hints: each key as a `kbd` chip beside what it does (quick open, completions, quick composer) |
 | `step_mark(step, color, slot)` | A step's mark, as fluidither's Steps: solid square done, outlined with dots active, empty outline waiting, a dash skipped (task lists) |
 | `thumb(color)` | A slider's upright rounded-bar thumb, 8 by 16 |
 | `knob(on)`, `switch_off()` | A switch: a white 3pt-rounded square knob (black on a pale accent) on a solid accent track when on, a flat `content(0.16)` track when off |

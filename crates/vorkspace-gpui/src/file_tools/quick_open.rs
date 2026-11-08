@@ -322,27 +322,12 @@ impl Render for QuickOpen {
                     .py_2()
                     .border_t_1()
                     .border_color(content(0.07))
-                    .flex()
-                    .items_center()
-                    .gap_3()
-                    .text_size(px(11.))
-                    .text_color(content(0.4))
-                    .children(
-                        [
-                            ("↑↓", "navigate"),
-                            ("↵", "open"),
-                            ("esc", "close"),
-                            (">", "commands"),
-                        ]
-                        .map(|(keys, what)| {
-                            div()
-                                .flex()
-                                .items_center()
-                                .gap_1p5()
-                                .child(vorkspace_ui::fluid::kbd(keys))
-                                .child(what)
-                        }),
-                    ),
+                    .child(vorkspace_ui::fluid::key_hints(&[
+                        ("↑↓", "navigate"),
+                        ("↵", "open"),
+                        ("esc", "close"),
+                        (">", "commands"),
+                    ])),
             )
     }
 }

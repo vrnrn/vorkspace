@@ -182,6 +182,27 @@ pub fn kbd(keys: impl Into<gpui::SharedString>) -> gpui::Div {
         .child(keys)
 }
 
+/// Keyboard hints for a picker or field: each key as a `kbd` chip beside
+/// what it does, in one quiet row.
+pub fn key_hints(hints: &[(&'static str, &'static str)]) -> gpui::Div {
+    use gpui::{ParentElement, Styled, px};
+    gpui::div()
+        .flex()
+        .flex_wrap()
+        .items_center()
+        .gap_3()
+        .text_size(px(11.))
+        .text_color(content(0.4))
+        .children(hints.iter().map(|&(keys, what)| {
+            gpui::div()
+                .flex()
+                .items_center()
+                .gap(px(6.))
+                .child(kbd(keys))
+                .child(what)
+        }))
+}
+
 /// A notice's tone at its leading edge, as fluidither's `Banner`: a solid
 /// 3pt bar with a printed column of dots behind it. It is one quad, the bar
 /// its left border and the dots its fill, so it follows the card's rounded
