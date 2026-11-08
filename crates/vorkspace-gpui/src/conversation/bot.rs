@@ -821,8 +821,7 @@ impl Conversation {
             .max_w(px(520.))
             .children(starters.into_iter().enumerate().map(|(ix, text)| {
                 let fill = text.clone();
-                div()
-                    .id((id, ix))
+                vorkspace_ui::theme::keyboard_reachable(div().id((id, ix)), true)
                     .debug_selector(move || format!("{id}-{ix}"))
                     .role(gpui::Role::Button)
                     .aria_label(text.clone())
