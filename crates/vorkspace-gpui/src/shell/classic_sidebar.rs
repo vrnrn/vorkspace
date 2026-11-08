@@ -266,6 +266,32 @@ impl Shell {
                         .child(self.sidebar_filter_button(cx)),
                 )
                 .child(self.virtual_sidebar(cx));
+        } else if self.workspace.project.is_empty() {
+            // Files, changes and a project board all belong to a project;
+            // without one, each tab offers the same way in.
+            body = body.child(
+                crate::controls::page::empty(
+                    icon("folder-open", 20.),
+                    "No project open",
+                    match tab {
+                        SidebarTab::Files => "Open a project to browse its files.",
+                        SidebarTab::Todos => "Open a project to plan its work.",
+                        _ => "Open a project to review and commit its changes.",
+                    },
+                )
+                .child(
+                    crate::controls::page::secondary(
+                        "sidebar-open-project",
+                        "Open project",
+                        false,
+                        false,
+                    )
+                    .debug_selector(|| "sidebar-open-project".into())
+                    .mt(px(12.))
+                    .child("Open project…")
+                    .on_click(cx.listener(|this, _, _, cx| this.open_project(cx))),
+                ),
+            );
         } else if tab == SidebarTab::Todos {
             body = body.child(self.project_todo_board(cx));
         } else if let Some(panel) = &self.right_panel {

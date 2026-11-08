@@ -32,6 +32,9 @@ const SHOTS: &[(&str, Option<usize>, (f32, f32))] = &[
     ("tooltip", Some(0), (551., 271.)),
     ("explorer", Some(0), (1390., 890.)),
     ("first-run", None, (1390., 890.)),
+    ("first-run-explorer", None, (1390., 890.)),
+    ("first-run-changes", None, (1390., 890.)),
+    ("first-run-todos", None, (1390., 890.)),
     ("changes", Some(0), (1390., 890.)),
     ("history", Some(0), (1390., 890.)),
     ("notes", Some(0), (1390., 890.)),
@@ -338,7 +341,7 @@ fn fluid_capture() {
             // Channels are opt-in; the channel scene turns them on.
             state.preferences.channels = *name == "bot-channel";
             // A first launch: no project, no session, nothing open.
-            let first_run = *name == "first-run";
+            let first_run = name.starts_with("first-run");
             if !first_run {
                 state.add_project(PROJECT);
                 state.project = PROJECT.into();
@@ -439,7 +442,7 @@ fn fluid_capture() {
                     .unwrap();
                 cx.run_until_parked();
             }
-            if open.is_none() && *name != "first-run" {
+            if open.is_none() && !name.starts_with("first-run") {
                 use crate::settings::Section;
                 let section = match *name {
                     "settings-general" => Section::General,
@@ -475,6 +478,21 @@ fn fluid_capture() {
                     ),
                     "changes" => shell.select_classic_sidebar(
                         crate::workspace::SidebarTab::Changes,
+                        window,
+                        cx,
+                    ),
+                    "first-run-explorer" => shell.select_classic_sidebar(
+                        crate::workspace::SidebarTab::Files,
+                        window,
+                        cx,
+                    ),
+                    "first-run-changes" => shell.select_classic_sidebar(
+                        crate::workspace::SidebarTab::Changes,
+                        window,
+                        cx,
+                    ),
+                    "first-run-todos" => shell.select_classic_sidebar(
+                        crate::workspace::SidebarTab::Todos,
                         window,
                         cx,
                     ),
