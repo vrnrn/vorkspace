@@ -72,7 +72,22 @@ impl Bots {
             .px_2()
             .pb_2()
             .when(expanded.is_some(), |d| d.flex_1());
-        if expanded != Some(Section::Documents) {
+        // A new Bot has neither; one line says what will gather here rather
+        // than two headed sections that are each empty.
+        let fresh = expanded.is_none() && bot.launches.is_empty() && bot.documents.is_empty();
+        if fresh {
+            body = body.child(
+                div()
+                    .id("bot-island-fresh")
+                    .debug_selector(|| "bot-island-fresh".into())
+                    .px_2()
+                    .pb_1()
+                    .text_size(px(12.))
+                    .line_height(px(18.))
+                    .text_color(content(0.45))
+                    .child("Sessions it starts and documents it writes appear here."),
+            );
+        } else if expanded != Some(Section::Documents) {
             let (sessions, more) = self.session_list(bot, expanded.is_some(), cx);
             body = body
                 .child(section("Sessions", bot.launches.len()))
@@ -81,7 +96,7 @@ impl Bots {
                 body = body.child(self.island_more(bot, Section::Sessions, false, cx));
             }
         }
-        if expanded != Some(Section::Sessions) {
+        if !fresh && expanded != Some(Section::Sessions) {
             body = body
                 .child(
                     section("Documents", bot.documents.len())

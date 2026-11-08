@@ -96,8 +96,9 @@ fn bot_island_collapses_to_face_and_button_and_opens_settings(cx: &mut TestAppCo
     let island = visual.debug_bounds("bot-island").unwrap();
     let pane = visual.debug_bounds("main-pane-frame").unwrap();
     assert!(island.left() > pane.left() && island.right() < pane.right());
-    assert!(visual.debug_bounds("bot-document-list").is_some());
-    assert!(visual.debug_bounds("bot-session-list").is_some());
+    // A Bot with no sessions or documents yet explains both in one line.
+    assert!(visual.debug_bounds("bot-island-fresh").is_some());
+    assert!(visual.debug_bounds("bot-session-list").is_none());
     click(visual, "bot-island-settings");
     visual.run_until_parked();
     assert!(visual.debug_bounds("bot-settings-dialog").is_some());
