@@ -181,6 +181,18 @@ impl QuickOpen {
 }
 impl Render for QuickOpen {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let query = self.search.read(cx).content.trim().to_owned();
+        // Point at the other mode, not the one already open. Backspace only
+        // returns to files while the prefix is all there is to delete.
+        let mode_hint = if !query.starts_with('>') {
+            Some((">", "commands"))
+        } else if query == ">" {
+            Some(("⌫", "files"))
+        } else {
+            None
+        };
+        let mut hints = vec![("↑↓", "navigate"), ("↵", "open"), ("esc", "close")];
+        hints.extend(mode_hint);
         let rows: Vec<_> = self
             .rows
             .iter()
@@ -322,12 +334,7 @@ impl Render for QuickOpen {
                     .py_2()
                     .border_t_1()
                     .border_color(content(0.07))
-                    .child(vorkspace_ui::fluid::key_hints(&[
-                        ("↑↓", "navigate"),
-                        ("↵", "open"),
-                        ("esc", "close"),
-                        (">", "commands"),
-                    ])),
+                    .child(vorkspace_ui::fluid::key_hints(&hints)),
             )
     }
 }
