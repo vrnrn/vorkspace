@@ -80,6 +80,7 @@ const SHOTS: &[(&str, Option<usize>, (f32, f32))] = &[
     ("bot-new", Some(0), (1390., 890.)),
     ("bot-channel", Some(0), (1390., 890.)),
     ("bot-look", Some(0), (1390., 890.)),
+    ("bot-look-narrow", Some(0), (1390., 890.)),
     ("bot-soul", Some(0), (1390., 890.)),
     ("bot-memory", Some(0), (1390., 890.)),
     ("bot-habits", Some(0), (1390., 890.)),
