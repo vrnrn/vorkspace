@@ -949,8 +949,9 @@ impl Automations {
                 page::empty(
                     icon("zap", 20.),
                     "No automations yet",
+                    // The gallery beside it already invites a first pick.
                     if self.gallery {
-                        "Pick an example or start from scratch to run work on a schedule."
+                        "Automations you create are listed here."
                     } else {
                         "The one you are drafting appears here once it is created."
                     },
