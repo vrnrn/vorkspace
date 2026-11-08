@@ -47,8 +47,7 @@ impl Conversation {
         let Some(approval) = self.approvals.front() else {
             return div().into_any_element();
         };
-        let mut ink = shell_fill();
-        ink.a = 1.;
+        let ink = vorkspace_ui::fluid::on_ink();
         let deny_id = approval.id.clone();
         let session_id = approval.id.clone();
         let allow_id = approval.id.clone();

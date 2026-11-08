@@ -46,8 +46,7 @@ impl Accounts {
         };
         let click_id = id.to_owned();
         let keyboard_id = id.to_owned();
-        let mut button_text = shell_fill();
-        button_text.a = 1.;
+        let button_text = vorkspace_ui::fluid::on_ink();
         div()
             .id("footer-provider-signin-panel")
             .role(Role::Status)

@@ -415,7 +415,7 @@ impl Inbox {
                         .items_stretch()
                         .rounded(px(radius::CONTROL))
                         .bg(content(1.))
-                        .text_color(shell_fill())
+                        .text_color(vorkspace_ui::fluid::on_ink())
                         .child(self.action_anchor.probe())
                         .child(
                             page::primary("inbox-pr-merge", merge_label, self.acting)

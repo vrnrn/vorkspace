@@ -332,7 +332,7 @@ impl Render for LinkedActivity {
                         .px(px(8.))
                         .py(px(4.))
                         .bg(content(1.))
-                        .text_color(pane_fill())
+                        .text_color(vorkspace_ui::fluid::on_ink())
                         .on_click(cx.listener(move |_, _, _, cx| {
                             cx.emit(LinkedActivityEvent::Acknowledge(session));
                             cx.emit(LinkedActivityEvent::AddToChat(session, prompt.clone()));
