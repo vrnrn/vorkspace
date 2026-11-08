@@ -306,6 +306,9 @@ impl TodoBoardView {
                             true,
                             pending || self.pending_changes > 0,
                         )
+                        // The destructive action stands apart from the ones
+                        // that move the work forward.
+                        .ml_auto()
                         .on_click(cx.listener({
                             let id = item.id.clone();
                             move |this, _, window, cx| {
