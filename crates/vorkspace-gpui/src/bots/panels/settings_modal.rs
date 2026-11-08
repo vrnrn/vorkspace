@@ -115,7 +115,7 @@ impl Bots {
                             .role(Role::Dialog)
                             .track_focus(&self.settings_focus)
                             .aria_label(if creating {
-                                "New Bot".into()
+                                "New bot".into()
                             } else {
                                 format!("{} settings", bot.label())
                             })
@@ -145,7 +145,7 @@ impl Bots {
                                             .pb_2()
                                             .text_size(px(11.))
                                             .text_color(content(0.45))
-                                            .child(if creating { "New Bot" } else { "Settings" }),
+                                            .child(if creating { "New bot" } else { "Settings" }),
                                     )
                                     .children(
                                         [
