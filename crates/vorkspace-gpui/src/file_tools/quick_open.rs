@@ -53,7 +53,7 @@ struct Row {
 }
 pub(crate) struct QuickOpen {
     pub(crate) search: Entity<input::Input>,
-    files: Vec<ProjectFile>,
+    files: Arc<Vec<ProjectFile>>,
     rows: Vec<Row>,
     active: usize,
     scroll: gpui::ScrollHandle,
@@ -73,8 +73,34 @@ impl Drop for QuickOpen {
         self.cancel.store(true, Ordering::Relaxed);
     }
 }
+/// The last listing of the most recently opened roots. Quick Open is built
+/// fresh on every open; without this each open showed nothing until a full
+/// rescan of the project finished. A cached listing is shown at once and
+/// replaced when the rescan lands, so new and deleted files still appear.
+const CACHED_ROOTS: usize = 4;
+static LISTINGS: std::sync::Mutex<Vec<(String, Arc<Vec<ProjectFile>>)>> =
+    std::sync::Mutex::new(Vec::new());
+
+fn cached_listing(cwd: &str) -> Option<Arc<Vec<ProjectFile>>> {
+    let listings = LISTINGS.lock().ok()?;
+    listings
+        .iter()
+        .find(|(root, _)| root == cwd)
+        .map(|(_, files)| files.clone())
+}
+
+fn remember_listing(cwd: &str, files: Arc<Vec<ProjectFile>>) {
+    if let Ok(mut listings) = LISTINGS.lock() {
+        listings.retain(|(root, _)| root != cwd);
+        listings.insert(0, (cwd.to_owned(), files));
+        listings.truncate(CACHED_ROOTS);
+    }
+}
+
 impl QuickOpen {
     pub(crate) fn new(cwd: String, palette: bool, cx: &mut Context<Self>) -> Self {
+        let cached = cached_listing(&cwd);
+        let root = cwd.clone();
         let search = cx.new(|cx| {
             input::Input::field(
                 "Go to file or run a command",
@@ -101,7 +127,11 @@ impl QuickOpen {
             let _ = this.update(cx, |this, cx| {
                 this.loading = false;
                 match result {
-                    Ok(files) => this.files = files,
+                    Ok(files) => {
+                        let files = Arc::new(files);
+                        remember_listing(&root, files.clone());
+                        this.files = files;
+                    }
                     Err(e) => this.error = Some(e),
                 };
                 this.rank(cx);
@@ -111,11 +141,11 @@ impl QuickOpen {
         .detach();
         let mut this = Self {
             search,
-            files: Vec::new(),
+            files: cached.clone().unwrap_or_default(),
             rows: Vec::new(),
             active: 0,
             scroll: gpui::ScrollHandle::new(),
-            loading: true,
+            loading: cached.is_none(),
             error: None,
             cancel,
             _changed: changed,
@@ -336,5 +366,41 @@ impl Render for QuickOpen {
                     .border_color(content(0.07))
                     .child(vorkspace_ui::fluid::key_hints(&hints)),
             )
+    }
+}
+
+#[cfg(test)]
+mod listing_tests {
+    use super::*;
+    use gpui::TestAppContext;
+
+    #[gpui::test]
+    fn reopening_shows_the_last_listing_at_once_and_refreshes_it(cx: &mut TestAppContext) {
+        let dir = std::env::temp_dir().join(format!(
+            "vorkspace-quick-open-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir(&dir).unwrap();
+        std::fs::write(dir.join("first.rs"), "").unwrap();
+        let cwd = dir.to_string_lossy().into_owned();
+        cx.update(input::bind);
+        let first = cx.update(|cx| cx.new(|cx| QuickOpen::new(cwd.clone(), false, cx)));
+        cx.run_until_parked();
+        assert_eq!(first.read_with(cx, |q, _| q.files.len()), 1);
+        std::fs::write(dir.join("second.rs"), "").unwrap();
+        let second = cx.update(|cx| cx.new(|cx| QuickOpen::new(cwd.clone(), false, cx)));
+        // Before the rescan runs, the previous listing is already there.
+        second.read_with(cx, |q, _| {
+            assert_eq!(q.files.len(), 1);
+            assert!(!q.loading);
+            assert!(!q.rows.is_empty());
+        });
+        cx.run_until_parked();
+        assert_eq!(second.read_with(cx, |q, _| q.files.len()), 2);
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }
