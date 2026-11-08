@@ -801,7 +801,9 @@ impl SettingsView {
                     .child(div().rounded(px(radius::SMALL)).bg(content(0.1)).px_2().py_1().text_size(px(11.)).text_color(content(0.6)).child("SSH")))
                 .child(target).child(name)
                 .child(div().id("ssh-advanced").role(Role::Button).aria_label("Advanced SSH settings").text_size(px(12.)).text_color(content(0.5)).cursor_pointer()
-                    .child(if self.connections.advanced { "▾ Advanced" } else { "▸ Advanced" })
+                    .flex().items_center().gap_1().aria_expanded(self.connections.advanced)
+                    .child(icon(if self.connections.advanced { "chevron-down" } else { "chevron-right" }, 12.).text_color(content(0.5)))
+                    .child("Advanced")
                     .on_click(cx.listener(|this, _, _, cx| { this.connections.advanced = !this.connections.advanced; cx.notify(); })))
                 .when(self.connections.advanced, |d| d.child(div().max_w(px(160.)).child(port)))
                 .child(paragraph("Enable SSH and sign in to an agent provider on the remote machine. Vorkspace uses your SSH keys and config to install its background host. Keep a Mac host awake with its desktop account signed in."))
@@ -931,11 +933,22 @@ impl SettingsView {
                 .text_size(px(12.))
                 .text_color(content(0.45))
                 .cursor_pointer()
-                .child(if self.connections.url {
-                    "▾ Connect to an existing host by URL"
-                } else {
-                    "▸ Connect to an existing host by URL"
-                })
+                .flex()
+                .items_center()
+                .gap_1()
+                .aria_expanded(self.connections.url)
+                .child(
+                    icon(
+                        if self.connections.url {
+                            "chevron-down"
+                        } else {
+                            "chevron-right"
+                        },
+                        12.,
+                    )
+                    .text_color(content(0.45)),
+                )
+                .child("Connect to an existing host by URL")
                 .on_click(cx.listener(|this, _, _, cx| {
                     this.connections.url = !this.connections.url;
                     cx.notify();
