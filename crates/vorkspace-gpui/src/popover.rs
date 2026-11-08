@@ -1133,6 +1133,22 @@ impl Menu {
             _ => None,
         })
     }
+    /// A menu whose only row opens a flyout opens it straight away: one row
+    /// that leads somewhere else is a click with nothing to decide.
+    pub(crate) fn open_lone_flyout(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let rows: Vec<usize> = self
+            .items
+            .iter()
+            .enumerate()
+            .filter(|(_, item)| matches!(item, MenuItem::Action(_)))
+            .map(|(ix, _)| ix)
+            .collect();
+        if let [ix] = rows[..]
+            && self.action(ix).is_some_and(|a| a.flyout.is_some())
+        {
+            self.open_submenu(ix, None, window, cx);
+        }
+    }
     fn open_submenu(
         &mut self,
         ix: usize,

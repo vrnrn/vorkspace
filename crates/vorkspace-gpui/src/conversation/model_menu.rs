@@ -526,6 +526,9 @@ impl Conversation {
                 None => menu,
             }
         });
+        if kind == ComposerMenu::Model {
+            menu.update(cx, |menu, cx| menu.open_lone_flyout(window, cx));
+        }
         events.push(cx.subscribe_in(
             &menu,
             window,
