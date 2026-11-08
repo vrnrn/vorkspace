@@ -3641,10 +3641,14 @@ fn sidebar_options_lead_to_settings_where_appearance_is_edited(cx: &mut TestAppC
     let last = visual.debug_bounds("bot-mascot-4").unwrap();
     assert_eq!(first.top(), last.top());
     assert_eq!(first.size.height, px(44.));
-    let shape_dd = visual.debug_bounds("settings-bot-shape-dropdown").unwrap();
-    visual.simulate_click(shape_dd.center(), Default::default());
-    visual.run_until_parked();
-    let shape = visual.debug_bounds("settings-bot-shape-4").unwrap();
+    // Shapes are tiles, each the Bot wearing it; all sit on one row.
+    let shapes = visual.debug_bounds("bot-shape-options").unwrap();
+    assert_eq!(
+        visual.debug_bounds("bot-shape-squircle").unwrap().top(),
+        visual.debug_bounds("bot-shape-tv").unwrap().top()
+    );
+    assert!(shapes.size.height <= px(44.));
+    let shape = visual.debug_bounds("bot-shape-hex").unwrap();
     visual.simulate_click(shape.center(), Default::default());
     visual.run_until_parked();
     assert!(visual.debug_bounds("bot-custom-color").is_none());

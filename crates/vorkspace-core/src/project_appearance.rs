@@ -14,12 +14,27 @@ pub const COLORS: [u32; 9] = [
 pub const MASCOTS: [&str; 10] = [
     "invader", "ghost", "robot", "cat", "skull", "crab", "mushroom", "rocket", "dino", "frog",
 ];
-pub const BADGE_SHAPES: [&str; 5] = ["squircle", "circle", "rounded", "pill", "hex"];
-pub const BOT_FACES: [&str; 5] = ["pills", "dots", "visor", "carets", "wink"];
+pub const BADGE_SHAPES: [&str; 8] = [
+    "squircle", "circle", "rounded", "pill", "hex", "octagon", "ghost", "tv",
+];
+/// Eye styles. Expressions (a wink, happy carets, crossed eyes) are moods the
+/// face can wear for a moment, not styles to choose.
+pub const BOT_FACES: [&str; 6] = ["pills", "dots", "visor", "square", "slits", "rings"];
 /// A Bot's body pattern. "rings" is the legacy concentric texture projects and
 /// channels keep; Bots choose among the printed patterns, and an unknown or
 /// legacy value reads as "dither".
 pub const BOT_PATTERNS: [&str; 5] = ["dither", "halftone", "grain", "stripes", "solid"];
+
+/// Where a Bot's pattern sits on its body.
+pub const BOT_PRINTS: [&str; 3] = ["ground", "cap", "full"];
+
+pub fn normalize_bot_print(print: &str) -> &'static str {
+    match print {
+        "cap" => "cap",
+        "full" => "full",
+        _ => "ground",
+    }
+}
 
 pub fn normalize_bot_pattern(pattern: &str) -> &'static str {
     match pattern {
@@ -110,8 +125,9 @@ pub fn normalize_bot_face(face_or_mascot: &str) -> &'static str {
         "pills" | "invader" | "skull" => "pills",
         "dots" | "ghost" | "mushroom" => "dots",
         "visor" | "robot" | "rocket" => "visor",
-        "carets" | "cat" | "crab" => "carets",
-        "wink" | "dino" | "frog" => "wink",
+        "square" => "square",
+        "slits" | "carets" | "cat" | "crab" => "slits",
+        "rings" | "wink" | "dino" | "frog" => "rings",
         _ => "pills",
     }
 }
@@ -124,6 +140,9 @@ pub fn normalize_badge_shape(shape: &str) -> &'static str {
         "rounded" => "rounded",
         "pill" => "pill",
         "hex" => "hex",
+        "octagon" => "octagon",
+        "ghost" => "ghost",
+        "tv" => "tv",
         _ => "squircle",
     }
 }
@@ -1258,6 +1277,29 @@ fn sd_badge_shape(shape: &str, x: f32, y: f32, s: f32) -> f32 {
             qy -= r_in;
             qx.hypot(qy) * qy.signum() - cr
         }
+        "octagon" => {
+            // Regular octagon with softened corners.
+            let cr = s * 0.06;
+            let r = s * 0.46 - cr;
+            let (kx, ky, kz) = (-0.923_879_5_f32, 0.382_683_43_f32, 0.414_213_57_f32);
+            let (mut qx, mut qy) = (cx.abs(), cy.abs());
+            let m = 2.0 * (kx * qx + ky * qy).min(0.0);
+            qx -= m * kx;
+            qy -= m * ky;
+            let m = 2.0 * (-kx * qx + ky * qy).min(0.0);
+            qx -= m * -kx;
+            qy -= m * ky;
+            qx -= qx.clamp(-kz * r, kz * r);
+            qy -= r;
+            qx.hypot(qy) * qy.signum() - cr
+        }
+        "ghost" => {
+            // A dome over a straight-sided body with soft feet.
+            let dome = cx.hypot(cy + s * 0.04) - s * 0.42;
+            let body = sd_rounded_box(cx, cy - s * 0.2, s * 0.42, s * 0.24, s * 0.08);
+            dome.min(body)
+        }
+        "tv" => sd_rounded_box(cx, cy, s * 0.47, s * 0.37, s * 0.13),
         _ => {
             // "squircle"
             let half = s * 0.46;
@@ -1378,6 +1420,7 @@ pub fn render_badge_or_bot(
 pub fn render_bot_body(
     shape: &str,
     pattern: &str,
+    print: &str,
     textured: bool,
     seed: u32,
     grid: u8,
@@ -1411,9 +1454,13 @@ pub fn render_bot_body(
     let mut out = RgbaImage::new(side, side);
     for py in 0..side {
         let fy = py as f32 + 0.5;
-        // The ground: nothing in the top 40%, rising to full strength at the
-        // bottom edge.
-        let rise = ((fy / s - 0.4) / 0.6).clamp(0., 1.);
+        // Ground: rising from nothing at 40% to full at the base. Cap: the
+        // same from the top. Full: an even print across the body.
+        let rise = match normalize_bot_print(print) {
+            "cap" => ((0.6 - fy / s) / 0.6).clamp(0., 1.),
+            "full" => 0.7,
+            _ => ((fy / s - 0.4) / 0.6).clamp(0., 1.),
+        };
         for px in 0..side {
             let fx = px as f32 + 0.5;
             let d = sd_badge_shape(shape_id, fx, fy, s);

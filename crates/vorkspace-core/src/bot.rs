@@ -72,6 +72,9 @@ impl Bot {
             pattern => pattern,
         }
     }
+    pub fn resolved_print(&self) -> &'static str {
+        crate::project_appearance::normalize_bot_print(self.print.as_deref().unwrap_or("ground"))
+    }
     pub fn resolved_grid(&self) -> u8 {
         self.grid.unwrap_or(4).clamp(2, 8)
     }

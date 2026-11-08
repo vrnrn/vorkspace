@@ -90,7 +90,9 @@ fn one_eye_faces_stay_single_and_centered_through_gaze_blink_and_delete() {
         },
     ];
     for shape in BADGE_SHAPES {
-        for face in BOT_FACES {
+        // The per-pixel renderer keeps the faces project marks and legacy
+        // callers draw; Bots paint their face as vectors in the app.
+        for face in ["pills", "dots", "visor"] {
             for anim in poses {
                 let image = eye_fixture(shape, face, true, anim);
                 let regions = face_regions(&image, true, false);
@@ -117,7 +119,9 @@ fn one_eye_faces_stay_single_and_centered_through_gaze_blink_and_delete() {
 #[test]
 fn ordinary_faces_keep_paired_eyes_and_the_legacy_entry_point() {
     for shape in BADGE_SHAPES {
-        for face in BOT_FACES {
+        // The per-pixel renderer keeps the faces project marks and legacy
+        // callers draw; Bots paint their face as vectors in the app.
+        for face in ["pills", "dots", "visor"] {
             for crossed_eyes in [false, true] {
                 let anim = BotAnimState {
                     crossed_eyes,

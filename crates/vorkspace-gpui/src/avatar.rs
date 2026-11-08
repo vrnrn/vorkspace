@@ -521,6 +521,8 @@ pub(crate) struct BotLookConfig {
     pub shape: String,
     /// The body's printed pattern; projects keep "rings".
     pub pattern: &'static str,
+    /// Where the pattern sits on the body.
+    pub print: &'static str,
     pub face: String,
     pub one_eye: bool,
     pub textured: bool,
@@ -537,6 +539,7 @@ impl BotLookConfig {
         Self {
             shape: bot.badge_shape().into(),
             pattern: bot.resolved_pattern(),
+            print: bot.resolved_print(),
             face: bot.face_style().into(),
             one_eye: false,
             textured: bot.textured,
@@ -551,6 +554,7 @@ impl BotLookConfig {
         Self {
             shape: "squircle".into(),
             pattern: "dither",
+            print: "ground",
             face: normalize_bot_face(mascot).into(),
             one_eye: false,
             textured: true,
@@ -572,6 +576,7 @@ pub(crate) fn minion_look(parent: &Bot, identity: &str) -> BotLookConfig {
         // A team member prints in its parent's pattern, as it wears its
         // palette; a team member is always printed, so a plain parent's
         // members print in dither.
+        print: parent.resolved_print(),
         pattern: match parent.resolved_pattern() {
             "solid" => "dither",
             pattern => pattern,
@@ -671,6 +676,7 @@ fn render_frame(key: &FrameCacheKey, look: &BotLookConfig, anim: BotAnimState) -
 struct BodyKey {
     shape: String,
     pattern: &'static str,
+    print: &'static str,
     textured: bool,
     seed: u32,
     grid: u8,
@@ -693,6 +699,7 @@ fn body_image(
     let key = BodyKey {
         shape: normalize_badge_shape(&look.shape).into(),
         pattern: look.pattern,
+        print: look.print,
         textured: look.textured,
         seed: look.seed,
         grid: look.grid,
@@ -704,6 +711,7 @@ fn body_image(
         to_render_image(vorkspace_core::project_appearance::render_bot_body(
             &key.shape,
             key.pattern,
+            key.print,
             key.textured,
             key.seed,
             key.grid,
@@ -812,39 +820,38 @@ pub(crate) fn paint_bot(
                 window.paint_quad(fill(hole, rgb_hsla(look.bg_color)).corner_radii(px(0.04 * w)));
             }
         }
-        "carets" => {
-            let r = 0.095 * grow;
+        "square" => {
+            // Square eyes with softened corners, a little robotic.
+            let e = 0.15 * grow;
             for &side in slots {
-                let x = cx0 + side * gap;
-                stroke(
-                    &[
-                        (x - r * 0.85, cy0 + r * 0.45 * blink),
-                        (x, cy0 - r * 0.65 * blink),
-                        (x + r * 0.85, cy0 + r * 0.45 * blink),
-                    ],
-                    0.055,
-                    window,
-                );
+                let eye = rect(cx0 + side * gap, cy0, e, e * blink);
+                window.paint_quad(fill(eye, ink).corner_radii(px(0.035 * w)));
             }
         }
-        "wink" => {
-            if !look.one_eye {
-                let pw = 0.115 * grow;
-                let ph = (0.25 * blink).max(0.04) * grow;
-                let eye = rect(cx0 - gap, cy0, pw, ph);
-                window.paint_quad(fill(eye, ink).corner_radii(px(pw.min(ph) * w / 2.)));
+        "slits" => {
+            // Calm horizontal bars; a blink thins them to a line.
+            let ew = 0.17 * grow;
+            let eh = (0.065 * blink).max(0.022) * grow;
+            for &side in slots {
+                let eye = rect(cx0 + side * gap, cy0, ew, eh);
+                window.paint_quad(fill(eye, ink).corner_radii(px(eh * w / 2.)));
             }
-            let x = if look.one_eye { cx0 } else { cx0 + gap };
-            let r = 0.095 * grow;
-            stroke(
-                &[
-                    (x - r * 0.7, cy0 - r * 0.55),
-                    (x + r * 0.55, cy0),
-                    (x - r * 0.7, cy0 + r * 0.55),
-                ],
-                0.055,
-                window,
-            );
+        }
+        "rings" => {
+            // Hollow round eyes: an ink ring with the body showing through.
+            let d = 0.19 * grow;
+            let hole = 0.085 * grow;
+            for &side in slots {
+                let x = cx0 + side * gap;
+                let outer = rect(x, cy0, d, d * blink);
+                window.paint_quad(fill(outer, ink).corner_radii(px(d * w / 2.)));
+                if blink > 0.4 {
+                    let inner = rect(x, cy0, hole, hole * blink);
+                    window.paint_quad(
+                        fill(inner, rgb_hsla(look.bg_color)).corner_radii(px(hole * w / 2.)),
+                    );
+                }
+            }
         }
         // Pills, the default.
         _ => {
@@ -1263,5 +1270,7 @@ mod preview_tests {
 #[cfg(test)]
 mod idle_tests;
 
+#[cfg(test)]
+mod face_tests;
 #[cfg(test)]
 mod minion_tests;

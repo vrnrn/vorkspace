@@ -37,6 +37,7 @@ fn minion_looks_survive_parent_edits_and_roster_reload() {
         minion_look(&parent, "hello"),
         BotLookConfig {
             pattern: "dither",
+            print: "ground",
             bg_color: 0x22c55e,
             fg_color: default_foreground_color(0x22c55e),
             ..look.clone()
@@ -108,6 +109,7 @@ fn frame_cache_distinguishes_one_eye_and_preserves_palette_invalidation() {
     let single = minion_look(&parent, "member");
     let paired = BotLookConfig {
         pattern: "dither",
+        print: "ground",
         one_eye: false,
         ..single.clone()
     };

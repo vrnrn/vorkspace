@@ -71,6 +71,7 @@ const SHOTS: &[(&str, Option<usize>, (f32, f32))] = &[
     ("bot", Some(0), (1390., 890.)),
     ("bot-new", Some(0), (1390., 890.)),
     ("bot-channel", Some(0), (1390., 890.)),
+    ("bot-look", Some(0), (1390., 890.)),
     ("bot-soul", Some(0), (1390., 890.)),
     ("bot-memory", Some(0), (1390., 890.)),
     ("bot-habits", Some(0), (1390., 890.)),
@@ -583,6 +584,7 @@ fn fluid_capture() {
                                     None => {
                                         manager.dismiss_settings(w, cx);
                                     }
+                                    Some("look") => manager.open_look_for_capture(w, cx),
                                     Some("channel") => {
                                         manager.dismiss_settings(w, cx);
                                         manager.create_channel_for_capture("Design review", cx);

@@ -1611,6 +1611,14 @@ impl Bots {
         }
         cx.notify();
     }
+    /// Opens the current Bot's look editor in its settings, for captures.
+    #[cfg(test)]
+    pub(crate) fn open_look_for_capture(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if let Some(id) = self.active.clone() {
+            self.settings = Some(SettingsSection::General);
+            self.open_settings_look(&id, window, cx);
+        }
+    }
     /// Shows one settings section, for captures of each page.
     #[cfg(test)]
     pub(crate) fn show_settings_section(&mut self, section: &str, cx: &mut Context<Self>) {
