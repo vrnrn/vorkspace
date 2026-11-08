@@ -413,14 +413,36 @@ impl SettingsView {
                 .text_color(content(0.5))
                 .child(div().min_w_0().flex_1().child("Command"))
                 .child(div().w(px(160.)).flex_shrink_0().child("Keybinding"))
-                .child(div().w(px(112.)).flex_shrink_0().child("When"))
+                .child(div().w(px(150.)).flex_shrink_0().child("When"))
                 .into_any_element(),
         ];
         if rows.is_empty() {
             children.push(super::super::widgets::note("No matching bindings"));
         }
+        // Commands are named "Area: Action". The area becomes a header the
+        // first time it appears so each row only has to say what it does.
+        let mut area = "";
         for row in rows {
             let command = row.command;
+            let (row_area, name) = command.split_once(": ").unwrap_or(("", command));
+            if row_area != area && !row_area.is_empty() {
+                area = row_area;
+                children.push(
+                    div()
+                        .h(px(32.))
+                        .flex()
+                        .items_end()
+                        .pb(px(6.))
+                        .px_4()
+                        .border_b_1()
+                        .border_color(content(0.05))
+                        .text_size(px(11.))
+                        .font_weight(FontWeight::MEDIUM)
+                        .text_color(content(0.45))
+                        .child(row_area)
+                        .into_any_element(),
+                );
+            }
             let recording = self.recording.as_deref() == Some(command);
             let modified = self.prefs.keybindings.contains_key(command);
             let disabled = self.prefs.keybindings.get(command) == Some(&None);
@@ -435,7 +457,7 @@ impl SettingsView {
             };
             children.push(
                 div()
-                    .h(px(44.))
+                    .h(px(36.))
                     .flex()
                     .items_center()
                     .border_b_1()
@@ -448,7 +470,7 @@ impl SettingsView {
                             .flex_1()
                             .truncate()
                             .text_color(content(if disabled { 0.45 } else { 1. }))
-                            .child(command),
+                            .child(name),
                     )
                     .child(
                         div()
@@ -522,7 +544,7 @@ impl SettingsView {
                     )
                     .child(
                         div()
-                            .w(px(112.))
+                            .w(px(150.))
                             .flex_shrink_0()
                             .truncate()
                             .text_size(px(12.))
