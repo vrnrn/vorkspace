@@ -10,6 +10,7 @@ use vorkspace_core::tool::{ToolCall, ToolState};
 /// boundaries (and kerning/ligatures) as neighboring colors become equal.
 pub(crate) fn shimmer(text: String, elapsed: f32) -> AnyElement {
     Shimmer {
+        key: gpui::SharedString::from(format!("shimmer:{text}")),
         text: StyledText::new(text),
         elapsed,
     }
@@ -17,6 +18,7 @@ pub(crate) fn shimmer(text: String, elapsed: f32) -> AnyElement {
 }
 
 struct Shimmer {
+    key: gpui::SharedString,
     text: StyledText,
     elapsed: f32,
 }
@@ -42,6 +44,23 @@ impl Element for Shimmer {
         window: &mut Window,
         cx: &mut App,
     ) -> (LayoutId, Self::RequestLayoutState) {
+        // Its own clock, alive only while the label is drawn: the band steps
+        // twelve times a second, which is as often as a two-ink shimmer
+        // visibly changes, whatever else redraws the view.
+        if !cx.reduce_motion() {
+            window.use_keyed_state(self.key.clone(), cx, |_, cx| {
+                cx.spawn(async move |this, cx| {
+                    loop {
+                        cx.background_executor()
+                            .timer(std::time::Duration::from_millis(83))
+                            .await;
+                        if this.update(cx, |_, cx| cx.notify()).is_err() {
+                            break;
+                        }
+                    }
+                })
+            });
+        }
         self.text.request_layout(None, None, window, cx)
     }
     fn prepaint(
@@ -76,11 +95,17 @@ impl Element for Shimmer {
                     let line = &wrapped.unwrapped_layout;
                     let baseline = (line_height - line.ascent - line.descent) / 2. + line.ascent;
                     let width = f32::from(line.width).max(1.);
-                    let center = -0.25 + (self.elapsed / 1.6).fract() * 1.5;
+                    let elapsed = self.elapsed;
+                    // fluidither's paperless shimmer: the band lights glyphs
+                    // in full ink and dithers them at its edges; the rest rest
+                    // in soft ink. Two inks, so it reads as print, not a fade.
+                    let mut index = 0;
                     for run in &line.runs {
                         for glyph in &run.glyphs {
                             let x = f32::from(glyph.position.x + line.font_size * 0.25) / width;
-                            let sweep = (1. - (x - center).abs() / (2. / 7.)).max(0.);
+                            let lit = vorkspace_ui::fluid::shimmer_lit(x, index, elapsed);
+                            index += 1;
+                            let sweep = if lit { 1. } else { 0. };
                             let origin = bounds.origin
                                 + point(glyph.position.x, baseline + glyph.position.y);
                             if glyph.is_emoji {
@@ -326,6 +351,7 @@ mod shimmer_tests {
                         move |_, window, cx| {
                             let text = "GPT-6.1-Sol working for 29s · office AV café 漢字";
                             let shimmer = Shimmer {
+                                key: "shimmer-test".into(),
                                 text: StyledText::new(text),
                                 elapsed,
                             };
@@ -388,5 +414,58 @@ mod shimmer_tests {
                 first = Some(current);
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod shimmer_clock_tests {
+    use gpui::{TestAppContext, VisualTestContext, prelude::*};
+
+    struct Label {
+        renders: usize,
+    }
+    impl gpui::Render for Label {
+        fn render(
+            &mut self,
+            _: &mut gpui::Window,
+            _: &mut gpui::Context<Self>,
+        ) -> impl IntoElement {
+            self.renders += 1;
+            gpui::div().child(super::shimmer("Thinking".into(), 0.))
+        }
+    }
+
+    #[gpui::test]
+    fn the_shimmer_steps_on_its_own_clock_and_stops_with_reduce_motion(cx: &mut TestAppContext) {
+        let window = cx.update(|cx| {
+            cx.open_window(Default::default(), |_, cx| cx.new(|_| Label { renders: 0 }))
+                .unwrap()
+        });
+        let visual = &mut VisualTestContext::from_window(window.into(), cx);
+        visual.run_until_parked();
+        // Count wakes of the label's view: the shimmer's clock notifies it.
+        let label = window.root(visual).unwrap();
+        let wakes = std::rc::Rc::new(std::cell::Cell::new(0));
+        let counter = wakes.clone();
+        let _watch =
+            visual.update(|_, cx| cx.observe(&label, move |_, _| counter.set(counter.get() + 1)));
+        let step = |visual: &mut VisualTestContext| {
+            visual.refresh().unwrap();
+            let before = wakes.get();
+            visual
+                .executor()
+                .advance_clock(std::time::Duration::from_millis(83 * 3));
+            visual.run_until_parked();
+            wakes.get() - before
+        };
+        assert!(step(visual) > 0, "the label redraws as the band steps");
+        visual.update(|_, cx| cx.set_reduce_motion(true));
+        // One frame to release the previous clock with its state.
+        let _ = step(visual);
+        assert_eq!(
+            step(visual),
+            0,
+            "under Reduce Motion nothing wakes the view"
+        );
     }
 }
