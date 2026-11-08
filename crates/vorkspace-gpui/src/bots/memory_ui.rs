@@ -215,18 +215,15 @@ impl Bots {
             .flex_col()
             .child(
                 Self::settings_page_header("Memory").when(files.is_some(), |d| {
+                    let adding = self
+                        .memory_editor
+                        .as_ref()
+                        .is_some_and(|e| e.target.original.is_none());
                     d.child(
-                        icon_button_enabled(
-                            "bot-add-memory",
-                            "Add memory",
-                            "plus",
-                            !self
-                                .memory_editor
-                                .as_ref()
-                                .is_some_and(|e| e.target.original.is_none()),
-                        )
-                        .debug_selector(|| "bot-add-memory".into())
-                        .size(px(28.))
+                        // Worded like Habits' New habit, its sibling page.
+                        panels::button("bot-add-memory", "Add memory")
+                            .debug_selector(|| "bot-add-memory".into())
+                            .when(adding, |b| b.opacity(0.5))
                         .on_click(cx.listener({
                             let id = bot.id.clone();
                             move |this, _, window, cx| {
@@ -294,6 +291,7 @@ impl Bots {
                                 div()
                                     .id("bot-memory-empty")
                                     .debug_selector(|| "bot-memory-empty".into())
+                                    .flex_1()
                                     .min_h(px(240.))
                                     .flex()
                                     .child(panels::empty_state(
