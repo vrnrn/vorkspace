@@ -344,6 +344,8 @@ impl SettingsView {
                 );
             }
             let count = skills.len();
+            // A scope badge only distinguishes rows when the list mixes scopes.
+            let mixed_scopes = skills.windows(2).any(|w| w[0].scope != w[1].scope);
             for (ix, skill) in skills.into_iter().enumerate() {
                 let path = skill.path.clone();
                 let skill_path = path.display().to_string();
@@ -386,16 +388,20 @@ impl SettingsView {
                                             cx.notify();
                                         })),
                                 )
-                                .child(match skill.scope.as_str() {
-                                    "user" => vorkspace_ui::fluid::badge("Personal", content(0.45)),
-                                    "builtin" => vorkspace_ui::fluid::badge(
-                                        "vorkspace",
-                                        vorkspace_ui::theme::accent_color(),
-                                    ),
-                                    _ => vorkspace_ui::fluid::badge(
-                                        "Project",
-                                        vorkspace_ui::theme::success(),
-                                    ),
+                                .when(mixed_scopes, |d| {
+                                    d.child(match skill.scope.as_str() {
+                                        "user" => {
+                                            vorkspace_ui::fluid::badge("Personal", content(0.45))
+                                        }
+                                        "builtin" => vorkspace_ui::fluid::badge(
+                                            "vorkspace",
+                                            vorkspace_ui::theme::accent_color(),
+                                        ),
+                                        _ => vorkspace_ui::fluid::badge(
+                                            "Project",
+                                            vorkspace_ui::theme::success(),
+                                        ),
+                                    })
                                 })
                                 .child(
                                     div()

@@ -97,6 +97,7 @@ impl SettingsView {
         page.push(
             div()
                 .mt_6()
+                .flex()
                 .child(self.segmented(
                     "mcp-filter",
                     "Filter MCP servers by provider",
