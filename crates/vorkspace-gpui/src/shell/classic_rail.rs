@@ -359,27 +359,29 @@ impl Shell {
                     .when(projects.is_empty(), |d| {
                         d.child(
                             div().px_2().child(
-                                div()
-                                    .id("classic-open-first-project")
-                                    .debug_selector(|| "classic-open-first-project".into())
-                                    .role(Role::Button)
-                                    .aria_label("Open project")
-                                    .h(px(32.))
-                                    .px_2()
-                                    .rounded(px(radius::CONTROL))
-                                    .flex()
-                                    .items_center()
-                                    .gap_2()
-                                    .text_size(px(14.))
-                                    .text_color(content(0.5))
-                                    .cursor_pointer()
-                                    .hover(|s| {
-                                        s.bg(vorkspace_ui::fluid::hover(0.08))
-                                            .text_color(content(1.))
-                                    })
-                                    .child(icon("folder-open", 16.))
-                                    .child("Open project…")
-                                    .on_click(cx.listener(|this, _, _, cx| this.open_project(cx))),
+                                vorkspace_ui::theme::keyboard_reachable(
+                                    div().id("classic-open-first-project"),
+                                    true,
+                                )
+                                .debug_selector(|| "classic-open-first-project".into())
+                                .role(Role::Button)
+                                .aria_label("Open project")
+                                .h(px(32.))
+                                .px_2()
+                                .rounded(px(radius::CONTROL))
+                                .flex()
+                                .items_center()
+                                .gap_2()
+                                .text_size(px(14.))
+                                .text_color(content(0.5))
+                                .cursor_pointer()
+                                .hover(|s| {
+                                    s.bg(vorkspace_ui::fluid::hover(0.08))
+                                        .text_color(content(1.))
+                                })
+                                .child(icon("folder-open", 16.))
+                                .child("Open project…")
+                                .on_click(cx.listener(|this, _, _, cx| this.open_project(cx))),
                             ),
                         )
                     })

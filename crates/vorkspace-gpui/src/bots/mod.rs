@@ -1737,8 +1737,7 @@ impl Bots {
             .child(heading)
             .when(!has, |d| {
                 d.child(
-                    div()
-                        .id("new-bot-row")
+                    vorkspace_ui::theme::keyboard_reachable(div().id("new-bot-row"), true)
                         .debug_selector(|| "new-bot".into())
                         .role(Role::Button)
                         .aria_label("New bot")
