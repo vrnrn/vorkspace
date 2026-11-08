@@ -1,8 +1,5 @@
 use super::*;
-use gpui::{
-    Animation, AnimationExt, AnyElement, FontWeight, Role, SharedString, Transformation, div,
-    percentage, px,
-};
+use gpui::{AnyElement, FontWeight, Role, SharedString, div, px};
 use vorkspace_ui::radius;
 use vorkspace_ui::theme::*;
 
@@ -134,19 +131,11 @@ impl Accounts {
                         d.cursor_pointer().hover(|s| s.bg(content(0.85)))
                     })
                     .when(running, |d| {
-                        d.child(
-                            icon("refresh-cw", 14.)
-                                .text_color(button_text)
-                                .with_animation(
-                                    "footer-provider-auth-spinner",
-                                    Animation::new(Duration::from_secs(1)).repeat(),
-                                    |icon, delta| {
-                                        icon.with_transformation(Transformation::rotate(
-                                            percentage(delta),
-                                        ))
-                                    },
-                                ),
-                        )
+                        d.child(crate::panel_kit::spinner(
+                            "footer-provider-auth-spinner",
+                            "refresh-cw",
+                            14.,
+                        ))
                     })
                     .when(complete, |d| {
                         d.child(icon("check", 14.).text_color(button_text))

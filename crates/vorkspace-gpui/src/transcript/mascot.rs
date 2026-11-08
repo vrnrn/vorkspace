@@ -124,7 +124,10 @@ fn project_mascot(name: &str, active: bool) -> AnyElement {
         // AnimationExt drives the repeating frame requests.
         slot.with_animation(
             "subagent-mascot",
-            Animation::new(Duration::from_millis(460)).repeat(),
+            // Two sprites a beat: a few frames a second shows every swap.
+            Animation::new(Duration::from_millis(460))
+                .repeat()
+                .with_max_fps(8.),
             move |slot, phase| slot.child(sprite(index, phase >= 0.5)),
         )
         .into_any_element()

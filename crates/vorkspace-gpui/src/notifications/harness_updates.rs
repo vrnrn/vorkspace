@@ -1,6 +1,6 @@
 //! Native counterpart of HarnessUpdateNotice.tsx. The parent positions this
 //! entity in the shared top-right notification stack.
-use gpui::{AnimationExt, Context, EventEmitter, Render, Role, Window, div, prelude::*, px};
+use gpui::{Context, EventEmitter, Render, Role, Window, div, prelude::*, px};
 use std::collections::HashMap;
 use vorkspace_core::{
     harness_updates::{self, Update},
@@ -246,18 +246,11 @@ impl Render for HarnessUpdates {
                             .items_center()
                             .gap(px(6.))
                             .when(updating, |el| {
-                                el.child(
-                                    icon("loader", 12.).with_animation(
-                                        "harness-update-spinner",
-                                        gpui::Animation::new(std::time::Duration::from_secs(1))
-                                            .repeat(),
-                                        |icon, delta| {
-                                            icon.with_transformation(gpui::Transformation::rotate(
-                                                gpui::percentage(delta),
-                                            ))
-                                        },
-                                    ),
-                                )
+                                el.child(crate::panel_kit::spinner(
+                                    "harness-update-spinner",
+                                    "loader",
+                                    12.,
+                                ))
                             })
                             .child(if updating {
                                 "Updating"

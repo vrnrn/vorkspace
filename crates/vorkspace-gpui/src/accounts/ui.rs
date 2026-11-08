@@ -1,9 +1,7 @@
 use super::masked::masked_text;
 use super::*;
 use crate::controls::{primary_button, secondary_button};
-use gpui::{
-    AnimationExt, AnyElement, App, Div, FontWeight, MouseButton, Role, SharedString, div, px,
-};
+use gpui::{AnyElement, App, Div, FontWeight, MouseButton, Role, SharedString, div, px};
 use vorkspace_ui::radius;
 use vorkspace_ui::theme::*;
 fn account_button(
@@ -99,14 +97,10 @@ impl Accounts {
                     .gap(px(6.))
                     .text_size(px(11.))
                     .when(self.working, |d| {
-                        d.child(icon("refresh-cw", 14.).with_animation(
+                        d.child(crate::panel_kit::spinner(
                             "footer-account-spinner",
-                            gpui::Animation::new(Duration::from_secs(1)).repeat(),
-                            |icon, delta| {
-                                icon.with_transformation(gpui::Transformation::rotate(
-                                    gpui::percentage(delta),
-                                ))
-                            },
+                            "refresh-cw",
+                            14.,
                         ))
                     })
                     .child(if self.working {
@@ -196,14 +190,10 @@ impl Accounts {
                         .gap(px(6.))
                         .text_size(px(11.))
                         .when(self.working, |d| {
-                            d.child(icon("refresh-cw", 12.).with_animation(
+                            d.child(crate::panel_kit::spinner(
                                 "account-editor-spinner",
-                                gpui::Animation::new(Duration::from_secs(1)).repeat(),
-                                |icon, delta| {
-                                    icon.with_transformation(gpui::Transformation::rotate(
-                                        gpui::percentage(delta),
-                                    ))
-                                },
+                                "refresh-cw",
+                                12.,
                             ))
                         })
                         .child(if adding {
