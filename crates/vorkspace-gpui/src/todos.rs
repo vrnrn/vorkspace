@@ -162,6 +162,13 @@ impl Focusable for TodoBoardView {
 }
 
 impl TodoBoardView {
+    /// Opens the first item's details, for captures.
+    #[cfg(test)]
+    pub(crate) fn open_first_details(&mut self, cx: &mut Context<Self>) {
+        if let Some(item) = self.items().first().cloned() {
+            self.open_details(&item, cx);
+        }
+    }
     pub(crate) fn new(store: Database, columns: bool, cx: &mut Context<Self>) -> Self {
         let draft =
             cx.new(|cx| Input::field("Task title", "Task title", page::secondary_ink(), cx));
@@ -1803,6 +1810,13 @@ pub(crate) enum PageEvent {
 
 /// The left sidebar's To-dos page: the personal board or a project board,
 /// picked from a dropdown.
+#[cfg(test)]
+impl TodosPage {
+    pub(crate) fn board_for_capture(&self) -> Entity<TodoBoardView> {
+        self.board.clone()
+    }
+}
+
 pub(crate) struct TodosPage {
     store: Database,
     board: Entity<TodoBoardView>,

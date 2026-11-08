@@ -35,6 +35,7 @@ const SHOTS: &[(&str, Option<usize>, (f32, f32))] = &[
     ("notes", Some(0), (1390., 890.)),
     ("automations", Some(0), (1390., 890.)),
     ("todos", Some(0), (1390., 890.)),
+    ("todo-details", Some(0), (1390., 890.)),
     ("quick-open", Some(0), (1390., 890.)),
     ("palette", Some(0), (1390., 890.)),
     ("settings-general", None, (1390., 890.)),
@@ -466,6 +467,7 @@ fn fluid_capture() {
                     "notes" => shell.open_notes(window, cx),
                     "automations" => shell.open_automations(window, cx),
                     "todos" => shell.open_todos(window, cx),
+                    "todo-details" => shell.open_todos(window, cx),
                     "quick-open" => shell.open_quick_open(false, window, cx),
                     "palette" => shell.open_quick_open(true, window, cx),
                     "diff" => shell.open_review(
@@ -553,6 +555,18 @@ fn fluid_capture() {
                 })
                 .unwrap();
             cx.run_until_parked();
+            if *name == "todo-details" {
+                // The board loads its items first.
+                window
+                    .update(&mut cx, |shell, _, cx| {
+                        if let Some(page) = shell.todos_page.clone() {
+                            let board = page.read(cx).board_for_capture();
+                            board.update(cx, |board, cx| board.open_first_details(cx));
+                        }
+                    })
+                    .unwrap();
+                cx.run_until_parked();
+            }
             if name.starts_with("bot") {
                 let new = *name == "bot-new";
                 window
