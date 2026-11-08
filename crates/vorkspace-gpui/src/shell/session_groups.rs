@@ -134,6 +134,7 @@ impl Render for FolderSwatches {
                     .id(("folder-swatch", ix))
                     .debug_selector(move || format!("folder-color-{ix}"))
                     .role(Role::Button)
+                    .map(vorkspace_ui::theme::tab_reachable)
                     .aria_label(if ix == 0 {
                         "Default color".to_string()
                     } else {

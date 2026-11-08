@@ -758,6 +758,7 @@ impl TranscriptView {
             div()
                 .id(id)
                 .role(Role::Button)
+                .map(vorkspace_ui::theme::tab_reachable)
                 .aria_label(label)
                 .flex()
                 .items_center()

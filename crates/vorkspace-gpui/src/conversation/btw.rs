@@ -801,6 +801,7 @@ impl Render for Btw {
                         div()
                             .id(format!("btw-remove-{remove_id}"))
                             .role(Role::Button)
+                            .map(vorkspace_ui::theme::tab_reachable)
                             .aria_label("Delete side question")
                             .size(px(20.))
                             .flex()

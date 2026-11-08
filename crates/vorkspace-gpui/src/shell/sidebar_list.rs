@@ -616,6 +616,7 @@ impl Shell {
                                     .id(label)
                                     .debug_selector(move || format!("sidebar-navigation-{label}"))
                                     .role(Role::Button)
+                                    .map(vorkspace_ui::theme::tab_reachable)
                                     .aria_label(if unread {
                                         format!("{label}, new items")
                                     } else {

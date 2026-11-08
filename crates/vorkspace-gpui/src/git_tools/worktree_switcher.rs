@@ -508,6 +508,7 @@ impl Render for WorktreeSwitcher {
                                 .id("create-sidebar-worktree")
                                 .debug_selector(|| "create-sidebar-worktree".into())
                                 .role(Role::Button)
+                                .map(vorkspace_ui::theme::tab_reachable)
                                 .aria_label(format!("Create worktree {}", self.query(cx)))
                                 .h(px(36.))
                                 .w_full()

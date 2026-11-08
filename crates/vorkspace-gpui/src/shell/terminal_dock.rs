@@ -499,6 +499,7 @@ impl Shell {
                                         div()
                                             .id(("terminal-tab-close", ix))
                                             .role(Role::Button)
+                                            .map(vorkspace_ui::theme::tab_reachable)
                                             .aria_label(SharedString::from(format!(
                                                 "Close {label}"
                                             )))

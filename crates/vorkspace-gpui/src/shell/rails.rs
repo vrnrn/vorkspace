@@ -378,6 +378,7 @@ impl Shell {
                     div()
                         .id((id, (lead as usize) << 8 | ix))
                         .role(Role::Button)
+                        .map(vorkspace_ui::theme::tab_reachable)
                         .aria_label(label)
                         .rounded(px(radius::SMALL))
                         .bg(content(0.15))

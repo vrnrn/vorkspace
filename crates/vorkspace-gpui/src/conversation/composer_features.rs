@@ -416,6 +416,7 @@ impl Conversation {
                     let remove = div()
                         .id(("remove-attachment", ix))
                         .role(Role::Button)
+                        .map(vorkspace_ui::theme::tab_reachable)
                         .aria_label(format!("Remove {label}"))
                         .cursor(CursorStyle::Arrow)
                         .flex_shrink_0()

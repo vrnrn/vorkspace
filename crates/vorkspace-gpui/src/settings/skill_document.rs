@@ -106,6 +106,7 @@ impl SkillDocument {
                                 .id("skill-metadata")
                                 .debug_selector(|| "skill-metadata".into())
                                 .role(Role::Button)
+                                .map(vorkspace_ui::theme::tab_reachable)
                                 .aria_label("Skill metadata")
                                 .flex()
                                 .items_center()

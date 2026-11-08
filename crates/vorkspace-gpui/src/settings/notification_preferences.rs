@@ -1101,6 +1101,7 @@ impl SettingsView {
                             div()
                                 .id(("mute-calendar-day", cell))
                                 .role(Role::Button)
+                                .map(vorkspace_ui::theme::tab_reachable)
                                 .aria_label(date.to_string())
                                 .aria_selected(selected)
                                 .size(px(32.))

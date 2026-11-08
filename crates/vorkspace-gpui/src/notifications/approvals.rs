@@ -190,6 +190,7 @@ impl Render for ApprovalNotices {
                                 div()
                                     .id(("approval-toast-open", ix))
                                     .role(Role::Button)
+                                    .map(vorkspace_ui::theme::tab_reachable)
                                     .cursor_pointer()
                                     .pl(px(vorkspace_ui::fluid::STRIP_WIDTH + 10.))
                                     .pr(px(14.))

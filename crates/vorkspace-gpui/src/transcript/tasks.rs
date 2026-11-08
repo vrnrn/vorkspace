@@ -918,6 +918,7 @@ fn agent_step(
             div()
                 .id("toggle")
                 .role(Role::Button)
+                .map(vorkspace_ui::theme::tab_reachable)
                 .aria_expanded(open)
                 .aria_label(format!(
                     "{} {}: {summary}",

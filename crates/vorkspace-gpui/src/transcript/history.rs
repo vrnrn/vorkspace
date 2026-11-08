@@ -366,6 +366,7 @@ impl TranscriptView {
             .id("older-bot-history")
             .debug_selector(|| "older-bot-history".into())
             .role(Role::Button)
+            .map(vorkspace_ui::theme::tab_reachable)
             .aria_label("Load earlier messages")
             .w_full()
             .py_3()

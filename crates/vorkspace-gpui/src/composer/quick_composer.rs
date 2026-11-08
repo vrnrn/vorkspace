@@ -410,6 +410,7 @@ impl Render for QuickComposer {
                             div()
                                 .id(gpui::SharedString::from(mode.id()))
                                 .role(Role::Button)
+                                .map(vorkspace_ui::theme::tab_reachable)
                                 .aria_label(mode.label())
                                 .px_3()
                                 .py_2()

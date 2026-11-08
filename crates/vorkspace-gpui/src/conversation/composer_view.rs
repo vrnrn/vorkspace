@@ -605,6 +605,7 @@ impl Conversation {
                             div()
                                 .id("cancel-edit-last-turn")
                                 .role(Role::Button)
+                                .map(vorkspace_ui::theme::tab_reachable)
                                 .aria_label("Cancel editing")
                                 .text_size(px(11.))
                                 .text_color(content(0.6))

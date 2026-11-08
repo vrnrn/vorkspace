@@ -392,6 +392,7 @@ impl History {
         div()
             .id(("history-row", ix))
             .role(Role::Button)
+            .map(vorkspace_ui::theme::tab_reachable)
             .aria_label(title)
             .aria_selected(active)
             .h(px(ROW))

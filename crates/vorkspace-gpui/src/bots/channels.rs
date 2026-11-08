@@ -226,6 +226,7 @@ impl gpui::Render for ChannelLookEditor {
                                                 .id("channel-seed-randomize")
                                                 .debug_selector(|| "channel-seed-randomize".into())
                                                 .role(Role::Button)
+                                                .map(vorkspace_ui::theme::tab_reachable)
                                                 .aria_label("Randomize seed")
                                                 .size(px(22.))
                                                 .rounded(px(radius::CONTROL))
@@ -309,6 +310,7 @@ impl gpui::Render for ChannelLookEditor {
                                     .id("channel-bg-color-button")
                                     .debug_selector(|| "channel-bg-color-button".into())
                                     .role(Role::Button)
+                                    .map(vorkspace_ui::theme::tab_reachable)
                                     .aria_label(if textured {
                                         "Background color"
                                     } else {
@@ -351,6 +353,7 @@ impl gpui::Render for ChannelLookEditor {
                                         .id("channel-fg-color-button")
                                         .debug_selector(|| "channel-fg-color-button".into())
                                         .role(Role::Button)
+                                        .map(vorkspace_ui::theme::tab_reachable)
                                         .aria_label("Foreground color")
                                         .aria_expanded(fg_active)
                                         .flex_1()
@@ -388,6 +391,7 @@ impl gpui::Render for ChannelLookEditor {
                                         .id("channel-swap-colors")
                                         .debug_selector(|| "channel-swap-colors".into())
                                         .role(Role::Button)
+                                        .map(vorkspace_ui::theme::tab_reachable)
                                         .aria_label("Swap background and foreground colors")
                                         .h(px(24.))
                                         .w(px(28.))
@@ -441,6 +445,7 @@ impl gpui::Render for ChannelLookEditor {
                             .id(("channel-color", ix))
                             .debug_selector(move || format!("channel-color-{ix}"))
                             .role(Role::Button)
+                            .map(vorkspace_ui::theme::tab_reachable)
                             .aria_label(format!("Color #{color:06x}"))
                             .aria_selected(selected)
                             .size(px(22.))

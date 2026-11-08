@@ -94,6 +94,7 @@ impl Shell {
                             .id(SharedString::from(close_identity.clone()))
                             .debug_selector(move || close_identity.clone())
                             .role(Role::Button)
+                            .map(vorkspace_ui::theme::tab_reachable)
                             .aria_label(close_label)
                             .absolute()
                             .right_1()

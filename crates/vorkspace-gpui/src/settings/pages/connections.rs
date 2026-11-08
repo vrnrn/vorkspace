@@ -928,6 +928,7 @@ impl SettingsView {
             div()
                 .id("existing-host-url")
                 .role(Role::Button)
+                .map(vorkspace_ui::theme::tab_reachable)
                 .aria_label("Connect to an existing host by URL")
                 .mt_5()
                 .text_size(px(12.))

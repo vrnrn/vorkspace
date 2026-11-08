@@ -88,6 +88,7 @@ impl Shell {
                 div()
                     .id(("close-chat-pane", id as usize))
                     .role(Role::Button)
+                    .map(vorkspace_ui::theme::tab_reachable)
                     .aria_label("Close pane")
                     .group("close-chat-pane")
                     .size(px(20.))

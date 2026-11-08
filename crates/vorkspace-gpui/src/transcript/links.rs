@@ -203,6 +203,7 @@ impl TranscriptView {
                             div()
                                 .id("dismiss-link-error")
                                 .role(Role::Button)
+                                .map(vorkspace_ui::theme::tab_reachable)
                                 .aria_label("Dismiss file action error")
                                 .flex_shrink_0()
                                 .cursor_pointer()

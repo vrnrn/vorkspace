@@ -407,6 +407,7 @@ impl Render for ProjectSearch {
                         div()
                             .id(("project-search-match", group_index * 501 + index))
                             .role(Role::Button)
+                            .map(vorkspace_ui::theme::tab_reachable)
                             .aria_label(format!(
                                 "{}:{} {}",
                                 group.relative, matched.source.line, matched.source.preview
@@ -494,6 +495,7 @@ impl Render for ProjectSearch {
                         div()
                             .id("project-search-back")
                             .role(Role::Button)
+                            .map(vorkspace_ui::theme::tab_reachable)
                             .aria_label("Back to files")
                             .size(px(28.))
                             .flex_shrink_0()

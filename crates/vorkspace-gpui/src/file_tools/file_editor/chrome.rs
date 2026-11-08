@@ -98,6 +98,7 @@ impl FileEditor {
             .id("file-word-wrap")
             .debug_selector(|| "file-word-wrap".into())
             .role(Role::Button)
+            .map(vorkspace_ui::theme::tab_reachable)
             .aria_label("Word wrap")
             .aria_description("Toggle word wrap (Alt+Z)")
             .aria_toggled(if wrap {

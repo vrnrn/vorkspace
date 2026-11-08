@@ -361,6 +361,15 @@ pub fn icon_button_enabled(
 /// A Tab stop that Enter and Space activate. The focus ring is keyboard-only, and
 /// pointer presses leave focus alone so clicking never pulls it out of the composer.
 /// A disabled action stays out of the tab order and tells assistive tech so.
+/// Puts a clickable element in the Tab order with the shared focus fill.
+/// Enter and Space then click it. Unlike `keyboard_reachable` it leaves
+/// mouse focus handling alone, so it suits rows and tiles as well as buttons.
+pub fn tab_reachable(element: Stateful<Div>) -> Stateful<Div> {
+    element
+        .focusable()
+        .tab_stop(true)
+        .focus_visible(|style| style.bg(content(0.16)))
+}
 pub fn keyboard_reachable(button: Stateful<Div>, enabled: bool) -> Stateful<Div> {
     button
         .aria_disabled(!enabled)

@@ -190,6 +190,7 @@ impl FileEditor {
                             div()
                                 .id("editor-selection-chat")
                                 .role(Role::Button)
+                                .map(vorkspace_ui::theme::tab_reachable)
                                 .aria_label("Add to chat")
                                 .tab_index(0)
                                 .flex()

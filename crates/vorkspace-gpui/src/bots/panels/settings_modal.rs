@@ -251,6 +251,7 @@ impl Bots {
                                                 .id("bot-delete")
                                                 .debug_selector(|| "bot-delete".into())
                                                 .role(Role::Button)
+                                                .map(vorkspace_ui::theme::tab_reachable)
                                                 .aria_label("Delete bot")
                                                 .relative()
                                                 .w_full()
@@ -355,6 +356,7 @@ impl Bots {
                         .id("bot-create")
                         .debug_selector(|| "bot-create".into())
                         .role(Role::Button)
+                        .map(vorkspace_ui::theme::tab_reachable)
                         .aria_label("Create")
                         .aria_description(if enabled {
                             "Create this named Bot"
@@ -568,6 +570,7 @@ impl Bots {
                 div()
                     .id("bot-settings-model")
                     .role(Role::Button)
+                    .map(vorkspace_ui::theme::tab_reachable)
                     .aria_label(format!("Choose model, {model}"))
                     .h(px(28.))
                     .px_1p5()
@@ -661,6 +664,7 @@ impl Bots {
                     div()
                         .id("bot-settings-access")
                         .role(Role::Button)
+                        .map(vorkspace_ui::theme::tab_reachable)
                         .aria_label(format!("Permissions, {}", mode.label()))
                         .h(px(28.))
                         .max_w(px(208.))

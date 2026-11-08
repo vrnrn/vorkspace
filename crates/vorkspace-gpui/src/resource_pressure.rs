@@ -525,6 +525,7 @@ impl ResourceMonitor {
                             div()
                                 .id(("stop-session", id as u64))
                                 .role(Role::Button)
+                                .map(vorkspace_ui::theme::tab_reachable)
                                 .aria_label(format!("Stop session {title}"))
                                 .h(px(28.))
                                 .flex_shrink_0()
@@ -569,6 +570,7 @@ impl ResourceMonitor {
                 div()
                     .id(("resource-processes", id as u64))
                     .role(Role::Button)
+                    .map(vorkspace_ui::theme::tab_reachable)
                     .aria_expanded(expanded)
                     .ml(px(34.))
                     .mt(px(2.))
@@ -668,6 +670,7 @@ impl ResourceMonitor {
                 div()
                     .id(("stop-process", pid as u64))
                     .role(Role::Button)
+                    .map(vorkspace_ui::theme::tab_reachable)
                     .aria_label(format!(
                         "{} for {title} (PID {pid})",
                         if agent {
@@ -719,6 +722,7 @@ impl Render for ResourceMonitor {
                         .id("resource-pressure-chip")
                         .debug_selector(|| "resource-pressure-chip".into())
                         .role(Role::Button)
+                        .map(vorkspace_ui::theme::tab_reachable)
                         .aria_label("High resource usage")
                         .aria_description(format!("{} · Review running work", self.reasons()))
                         .aria_expanded(open)

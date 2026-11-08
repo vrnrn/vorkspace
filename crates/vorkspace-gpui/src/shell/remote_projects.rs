@@ -251,6 +251,7 @@ impl RemoteProjectPicker {
         div()
             .id(("remote-folder", id))
             .role(Role::Button)
+            .map(vorkspace_ui::theme::tab_reachable)
             .aria_label(format!("Browse {name}"))
             .w_full()
             .rounded(px(radius::CONTROL))

@@ -300,6 +300,7 @@ impl Render for AppearanceControls {
                             .id("choose-project-logo")
                             .debug_selector(|| "choose-project-logo".into())
                             .role(Role::Button)
+                            .map(vorkspace_ui::theme::tab_reachable)
                             .aria_label("Choose project logo")
                             .size(px(36.))
                             .flex_shrink_0()
@@ -408,6 +409,7 @@ impl Render for AppearanceControls {
                                                 .id("project-randomize-seed")
                                                 .debug_selector(|| "project-randomize-seed".into())
                                                 .role(Role::Button)
+                                                .map(vorkspace_ui::theme::tab_reachable)
                                                 .aria_label("Randomize texture seed")
                                                 .size(px(22.))
                                                 .rounded(px(radius::CONTROL))
@@ -491,6 +493,7 @@ impl Render for AppearanceControls {
                                     .id("project-bg-color-button")
                                     .debug_selector(|| "project-bg-color-button".into())
                                     .role(Role::Button)
+                                    .map(vorkspace_ui::theme::tab_reachable)
                                     .aria_label(if textured {
                                         "Background color"
                                     } else {
@@ -533,6 +536,7 @@ impl Render for AppearanceControls {
                                         .id("project-fg-color-button")
                                         .debug_selector(|| "project-fg-color-button".into())
                                         .role(Role::Button)
+                                        .map(vorkspace_ui::theme::tab_reachable)
                                         .aria_label("Foreground color")
                                         .aria_expanded(fg_active)
                                         .flex_1()
@@ -570,6 +574,7 @@ impl Render for AppearanceControls {
                                         .id("project-swap-colors")
                                         .debug_selector(|| "project-swap-colors".into())
                                         .role(Role::Button)
+                                        .map(vorkspace_ui::theme::tab_reachable)
                                         .aria_label("Swap background and foreground colors")
                                         .h(px(24.))
                                         .w(px(28.))
@@ -622,6 +627,7 @@ impl Render for AppearanceControls {
                             .id(("project-color", ix))
                             .debug_selector(move || format!("project-color-{ix}"))
                             .role(Role::Button)
+                            .map(vorkspace_ui::theme::tab_reachable)
                             .aria_label(format!("Project color #{color:06x}"))
                             .aria_selected(current == color)
                             .size(px(22.))
@@ -1309,8 +1315,9 @@ mod control_tests {
                 assert!(!view.appearance.textured);
                 assert!(view.editing_color.is_none());
                 assert_eq!(view.name.read(cx).content, "Unfinished name");
-                // The name field precedes the texture switch in this form's focus order.
+                // Focus runs name field, logo button, texture switch.
                 window.focus(&view.name.focus_handle(cx), cx);
+                window.focus_next(cx);
                 window.focus_next(cx);
             })
             .unwrap();

@@ -107,6 +107,12 @@ read them only through these helpers:
 `white(a)` and `black(a)` are for literal-contrast cases only, such as ink on a
 user-chosen accent fill or a switch knob.
 
+### Keyboard reach
+
+Anything with a click action is in the Tab order and shows focus: use the
+shared button helpers, or `vorkspace_ui::theme::tab_reachable` for a custom
+row, tile or chip. Enter and Space click a focused element.
+
 ### Casing
 
 Every label is sentence case: page and section titles, menu section headers,

@@ -461,6 +461,7 @@ impl TranscriptView {
                         div()
                             .id("error-toggle")
                             .role(Role::Button)
+                            .map(vorkspace_ui::theme::tab_reachable)
                             .aria_expanded(error_open)
                             .aria_label(format!(
                                 "{} {} for {caption}",

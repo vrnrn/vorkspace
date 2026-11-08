@@ -1793,6 +1793,7 @@ impl ReviewPane {
                         div()
                             .id(("review-tab-close", ix))
                             .role(Role::Button)
+                            .map(vorkspace_ui::theme::tab_reachable)
                             .aria_label(SharedString::from(format!("Close {label}")))
                             .absolute()
                             .right_1()

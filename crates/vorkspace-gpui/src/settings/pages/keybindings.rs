@@ -528,6 +528,7 @@ impl SettingsView {
                                         .id(gpui::SharedString::from(format!("reset-{command}")))
                                         .debug_selector(move || format!("reset-shortcut-{command}"))
                                         .role(Role::Button)
+                                        .map(vorkspace_ui::theme::tab_reachable)
                                         .aria_label(format!("Reset {command} shortcut"))
                                         .p_1()
                                         .rounded(px(radius::CONTROL))

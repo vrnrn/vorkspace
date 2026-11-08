@@ -492,6 +492,7 @@ impl Bots {
                                 move || format!("memory-fact-body-{key}")
                             })
                             .role(Role::Button)
+                            .map(vorkspace_ui::theme::tab_reachable)
                             .aria_label(format!("Edit memory: {fact}"))
                             .flex_1()
                             .min_w_0()

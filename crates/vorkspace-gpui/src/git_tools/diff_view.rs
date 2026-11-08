@@ -1125,6 +1125,7 @@ impl DiffView {
                             "diff-layout-unified"
                         })
                         .role(Role::Button)
+                        .map(vorkspace_ui::theme::tab_reachable)
                         .aria_label(label)
                         .cursor_pointer()
                         .px_2()
@@ -1623,6 +1624,7 @@ impl DiffView {
                             div()
                                 .id(("diff-comment", ix))
                                 .role(Role::Button)
+                                .map(vorkspace_ui::theme::tab_reachable)
                                 .aria_label(SharedString::from(format!(
                                     "Comment on line {}",
                                     number.map(|n| n.to_string()).unwrap_or_default()
@@ -1653,6 +1655,7 @@ impl DiffView {
                                 div()
                                     .id(("diff-stage-hunk", ix))
                                     .role(Role::Button)
+                                    .map(vorkspace_ui::theme::tab_reachable)
                                     .aria_label("Stage hunk")
                                     .absolute()
                                     .top_0()
@@ -1977,6 +1980,7 @@ impl Render for DiffView {
                                 div()
                                     .id("add-comment")
                                     .role(Role::Button)
+                                    .map(vorkspace_ui::theme::tab_reachable)
                                     .aria_label("Add to chat")
                                     .h(px(28.))
                                     .flex()

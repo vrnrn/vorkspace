@@ -51,6 +51,7 @@ impl FileEditor {
             div()
                 .id(id)
                 .role(Role::Button)
+                .map(vorkspace_ui::theme::tab_reachable)
                 .aria_label(title)
                 .aria_toggled(if on {
                     gpui::Toggled::True
@@ -158,6 +159,7 @@ impl FileEditor {
                                     div()
                                         .id("replace-next")
                                         .role(Role::Button)
+                                        .map(vorkspace_ui::theme::tab_reachable)
                                         .aria_label("Replace")
                                         .px_2()
                                         .py_1()
@@ -174,6 +176,7 @@ impl FileEditor {
                                     div()
                                         .id("replace-all")
                                         .role(Role::Button)
+                                        .map(vorkspace_ui::theme::tab_reachable)
                                         .aria_label("Replace all")
                                         .px_2()
                                         .py_1()

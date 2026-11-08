@@ -9,6 +9,7 @@ fn line_card(id: impl Into<ElementId>) -> Stateful<Div> {
     div()
         .id(id)
         .role(Role::Button)
+        .map(vorkspace_ui::theme::tab_reachable)
         .flex()
         .max_w(px(384.))
         .min_w_0()

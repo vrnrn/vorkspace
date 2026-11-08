@@ -73,6 +73,7 @@ impl TranscriptView {
                     div()
                         .id(("interjection-expand", message_start))
                         .role(Role::Button)
+                        .map(vorkspace_ui::theme::tab_reachable)
                         .aria_expanded(open)
                         .text_size(px(11.))
                         .text_color(content(0.5))
@@ -338,6 +339,7 @@ impl TranscriptView {
             .id(("thinking", message_start))
             .debug_selector(move || format!("thinking-{message_start}"))
             .role(Role::Button)
+            .map(vorkspace_ui::theme::tab_reachable)
             .aria_label(format!(
                 "{} thinking: {summary}",
                 if open { "Hide" } else { "Show" }
@@ -546,6 +548,7 @@ impl TranscriptView {
                         div()
                             .id(("prompt-more", message_start))
                             .role(Role::Button)
+                            .map(vorkspace_ui::theme::tab_reachable)
                             .aria_expanded(!collapsed)
                             .mt_1()
                             .px_1()

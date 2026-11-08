@@ -508,6 +508,7 @@ impl LookEditor {
                                                 .id(SharedString::from(rand_id))
                                                 .debug_selector(move || rand_sel.clone())
                                                 .role(Role::Button)
+                                                .map(vorkspace_ui::theme::tab_reachable)
                                                 .aria_label("Randomize texture seed")
                                                 .size(px(22.))
                                                 .rounded(px(radius::CONTROL))
@@ -604,6 +605,7 @@ impl LookEditor {
                             .id(SharedString::from(bg_id))
                             .debug_selector(move || bg_sel.clone())
                             .role(Role::Button)
+                            .map(vorkspace_ui::theme::tab_reachable)
                             .aria_label(if textured {
                                 "Background color"
                             } else {
@@ -643,6 +645,7 @@ impl LookEditor {
                                 .id(SharedString::from(fg_id))
                                 .debug_selector(move || fg_sel.clone())
                                 .role(Role::Button)
+                                .map(vorkspace_ui::theme::tab_reachable)
                                 .aria_label("Foreground color")
                                 .aria_expanded(fg_active)
                                 .flex_1()
@@ -677,6 +680,7 @@ impl LookEditor {
                                 .id(SharedString::from(swap_id))
                                 .debug_selector(move || swap_sel.clone())
                                 .role(Role::Button)
+                                .map(vorkspace_ui::theme::tab_reachable)
                                 .aria_label("Swap background and foreground colors")
                                 .h(px(24.))
                                 .w(px(28.))
@@ -840,6 +844,7 @@ impl LookEditor {
                                         .id(("settings-color", index))
                                         .debug_selector(move || format!("bot-color-{index}"))
                                         .role(Role::Button)
+                                        .map(vorkspace_ui::theme::tab_reachable)
                                         .aria_label(COLOR_NAMES[index])
                                         .aria_selected(selected)
                                         .size(px(26.))

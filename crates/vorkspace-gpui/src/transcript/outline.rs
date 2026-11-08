@@ -240,6 +240,7 @@ impl TranscriptView {
                 div()
                     .id(("prompt-bar", prompt))
                     .role(Role::Button)
+                    .map(vorkspace_ui::theme::tab_reachable)
                     .aria_label(prompt_label(&self.message_text(prompt)))
                     .relative()
                     .flex()

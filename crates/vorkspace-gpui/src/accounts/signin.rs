@@ -107,6 +107,7 @@ impl Accounts {
                 div()
                     .id("footer-provider-auth-action")
                     .role(Role::Button)
+                    .map(vorkspace_ui::theme::tab_reachable)
                     .aria_label(label.clone())
                     .track_focus(&self.dialog_focus)
                     .tab_index(0)
