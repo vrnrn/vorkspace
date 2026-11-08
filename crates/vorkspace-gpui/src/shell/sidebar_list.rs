@@ -350,7 +350,7 @@ impl Shell {
                 .text_size(px(12.))
                 .text_color(rgb(MUTED))
                 .child(if self.query.is_empty() {
-                    "No sessions yet"
+                    "No sessions yet · ⌘N starts one"
                 } else {
                     "No matching sessions"
                 })
