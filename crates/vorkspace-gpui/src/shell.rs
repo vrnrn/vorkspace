@@ -10,6 +10,7 @@ mod tab_strip;
 mod titlebar;
 mod workspace_commands;
 pub(crate) use crate::bots::host_api::AppStart;
+mod app_core;
 mod app_panes;
 mod app_views;
 mod automation_runs;
@@ -609,6 +610,8 @@ pub(crate) struct Shell {
     /// Memory and notifications, in the same dialog frame as a Bot's.
     pub(super) project_dialog: Option<project_settings::ProjectDialog>,
     pub(super) vorkspace_dialog: Option<vorkspaces::VorkspaceDialog>,
+    /// What every window shares; `None` only before the window joins it.
+    app_core: Option<Entity<app_core::AppCore>>,
     rail_sessions_expanded: bool,
     vorkspace_anchor: AnchorSlot,
     backgrounds: HashMap<i64, Entity<crate::project_background::ProjectBackground>>,
@@ -846,8 +849,11 @@ impl Shell {
                     .await;
                 if this
                     .update(cx, |this, cx| {
-                        this.poll_reminders(cx);
-                        this.poll_automations(cx);
+                        // One window fires scheduled work for the whole app.
+                        if this.holds_scheduler(cx) {
+                            this.poll_reminders(cx);
+                            this.poll_automations(cx);
+                        }
                         this.update_chat_visibility(cx);
                         if this.workspace.sidebar_visible {
                             this.notify_sidebar(cx);
@@ -993,6 +999,7 @@ impl Shell {
             background_dialog: None,
             project_dialog: None,
             vorkspace_dialog: None,
+            app_core: None,
             rail_sessions_expanded: false,
             vorkspace_anchor: AnchorSlot::default(),
             backgrounds: HashMap::new(),
@@ -1066,6 +1073,7 @@ impl Shell {
             render_passes: 0,
         };
         this.scan_external_editors(cx);
+        this.adopt_app_core(cx);
         this.observe_accounts(cx);
         this.observe_picker_preferences(cx);
         let bot_owner: std::rc::Rc<dyn crate::bots::host_api::BotsHost> =
@@ -1212,7 +1220,9 @@ impl Shell {
         this.update_chat_visibility(cx);
         this.update_usage_provider(cx);
         this.apply_preferences(cx);
-        this.poll_reminders(cx);
+        if this.holds_scheduler(cx) {
+            this.poll_reminders(cx);
+        }
         this.initialize_automations(cx);
         cx.spawn(async move |this, cx| {
             let _ = this.update_in(cx, |this, window, cx| {
@@ -1290,6 +1300,11 @@ impl Shell {
     fn add_loaded(&mut self, summary: Session, cx: &mut Context<Self>) {
         let id = summary.id;
         if self.sessions.contains_key(&id) {
+            return;
+        }
+        // Another window has this session live; it is listed, not loaded.
+        if !self.claim_session(id, cx) {
+            self.session_summaries.insert(id, summary);
             return;
         }
         self.session_summaries.insert(id, summary.clone());
@@ -1769,6 +1784,7 @@ impl Shell {
         self.update_chat_visibility(cx);
         self.update_usage_provider(cx);
         self.invalidate_chrome(cx);
+        self.share_vorkspaces(cx);
         let state = serde_json::to_string(&self.workspace).unwrap();
         *self.latest_state.lock().unwrap_or_else(|e| e.into_inner()) = state.clone();
         let revision = self.generation.fetch_add(1, Ordering::SeqCst) + 1;

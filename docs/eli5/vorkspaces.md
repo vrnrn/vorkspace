@@ -8,6 +8,6 @@ The left side now lists sessions instead of projects. Anything running or waitin
 
 **Manage vorkspaces…** lets you rename a vorkspace, add or remove its folders and Bots, switch to it, or delete it. You always keep at least one.
 
-Each vorkspace is meant to get its own window. That comes next: for now one window switches between them, because running two windows today would run scheduled Bot and automation work twice.
+Each vorkspace is meant to get its own window. That is being built in steps. Already, the app keeps one shared list of vorkspaces for all windows, lets only one window run reminders and automations, and never lets two windows run the same session. Bots, voice and a few other background parts still need the same treatment before a second window can open.
 
 The [technical guide](../vorkspaces.md) has the details.

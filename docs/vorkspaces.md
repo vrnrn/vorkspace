@@ -27,4 +27,14 @@ The rail no longer lists projects. Its **Sessions** section lists the vorkspace'
 
 ## One window per vorkspace
 
-Vorkspaces are designed so each can own a window. Separate windows are not enabled yet: each window's shell currently starts its own Bot manager, Habit scheduler, automation polling and agent host, so a second window would run scheduled work twice. Those services need a single application-wide owner first.
+Vorkspaces are designed so each can own a window. Separate windows are being built in steps, so that nothing runs twice and no session has two owners.
+
+`shell::app_core::AppCore` is the application's single owner of what windows share, one per data store:
+
+- Vorkspace definitions and placed Bots, saved under the `vorkspaces` setting. A change in one window reaches every other window; each window keeps its own choice of active vorkspace.
+- The scheduler lease. Only the holding window fires reminders and automations. When it closes, the next window to ask takes the lease.
+- Session leases. A session is live (has a `Conversation` and may run a provider) in at most one window. Another window lists it but does not load it. A lease is free once its window closes or no longer has the session loaded.
+
+Leases name their holder and are checked again at every claim, so a closed window never leaves one stuck.
+
+Still owned per window, and the remaining blockers before the app opens a second window: the Bot manager (Habit scheduler, channel workers and outbox, and its saved roster), the agent app bridge socket, Vox, remote-host connections and OS notifications.
