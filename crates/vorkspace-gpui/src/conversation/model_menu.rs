@@ -792,7 +792,7 @@ impl Conversation {
                             .description("Plan and coordinate agent work"),
                         MenuAction::new("draft", "Draft")
                             .icon("circle-dashed-hi")
-                            .description("Save this message without starting the agent")
+                            .description("Save it without starting the agent")
                             .disabled(
                                 self.follow_ups.state.draft.is_some()
                                     || (self.is_remote() && (self.busy || self.stopping)),
@@ -892,6 +892,11 @@ impl Conversation {
             }
             ComposerMenu::Setting(ix) => self.bot_setting_menu(ix),
         }
+    }
+    /// The composer's "+" menu, for captures.
+    #[cfg(test)]
+    pub(crate) fn toggle_add_menu(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.toggle_menu(ComposerMenu::Add, window, cx);
     }
     /// The model trigger: the composer's model menu.
     #[cfg(test)]

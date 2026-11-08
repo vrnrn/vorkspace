@@ -682,11 +682,7 @@ impl Completion {
                     "Add to folder",
                     "Place this session in an existing or new sidebar folder",
                 ),
-                (
-                    "draft",
-                    "Draft",
-                    "Save this message without starting the agent",
-                ),
+                ("draft", "Draft", "Save it without starting the agent"),
                 (
                     "compact",
                     "Compact context",

@@ -106,7 +106,19 @@ const ACCESS_MODES: &[(&str, &str, &str, &str)] = &[
 const YELLOW_300: u32 = 0xffdf20;
 const SKY_300: u32 = 0x74d4ff;
 const FUCHSIA_300: u32 = 0xf4a8ff;
+/// One of the accents above, in the theme it is shown in: the light 300
+/// shades wash out on paper, so light mode takes the matching 600.
 fn tint(color: u32, alpha: f32) -> gpui::Hsla {
+    let color = if vorkspace_ui::theme::is_light() {
+        match color {
+            YELLOW_300 => 0xca8a04,
+            SKY_300 => 0x0284c7,
+            FUCHSIA_300 => 0xc026d3,
+            other => other,
+        }
+    } else {
+        color
+    };
     let mut c: gpui::Hsla = gpui::rgb(color).into();
     c.a = alpha;
     c

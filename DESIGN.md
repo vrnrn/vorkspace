@@ -97,6 +97,13 @@ read them only through these helpers:
 `white(a)` and `black(a)` are for literal-contrast cases only, such as ink on a
 user-chosen accent fill or a switch knob.
 
+### Casing
+
+Every label is sentence case: page and section titles, menu section headers,
+filter captions, table headers, badges and buttons ("Add trigger", "Add to
+message"). The macOS menu bar and file context menus keep the platform's
+title case.
+
 ### Ink alpha scale
 
 Pick from this scale; don't invent in-between values.

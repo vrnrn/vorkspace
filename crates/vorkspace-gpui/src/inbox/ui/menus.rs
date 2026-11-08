@@ -39,7 +39,7 @@ impl Inbox {
         let weak = cx.entity().downgrade();
         let f = &self.state.filters;
         let tracker = model::is_tracker(&self.state.source);
-        let mut rows = vec![caption("FILTER ITEMS").into_any_element()];
+        let mut rows = vec![caption("Filter items").into_any_element()];
         if !(tracker && self.state.jira_filter.mode == "jql") {
             rows.push(
                 menu_row(
@@ -58,7 +58,7 @@ impl Inbox {
                 .into_any_element(),
             );
         }
-        rows.push(caption("UPDATED").into_any_element());
+        rows.push(caption("Updated").into_any_element());
         for (time, label) in [
             ("all", "Any time"),
             ("today", "Today"),
@@ -74,7 +74,7 @@ impl Inbox {
                     .into_any_element(),
             );
         }
-        rows.push(caption("STATUS").into_any_element());
+        rows.push(caption("Status").into_any_element());
         for status in ["Open", "Draft", "Closed", "Merged"]
             .into_iter()
             .filter(|s| !tracker || matches!(*s, "Open" | "Closed"))
@@ -101,7 +101,7 @@ impl Inbox {
             );
         }
         if !tracker {
-            rows.push(caption("TYPE").into_any_element());
+            rows.push(caption("Type").into_any_element());
             for (kind, label) in [
                 ("issue", "Issues"),
                 (
@@ -126,7 +126,7 @@ impl Inbox {
                     .into_any_element(),
                 );
             }
-            rows.push(caption("PROJECTS").into_any_element());
+            rows.push(caption("Projects").into_any_element());
             for (ix, project) in self.projects.iter().enumerate() {
                 let key = project.to_string_lossy().into_owned();
                 rows.push(
@@ -146,7 +146,7 @@ impl Inbox {
         }
         let provider_options = &self.snapshot.jira_projects;
         if tracker && self.state.jira_filter.mode != "jql" && !provider_options.is_empty() {
-            rows.push(caption("PROJECTS").into_any_element());
+            rows.push(caption("Projects").into_any_element());
             for (ix, option) in provider_options.iter().enumerate() {
                 let id = option.id.clone();
                 let hidden = &self.state.hidden_jira_projects;
@@ -212,7 +212,7 @@ impl Inbox {
                 cx.notify();
             });
         })
-        .child(caption("CONNECTIONS"))
+        .child(caption("Connections"))
         .children(self.state.connectors.enabled_providers().map(|provider| {
             let connected = self
                 .snapshot

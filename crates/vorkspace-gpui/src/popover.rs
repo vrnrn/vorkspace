@@ -1614,11 +1614,17 @@ impl Menu {
                             .px(px(6.))
                             .py(px(2.))
                             .rounded_full()
-                            .bg(gpui::hsla(0.82, 1., 0.83, 0.1))
+                            // The row's own tone, already paired for the
+                            // theme; neutral ink when the row has none.
+                            .bg(action.icon_color.unwrap_or(content(1.)).opacity(0.12))
                             .text_size(px(9.))
                             .line_height(px(9.))
                             .font_weight(gpui::FontWeight::MEDIUM)
-                            .text_color(gpui::hsla(0.81, 1., 0.9, 0.55))
+                            .text_color({
+                                let mut ink = action.icon_color.unwrap_or(content(0.6));
+                                ink.a = 1.;
+                                ink
+                            })
                             .child(badge.clone()),
                     )
                     .into_any(),
@@ -1643,11 +1649,12 @@ impl Render for Menu {
                     .px_2()
                     .pt(px(2.))
                     .pb_1()
-                    .text_size(px(10.))
+                    // Sentence case, as every other label in the app.
+                    .text_size(px(11.))
                     .line_height(px(15.))
                     .font_weight(gpui::FontWeight::MEDIUM)
-                    .text_color(content(0.4))
-                    .child(text.to_uppercase())
+                    .text_color(content(0.45))
+                    .child(text.clone())
                     .into_any(),
                 MenuItem::Note(text) => div()
                     .flex_shrink_0()
