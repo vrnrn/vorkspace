@@ -22,8 +22,6 @@ impl SettingsView {
         )];
         if self.ctx.cwd.is_empty() {
             rows.push(note("Open a project to see its archived conversations."));
-        } else if self.ctx.archived.is_empty() {
-            rows.push(note("No archived conversations in this project."));
         }
         for session in &self.ctx.archived {
             let id = session.id;
@@ -97,9 +95,6 @@ impl SettingsView {
             format!("Archived in {}", self.ctx.project_label)
         };
         let mut projects = Vec::new();
-        if self.ctx.archived_projects.is_empty() {
-            projects.push(note("No archived projects."));
-        }
         for path in &self.ctx.archived_projects {
             let path = path.clone();
             let restore = path.clone();
@@ -135,16 +130,29 @@ impl SettingsView {
                     .into_any_element(),
             );
         }
-        vec![
-            self.group(
+        // Empty sections collapse into one explanation instead of a card per
+        // kind that each say there is nothing in it.
+        let mut page = Vec::new();
+        if projects.is_empty() && self.ctx.archived.is_empty() {
+            page.push(
+                super::super::widgets::empty_card(
+                    "archive",
+                    "Nothing archived",
+                    "Archived projects and conversations wait here until you restore them.",
+                )
+                .into_any_element(),
+            );
+        } else if !projects.is_empty() {
+            page.push(self.group(
                 None,
                 true,
                 "Archived projects",
                 Some("Archived projects keep their conversations and files.".into()),
                 None,
                 projects,
-            ),
-            self.group(None, false, SharedString::from(title), None, None, rows),
-        ]
+            ));
+        }
+        page.push(self.group(None, false, SharedString::from(title), None, None, rows));
+        page
     }
 }
