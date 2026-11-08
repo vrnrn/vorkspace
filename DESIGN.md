@@ -321,8 +321,15 @@ Behavior rules for controls:
   `pane_motion.rs` so a retarget keeps its velocity.
 - Popovers and menus animate in (170ms, 8px from the anchor) and **dismiss
   instantly**.
-- There is no reduced-motion mode and no code reads `cx.reduce_motion()`.
-  Tests that depend on timing advance the clock past the animation duration.
+- The app mirrors macOS Reduce Motion into `cx.reduce_motion()`; GPUI
+  animations then render their final frame, and the loader holds still with
+  every cell lit. Tests that depend on timing advance the clock past the
+  animation duration.
+- Never redraw every display refresh for an image that changes less often.
+  A repeating animation sets `Animation::with_max_fps` to the rate its image
+  actually changes, or keeps its state in keyed state advanced by a timer, as
+  the loader does. The capture harness records any screen that keeps
+  requesting frames once settled (`idle-frames.txt`).
 - Hover feedback is immediate, or at most a short fade.
 - Selection in a fixed list or strip glides: `vorkspace_ui::glide::GlideList`
   (or `Glide` directly, as the title-bar strip does) springs one thumb

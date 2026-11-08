@@ -183,6 +183,10 @@ struct Loader {
 
 impl RenderOnce for Loader {
     fn render(self, window: &mut gpui::Window, cx: &mut gpui::App) -> impl IntoElement {
+        // Reduce Motion: a still loader, all cells lit, and no timer.
+        if cx.reduce_motion() {
+            return loader_cells(self.side, 3);
+        }
         let count = window.use_keyed_state(self.id, cx, |_, cx| LoaderCount {
             shown: 1,
             _tick: cx.spawn(async move |this, cx| {
@@ -200,23 +204,27 @@ impl RenderOnce for Loader {
                 }
             }),
         });
-        let shown = count.read(cx).shown;
-        // Three cells and two gaps of the same size fill the slot's width.
-        let cell = (self.side / 5.).floor().max(2.);
-        div()
-            .size(px(self.side))
-            .flex_shrink_0()
-            .flex()
-            .items_center()
-            .justify_center()
-            .gap(px(cell))
-            .children((0..3).map(|index| {
-                div()
-                    .size(px(cell))
-                    .when(index < shown, |d| d.bg(content(0.6)))
-                    .when(index >= shown, |d| d.bg(vorkspace_ui::fluid::track(0.1)))
-            }))
+        loader_cells(self.side, count.read(cx).shown)
     }
+}
+
+/// The loader's three cells with `shown` of them lit.
+fn loader_cells(side: f32, shown: usize) -> gpui::Div {
+    // Three cells and two gaps of the same size fill the slot's width.
+    let cell = (side / 5.).floor().max(2.);
+    div()
+        .size(px(side))
+        .flex_shrink_0()
+        .flex()
+        .items_center()
+        .justify_center()
+        .gap(px(cell))
+        .children((0..3).map(|index| {
+            div()
+                .size(px(cell))
+                .when(index < shown, |d| d.bg(content(0.6)))
+                .when(index >= shown, |d| d.bg(vorkspace_ui::fluid::track(0.1)))
+        }))
 }
 
 pub(crate) fn format_integer(value: i64) -> String {
@@ -355,5 +363,22 @@ mod loader_tests {
         visual.run_until_parked();
         visual.refresh().unwrap();
         assert_eq!(lit(visual), 1, "after three it starts over");
+    }
+
+    #[gpui::test]
+    fn under_reduce_motion_the_loader_holds_still(cx: &mut TestAppContext) {
+        cx.update(|cx| cx.set_reduce_motion(true));
+        let window = cx.update(|cx| {
+            cx.open_window(Default::default(), |_, cx| cx.new(|_| Host))
+                .unwrap()
+        });
+        let visual = &mut VisualTestContext::from_window(window.into(), cx);
+        visual.run_until_parked();
+        visual.refresh().unwrap();
+        assert_eq!(lit(visual), 3);
+        visual.executor().advance_clock(LOADER_STEP * 4);
+        visual.run_until_parked();
+        visual.refresh().unwrap();
+        assert_eq!(lit(visual), 3);
     }
 }
