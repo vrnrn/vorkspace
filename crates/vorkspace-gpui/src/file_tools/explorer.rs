@@ -1229,9 +1229,9 @@ impl Explorer {
             .role(Role::Button)
             .aria_label(label)
             .group(id)
-            .h(px(24.))
-            .min_w_0()
-            .flex_1()
+            // A square button: a quarter-width strip read as a tab.
+            .size(px(24.))
+            .flex_shrink_0()
             .self_center()
             .flex()
             .items_center()
@@ -1487,7 +1487,7 @@ impl Render for Explorer {
                 .into_any_element();
         }
         let root_open = self.expanded.contains(&self.cwd);
-        let name: SharedString = basename(&self.cwd).to_uppercase().into();
+        let name: SharedString = basename(&self.cwd).into();
         let root_selected = self.drag_over.as_deref() == Some(self.cwd.as_str());
         let focused = self.focus.contains_focused(window, cx);
         let entity = cx.entity();
@@ -1610,6 +1610,8 @@ impl Render for Explorer {
             )
             .child(
                 pane_header("explorer-header", "Explorer")
+                    .justify_end()
+                    .gap_1()
                     .on_mouse_down(MouseButton::Right, |_, _, cx| cx.stop_propagation())
                     .child(
                         Self::header_icon("explorer-new-file", "New File".into(), "file-add", true)

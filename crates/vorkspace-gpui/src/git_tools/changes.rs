@@ -1471,10 +1471,10 @@ impl Changes {
                                 div()
                                     .min_w_0()
                                     .truncate()
-                                    .text_size(px(10.))
+                                    .text_size(px(11.))
                                     .font_weight(FontWeight::SEMIBOLD)
                                     .text_color(content(0.55))
-                                    .child(title.to_uppercase()),
+                                    .child(title),
                             )
                             .child(
                                 div()
