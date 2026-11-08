@@ -111,7 +111,7 @@ impl FileEditor {
                             .gap_1()
                             .child(query)
                             .child(
-                                toggle("match-case", "Aa", "Match Case", self.match_case).on_click(
+                                toggle("match-case", "Aa", "Match case", self.match_case).on_click(
                                     cx.listener(|this, _, _, cx| {
                                         this.match_case = !this.match_case;
                                         this.find_matches(cx);
@@ -119,14 +119,14 @@ impl FileEditor {
                                 ),
                             )
                             .child(
-                                toggle("whole-word", "ab", "Match Whole Word", self.whole_word)
+                                toggle("whole-word", "ab", "Match whole word", self.whole_word)
                                     .on_click(cx.listener(|this, _, _, cx| {
                                         this.whole_word = !this.whole_word;
                                         this.find_matches(cx);
                                     })),
                             )
                             .child(
-                                toggle("use-regex", ".*", "Use Regular Expression", self.regex)
+                                toggle("use-regex", ".*", "Use regular expression", self.regex)
                                     .on_click(cx.listener(|this, _, _, cx| {
                                         this.regex = !this.regex;
                                         this.find_matches(cx);
@@ -174,7 +174,7 @@ impl FileEditor {
                                     div()
                                         .id("replace-all")
                                         .role(Role::Button)
-                                        .aria_label("Replace All")
+                                        .aria_label("Replace all")
                                         .px_2()
                                         .py_1()
                                         .rounded(px(radius::CONTROL))
@@ -198,7 +198,7 @@ impl FileEditor {
                     .child(
                         icon_action(
                             "find-prev",
-                            "Previous Match",
+                            "Previous match",
                             "chevron-up",
                             !self.matches.is_empty(),
                         )
@@ -207,7 +207,7 @@ impl FileEditor {
                     .child(
                         icon_action(
                             "find-next",
-                            "Next Match",
+                            "Next match",
                             "chevron-down",
                             !self.matches.is_empty(),
                         )

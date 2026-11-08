@@ -1232,7 +1232,7 @@ impl Render for BackgroundDialog {
             .clone()
             .or_else(|| self.preview.read(cx).error.clone());
         div().id("project-background-dialog").debug_selector(||"project-background-dialog".into())
-            .role(Role::Dialog).aria_label("Background Image").track_focus(&self.focus)
+            .role(Role::Dialog).aria_label("Background image").track_focus(&self.focus)
             .relative().min_h_0().when(!self.embedded, |d| d.max_h(px(window.viewport_size().height.as_f32()-34.)))
             .flex().flex_col().text_color(content(1.))
             .child(self.bounds.layout_probe())

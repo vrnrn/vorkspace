@@ -906,7 +906,7 @@ impl Changes {
                         .disabled(!can_push_pr)
                         .into(),
                     MenuItem::Separator,
-                    MenuAction::new("amend", "Amend Last Commit")
+                    MenuAction::new("amend", "Amend last commit")
                         .checked(self.amend.is_some())
                         .into(),
                 ]
@@ -1169,7 +1169,7 @@ impl Changes {
                         div()
                             .id("commit")
                             .role(Role::Button)
-                            .aria_label(if amend { "Amend Commit" } else { "Commit" })
+                            .aria_label(if amend { "Amend commit" } else { "Commit" })
                             .h(px(28.))
                             .min_w_0()
                             .flex_1()
@@ -1183,7 +1183,7 @@ impl Changes {
                             .bg(face)
                             .text_color(ink)
                             .child(icon("check-2", 14.).text_color(ink))
-                            .child(if amend { "Amend Commit" } else { "Commit" })
+                            .child(if amend { "Amend commit" } else { "Commit" })
                             .when(can_commit, |d| {
                                 d.on_click(cx.listener(|this, _, window, cx| {
                                     this.commit(false, false, window, cx)
@@ -1256,10 +1256,10 @@ impl Changes {
         let syncing = self.busy.as_deref() == Some("sync");
         let plural = |n: i64| if n == 1 { "" } else { "s" };
         let sync_title = if syncing {
-            "Synchronizing Changes...".to_owned()
+            "Syncing changes…".to_owned()
         } else if can_publish {
-            index.branch.as_ref().map_or("Publish Branch".into(), |b| {
-                format!("Publish Branch \"{b}\"")
+            index.branch.as_ref().map_or("Publish branch".into(), |b| {
+                format!("Publish branch \"{b}\"")
             })
         } else if behind > 0 && ahead > 0 {
             format!("Pull {behind} and push {ahead} commits between {dest}")
@@ -1305,7 +1305,7 @@ impl Changes {
                         } else {
                             glyph("cloud-upload")
                         })
-                        .child(div().min_w_0().truncate().child("Publish Branch"))
+                        .child(div().min_w_0().truncate().child("Publish branch"))
                         .when(!busy, |d| {
                             d.on_click(cx.listener(|this, _, window, cx| this.sync(window, cx)))
                         }),
@@ -1319,7 +1319,7 @@ impl Changes {
                         } else {
                             glyph("refresh-cw")
                         })
-                        .child(div().min_w_0().truncate().child("Sync Changes"))
+                        .child(div().min_w_0().truncate().child("Sync changes"))
                         .when(behind > 0, |d| {
                             d.child(
                                 div()
@@ -1416,7 +1416,7 @@ impl Changes {
         match self.lines[ix].clone() {
             Line::Section(kind) => {
                 let (title, open) = match kind {
-                    Kind2::Staged => ("Staged Changes", self.staged_open),
+                    Kind2::Staged => ("Staged changes", self.staged_open),
                     Kind2::Unstaged => ("Changes", self.changes_open),
                 };
                 let count = files
@@ -1429,13 +1429,13 @@ impl Changes {
                 let tree = self.view == ChangesView::Tree;
                 let actions: Vec<(&'static str, &'static str, &'static str)> = match kind {
                     Kind2::Staged => vec![
-                        ("open-all-staged", "Open All Changes", "file-diff"),
-                        ("unstage-all", "Unstage All Changes", "minus-sign"),
+                        ("open-all-staged", "Open all changes", "file-diff"),
+                        ("unstage-all", "Unstage all changes", "minus-sign"),
                     ],
                     Kind2::Unstaged => vec![
-                        ("open-all-unstaged", "Open All Changes", "file-diff"),
-                        ("discard-all", "Discard All Changes", "undo"),
-                        ("stage-all", "Stage All Changes", "plus"),
+                        ("open-all-unstaged", "Open all changes", "file-diff"),
+                        ("discard-all", "Discard all changes", "undo"),
+                        ("stage-all", "Stage all changes", "plus"),
                     ],
                 };
                 div()

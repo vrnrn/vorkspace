@@ -1195,7 +1195,7 @@ impl Conversation {
                     MenuAction::new(format!("tier:{id}"), name.clone())
                         .checked(self.selected_tier() == Some(id.as_str()))
                 }));
-                group(&mut items, "Service Tier", tiers);
+                group(&mut items, "Service tier", tiers);
             }
             if items
                 .iter()
@@ -1239,7 +1239,7 @@ impl Conversation {
                 let (glyph, label, value) = if model.efforts.is_empty() {
                     (
                         "zap",
-                        "Service Tier",
+                        "Service tier",
                         self.selected_tier()
                             .and_then(|id| model.tiers.iter().find(|(t, _)| t == id))
                             .map_or("Standard".into(), |(_, name)| name.clone()),

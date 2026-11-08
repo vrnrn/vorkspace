@@ -613,7 +613,7 @@ impl Shell {
                         ),
                     )
                     .child(
-                        icon_button("move-terminal", "Move Terminal", side)
+                        icon_button("move-terminal", "Move terminal", side)
                             .child(move_anchor.probe())
                             .on_click(cx.listener(move |this, _, window, cx| {
                                 // ExplorerMenu hangs from the button's bottom-left corner.
@@ -655,8 +655,8 @@ impl Shell {
     }
 }
 
-const NEW_TERMINAL_LABEL: &str = "New Terminal (⌘`)";
-const HIDE_TERMINAL_LABEL: &str = "Hide Terminal (⌘J)";
+const NEW_TERMINAL_LABEL: &str = "New terminal (⌘`)";
+const HIDE_TERMINAL_LABEL: &str = "Hide terminal (⌘J)";
 
 impl Shell {
     /// newTerminalCwd: the focused session's worktree, else its folder, else

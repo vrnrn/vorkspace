@@ -75,7 +75,7 @@ impl ReviewTab {
                 .map_or_else(|| path.clone(), |p| p.to_string_lossy().into_owned()),
             Self::Changes { staged, .. } => {
                 if *staged == Some(true) {
-                    "Staged Changes".into()
+                    "Staged changes".into()
                 } else {
                     "Changes".into()
                 }

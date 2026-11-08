@@ -209,10 +209,10 @@ impl Shell {
                 (
                     "Move terminal".into(),
                     [
-                        ("bottom", "Dock Bottom", DockSide::Bottom),
-                        ("top", "Dock Top", DockSide::Top),
-                        ("left", "Dock Left", DockSide::Left),
-                        ("right", "Dock Right", DockSide::Right),
+                        ("bottom", "Dock bottom", DockSide::Bottom),
+                        ("top", "Dock top", DockSide::Top),
+                        ("left", "Dock left", DockSide::Left),
+                        ("right", "Dock right", DockSide::Right),
                     ]
                     .into_iter()
                     .map(|(id, label, s)| MenuAction::new(id, label).checked(s == side).into())

@@ -76,7 +76,7 @@ pub(crate) fn model_options(
                 .checked(selected_tier(settings) == Some(id.as_str()))
         }));
         items.push(
-            MenuAction::new("service-tier", "Service Tier")
+            MenuAction::new("service-tier", "Service tier")
                 .value(
                     selected_tier(settings)
                         .and_then(|id| model.tiers.iter().find(|(key, _)| key == id))

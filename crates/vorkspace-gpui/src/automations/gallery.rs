@@ -53,10 +53,10 @@ impl Automations {
     pub(super) fn render_gallery(&self, narrow: bool, cx: &mut Context<Self>) -> AnyElement {
         let categories = [
             ("popular", "Popular"),
-            ("review", "Code Review"),
+            ("review", "Code review"),
             ("security", "Security"),
-            ("incidents", "Incidents & Triage"),
-            ("research", "Data & Research"),
+            ("incidents", "Incidents & triage"),
+            ("research", "Data & research"),
             ("environment", "Environment"),
         ];
         let scratch = gallery_card(
