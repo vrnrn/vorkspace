@@ -822,8 +822,101 @@ impl Conversation {
         let bot = self.settings.bot.as_ref().unwrap().bot.clone();
         // The fixed Bot header owns identity; the empty state only offers help.
         let body = if !self.summary.has_messages {
-            let greeting = div().flex().flex_col().items_center().justify_center().px_6().py_12()
-                .child(div().mt_3().max_w(px(384.)).text_center().text_size(px(13.)).line_height(px(21.)).text_color(content(0.5)).child(if bot.projects.is_empty(){"Add the projects I should work on in my settings, or just ask me something.".into()}else{format!("I can see every session, note and folder in {}. Ask what’s going on, or hand me work.",bot.projects.iter().map(|p|std::path::Path::new(p).file_name().unwrap_or_default().to_string_lossy()).collect::<Vec<_>>().join(", "))}));
+            let project = bot
+                .projects
+                .first()
+                .map(|p| {
+                    std::path::Path::new(p)
+                        .file_name()
+                        .unwrap_or_default()
+                        .to_string_lossy()
+                        .into_owned()
+                })
+                .unwrap_or_default();
+            let line = if bot.projects.is_empty() {
+                "Add the projects I should work on in my settings, or just ask me something."
+                    .to_owned()
+            } else {
+                format!(
+                    "I can see every session, note and folder in {}. Ask what’s going on, or hand me work.",
+                    bot.projects
+                        .iter()
+                        .map(|p| std::path::Path::new(p)
+                            .file_name()
+                            .unwrap_or_default()
+                            .to_string_lossy()
+                            .into_owned())
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                )
+            };
+            // A first message is the hardest; offer three that show what a
+            // Bot is for. A click fills the composer, so it can be edited.
+            let starters: Vec<String> = if project.is_empty() {
+                vec![
+                    "What can you help me with?".into(),
+                    "Set up a morning digest habit".into(),
+                ]
+            } else {
+                vec![
+                    format!("What changed in {project} today?"),
+                    "Summarize the sessions still running".into(),
+                    "Plan my next task".into(),
+                ]
+            };
+            let greeting = div()
+                .flex()
+                .flex_col()
+                .items_center()
+                .justify_center()
+                .px_6()
+                .py_12()
+                .child(
+                    div()
+                        .mt_3()
+                        .max_w(px(384.))
+                        .text_center()
+                        .text_size(px(13.))
+                        .line_height(px(21.))
+                        .text_color(content(0.5))
+                        .child(line),
+                )
+                .child(
+                    div()
+                        .mt_5()
+                        .flex()
+                        .flex_wrap()
+                        .justify_center()
+                        .gap_2()
+                        .max_w(px(520.))
+                        .children(starters.into_iter().enumerate().map(|(ix, text)| {
+                            let fill = text.clone();
+                            div()
+                                .id(("bot-starter", ix))
+                                .debug_selector(move || format!("bot-starter-{ix}"))
+                                .role(gpui::Role::Button)
+                                .aria_label(text.clone())
+                                .px_3()
+                                .py(px(6.))
+                                .rounded_full()
+                                .border_1()
+                                .border_color(content(0.12))
+                                .text_size(px(12.))
+                                .text_color(content(0.75))
+                                .cursor_pointer()
+                                .hover(|s| {
+                                    s.bg(vorkspace_ui::fluid::hover(0.06))
+                                        .text_color(content(1.))
+                                })
+                                .child(text)
+                                .on_click(cx.listener(move |this, _, window, cx| {
+                                    this.input
+                                        .update(cx, |input, cx| input.set_text(fill.clone(), cx));
+                                    window.focus(&this.input.focus_handle(cx), cx);
+                                    cx.notify();
+                                }))
+                        })),
+                );
             div()
                 .flex_1()
                 .flex()

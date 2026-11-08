@@ -4845,3 +4845,29 @@ fn legacy_bot_tasks_move_to_an_assigned_project_without_losing_identity(cx: &mut
         saved.id
     );
 }
+
+#[gpui::test]
+fn an_empty_bot_chat_offers_starters_that_fill_the_composer(cx: &mut TestAppContext) {
+    let s = setup(cx);
+    let visual = &mut gpui::VisualTestContext::from_window(s.window.into(), cx);
+    s.window
+        .update(visual, |_, w, cx| {
+            s.manager.update(cx, |m, cx| {
+                m.dismiss_settings(w, cx);
+            })
+        })
+        .unwrap();
+    visual.run_until_parked();
+    visual.refresh().unwrap();
+    let starter = visual
+        .debug_bounds("bot-starter-0")
+        .expect("an empty Bot chat offers a first message");
+    visual.simulate_click(starter.center(), Default::default());
+    visual.run_until_parked();
+    let text = s.manager.read_with(visual, |m, cx| {
+        m.chat()
+            .map(|chat| chat.read(cx).input.read(cx).content.to_string())
+            .unwrap_or_default()
+    });
+    assert!(text.starts_with("What changed in"), "{text}");
+}
