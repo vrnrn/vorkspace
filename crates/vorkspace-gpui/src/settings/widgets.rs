@@ -64,10 +64,19 @@ pub(super) fn empty_card(
     title: impl Into<SharedString>,
     detail: impl Into<SharedString>,
 ) -> Div {
-    div()
+    empty_inline(glyph, title, detail)
         .rounded(px(vorkspace_ui::radius::SURFACE))
         .border_1()
         .border_color(content(0.1))
+}
+
+/// The empty state for a list that already sits inside a group's card.
+pub(super) fn empty_inline(
+    glyph: &'static str,
+    title: impl Into<SharedString>,
+    detail: impl Into<SharedString>,
+) -> Div {
+    div()
         .px_4()
         .py_6()
         .flex()

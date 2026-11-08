@@ -23,11 +23,11 @@ impl SettingsView {
             self.row(
                 Some("rail-bots-pinned"),
                 false,
-                "Pin bots to the icon rail",
+                "Pin Bots to the icon rail",
                 Some("Keep Bots above projects when navigation is collapsed.".into()),
                 vec![self.toggle(
                     "rail-bots-pinned",
-                    "Pin bots to the icon rail",
+                    "Pin Bots to the icon rail",
                     p.rail_bots_pinned,
                     !p.bots,
                     cx,
@@ -147,7 +147,14 @@ impl SettingsView {
             );
         }
         if roster.is_empty() {
-            roster.push(super::super::widgets::note("No bots yet."));
+            roster.push(
+                super::super::widgets::empty_inline(
+                    "ghost",
+                    "No bots yet",
+                    "Create one with + beside Bots in the sidebar; its sessions are listed here.",
+                )
+                .into_any_element(),
+            );
         }
         vec![self.card(None, rows).into_any_element(),self.group(Some("bot-list"),false,"Your bots",Some("Show or hide sessions started by each Bot. Hidden sessions remain available from the Bot's chat.".into()),None,roster)]
     }
