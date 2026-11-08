@@ -32,6 +32,7 @@ const SHOTS: &[(&str, Option<usize>, (f32, f32))] = &[
     ("tooltip", Some(0), (551., 271.)),
     ("explorer", Some(0), (1390., 890.)),
     ("changes", Some(0), (1390., 890.)),
+    ("history", Some(0), (1390., 890.)),
     ("notes", Some(0), (1390., 890.)),
     ("automations", Some(0), (1390., 890.)),
     ("todos", Some(0), (1390., 890.)),
@@ -462,6 +463,11 @@ fn fluid_capture() {
                     ),
                     "changes" => shell.select_classic_sidebar(
                         crate::workspace::SidebarTab::Changes,
+                        window,
+                        cx,
+                    ),
+                    "history" => shell.select_classic_sidebar(
+                        crate::workspace::SidebarTab::Graph,
                         window,
                         cx,
                     ),
