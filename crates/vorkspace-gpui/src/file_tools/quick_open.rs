@@ -78,7 +78,7 @@ impl QuickOpen {
         let search = cx.new(|cx| {
             input::Input::field(
                 "Go to file or run a command",
-                "Search files by name…  (> for commands)",
+                "Search files by name…",
                 content(0.35),
                 cx,
             )
