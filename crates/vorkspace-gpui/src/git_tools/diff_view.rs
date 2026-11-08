@@ -1355,7 +1355,6 @@ impl DiffView {
             return div().into_any_element();
         };
         let gutter = self.gutter_width();
-        let number_width = self.number_width;
         let accent: Hsla = accent_color();
         match row.kind {
             RowKind::File => self.file_header(row.file, false, cx),
@@ -1382,26 +1381,9 @@ impl DiffView {
                 .border_t_1()
                 .border_b_1()
                 .border_color(accent.opacity(0.1))
-                .child(
-                    div()
-                        .w(px(gutter))
-                        .flex_shrink_0()
-                        .flex()
-                        .pl(px(3.))
-                        .text_size(px(9.))
-                        .text_color(content(0.35))
-                        .children(
-                            (if self.layout == Layout::Split {
-                                vec![]
-                            } else {
-                                vec!["Old", "New"]
-                            })
-                            .into_iter()
-                            .map(|label| {
-                                div().w(px(number_width)).pr_2().text_right().child(label)
-                            }),
-                        ),
-                )
+                // The gutter's columns read as old and new from the -/+ rows
+                // themselves; labelling them on every hunk was noise.
+                .child(div().w(px(gutter)).flex_shrink_0())
                 .child(
                     div()
                         .min_w_0()
