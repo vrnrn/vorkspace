@@ -90,7 +90,9 @@ impl Shell {
                                     });
                                 }
                             }
-                            Target::Project(path) => this.select_project(path.clone(), window, cx),
+                            Target::Project(path) => {
+                                this.open_project_from_user(path.clone(), window, cx)
+                            }
                         }
                     }
                 },
