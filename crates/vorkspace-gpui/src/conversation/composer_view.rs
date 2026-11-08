@@ -856,6 +856,19 @@ impl Conversation {
                             )),
                     )
                     .child(self.composer(window, cx))
+                    // Three ways to begin, below the prompt; hidden once the
+                    // pane is too narrow to show them on one or two rows.
+                    .when(!narrow, |d| {
+                        d.child(div().mt_4().flex().justify_center().child(self.starters(
+                            "session-starter",
+                            vec![
+                                "Explain how this project is organized".into(),
+                                "Find and fix a failing test".into(),
+                                "Review my uncommitted changes".into(),
+                            ],
+                            cx,
+                        )))
+                    })
                     .when(!docked, |d| {
                         d.child(div().flex_grow(1.).flex_shrink(1.).flex_basis(px(18.)))
                     }),

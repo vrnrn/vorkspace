@@ -805,6 +805,48 @@ impl Conversation {
         cx.notify();
         Ok(())
     }
+    /// First messages for an empty conversation: a click fills the composer
+    /// for editing rather than sending.
+    pub(super) fn starters(
+        &self,
+        id: &'static str,
+        starters: Vec<String>,
+        cx: &mut Context<Self>,
+    ) -> gpui::Div {
+        div()
+            .flex()
+            .flex_wrap()
+            .justify_center()
+            .gap_2()
+            .max_w(px(520.))
+            .children(starters.into_iter().enumerate().map(|(ix, text)| {
+                let fill = text.clone();
+                div()
+                    .id((id, ix))
+                    .debug_selector(move || format!("{id}-{ix}"))
+                    .role(gpui::Role::Button)
+                    .aria_label(text.clone())
+                    .px_3()
+                    .py(px(6.))
+                    .rounded_full()
+                    .border_1()
+                    .border_color(content(0.12))
+                    .text_size(px(12.))
+                    .text_color(content(0.75))
+                    .cursor_pointer()
+                    .hover(|s| {
+                        s.bg(vorkspace_ui::fluid::hover(0.06))
+                            .text_color(content(1.))
+                    })
+                    .child(text)
+                    .on_click(cx.listener(move |this, _, window, cx| {
+                        this.input
+                            .update(cx, |input, cx| input.set_text(fill.clone(), cx));
+                        window.focus(&this.input.focus_handle(cx), cx);
+                        cx.notify();
+                    }))
+            }))
+    }
     pub(super) fn render_bot(&mut self, window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
         let command = if self.follow_ups.draft_selected {
             Some(input::Command::Draft)
@@ -881,42 +923,7 @@ impl Conversation {
                         .text_color(content(0.5))
                         .child(line),
                 )
-                .child(
-                    div()
-                        .mt_5()
-                        .flex()
-                        .flex_wrap()
-                        .justify_center()
-                        .gap_2()
-                        .max_w(px(520.))
-                        .children(starters.into_iter().enumerate().map(|(ix, text)| {
-                            let fill = text.clone();
-                            div()
-                                .id(("bot-starter", ix))
-                                .debug_selector(move || format!("bot-starter-{ix}"))
-                                .role(gpui::Role::Button)
-                                .aria_label(text.clone())
-                                .px_3()
-                                .py(px(6.))
-                                .rounded_full()
-                                .border_1()
-                                .border_color(content(0.12))
-                                .text_size(px(12.))
-                                .text_color(content(0.75))
-                                .cursor_pointer()
-                                .hover(|s| {
-                                    s.bg(vorkspace_ui::fluid::hover(0.06))
-                                        .text_color(content(1.))
-                                })
-                                .child(text)
-                                .on_click(cx.listener(move |this, _, window, cx| {
-                                    this.input
-                                        .update(cx, |input, cx| input.set_text(fill.clone(), cx));
-                                    window.focus(&this.input.focus_handle(cx), cx);
-                                    cx.notify();
-                                }))
-                        })),
-                );
+                .child(self.starters("bot-starter", starters, cx).mt_5());
             div()
                 .flex_1()
                 .flex()

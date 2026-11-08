@@ -710,3 +710,33 @@ fn narrow_layout_and_opening_history_do_not_slide(cx: &mut TestAppContext) {
         })
         .unwrap();
 }
+
+#[gpui::test]
+fn an_empty_session_offers_starters_that_fill_the_composer(cx: &mut TestAppContext) {
+    vorkspace_ui::theme::configure(&Default::default(), false, true);
+    cx.update(|cx| {
+        cx.set_global(vorkspace_ui::preferences::Preferences::default());
+        vorkspace_ui::clock::use_test_clock(cx);
+        input::bind(cx);
+        crate::popover::bind(cx);
+    });
+    let window = window(cx, 1000.);
+    let visual = &mut gpui::VisualTestContext::from_window(window.into(), cx);
+    window
+        .update(visual, |c, w, cx| {
+            c.input
+                .update(cx, |i, cx| i.replace_text_in_range(None, "", w, cx));
+        })
+        .unwrap();
+    visual.run_until_parked();
+    visual.refresh().unwrap();
+    let starter = visual
+        .debug_bounds("session-starter-1")
+        .expect("an empty session offers a first message");
+    visual.simulate_click(starter.center(), Default::default());
+    visual.run_until_parked();
+    let text = window
+        .update(visual, |c, _, cx| c.input.read(cx).content.to_string())
+        .unwrap();
+    assert_eq!(text, "Find and fix a failing test");
+}
