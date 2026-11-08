@@ -1146,30 +1146,6 @@ impl Notes {
                     }))
                     .child("Add to chat"),
             )
-            .child(
-                page::secondary("delete-note", "Delete note", true, !can_delete)
-                    .child(icon("trash", page::ICON_SIZE))
-                    .child(if self.confirm_delete {
-                        "Confirm delete"
-                    } else {
-                        "Delete"
-                    })
-                    .on_click(cx.listener(move |this, _, _, cx| {
-                        if can_delete {
-                            this.delete(cx);
-                        }
-                    })),
-            )
-            .when(self.confirm_delete, |d| {
-                d.child(
-                    page::action("cancel-delete-note", "Cancel deletion", true)
-                        .child("Cancel")
-                        .on_click(cx.listener(|this, _, _, cx| {
-                            this.confirm_delete = false;
-                            cx.notify();
-                        })),
-                )
-            })
             .when_some(source, |d, source| {
                 d.child(
                     page::action("note-source-session", "Open source conversation", true)
@@ -1199,6 +1175,46 @@ impl Notes {
                             cx.write_to_clipboard(ClipboardItem::new_string(note.body));
                         }
                     })),
+            )
+            // Deleting is rare and destructive, so it waits at the far end as
+            // a quiet icon and only grows into words once it asks to confirm.
+            .child(
+                div()
+                    .ml_auto()
+                    .flex()
+                    .items_center()
+                    .gap_2()
+                    .when(self.confirm_delete, |d| {
+                        d.child(
+                            page::action("cancel-delete-note", "Cancel deletion", true)
+                                .child("Cancel")
+                                .on_click(cx.listener(|this, _, _, cx| {
+                                    this.confirm_delete = false;
+                                    cx.notify();
+                                })),
+                        )
+                        .child(
+                            page::secondary("delete-note", "Delete note", true, !can_delete)
+                                .child(icon("trash", page::ICON_SIZE))
+                                .child("Confirm delete")
+                                .on_click(cx.listener(move |this, _, _, cx| {
+                                    if can_delete {
+                                        this.delete(cx);
+                                    }
+                                })),
+                        )
+                    })
+                    .when(!self.confirm_delete, |d| {
+                        d.child(
+                            page::icon_action("delete-note", "Delete note", can_delete)
+                                .child(icon("trash", page::ICON_SIZE))
+                                .on_click(cx.listener(move |this, _, _, cx| {
+                                    if can_delete {
+                                        this.delete(cx);
+                                    }
+                                })),
+                        )
+                    }),
             );
         let actions = if recording_ready {
             self.recording.update(cx, |page, cx| {

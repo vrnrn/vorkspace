@@ -940,13 +940,21 @@ impl Automations {
             .flex_col()
             .gap(px(4.));
         if visible.is_empty() {
-            list = list.child(page::meta().px(px(8.)).py(px(4.)).child(if self.loading {
-                "Loading automations…"
+            list = list.child(if self.loading {
+                page::meta()
+                    .px(px(8.))
+                    .py(px(4.))
+                    .child("Loading automations…")
             } else if query.trim().is_empty() {
-                "No automations yet"
+                page::empty(
+                    icon("zap", 20.),
+                    "No automations yet",
+                    "Pick an example or start from scratch to run work on a schedule.",
+                )
+                .h(px(240.))
             } else {
-                "No matching automations"
-            }));
+                page::empty(icon("search", 20.), "No matching automations", "").h(px(200.))
+            });
         }
         for automation in visible {
             let id = automation.id.clone();
