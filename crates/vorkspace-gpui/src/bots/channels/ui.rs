@@ -494,7 +494,7 @@ impl Bots {
             .on_mouse_down(MouseButton::Left, move |_, window, cx| {
                 window.focus(&focus, cx)
             })
-            .child(div().flex_1().min_w_0().py_1().child(completion))
+            .child(div().flex_1().min_w_0().py(px(2.)).child(completion))
             // The same square submit as a session's composer: ink when there
             // is something to send, a faint well when there is not.
             .child(

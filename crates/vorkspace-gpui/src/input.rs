@@ -312,6 +312,9 @@ impl Input {
         let mut input = Self::new(cx);
         input.label = "Message the channel".into();
         input.placeholder = "Message the channel · @mention a Bot to address it".into();
+        // One line until there is more to say, like a session's composer.
+        input.height = LINE_HEIGHT;
+        input.min_height = LINE_HEIGHT;
         input
     }
     pub(crate) fn multiline_field(label: &str, placeholder: &str, cx: &mut Context<Self>) -> Self {
