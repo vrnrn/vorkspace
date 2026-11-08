@@ -1,7 +1,7 @@
 //! Operator uses the existing authenticated, per-session local app bridge.
 use super::*;
 use serde_json::{Value, json};
-use vorkspace_core::bot::bridge::{Call, Server};
+use vorkspace_core::bot::bridge::Call;
 
 enum Effect {
     None,
@@ -478,32 +478,6 @@ impl Shell {
         cx.notify();
         Ok(value)
     }
-    pub(super) fn init_app_bridge(&mut self, cx: &mut Context<Self>) {
-        // GPUI's deterministic executor cannot be woken by an OS socket thread.
-        // Command tests exercise the same dispatcher directly without a listener.
-        if cx.is_test() {
-            return;
-        }
-        match Server::start() {
-            Ok((server, calls)) => {
-                self.app_bridge = Some(server);
-                cx.spawn(async move |this, cx| {
-                    while let Ok(call) = calls.recv().await {
-                        if this
-                            .update_in(cx, |this, window, cx| {
-                                this.handle_app_call(call, window, cx)
-                            })
-                            .is_err()
-                        {
-                            break;
-                        }
-                    }
-                })
-                .detach();
-            }
-            Err(error) => self.error = Some(format!("Operator app access: {error}")),
-        }
-    }
     fn finish_app_call(&mut self, call: Call, result: Result<Value, String>) {
         let saved = if vorkspace_core::bot::api::is_read_only(&call.action) {
             Ok(())
@@ -555,7 +529,12 @@ impl Shell {
         })
         .detach();
     }
-    fn handle_app_call(&mut self, call: Call, window: &mut Window, cx: &mut Context<Self>) {
+    pub(super) fn handle_app_call(
+        &mut self,
+        call: Call,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         let caller = self.sessions.get(&call.session).map(|v| v.read(cx));
         let Some(caller) = caller.filter(|v| v.settings.operator) else {
             let _ = call

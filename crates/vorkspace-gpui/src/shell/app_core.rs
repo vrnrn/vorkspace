@@ -15,7 +15,7 @@
 //! loaded, is free. Nothing has to remember to release one.
 use super::*;
 use crate::workspace::VorkspaceDef;
-use gpui::WeakEntity;
+use gpui::{AppContext as _, WeakEntity};
 use serde::{Deserialize, Serialize};
 
 const STORE_KEY: &str = "vorkspaces";
@@ -33,6 +33,11 @@ pub(crate) struct AppCore {
     pub(crate) seen_bots: HashSet<String>,
     scheduler: Option<WeakEntity<Shell>>,
     sessions: HashMap<i64, WeakEntity<Shell>>,
+    /// Windows in the order they joined; the oldest open one is the default
+    /// destination for work no window owns.
+    windows: Vec<WeakEntity<Shell>>,
+    /// The agent app bridge: one socket for the application.
+    pub(crate) bridge: Option<vorkspace_core::bot::bridge::Server>,
 }
 
 /// One core per data store: windows on the same store share it, and a
@@ -63,6 +68,8 @@ impl AppCore {
             seen_bots: saved.seen_bots,
             scheduler: None,
             sessions: HashMap::new(),
+            windows: Vec::new(),
+            bridge: None,
         });
         cx.default_global::<Installed>().0.insert(key, core.clone());
         core
@@ -124,6 +131,67 @@ impl AppCore {
     }
 }
 
+impl AppCore {
+    fn register(&mut self, shell: WeakEntity<Shell>) {
+        self.windows.retain(|w| w.upgrade().is_some());
+        self.windows.push(shell);
+    }
+
+    /// The window an agent call from `session` belongs to: the one with that
+    /// session live, else the one whose Bots run it, else the oldest open.
+    pub(crate) fn route(&self, session: i64, cx: &App) -> Option<Entity<Shell>> {
+        let alive = || self.windows.iter().filter_map(|w| w.upgrade());
+        if let Some(holder) = self.sessions.get(&session).and_then(|w| w.upgrade())
+            && holder.read(cx).sessions.contains_key(&session)
+        {
+            return Some(holder);
+        }
+        alive()
+            .find(|shell| {
+                shell
+                    .read(cx)
+                    .bots
+                    .as_ref()
+                    .is_some_and(|m| m.read(cx).is_bot_session(session))
+            })
+            .or_else(|| alive().next())
+    }
+
+    /// Starts the bridge once and hands each call to the window it belongs to.
+    fn start_bridge(&mut self, cx: &mut Context<Self>) -> Result<(), String> {
+        if self.bridge.is_some() {
+            return Ok(());
+        }
+        let (server, calls) = vorkspace_core::bot::bridge::Server::start()?;
+        self.bridge = Some(server);
+        cx.spawn(async move |core, cx| {
+            while let Ok(call) = calls.recv().await {
+                cx.update(|cx| {
+                    let target = core.upgrade()?.read(cx).route(call.session, cx)?;
+                    let handles: Vec<_> = cx
+                        .windows()
+                        .into_iter()
+                        .filter_map(|w| w.downcast::<Shell>())
+                        .collect();
+                    let window = handles.into_iter().find(|h| {
+                        cx.update_window((*h).into(), |root, _, _| {
+                            root.entity_id() == target.entity_id()
+                        })
+                        .unwrap_or(false)
+                    })?;
+                    window
+                        .update(cx, |shell, window, cx| {
+                            shell.handle_app_call(call, window, cx)
+                        })
+                        .ok()
+                });
+            }
+        })
+        .detach();
+        Ok(())
+    }
+}
+
 impl Shell {
     /// Joins this window to the application's shared state. The first
     /// window seeds it from its own (possibly migrated) definitions.
@@ -143,7 +211,30 @@ impl Shell {
                 this.reconcile_after_shared_change(cx);
             }
         }));
+        let me = cx.weak_entity();
+        core.update(cx, |core, _| core.register(me));
         self.app_core = Some(core);
+    }
+
+    /// Starts the application's agent bridge if no window has yet.
+    pub(super) fn init_app_bridge(&mut self, cx: &mut Context<Self>) {
+        // GPUI's deterministic executor cannot be woken by an OS socket thread.
+        // Command tests exercise the same dispatcher directly without a listener.
+        if cx.is_test() {
+            return;
+        }
+        let Some(core) = self.app_core.clone() else {
+            return;
+        };
+        if let Err(error) = core.update(cx, |core, cx| core.start_bridge(cx)) {
+            self.error = Some(format!("Operator app access: {error}"));
+        }
+    }
+
+    /// The environment that lets session `id`'s agent reach the bridge.
+    pub(super) fn bridge_environment(&self, id: i64, cx: &App) -> Option<HashMap<String, String>> {
+        let core = self.app_core.as_ref()?.read(cx);
+        core.bridge.as_ref().map(|bridge| bridge.environment(id))
     }
 
     /// Copies the shared definitions in; returns whether anything changed.
@@ -307,5 +398,32 @@ mod tests {
                 .update(cx, |shell, _, cx| shell.ensure_session(id, cx).is_some())
                 .unwrap()
         );
+    }
+
+    #[gpui::test]
+    fn agent_calls_go_to_the_window_with_their_session(cx: &mut TestAppContext) {
+        let (a, b, id, _dir) = two_windows(cx);
+        // Make sure B is the window holding the session.
+        a.update(cx, |shell, _, _| {
+            shell.sessions.remove(&id);
+        })
+        .unwrap();
+        assert!(
+            b.update(cx, |shell, _, cx| shell.ensure_session(id, cx).is_some())
+                .unwrap()
+        );
+        let (a_root, b_root) = (
+            a.update(cx, |_, _, cx| cx.entity()).unwrap(),
+            b.update(cx, |_, _, cx| cx.entity()).unwrap(),
+        );
+        let core = a
+            .update(cx, |shell, _, _| shell.app_core.clone().unwrap())
+            .unwrap();
+        cx.update(|cx| {
+            let core = core.read(cx);
+            assert_eq!(core.route(id, cx), Some(b_root.clone()));
+            // A call from no known session goes to the oldest open window.
+            assert_eq!(core.route(-42, cx), Some(a_root.clone()));
+        });
     }
 }

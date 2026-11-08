@@ -35,6 +35,8 @@ Vorkspaces are designed so each can own a window. Separate windows are being bui
 - The scheduler lease. Only the holding window fires reminders and automations. When it closes, the next window to ask takes the lease.
 - Session leases. A session is live (has a `Conversation` and may run a provider) in at most one window. Another window lists it but does not load it. A lease is free once its window closes or no longer has the session loaded.
 
+- The agent app bridge. The core starts its socket once. Each call goes to the window with the calling session live, else the window whose Bots run that session, else the oldest open window.
+
 Leases name their holder and are checked again at every claim, so a closed window never leaves one stuck.
 
-Still owned per window, and the remaining blockers before the app opens a second window: the Bot manager (Habit scheduler, channel workers and outbox, and its saved roster), the agent app bridge socket, Vox, remote-host connections and OS notifications.
+Still owned per window, and the remaining blockers before the app opens a second window: the Bot manager (Habit scheduler, channel workers and outbox, and its saved roster), Vox, remote-host connections and OS notifications.

@@ -483,7 +483,6 @@ pub(crate) struct Shell {
     vox: Option<Entity<crate::vox::Vox>>,
     quick_open: Option<quick_open::Open>,
     image_lightbox: Option<(Entity<crate::image_lightbox::ImageLightbox>, Subscription)>,
-    app_bridge: Option<vorkspace_core::bot::bridge::Server>,
     orchestrations: HashMap<i64, orchestration::Run>,
     /// Each lead's last orchestration, whose agents hang under it in the sidebar.
     orchestration_summaries: HashMap<i64, vorkspace_core::orchestration::Summary>,
@@ -891,7 +890,6 @@ impl Shell {
             vox: None,
             quick_open: None,
             image_lightbox: None,
-            app_bridge: None,
             orchestrations: HashMap::new(),
             orchestration_summaries: sidebar_metadata.orchestrations,
             started_by: sidebar_metadata.started_by,
@@ -1319,6 +1317,7 @@ impl Shell {
             .borrow()
             .get(&id)
             .and_then(|view| view.upgrade());
+        let bridge = self.bridge_environment(id, cx);
         let view = existing
             .unwrap_or_else(|| cx.new(|cx| Conversation::new(summary, self.store.clone(), cx)));
         view.update(cx, |view, cx| {
@@ -1326,8 +1325,8 @@ impl Shell {
             // the indexed working directory so those events cannot erase it.
             view.restore_worktree(worktree, None, cx);
             view.draft_hint = self.draft_sessions.contains(&id);
-            if let Some(bridge) = &self.app_bridge {
-                view.set_app_environment(bridge.environment(id));
+            if let Some(environment) = bridge {
+                view.set_app_environment(environment);
             }
             view.minions = Some(self.minion_registry.clone());
             view.team_histories = Some(self.team_histories.clone());
