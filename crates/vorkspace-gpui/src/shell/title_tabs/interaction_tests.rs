@@ -71,17 +71,6 @@ fn sidebar_highlights_only_the_visible_bot_or_session(cx: &mut TestAppContext) {
         .unwrap();
     let bot_row = format!("bot-rail-{id}");
     let session_row = format!("sidebar-session-{session}");
-    let project_row = window
-        .update(cx, |shell, _, _| {
-            let project = shell
-                .workspace
-                .projects
-                .iter()
-                .position(|project| project == "/work/vorkspace")
-                .unwrap();
-            format!("classic-project-{project}")
-        })
-        .unwrap();
     assert!(sidebar_highlight(window, session_row.clone(), cx));
     assert!(!sidebar_highlight(window, bot_row.clone(), cx));
     let click = |selector: &str, cx: &mut TestAppContext| {
@@ -113,7 +102,13 @@ fn sidebar_highlights_only_the_visible_bot_or_session(cx: &mut TestAppContext) {
             );
         })
         .unwrap();
-    click(&project_row, cx);
+    // The sidebar header's project picker opens a project explicitly.
+    window
+        .update(cx, |shell, w, cx| {
+            shell.open_project_from_user("/work/vorkspace".into(), w, cx)
+        })
+        .unwrap();
+    cx.run_until_parked();
     window
         .update(cx, |shell, _, cx| {
             assert!(

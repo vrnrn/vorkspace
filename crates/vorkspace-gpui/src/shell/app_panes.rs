@@ -713,7 +713,7 @@ impl Shell {
                 library.update(cx, |view, cx| {
                     view.set_context(
                         self.workspace.project.clone(),
-                        self.workspace.projects.clone(),
+                        self.workspace.vorkspace_projects(),
                         cx,
                     );
                     view.configure_recording(&self.workspace.preferences.hidden_providers, cx);
@@ -728,7 +728,7 @@ impl Shell {
                 view.set_appearances(self.workspace.project_appearance.clone(), cx);
                 view.set_context(
                     self.workspace.project.clone(),
-                    self.workspace.projects.clone(),
+                    self.workspace.vorkspace_projects(),
                     cx,
                 );
                 view.configure_recording(&self.workspace.preferences.hidden_providers, cx);

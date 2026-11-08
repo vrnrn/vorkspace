@@ -1,7 +1,7 @@
 //! Everything `Bots` needs from the workspace that hosts it. The shell implements
 //! this, so Bots never depends on the shell itself.
 use crate::conversation::Conversation;
-use gpui::{App, Entity, SharedString, Window};
+use gpui::{App, Entity, Window};
 use serde_json::Value;
 use std::collections::HashMap;
 use vorkspace_core::{
@@ -15,11 +15,7 @@ pub(crate) struct BotSession {
     pub cwd: String,
     pub busy: bool,
     pub has_messages: bool,
-    pub archived: bool,
-    pub updated_at: u64,
     pub needs_input: bool,
-    pub branch: Option<String>,
-    pub model: SharedString,
 }
 
 pub(crate) struct AppStart {

@@ -1,0 +1,30 @@
+# Vorkspaces
+
+A vorkspace is a named set of projects (folders or repositories) and Bots: the work a window is for. The switcher at the top of the left rail shows the active vorkspace; its menu switches vorkspaces, creates one, or opens **Manage vorkspaces…**.
+
+## Model
+
+`workspace::vorkspaces` owns the definitions, stored with the window's saved workspace state:
+
+- `vorkspaces`: each has an id, a name, an ordered list of project paths and a list of Bot ids.
+- `active_vorkspace`: the vorkspace this window shows.
+- `vorkspace_project`: the project each vorkspace last showed, so switching back returns there.
+- `seen_bots`: Bots already placed once.
+
+Membership is a view, not ownership. A folder can belong to several vorkspaces and its sessions appear in each. Removing a folder from a vorkspace only hides it there; its sessions, appearance and data stay. Bots keep running whichever vorkspace lists them.
+
+On the first launch with vorkspaces, every existing project goes into one vorkspace named **Main**. A project the app has never seen before joins the active vorkspace, however it arrives: Open project, a remote host, or an agent command. A Bot never seen before joins the active vorkspace when the roster loads, so existing Bots also land in Main. A Bot deliberately removed from every vorkspace stays out until it is added back. The last vorkspace cannot be deleted.
+
+## Window
+
+Everything that lists projects uses the active vorkspace's projects: the sidebar header's project picker, Search, the quick composer, app pages such as Notes and Automations, and a Bot's project choices. The rail's Bots section hides Bots placed in another vorkspace.
+
+Switching remembers the current project, makes the target active and opens its last project (or its first) the same way an explicit project pick does: a visible Bot or Channels pane gives way to that project's session. A vorkspace with no folders shows the no-project state.
+
+The rail no longer lists projects. Its **Sessions** section lists the vorkspace's sessions across its projects: every working or approval-blocked session up to five, otherwise the three most recent. The disclosure shows up to twenty. Each card shows the title, status or age, the provider, the project, and the Bot that started it, when one did. Blank and archived sessions are not listed. Listing a session never loads its saved history. A Bot's floating island now shows only its documents; the sessions it starts appear in the rail with its name.
+
+**Manage vorkspaces…** opens a dialog with the vorkspace list on the left. For the selected vorkspace it edits the name, its folders (remove, **Add folder…**, or add a folder known from another vorkspace) and its Bots (remove, or add one listed elsewhere). It can switch to that vorkspace or delete it, with a confirming second click.
+
+## One window per vorkspace
+
+Vorkspaces are designed so each can own a window. Separate windows are not enabled yet: each window's shell currently starts its own Bot manager, Habit scheduler, automation polling and agent host, so a second window would run scheduled work twice. Those services need a single application-wide owner first.

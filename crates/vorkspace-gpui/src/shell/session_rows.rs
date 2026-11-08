@@ -781,7 +781,7 @@ impl Shell {
         if self.menu.is_some() {
             return;
         }
-        let projects = self.workspace.projects.clone();
+        let projects = self.workspace.vorkspace_projects();
         if let Some(next) = adjacent(&projects, Some(&self.workspace.project), step)
             && next != self.workspace.project
         {

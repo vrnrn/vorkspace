@@ -3,11 +3,13 @@
 //! pane keeps its split tree in `layouts` and its last focused pane in
 //! `focused`. `active` is always the focused pane.
 mod panes;
+mod vorkspaces;
 pub(crate) use panes::{AppPane, AppPaneState};
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 use std::sync::atomic::{AtomicU64, Ordering};
 use vorkspace_model::pane_layout::{Edge, PaneNode, SplitDir, leaf};
+pub(crate) use vorkspaces::VorkspaceDef;
 
 static NEXT_TERMINAL_TAB_ID: AtomicU64 = AtomicU64::new(1);
 
@@ -378,6 +380,14 @@ pub(crate) struct Workspace {
     pub desktop_workspace_snapshot: Option<serde_json::Value>,
     /// Exact source strings retained for preferences with no native equivalent.
     pub desktop_preferences_metadata: Option<serde_json::Value>,
+    /// Named sets of projects and Bots. Folders and Bots keep their own data;
+    /// a vorkspace only decides what this window lists.
+    pub vorkspaces: Vec<VorkspaceDef>,
+    pub active_vorkspace: String,
+    /// The project each vorkspace last showed, so switching back returns there.
+    pub vorkspace_project: HashMap<String, String>,
+    /// Bots already placed in a vorkspace once; a new one joins the active.
+    pub seen_bots: HashSet<String>,
 }
 
 /// Port of src/features/projects/model/projectTerminal.ts.
@@ -552,6 +562,10 @@ impl Default for Workspace {
             desktop_project_preferences: None,
             desktop_workspace_snapshot: None,
             desktop_preferences_metadata: None,
+            vorkspaces: Vec::new(),
+            active_vorkspace: String::new(),
+            vorkspace_project: HashMap::new(),
+            seen_bots: HashSet::new(),
         }
     }
 }
@@ -793,6 +807,7 @@ impl Workspace {
         if !state.project.is_empty() {
             state.add_project(&state.project.clone());
         }
+        state.ensure_vorkspaces();
         state
     }
     /// Reorder the available projection, merging it into the complete order so
@@ -961,6 +976,17 @@ impl Workspace {
             .any(|p| vorkspace_core::files::path_key(p) == key)
         {
             self.projects.push(path.into());
+            // A folder the app has never seen joins the vorkspace in view,
+            // however it arrived (a dialog, a remote host, an agent command).
+            let active = self.active_vorkspace.clone();
+            if let Some(v) = self.vorkspaces.iter_mut().find(|v| v.id == active)
+                && !v
+                    .projects
+                    .iter()
+                    .any(|p| vorkspace_core::files::path_key(p) == key)
+            {
+                v.projects.push(path.into());
+            }
         }
     }
     pub fn session_for_pane(&self, id: i64) -> Option<i64> {

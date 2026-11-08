@@ -54,13 +54,11 @@ fn rail_opens_channels_without_a_selected_bot_and_returns_to_the_workspace(
     let channel = visual.debug_bounds("classic-channel-team").unwrap();
     let label = visual.debug_bounds("channel-label-team").unwrap();
     let bot = visual.debug_bounds("bot-rail-reader").unwrap();
-    let project = visual.debug_bounds("classic-project-label-0").unwrap();
     assert_eq!(
         label.left(),
         bot.left() + px(32.),
         "after the 16px mark slot"
     );
-    assert_eq!(label.left(), project.left());
     assert!(visual.debug_bounds("channel-unread-team").is_some());
     visual.simulate_click(channel.center(), Default::default());
     visual.run_until_parked();
@@ -112,8 +110,13 @@ fn rail_opens_channels_without_a_selected_bot_and_returns_to_the_workspace(
     assert!(visual.debug_bounds("sidebar-frame").is_none());
 
     assert!(visual.debug_bounds("close-channels").is_none());
-    let close = visual.debug_bounds("classic-project-0").unwrap();
-    visual.simulate_click(close.center(), Default::default());
+    // Picking the project in the sidebar header returns to its workspace.
+    window
+        .update(visual, |shell, w, cx| {
+            let project = shell.workspace.project.clone();
+            shell.open_project_from_user(project, w, cx)
+        })
+        .unwrap();
     visual.run_until_parked();
     assert!(!manager.read_with(visual, |manager, _| manager.classic_channels_open()));
     assert!(visual.debug_bounds("sidebar-frame").is_some());

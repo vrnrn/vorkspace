@@ -42,7 +42,7 @@ impl Shell {
             .filter(|v| self.workspace.projects.contains(&v.cwd))
             .unwrap_or(initial);
         choice.access = crate::conversation::default_access(cx);
-        let projects = self.workspace.projects.clone();
+        let projects = self.workspace.vorkspace_projects();
         let store = self.store.clone();
         let bounds = gpui::Bounds::centered(None, gpui::size(px(680.), px(230.)), cx);
         let handle = cx.open_window(

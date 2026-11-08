@@ -9,7 +9,6 @@ pub(crate) const ISLAND_BREAKPOINT: f32 = COLUMN + LANE_WIDTH;
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub(super) enum Section {
-    Sessions,
     Documents,
 }
 
@@ -26,23 +25,19 @@ impl Bots {
 
     pub(super) fn island_trigger(&self, bot: &Bot, cx: &mut Context<Self>) -> AnyElement {
         let id = bot.id.clone();
-        icon_button(
-            "bot-island-toggle",
-            "Show sessions and documents",
-            "bot-island",
-        )
-        .debug_selector(|| "bot-island-toggle".into())
-        .aria_expanded(false)
-        .size(px(32.))
-        .rounded(px(radius::CONTROL))
-        .bg(island_fill())
-        .border_1()
-        .border_color(content(0.08))
-        .on_click(cx.listener(move |this, _, _, cx| {
-            this.toggle_island(&id, cx);
-            cx.stop_propagation();
-        }))
-        .into_any_element()
+        icon_button("bot-island-toggle", "Show documents", "bot-island")
+            .debug_selector(|| "bot-island-toggle".into())
+            .aria_expanded(false)
+            .size(px(32.))
+            .rounded(px(radius::CONTROL))
+            .bg(island_fill())
+            .border_1()
+            .border_color(content(0.08))
+            .on_click(cx.listener(move |this, _, _, cx| {
+                this.toggle_island(&id, cx);
+                cx.stop_propagation();
+            }))
+            .into_any_element()
     }
 
     pub(super) fn island(
@@ -59,11 +54,14 @@ impl Bots {
             .get(&bot.id)
             .map(|chat| chat.read(cx).bot_status_label())
             .unwrap_or("Ready");
+        // Sessions a Bot starts live in the rail's Sessions list with the
+        // rest of the vorkspace, marked with the Bot that started them; the
+        // island keeps what is the Bot's own: its documents.
         let mut body = div()
-            .id(match expanded {
-                None => "bot-island-overview",
-                Some(Section::Sessions) => "bot-island-sessions",
-                Some(Section::Documents) => "bot-island-documents",
+            .id(if expanded.is_some() {
+                "bot-island-documents"
+            } else {
+                "bot-island-overview"
             })
             .debug_selector(|| "bot-island-content".into())
             .flex_shrink_1()
@@ -72,10 +70,7 @@ impl Bots {
             .px_2()
             .pb_2()
             .when(expanded.is_some(), |d| d.flex_1());
-        // A new Bot has neither; one line says what will gather here rather
-        // than two headed sections that are each empty.
-        let fresh = expanded.is_none() && bot.launches.is_empty() && bot.documents.is_empty();
-        if fresh {
+        if bot.documents.is_empty() {
             body = body.child(
                 div()
                     .id("bot-island-fresh")
@@ -85,23 +80,11 @@ impl Bots {
                     .text_size(px(12.))
                     .line_height(px(18.))
                     .text_color(content(0.45))
-                    .child("Sessions it starts and documents it writes appear here."),
+                    .child("Documents it writes appear here."),
             );
-        } else if expanded != Some(Section::Documents) {
-            let (sessions, more) = self.session_list(bot, expanded.is_some(), cx);
+        } else {
             body = body
-                .child(section("Sessions", bot.launches.len()))
-                .child(sessions);
-            if expanded.is_none() && more {
-                body = body.child(self.island_more(bot, Section::Sessions, false, cx));
-            }
-        }
-        if !fresh && expanded != Some(Section::Sessions) {
-            body = body
-                .child(
-                    section("Documents", bot.documents.len())
-                        .when(expanded.is_none(), |d| d.mt_3()),
-                )
+                .child(section("Documents", bot.documents.len()))
                 .child(self.document_list(bot, expanded.is_some(), cx));
             if expanded.is_none() && bot.documents.len() > 3 {
                 body = body.child(self.island_more(bot, Section::Documents, false, cx));
@@ -111,7 +94,7 @@ impl Bots {
             .id(SharedString::from(format!("bot-island-{}", bot.id)))
             .debug_selector(|| "bot-island".into())
             .role(Role::Complementary)
-            .aria_label(format!("{} sessions and documents", bot.label()))
+            .aria_label(format!("{} documents", bot.label()))
             .w_full()
             .max_h_full()
             .min_h_0()
@@ -157,19 +140,13 @@ impl Bots {
                     )
                     .when(overlay, |d| {
                         d.child(
-                            icon_button(
-                                "bot-island-close",
-                                "Close sessions and documents",
-                                "close",
-                            )
-                            .debug_selector(|| "bot-island-close".into())
-                            .on_click(cx.listener(
-                                move |this, _, _, cx| {
+                            icon_button("bot-island-close", "Close documents", "close")
+                                .debug_selector(|| "bot-island-close".into())
+                                .on_click(cx.listener(move |this, _, _, cx| {
                                     this.open_islands.remove(&close_id);
                                     cx.notify();
                                     cx.stop_propagation();
-                                },
-                            )),
+                                })),
                         )
                     }),
             )
@@ -195,7 +172,6 @@ impl Bots {
     ) -> AnyElement {
         let id = bot.id.clone();
         let (control, label) = match (section, expanded) {
-            (Section::Sessions, false) => ("bot-island-more-sessions", "View all sessions"),
             (Section::Documents, false) => ("bot-island-more-documents", "View all documents"),
             (_, true) => ("bot-island-show-less", "Show less"),
         };

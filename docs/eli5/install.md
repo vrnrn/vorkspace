@@ -6,7 +6,7 @@ To build your own copy, run `npm run build`. On macOS, this packages the release
 
 The app opens your saved desktop data by default, keeping your sessions and projects persistent. If you ever need a separate sandbox database, pass `--dev-data`. [Data storage](data-storage.md) explains those locations.
 
-Pick a project on the left and work in the middle. Sessions, Explorer and Changes stay on the left; drag the sidebar’s right edge to resize it. A Bot’s sessions and documents appear in a floating island on its right. In a narrow pane, click the Bot face or the small top-right button to show it. You can change the colors, transparency, and interface size in **Settings → Appearance**. To change one project's name, logo, colors, background picture or notifications, right-click it and choose **Project settings…**.
+Pick a vorkspace at the top left and a project at the top of the sidebar, then work in the middle. Sessions, Explorer and Changes stay on the left; drag the sidebar’s right edge to resize it. A Bot’s documents appear in a floating island on its right; the sessions it starts are listed on the left. In a narrow pane, click the Bot face or the small top-right button to show it. You can change the colors, transparency, and interface size in **Settings → Appearance**. To change one project's name, logo, colors, background picture or notifications, choose **Project settings…** from the project picker.
 
 Building does not publish the app. [Updates](updates.md) explains how to include the open-source updater and prepare signed downloads; paid Apple services are optional.
 

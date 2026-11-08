@@ -642,9 +642,6 @@ impl Conversation {
     pub(crate) fn bot_model(&self) -> Option<String> {
         self.model.clone()
     }
-    pub(crate) fn branch_name(&self) -> Option<&str> {
-        self.branch.as_deref()
-    }
     pub(crate) fn bot_model_label(&self) -> SharedString {
         self.model_label()
     }

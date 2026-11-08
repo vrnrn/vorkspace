@@ -31,6 +31,8 @@ const SHOTS: &[(&str, Option<usize>, (f32, f32))] = &[
     ("split-down", Some(0), (1390., 890.)),
     ("tooltip", Some(0), (551., 271.)),
     ("explorer", Some(0), (1390., 890.)),
+    ("vorkspace-menu", Some(0), (1390., 890.)),
+    ("vorkspace-dialog", Some(0), (1390., 890.)),
     ("first-run", None, (1390., 890.)),
     ("first-run-explorer", None, (1390., 890.)),
     ("first-run-changes", None, (1390., 890.)),
@@ -503,6 +505,17 @@ fn fluid_capture() {
                         window,
                         cx,
                     ),
+                    "vorkspace-menu" => {
+                        let side = shell.workspace.create_vorkspace("Side projects");
+                        shell.workspace.add_project_to_vorkspace(&side, PROJECT);
+                        shell.open_menu(
+                            MenuTarget::Vorkspace,
+                            Anchor::Slot(shell.vorkspace_anchor.clone()),
+                            window,
+                            cx,
+                        )
+                    }
+                    "vorkspace-dialog" => shell.open_vorkspace_dialog(None, window, cx),
                     "history" => shell.select_classic_sidebar(
                         crate::workspace::SidebarTab::Graph,
                         window,

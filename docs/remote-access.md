@@ -25,7 +25,7 @@ The forward binds to a temporary port on the laptop's loopback interface. Quitti
 
 ## Start a session
 
-1. In the project rail, click **+** next to Projects and choose **Open folder on a machine…**.
+1. Click the project name at the top of the sidebar and choose **Open folder on a machine…**. The folder joins the current vorkspace.
 2. Choose the machine, browse to an existing checkout (or type its absolute path, such as `/home/me/code/my-app`), and click **Open**.
 3. Send a message. The first message creates the session on the host with the model, reasoning effort, and permission mode shown in the composer.
 

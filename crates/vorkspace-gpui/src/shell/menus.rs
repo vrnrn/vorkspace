@@ -227,6 +227,7 @@ impl Shell {
                 228.,
                 MenuStyle::Filter,
             ),
+            MenuTarget::Vorkspace => self.vorkspace_menu_items(),
             MenuTarget::SidebarOptions => (
                 "Sidebar options".into(),
                 self.sidebar_options_menu_items(cx),
@@ -236,9 +237,13 @@ impl Shell {
             // SidebarWorktreeSwitcher's menu under the project header.
             MenuTarget::Header => {
                 let picker = cx.new(|cx| {
-                    ProjectPicker::new(&self.workspace.projects, &self.workspace.project, cx)
-                        .appearance(self.workspace.project_appearance.clone())
-                        .allow_remote()
+                    ProjectPicker::new(
+                        &self.workspace.vorkspace_projects(),
+                        &self.workspace.project,
+                        cx,
+                    )
+                    .appearance(self.workspace.project_appearance.clone())
+                    .allow_remote()
                 });
                 events.push(cx.subscribe_in(
                     &picker,
@@ -436,6 +441,7 @@ impl Shell {
             }
             MenuTarget::SessionFilter => self.change_session_filter(action, cx),
             MenuTarget::SidebarOptions => self.change_sidebar_option(action, cx),
+            MenuTarget::Vorkspace => self.run_vorkspace_menu(action, window, cx),
             MenuTarget::Tab(id) => {
                 self.run_title_tab_menu(TitleTab::Workspace(id), action, window, cx)
             }

@@ -58,6 +58,7 @@ mod title_tabs;
 mod titlebar_tests;
 #[cfg(test)]
 mod ui_parity_tests;
+mod vorkspaces;
 mod vox;
 mod worktrees;
 
@@ -295,6 +296,8 @@ pub(crate) enum MenuTarget {
         path: String,
         rail: bool,
     },
+    /// The rail's vorkspace switcher.
+    Vorkspace,
     /// ProjectTerminalDock's Move Terminal menu.
     TerminalDock,
     /// A dock terminal tab's context menu.
@@ -605,6 +608,9 @@ pub(crate) struct Shell {
     /// Project settings: one project's appearance, background, Codebase
     /// Memory and notifications, in the same dialog frame as a Bot's.
     pub(super) project_dialog: Option<project_settings::ProjectDialog>,
+    pub(super) vorkspace_dialog: Option<vorkspaces::VorkspaceDialog>,
+    rail_sessions_expanded: bool,
+    vorkspace_anchor: AnchorSlot,
     backgrounds: HashMap<i64, Entity<crate::project_background::ProjectBackground>>,
     background_card: AnchorSlot,
     /// Each project's working grid in the rail, by project path.
@@ -986,6 +992,9 @@ impl Shell {
             menu: None,
             background_dialog: None,
             project_dialog: None,
+            vorkspace_dialog: None,
+            rail_sessions_expanded: false,
+            vorkspace_anchor: AnchorSlot::default(),
             backgrounds: HashMap::new(),
             background_card: AnchorSlot::default(),
             project_marks: HashMap::new(),
@@ -2196,8 +2205,20 @@ impl Shell {
                 if let Some(path) = paths.first() {
                     let path = path.to_string_lossy().into_owned();
                     let _ = this.update_in(cx, |this, window, cx| {
-                        this.workspace.restore_project(&path);
-                        this.select_project(path, window, cx);
+                        // An opened folder joins the vorkspace it was opened from
+                        // (or the one being edited in the vorkspace dialog).
+                        let target = this
+                            .vorkspace_dialog
+                            .as_ref()
+                            .map(|d| d.editing.clone())
+                            .unwrap_or_else(|| this.workspace.active_vorkspace.clone());
+                        this.workspace.add_project_to_vorkspace(&target, &path);
+                        if target == this.workspace.active_vorkspace {
+                            this.open_project_from_user(path, window, cx);
+                        } else {
+                            this.persist(cx);
+                            cx.notify();
+                        }
                     });
                 }
             }
@@ -3021,6 +3042,7 @@ impl Render for Shell {
             .children(self.drag_ghost(cx))
             .children(self.background_modal(window, cx))
             .children(self.project_settings_modal(window, cx))
+            .children(self.vorkspace_modal(window, cx))
             .children(
                 self.bots
                     .clone()

@@ -42,7 +42,7 @@ fn sidebar_density_stays_inert_while_activity_visibility_is_restored(cx: &mut Te
     visual.run_until_parked();
     let selector: &'static str = Box::leak(format!("sidebar-session-{card}").into_boxed_str());
     assert_eq!(visual.debug_bounds(selector).unwrap().size.height, px(32.));
-    let tree: &'static str = Box::leak(format!("project-session-{b}").into_boxed_str());
+    let tree: &'static str = Box::leak(format!("rail-session-{b}").into_boxed_str());
     assert!(visual.debug_bounds(tree).is_some());
     window
         .update(visual, |shell, _, cx| {

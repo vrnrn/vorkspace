@@ -145,7 +145,7 @@ impl Shell {
         }
         if let Some(notes) = &self.notes {
             let cwd = self.workspace.project.clone();
-            let projects = self.workspace.projects.clone();
+            let projects = self.workspace.vorkspace_projects();
             notes.update(cx, |notes, cx| {
                 notes.set_appearances(self.workspace.project_appearance.clone(), cx);
                 notes.set_context(cwd, projects, cx);
@@ -357,7 +357,12 @@ impl Shell {
     }
     pub(super) fn ensure_background_inbox(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if self.inbox.is_none() {
-            let projects = self.workspace.projects.iter().map(Into::into).collect();
+            let projects = self
+                .workspace
+                .vorkspace_projects()
+                .into_iter()
+                .map(Into::into)
+                .collect();
             let cwd = self.workspace.project.clone().into();
             let view = cx.new(|cx| inbox::Inbox::new(self.store.clone(), projects, cwd, cx));
             self.subscribe_connector(&view, window, cx);
@@ -380,7 +385,12 @@ impl Shell {
             self.inbox = Some(view);
         }
         if let Some(inbox) = &self.inbox {
-            let projects = self.workspace.projects.iter().map(Into::into).collect();
+            let projects = self
+                .workspace
+                .vorkspace_projects()
+                .into_iter()
+                .map(Into::into)
+                .collect();
             let cwd = self.workspace.project.clone().into();
             let bots = self
                 .bots
@@ -416,7 +426,7 @@ impl Shell {
         );
         if self.automations.is_none() {
             let cwd = self.workspace.project.clone();
-            let projects = self.workspace.projects.clone();
+            let projects = self.workspace.vorkspace_projects();
             let view = cx.new(|cx| automations::Automations::new(service, cwd, projects, cx));
             view.update(cx, |view, cx| view.set_database(self.store.clone(), cx));
             self.app_view_events.push(cx.subscribe_in(
@@ -445,7 +455,7 @@ impl Shell {
         }
         if let Some(view) = &self.automations {
             let cwd = self.workspace.project.clone();
-            let projects = self.workspace.projects.clone();
+            let projects = self.workspace.vorkspace_projects();
             view.update(cx, |view, cx| {
                 view.set_appearances(self.workspace.project_appearance.clone(), cx);
                 let connections = self

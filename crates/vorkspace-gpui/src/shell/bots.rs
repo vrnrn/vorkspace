@@ -42,18 +42,13 @@ impl Shell {
             .iter()
             .map(|&id| {
                 let metadata = self.session_metadata(id, cx);
-                let live = self.sessions.get(&id).map(|v| v.read(cx));
                 BotSession {
                     id,
                     title: metadata.summary.title.clone(),
                     cwd: metadata.summary.cwd.clone(),
                     busy: metadata.busy,
                     has_messages: metadata.summary.has_messages,
-                    archived: metadata.summary.archived,
-                    updated_at: metadata.summary.updated_at,
                     needs_input: metadata.needs_approval(),
-                    branch: live.and_then(|v| v.branch_name()).map(str::to_owned),
-                    model: live.map(|v| v.bot_model_label()).unwrap_or_default(),
                 }
             })
             .collect()
@@ -234,7 +229,7 @@ impl BotsHost for gpui::WeakEntity<Shell> {
             .map(|shell| {
                 let workspace = &shell.read(cx).workspace;
                 (
-                    workspace.projects.clone(),
+                    workspace.vorkspace_projects(),
                     workspace.project_appearance.clone(),
                 )
             })

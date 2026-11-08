@@ -144,7 +144,7 @@ impl Shell {
         Sources {
             summaries: summaries.into_values().collect(),
             live,
-            projects: self.workspace.projects.clone(),
+            projects: self.workspace.vorkspace_projects(),
             recent: self
                 .workspace
                 .recent_files

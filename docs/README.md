@@ -3,6 +3,7 @@
 Start with [building](building.md), [architecture](architecture.md), and the [repository map](repository.md).
 
 - [Installation](install.md)
+- [Vorkspaces](vorkspaces.md)
 - [Data selection and continuity](data-storage.md)
 - [Provider CLIs and accounts](providers.md)
 - [Remote access](remote-access.md)

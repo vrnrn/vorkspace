@@ -37,39 +37,24 @@ fn bounds(visual: &mut VisualTestContext, selector: String) -> Option<Bounds<Pix
 }
 
 #[gpui::test]
-fn sessions_hang_under_their_projects_without_hydrating_history(cx: &mut TestAppContext) {
+fn rail_sessions_list_running_work_across_projects_without_hydrating_history(
+    cx: &mut TestAppContext,
+) {
     let (window, a, b) = fixture(cx);
     let visual = &mut VisualTestContext::from_window(window.into(), cx);
     visual.simulate_resize(gpui::size(px(1300.), px(900.)));
     visual.run_until_parked();
-    assert!(bounds(visual, format!("project-session-{a}")).is_none());
-    assert!(visual.debug_bounds("sidebar-activity-card").is_none());
     busy(window, a, true, visual);
     busy(window, b, true, visual);
-    let (a_project, b_project) = window
+    let different = window
         .update(visual, |shell, _, cx| {
-            let ix = |id: i64| {
-                let cwd = shell.session_metadata(id, cx).summary.cwd.clone();
-                shell
-                    .workspace
-                    .projects
-                    .iter()
-                    .position(|p| *p == cwd)
-                    .unwrap()
-            };
-            (ix(a), ix(b))
+            shell.session_metadata(a, cx).summary.cwd != shell.session_metadata(b, cx).summary.cwd
         })
         .unwrap();
-    assert_ne!(a_project, b_project);
-    for (id, project) in [(a, a_project), (b, b_project)] {
-        let row = bounds(visual, format!("project-session-{id}")).unwrap();
-        let mark = bounds(visual, format!("classic-project-{project}")).unwrap();
-        assert!(
-            row.top() >= mark.bottom(),
-            "a session hangs below its project"
-        );
-        assert!(bounds(visual, format!("classic-project-working-{project}")).is_some());
-    }
+    assert!(different, "the two sessions belong to different projects");
+    // Both projects are in the vorkspace, so both running sessions are listed.
+    assert!(bounds(visual, format!("rail-session-{a}")).is_some());
+    assert!(bounds(visual, format!("rail-session-{b}")).is_some());
     // The Working card is only for the icon rail.
     assert!(visual.debug_bounds("sidebar-activity-card").is_none());
     // Listing another project's session never loads its saved transcript.
@@ -78,8 +63,8 @@ fn sessions_hang_under_their_projects_without_hydrating_history(cx: &mut TestApp
             assert!(!shell.sessions[&a].read(cx).history_loaded())
         })
         .unwrap();
-    // Opening it selects exactly that session.
-    let row = bounds(visual, format!("project-session-{a}")).unwrap();
+    // Opening it selects exactly that session in its project.
+    let row = bounds(visual, format!("rail-session-{a}")).unwrap();
     visual.simulate_click(row.center(), Default::default());
     visual.run_until_parked();
     window
@@ -91,30 +76,6 @@ fn sessions_hang_under_their_projects_without_hydrating_history(cx: &mut TestApp
             );
         })
         .unwrap();
-}
-
-#[gpui::test]
-fn the_activity_preferences_hide_project_trees(cx: &mut TestAppContext) {
-    let (window, _, b) = fixture(cx);
-    let visual = &mut VisualTestContext::from_window(window.into(), cx);
-    busy(window, b, true, visual);
-    assert!(bounds(visual, format!("project-session-{b}")).is_some());
-    window
-        .update(visual, |shell, _, cx| {
-            shell.change_sidebar_option("sidebar-activity", cx)
-        })
-        .unwrap();
-    visual.run_until_parked();
-    assert!(bounds(visual, format!("project-session-{b}")).is_none());
-    window
-        .update(visual, |shell, _, cx| {
-            shell.change_sidebar_option("sidebar-activity", cx);
-            shell.workspace.preferences.working_agents = false;
-            shell.invalidate_chrome(cx);
-        })
-        .unwrap();
-    visual.run_until_parked();
-    assert!(bounds(visual, format!("project-session-{b}")).is_none());
 }
 
 #[gpui::test]
@@ -163,8 +124,8 @@ fn compact_activity_is_one_animated_control_for_working_sessions_and_expands(
             assert!(shell.workspace.project_rail_open)
         })
         .unwrap();
-    // Expanded, the session hangs under its project instead of the card.
-    assert!(bounds(visual, format!("project-session-{b}")).is_some());
+    // Expanded, the session is listed in the rail's Sessions instead.
+    assert!(bounds(visual, format!("rail-session-{b}")).is_some());
     window
         .update(visual, |shell, _, cx| shell.toggle_project_rail(cx))
         .unwrap();
@@ -948,4 +909,48 @@ fn removing_the_scrolled_session_keeps_the_nearest_surviving_session(cx: &mut Te
             assert_eq!(top.offset_in_item, px(0.));
         });
     }
+}
+
+#[gpui::test]
+fn switching_vorkspaces_lists_only_their_sessions_and_returns_to_the_last_project(
+    cx: &mut TestAppContext,
+) {
+    let (window, a, b) = fixture(cx);
+    let visual = &mut VisualTestContext::from_window(window.into(), cx);
+    visual.simulate_resize(gpui::size(px(1300.), px(900.)));
+    busy(window, a, true, visual);
+    busy(window, b, true, visual);
+    let (main, side, a_cwd, b_cwd, before) = window
+        .update(visual, |shell, w, cx| {
+            let a_cwd = shell.session_metadata(a, cx).summary.cwd.clone();
+            let b_cwd = shell.session_metadata(b, cx).summary.cwd.clone();
+            let main = shell.workspace.active_vorkspace.clone();
+            let before = shell.workspace.project.clone();
+            let side = shell.workspace.create_vorkspace("Side");
+            shell.workspace.add_project_to_vorkspace(&side, &b_cwd);
+            shell.switch_vorkspace(&side, w, cx);
+            (main, side, a_cwd, b_cwd, before)
+        })
+        .unwrap();
+    visual.run_until_parked();
+    assert_ne!(a_cwd, b_cwd);
+    assert!(bounds(visual, format!("rail-session-{a}")).is_none());
+    assert!(bounds(visual, format!("rail-session-{b}")).is_some());
+    window
+        .update(visual, |shell, w, cx| {
+            assert_eq!(shell.workspace.active_vorkspace, side);
+            assert_eq!(shell.workspace.project, b_cwd);
+            assert_eq!(shell.workspace.vorkspace_projects(), vec![b_cwd.clone()]);
+            shell.switch_vorkspace(&main, w, cx);
+        })
+        .unwrap();
+    visual.run_until_parked();
+    // A shared folder's sessions show in every vorkspace that holds it.
+    assert!(bounds(visual, format!("rail-session-{a}")).is_some());
+    assert!(bounds(visual, format!("rail-session-{b}")).is_some());
+    window
+        .update(visual, |shell, _, _| {
+            assert_eq!(shell.workspace.project, before, "back where Main was left")
+        })
+        .unwrap();
 }

@@ -8,7 +8,6 @@ mod creation;
 mod document_pane;
 mod effects;
 mod files;
-mod filters;
 mod habit_panel;
 #[cfg(test)]
 mod header_tests;
@@ -99,6 +98,9 @@ pub(crate) struct Bots {
     prefs: vorkspace_ui::preferences::Preferences,
     pub(crate) roster: Roster,
     pub(crate) roster_loaded: bool,
+    /// Bots placed in another vorkspace, hidden from this window's rail.
+    /// A Bot created a moment ago is not here, so it shows at once.
+    pub(crate) vorkspace_hidden: HashSet<String>,
     pub(crate) active: Option<String>,
     chats: HashMap<String, Entity<Conversation>>,
     bridge: Option<bot::bridge::Server>,
@@ -162,7 +164,6 @@ pub(crate) struct Bots {
     /// instead of being steered into it.
     held: HashSet<String>,
     card_refresh: HashMap<String, u64>,
-    session_filters: filters::Filters,
 }
 impl EventEmitter<Changed> for Bots {}
 impl EventEmitter<TabOpened> for Bots {}
@@ -422,11 +423,6 @@ impl Bots {
             .flat_map(|m| m.outbox.iter().map(|q| q.id.clone()))
             .collect();
         let held = roster.held_messages.clone();
-        let session_filters = locked(&store)
-            .ok()
-            .and_then(|s| s.setting("bot-session-filters").ok().flatten())
-            .and_then(|s| serde_json::from_str(&s).ok())
-            .unwrap_or_default();
         let manager = cx.entity();
         let habit_panel = cx.new(|cx| habit_panel::HabitPanel::new(manager, cx));
         let mut channel_state =
@@ -453,6 +449,7 @@ impl Bots {
             prefs,
             roster,
             roster_loaded: roster_error.is_none(),
+            vorkspace_hidden: HashSet::new(),
             active: None,
             chats: HashMap::new(),
             bridge,
@@ -514,7 +511,6 @@ impl Bots {
             dispatch_claims: HashSet::new(),
             held,
             card_refresh: HashMap::new(),
-            session_filters,
         };
         if let Some(rx) = rx {
             this._bridge_task = Some(cx.spawn(async move |this, cx| {
@@ -1711,6 +1707,7 @@ impl Bots {
             .iter()
             .filter(|m| !m.is_minion())
             .filter(|m| project.as_ref().is_none_or(|p| m.works_on(p)))
+            .filter(|m| !self.vorkspace_hidden.contains(&m.id))
             .cloned()
             .collect();
         self.rail_ids = roster.iter().map(|m| m.id.clone()).collect();

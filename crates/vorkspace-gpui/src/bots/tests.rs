@@ -2271,6 +2271,9 @@ fn settings_picker_project_overflow_preserves_bot_setup(cx: &mut TestAppContext)
     s.window
         .update(visual, |shell, _, cx| {
             shell.workspace.projects = projects.clone();
+            // Bots choose from their vorkspace's projects.
+            let active = shell.workspace.active_vorkspace.clone();
+            shell.workspace.vorkspace_mut(&active).unwrap().projects = projects.clone();
             cx.notify();
         })
         .unwrap();
@@ -4873,7 +4876,7 @@ fn an_empty_bot_chat_offers_starters_that_fill_the_composer(cx: &mut TestAppCont
 }
 
 #[gpui::test]
-fn clicking_a_project_row_from_a_bot_leaves_the_bot_for_that_project(cx: &mut TestAppContext) {
+fn opening_a_project_from_a_bot_leaves_the_bot_for_that_project(cx: &mut TestAppContext) {
     let s = setup(cx);
     let visual = &mut gpui::VisualTestContext::from_window(s.window.into(), cx);
     s.window
@@ -4887,10 +4890,12 @@ fn clicking_a_project_row_from_a_bot_leaves_the_bot_for_that_project(cx: &mut Te
         s.manager.read_with(visual, |m, _| m.active.is_some()),
         "the Bot is open"
     );
-    let row = visual
-        .debug_bounds("classic-project-0")
-        .expect("the Bot's project is listed");
-    visual.simulate_click(row.center(), Default::default());
+    // The header's project picker opens the Bot's own project explicitly.
+    s.window
+        .update(visual, |shell, w, cx| {
+            shell.open_project_from_user(s.project.clone(), w, cx)
+        })
+        .unwrap();
     visual.run_until_parked();
     visual.refresh().unwrap();
     let (bot_open, active) = s
