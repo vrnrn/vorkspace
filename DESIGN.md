@@ -78,6 +78,15 @@ only chrome color. Mermaid node surfaces stay flat, since a texture behind a
 label costs it legibility. Chart value axes land on round steps (1, 2, 2.5 or
 5 × 10ⁿ) that clear the tallest value (`visuals::nice_scale`).
 
+### Bots
+
+A Bot is a flat body in its colour with a printed pattern rising from its
+base (dither, halftone, grain, stripes or solid; `BOT_PATTERNS`), never past
+quarter tone, and a vector face over it. The body is rasterized once per look
+and size (`render_bot_body`); gaze, blink, hop and squash move only the face
+and the body's bounds (`avatar::paint_bot`), so animation costs quads, not
+frames. Projects and channels keep their ring-textured hex marks.
+
 ### Tokens (`theme.rs`)
 
 `theme::configure` derives all tokens from the saved Appearance preferences;

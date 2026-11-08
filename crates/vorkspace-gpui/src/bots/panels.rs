@@ -390,36 +390,76 @@ impl LookEditor {
             .gap_2()
             .child(
                 div()
+                    .text_size(px(12.))
+                    .text_color(content(0.75))
+                    .child("Pattern"),
+            )
+            // Each choice previews this Bot in that print, so the pick is
+            // made by eye rather than by name.
+            .child(
+                div()
+                    .id(SharedString::from(toggle_id))
+                    .debug_selector(move || toggle_sel.clone())
+                    .role(Role::TabList)
+                    .aria_label("Pattern")
                     .flex()
-                    .items_center()
-                    .justify_between()
-                    .child(
-                        div()
-                            .text_size(px(12.))
-                            .text_color(content(0.75))
-                            .child("Texture"),
-                    )
-                    .child(
-                        crate::controls::switch(
-                            SharedString::from(toggle_id),
-                            "Texture",
-                            textured,
-                            true,
-                        )
-                        .debug_selector(move || toggle_sel.clone())
-                        .on_click(cx.listener(|this, _, _, cx| {
-                            this.bot.textured = !this.bot.textured;
-                            if !this.bot.textured
-                                && this.editing_color == Some(EditingColor::Foreground)
-                            {
-                                this.editing_color = None;
-                            }
-                            cx.emit(LookChanged {
-                                bot: this.bot.clone(),
-                            });
-                            cx.notify();
-                        })),
-                    ),
+                    .gap_1p5()
+                    .children(vorkspace_core::project_appearance::BOT_PATTERNS.iter().map(
+                        |&pattern| {
+                            let selected = self.bot.resolved_pattern() == pattern;
+                            let mut look = crate::avatar::BotLookConfig::from_bot(&self.bot);
+                            look.pattern = pattern;
+                            look.textured = pattern != "solid";
+                            let label: SharedString = {
+                                let mut c = pattern.chars();
+                                c.next()
+                                    .map(|f| f.to_uppercase().chain(c).collect::<String>())
+                                    .unwrap_or_default()
+                                    .into()
+                            };
+                            div()
+                                .id(SharedString::from(format!("{prefix}-pattern-{pattern}")))
+                                .debug_selector(move || format!("bot-pattern-{pattern}"))
+                                .role(Role::Tab)
+                                .aria_label(label.clone())
+                                .aria_selected(selected)
+                                .flex_1()
+                                .flex()
+                                .flex_col()
+                                .items_center()
+                                .gap_1()
+                                .py_1p5()
+                                .rounded(px(radius::CONTROL))
+                                .border_1()
+                                .border_color(if selected { content(0.6) } else { content(0.) })
+                                .when(selected, |d| d.bg(content(0.06)))
+                                .when(!selected, |d| {
+                                    d.hover(|s| s.bg(vorkspace_ui::fluid::hover(0.06)))
+                                })
+                                .cursor_pointer()
+                                .child(crate::avatar::avatar_with_look(look, "idle", 30., true))
+                                .child(
+                                    div()
+                                        .text_size(px(10.))
+                                        .text_color(content(if selected { 0.9 } else { 0.5 }))
+                                        .child(label),
+                                )
+                                .on_click(cx.listener(move |this, _, _, cx| {
+                                    this.bot.textured = pattern != "solid";
+                                    this.bot.pattern =
+                                        (pattern != "solid").then(|| pattern.to_string());
+                                    if !this.bot.textured
+                                        && this.editing_color == Some(EditingColor::Foreground)
+                                    {
+                                        this.editing_color = None;
+                                    }
+                                    cx.emit(LookChanged {
+                                        bot: this.bot.clone(),
+                                    });
+                                    cx.notify();
+                                }))
+                        },
+                    )),
             )
             .when(textured, |d| {
                 d.child(
@@ -434,7 +474,7 @@ impl LookEditor {
                                 .justify_between()
                                 .text_size(px(11.))
                                 .text_color(content(0.5))
-                                .child("Grid Scale")
+                                .child("Scale")
                                 .child(
                                     div()
                                         .flex()
@@ -690,7 +730,7 @@ impl LookEditor {
             .child(
                 div()
                     .id("bot-mascot-options")
-                    .role(Role::RadioGroup)
+                    .role(Role::TabList)
                     .aria_label("Face style")
                     .px_1()
                     .flex()

@@ -59,6 +59,19 @@ impl Bot {
             .filter(|&s| s > 0)
             .unwrap_or_else(|| default_seed_for(&self.id))
     }
+    /// The body pattern; textured Bots without one print in dither.
+    pub fn resolved_pattern(&self) -> &'static str {
+        if !self.textured {
+            return "solid";
+        }
+        match crate::project_appearance::normalize_bot_pattern(
+            self.pattern.as_deref().unwrap_or("dither"),
+        ) {
+            // Bots no longer offer the rings; an old choice prints in dither.
+            "rings" => "dither",
+            pattern => pattern,
+        }
+    }
     pub fn resolved_grid(&self) -> u8 {
         self.grid.unwrap_or(4).clamp(2, 8)
     }

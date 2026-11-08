@@ -52,7 +52,7 @@ fn face_regions(image: &RgbaImage, bright: bool, enclosed_only: bool) -> Vec<(u3
 
 fn eye_fixture(shape: &str, face: &str, one_eye: bool, anim: BotAnimState) -> RgbaImage {
     render_badge_or_bot_with_eyes(
-        true, shape, face, false, false, 12345, 4, 0x222222, 0xffffff, 128, one_eye, anim,
+        true, shape, face, false, "rings", false, 12345, 4, 0x222222, 0xffffff, 128, one_eye, anim,
     )
 }
 
@@ -157,6 +157,7 @@ fn eye_layout_does_not_change_project_badges_or_notification_dots() {
                 "squircle",
                 "visor",
                 true,
+                "rings",
                 true,
                 12345,
                 4,
@@ -187,7 +188,7 @@ fn eye_layout_does_not_change_project_badges_or_notification_dots() {
 fn texture_cache_preserves_exact_pixels_across_look_and_rotation_changes() {
     use std::sync::Arc;
     let texture = |seed, grid, textured, bg, fg, bucket, rotation| {
-        cached_concentric_texture(seed, grid, textured, bg, fg, bucket, rotation)
+        cached_concentric_texture("rings", seed, grid, textured, bg, fg, bucket, rotation)
     };
     let resting = texture(7, 3, true, 0x223344, 0xddeeff, 96, 0.);
     assert!(Arc::ptr_eq(
@@ -213,7 +214,7 @@ fn texture_cache_evicts_by_bytes_without_flushing_hot_entries() {
     use std::sync::Arc;
     let mut cache = TextureCache::default();
     let image = Arc::new(RgbaImage::new(192, 192));
-    let key = |seed| ((seed, 3, true, 0, 0, 192), 0);
+    let key = |seed| ((seed, 3, true, 0, 0, 192, 0), 0);
     for seed in 0..64 {
         cache.insert(key(seed), image.clone());
     }
@@ -251,12 +252,12 @@ fn texture_cache_benchmark() {
             }
             let baseline = start.elapsed();
             black_box(cached_concentric_texture(
-                7, 4, true, 0x223344, 0xddeeff, bucket, 0.,
+                "rings", 7, 4, true, 0x223344, 0xddeeff, bucket, 0.,
             ));
             let start = Instant::now();
             for _ in 0..60 {
                 black_box(cached_concentric_texture(
-                    7, 4, true, 0x223344, 0xddeeff, bucket, 0.,
+                    "rings", 7, 4, true, 0x223344, 0xddeeff, bucket, 0.,
                 ));
             }
             eprintln!(
@@ -442,4 +443,20 @@ fn importing_owns_the_image_and_rejects_invalid_files() {
     let bad = directory.path().join("bad.png");
     std::fs::write(&bad, b"not an image").unwrap();
     assert!(import_image(&bad, &directory.path().join("assets"), "/project", false).is_err());
+}
+
+#[test]
+fn every_bot_pattern_prints_a_texture_and_solid_stays_flat() {
+    for pattern in BOT_PATTERNS {
+        let image = render_pattern_texture(pattern, 7, 4, true, 0x223344, 0xeeddcc, 96, 0.);
+        let first = *image.get_pixel(0, 0);
+        let varied = image.pixels().any(|p| *p != first);
+        assert_eq!(varied, pattern != "solid", "{pattern}");
+    }
+    // A legacy or unknown name prints in dither, never fails.
+    assert_eq!(normalize_bot_pattern("rings2"), "dither");
+    // Patterns turn with the working rotation, as the rings did.
+    let still = render_pattern_texture("stripes", 7, 4, true, 0x223344, 0xeeddcc, 96, 0.);
+    let turned = render_pattern_texture("stripes", 7, 4, true, 0x223344, 0xeeddcc, 96, 90.);
+    assert_ne!(still.as_raw(), turned.as_raw());
 }

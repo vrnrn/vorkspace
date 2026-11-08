@@ -16,6 +16,32 @@ pub const MASCOTS: [&str; 10] = [
 ];
 pub const BADGE_SHAPES: [&str; 5] = ["squircle", "circle", "rounded", "pill", "hex"];
 pub const BOT_FACES: [&str; 5] = ["pills", "dots", "visor", "carets", "wink"];
+/// A Bot's body pattern. "rings" is the legacy concentric texture projects and
+/// channels keep; Bots choose among the printed patterns, and an unknown or
+/// legacy value reads as "dither".
+pub const BOT_PATTERNS: [&str; 5] = ["dither", "halftone", "grain", "stripes", "solid"];
+
+pub fn normalize_bot_pattern(pattern: &str) -> &'static str {
+    match pattern {
+        "halftone" => "halftone",
+        "grain" => "grain",
+        "stripes" => "stripes",
+        "solid" => "solid",
+        "rings" => "rings",
+        _ => "dither",
+    }
+}
+
+fn pattern_id(pattern: &str) -> u8 {
+    match normalize_bot_pattern(pattern) {
+        "rings" => 0,
+        "dither" => 1,
+        "halftone" => 2,
+        "grain" => 3,
+        "stripes" => 4,
+        _ => 5,
+    }
+}
 pub const LOCKED_RINGS: usize = 4;
 pub const LOCKED_CURVATURE: f32 = 0.80;
 pub const LOCKED_TEX_OPACITY: f32 = 0.60;
@@ -805,7 +831,7 @@ fn lerp_rgb(a: [f32; 3], b: [f32; 3], t: f32) -> [f32; 3] {
 
 // Pose changes do not change the underlying texture. Keep exact rotation bits:
 // snapping here would change the public renderer's pixels, including previews.
-type TextureKey = ((u32, u8, bool, u32, u32, u32), u32);
+type TextureKey = ((u32, u8, bool, u32, u32, u32, u8), u32);
 const TEXTURE_CACHE_BYTES: usize = 9 * 1024 * 1024;
 
 #[derive(Default)]
@@ -850,7 +876,9 @@ impl TextureCache {
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn cached_concentric_texture(
+    pattern: &str,
     seed: u32,
     grid: u8,
     textured: bool,
@@ -863,7 +891,15 @@ fn cached_concentric_texture(
     static CACHE: LazyLock<Mutex<TextureCache>> =
         LazyLock::new(|| Mutex::new(TextureCache::default()));
     let key = (
-        (seed, grid, textured, bg_hex, fg_hex, bucket),
+        (
+            seed,
+            grid,
+            textured,
+            bg_hex,
+            fg_hex,
+            bucket,
+            pattern_id(pattern),
+        ),
         rot_offset_deg.to_bits(),
     );
     if let Some(texture) = CACHE.lock().ok().and_then(|mut cache| cache.get(&key)) {
@@ -871,7 +907,8 @@ fn cached_concentric_texture(
     }
     // Rasterization never holds the shared lock. Concurrent misses may duplicate
     // computation but cannot block other lookups for a full rasterization.
-    let texture = Arc::new(render_concentric_texture(
+    let texture = Arc::new(render_pattern_texture(
+        pattern,
         seed,
         grid,
         textured,
@@ -887,6 +924,117 @@ fn cached_concentric_texture(
 }
 
 /// Rasterize the concentric ring texture at `bucket x bucket` resolution.
+/// A body texture in `pattern`. The printed patterns share one tone ramp:
+/// a seeded diagonal from light to full ink, turned by `rot_offset_deg` as the
+/// Bot works, so every style animates the same way the rings did.
+#[allow(clippy::too_many_arguments)]
+pub fn render_pattern_texture(
+    pattern: &str,
+    seed: u32,
+    grid: u8,
+    textured: bool,
+    bg_hex: u32,
+    fg_hex: u32,
+    bucket: u32,
+    rot_offset_deg: f32,
+) -> RgbaImage {
+    let pattern = normalize_bot_pattern(pattern);
+    if pattern == "rings" {
+        return render_concentric_texture(
+            seed,
+            grid,
+            textured,
+            bg_hex,
+            fg_hex,
+            bucket,
+            rot_offset_deg,
+        );
+    }
+    let bg = unpack_rgb(bg_hex);
+    if !textured || pattern == "solid" {
+        return RgbaImage::from_pixel(
+            bucket,
+            bucket,
+            image::Rgba([bg[0] as u8, bg[1] as u8, bg[2] as u8, 255]),
+        );
+    }
+    let fg = unpack_rgb(fg_hex);
+    // Seeded ramp direction; the grid scale sets how coarse the print is.
+    let angle = ((seed % 360) as f32 + rot_offset_deg).to_radians();
+    let (dx, dy) = (angle.cos(), angle.sin());
+    let grid = grid.clamp(2, 8) as f32;
+    let inv = 1.0 / bucket.max(1) as f32;
+    // Cells per side: grid 2 is bold, grid 8 is fine.
+    let cells = grid * 4.0;
+    const BAYER: [f32; 16] = [
+        0., 8., 2., 10., 12., 4., 14., 6., 3., 11., 1., 9., 15., 7., 13., 5.,
+    ];
+    let hash = |x: u32, y: u32| -> f32 {
+        let mut h = x.wrapping_mul(0x9e37_79b1) ^ y.wrapping_mul(0x85eb_ca77) ^ seed;
+        h ^= h >> 15;
+        h = h.wrapping_mul(0x2c1b_3c6d);
+        h ^= h >> 12;
+        (h & 0xffff) as f32 / 65535.0
+    };
+    let mut img = RgbaImage::new(bucket, bucket);
+    for py in 0..bucket {
+        let v = (py as f32 + 0.5) * inv;
+        for px in 0..bucket {
+            let u = (px as f32 + 0.5) * inv;
+            // Tone along the ramp, 0.12 at the light end to 0.88 at the ink.
+            let along = ((u - 0.5) * dx + (v - 0.5) * dy) / std::f32::consts::SQRT_2 + 0.5;
+            let tone = 0.12 + 0.76 * along.clamp(0., 1.);
+            let ink = match pattern {
+                "dither" => {
+                    let cx = (u * cells).floor() as usize % 4;
+                    let cy = (v * cells).floor() as usize % 4;
+                    if tone > (BAYER[cy * 4 + cx] + 0.5) / 16. {
+                        1.
+                    } else {
+                        0.
+                    }
+                }
+                "halftone" => {
+                    // Round dots on a 45 degree screen, growing with tone.
+                    let (r, s) = (u + v, u - v);
+                    let n = cells * 0.75;
+                    let fr = (r * n).fract() - 0.5;
+                    let fs = (s * n).fract() - 0.5;
+                    let d = (fr * fr + fs * fs).sqrt();
+                    let radius = 0.62 * tone.sqrt();
+                    ((radius - d) * n * 2.0 + 0.5).clamp(0., 1.)
+                }
+                "grain" => {
+                    let gx = (u * cells * 2.).floor() as u32;
+                    let gy = (v * cells * 2.).floor() as u32;
+                    if tone > hash(gx, gy) {
+                        1.
+                    } else {
+                        0.
+                    }
+                }
+                _ => {
+                    // Diagonal stripes whose width follows the tone.
+                    let t = ((u + v) * cells * 0.5).fract();
+                    ((tone - (t - 0.5).abs() * 2.0) * cells * 0.6 + 0.5).clamp(0., 1.)
+                }
+            };
+            let col = lerp_rgb(bg, fg, ink * LOCKED_TEX_OPACITY);
+            img.put_pixel(
+                px,
+                py,
+                image::Rgba([
+                    col[0].round() as u8,
+                    col[1].round() as u8,
+                    col[2].round() as u8,
+                    255,
+                ]),
+            );
+        }
+    }
+    img
+}
+
 pub fn render_concentric_texture(
     seed: u32,
     grid: u8,
@@ -1216,9 +1364,126 @@ pub fn render_badge_or_bot(
     anim: BotAnimState,
 ) -> RgbaImage {
     render_badge_or_bot_with_eyes(
-        is_bot, shape, face, needs_you, textured, seed, grid, bg_hex, fg_hex, pixel_side, false,
-        anim,
+        is_bot, shape, face, needs_you, "rings", textured, seed, grid, bg_hex, fg_hex, pixel_side,
+        false, anim,
     )
+}
+
+/// A Bot's body without its face: the shape in its color, the pattern
+/// printed as a ground that rises from the bottom edge, and a quiet rim. It
+/// depends only on the look and the pixel size, never on pose, so it is
+/// rasterized once per look and reused for every frame; the face, gaze,
+/// blink and motion are drawn over it as vector shapes.
+#[allow(clippy::too_many_arguments)]
+pub fn render_bot_body(
+    shape: &str,
+    pattern: &str,
+    textured: bool,
+    seed: u32,
+    grid: u8,
+    bg_hex: u32,
+    fg_hex: u32,
+    pixel_side: u32,
+) -> RgbaImage {
+    let side = pixel_side.max(16);
+    let s = side as f32;
+    let shape_id = normalize_badge_shape(shape);
+    let pattern = if textured {
+        normalize_bot_pattern(pattern)
+    } else {
+        "solid"
+    };
+    let bg = unpack_rgb(bg_hex);
+    let fg = unpack_rgb(fg_hex);
+    const BAYER: [f32; 16] = [
+        0., 8., 2., 10., 12., 4., 14., 6., 3., 11., 1., 9., 15., 7., 13., 5.,
+    ];
+    // Print cells in device pixels: grid 2 is bold, grid 8 is fine.
+    let cell = (s / (grid.clamp(2, 8) as f32 * 7.)).max(1.);
+    let hash = |x: u32, y: u32| -> f32 {
+        let mut h = x.wrapping_mul(0x9e37_79b1) ^ y.wrapping_mul(0x85eb_ca77) ^ seed;
+        h ^= h >> 15;
+        h = h.wrapping_mul(0x2c1b_3c6d);
+        h ^= h >> 12;
+        (h & 0xffff) as f32 / 65535.0
+    };
+    let border_w = (s * 0.025).max(1.0);
+    let mut out = RgbaImage::new(side, side);
+    for py in 0..side {
+        let fy = py as f32 + 0.5;
+        // The ground: nothing in the top 40%, rising to full strength at the
+        // bottom edge.
+        let rise = ((fy / s - 0.4) / 0.6).clamp(0., 1.);
+        for px in 0..side {
+            let fx = px as f32 + 0.5;
+            let d = sd_badge_shape(shape_id, fx, fy, s);
+            let alpha = (0.5 - d).clamp(0.0, 1.0);
+            if alpha <= 0.0 {
+                continue;
+            }
+            let (cx, cy) = ((fx / cell).floor(), (fy / cell).floor());
+            let ink = match pattern {
+                // Quarter tone at most: Bayer ranks below 4 are an even dot
+                // grid, never the half-tone checkerboard.
+                "dither" => {
+                    let rank = BAYER[(cy as usize % 4) * 4 + cx as usize % 4];
+                    if rank < 4. * rise {
+                        1.
+                    } else {
+                        0.
+                    }
+                }
+                // Round dots on a 45 degree screen, growing toward the bottom.
+                "halftone" => {
+                    let sp = cell * 2.2 * std::f32::consts::SQRT_2;
+                    let (r, t) = ((fx + fy) / sp, (fx - fy) / sp);
+                    let (fr, ft) = (r.fract() - 0.5, t.fract() - 0.5);
+                    let dist = (fr * fr + ft * ft).sqrt();
+                    let radius = 0.4 * rise.sqrt();
+                    if rise > 0. {
+                        ((radius - dist) * sp + 0.5).clamp(0., 1.)
+                    } else {
+                        0.
+                    }
+                }
+                "grain" => {
+                    if hash(cx as u32, cy as u32) < 0.32 * rise {
+                        1.
+                    } else {
+                        0.
+                    }
+                }
+                // Horizontal rules that thicken toward the bottom.
+                "stripes" => {
+                    let period = cell * 2.6;
+                    let t = (fy / period).fract();
+                    if t < 0.5 * rise {
+                        1.
+                    } else {
+                        0.
+                    }
+                }
+                _ => 0.,
+            };
+            let mut col = lerp_rgb(bg, fg, ink * 0.55);
+            let d_border = (d + border_w * 0.5).abs() - border_w * 0.5;
+            let rim = (0.5 - d_border).clamp(0.0, 1.0) * 0.14;
+            if rim > 0.0 {
+                col = lerp_rgb(col, [255.0, 255.0, 255.0], rim);
+            }
+            out.put_pixel(
+                px,
+                py,
+                image::Rgba([
+                    col[0].round() as u8,
+                    col[1].round() as u8,
+                    col[2].round() as u8,
+                    (alpha * 255.).round() as u8,
+                ]),
+            );
+        }
+    }
+    out
 }
 
 /// Render the incumbent Bot styles with either their paired eyes or one
@@ -1230,6 +1495,7 @@ pub fn render_badge_or_bot_with_eyes(
     shape: &str,
     face: &str,
     needs_you: bool,
+    pattern: &str,
     textured: bool,
     seed: u32,
     grid: u8,
@@ -1243,6 +1509,7 @@ pub fn render_badge_or_bot_with_eyes(
     let s = s_u32 as f32;
     let bucket = if s_u32 <= 64 { 96 } else { 192 };
     let tex = cached_concentric_texture(
+        pattern,
         seed,
         grid,
         textured,

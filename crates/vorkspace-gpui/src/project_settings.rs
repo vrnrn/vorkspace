@@ -39,6 +39,7 @@ pub(crate) fn project_icon(appearance: &ProjectAppearance, project: &str, side: 
         None => {
             let pixel_side = ((side * 2.0).round() as u32).clamp(28, 96);
             let look = BotLookConfig {
+                pattern: "rings",
                 shape: "hex".into(),
                 face: "pills".into(),
                 one_eye: false,
