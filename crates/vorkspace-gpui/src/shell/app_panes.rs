@@ -416,7 +416,11 @@ impl Shell {
             AppPane::Terminal { cwd, .. } => format!("Terminal · {}", project_name(cwd)),
             AppPane::Codebase => "Codebase".into(),
             AppPane::Search => "Search".into(),
-            AppPane::Channels => "Channels".into(),
+            AppPane::Channels => self
+                .bots
+                .as_ref()
+                .and_then(|view| view.read(cx).selected_channel_title())
+                .unwrap_or_else(|| "Channels".into()),
             AppPane::Review => self
                 .workspace
                 .reviews

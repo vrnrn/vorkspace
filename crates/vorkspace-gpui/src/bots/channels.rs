@@ -585,6 +585,13 @@ impl Bots {
         }
     }
 
+    /// The tab title: the channel on screen, so the strip says where you are.
+    pub(crate) fn selected_channel_title(&self) -> Option<String> {
+        let id = self.channels.selected.as_ref()?;
+        let channel = self.channels.state.channels.iter().find(|c| &c.id == id)?;
+        Some(format!("#{}", channel.name))
+    }
+
     #[cfg(test)]
     pub(crate) fn classic_channels_open(&self) -> bool {
         self.prefs.bots && self.prefs.channels && self.channels.open
