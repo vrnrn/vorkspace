@@ -156,30 +156,67 @@ pub(crate) fn spinner(
     _path: &'static str,
     side: f32,
 ) -> AnyElement {
-    use gpui::{Animation, AnimationExt};
-    // Three cells and two gaps of the same size fill the slot's width.
-    let cell = (side / 5.).floor().max(2.);
-    div()
-        .size(px(side))
-        .flex_shrink_0()
-        .flex()
-        .items_center()
-        .justify_center()
-        .gap(px(cell))
-        .with_animation(
-            id,
-            Animation::new(std::time::Duration::from_millis(900)).repeat(),
-            move |row, delta| {
-                let shown = ((delta * 3.).floor() as usize).min(2) + 1;
-                row.children((0..3).map(|index| {
-                    div()
-                        .size(px(cell))
-                        .when(index < shown, |d| d.bg(content(0.6)))
-                        .when(index >= shown, |d| d.bg(vorkspace_ui::fluid::track(0.1)))
-                }))
-            },
-        )
-        .into_any_element()
+    Loader {
+        id: id.into(),
+        side,
+    }
+    .into_any_element()
+}
+
+/// How long each count of the loader holds.
+const LOADER_STEP: std::time::Duration = std::time::Duration::from_millis(300);
+
+/// The loader's count, advanced by its own timer. A repeating animation would
+/// redraw its view on every display refresh for an image that changes three
+/// times a cycle; this wakes the view only when a cell turns on. Dropped with
+/// the element, which cancels the timer.
+struct LoaderCount {
+    shown: usize,
+    _tick: gpui::Task<()>,
+}
+
+#[derive(IntoElement)]
+struct Loader {
+    id: gpui::ElementId,
+    side: f32,
+}
+
+impl RenderOnce for Loader {
+    fn render(self, window: &mut gpui::Window, cx: &mut gpui::App) -> impl IntoElement {
+        let count = window.use_keyed_state(self.id, cx, |_, cx| LoaderCount {
+            shown: 1,
+            _tick: cx.spawn(async move |this, cx| {
+                loop {
+                    cx.background_executor().timer(LOADER_STEP).await;
+                    if this
+                        .update(cx, |count: &mut LoaderCount, cx| {
+                            count.shown = count.shown % 3 + 1;
+                            cx.notify();
+                        })
+                        .is_err()
+                    {
+                        break;
+                    }
+                }
+            }),
+        });
+        let shown = count.read(cx).shown;
+        // Three cells and two gaps of the same size fill the slot's width.
+        let cell = (self.side / 5.).floor().max(2.);
+        div()
+            .size(px(self.side))
+            .flex_shrink_0()
+            .flex()
+            .items_center()
+            .justify_center()
+            .gap(px(cell))
+            .children((0..3).map(|index| {
+                div()
+                    .size(px(cell))
+                    .when(index < shown, |d| d.bg(content(0.6)))
+                    .when(index >= shown, |d| d.bg(vorkspace_ui::fluid::track(0.1)))
+            }))
+    }
 }
 
 pub(crate) fn format_integer(value: i64) -> String {
@@ -265,4 +302,58 @@ pub(crate) fn home_relative(path: &std::path::Path) -> String {
             })
         })
         .unwrap_or_else(|| path.display().to_string())
+}
+
+#[cfg(test)]
+mod loader_tests {
+    use super::*;
+    use gpui::{TestAppContext, VisualTestContext};
+
+    struct Host;
+    impl gpui::Render for Host {
+        fn render(
+            &mut self,
+            _: &mut gpui::Window,
+            _: &mut gpui::Context<Self>,
+        ) -> impl IntoElement {
+            div()
+                .size_full()
+                .child(spinner("loader-under-test", "", 14.))
+        }
+    }
+
+    /// Cells lit, read from the painted quads: lit cells are solid ink.
+    fn lit(visual: &mut VisualTestContext) -> usize {
+        visual.update(|window, _| {
+            window
+                .painted_quads()
+                .iter()
+                .filter(|q| q.background == gpui::Background::from(content(0.6)))
+                .count()
+        })
+    }
+
+    #[gpui::test]
+    fn the_loader_counts_on_a_timer_and_never_asks_for_frames(cx: &mut TestAppContext) {
+        let window = cx.update(|cx| {
+            cx.open_window(Default::default(), |_, cx| cx.new(|_| Host))
+                .unwrap()
+        });
+        let visual = &mut VisualTestContext::from_window(window.into(), cx);
+        visual.run_until_parked();
+        visual.refresh().unwrap();
+        assert_eq!(lit(visual), 1);
+        // Nothing waits on the next display refresh: the view sleeps between
+        // counts instead of redrawing every frame.
+        let waiting = visual.update(|window, cx| window.simulate_next_frame(cx));
+        assert_eq!(waiting, 0);
+        visual.executor().advance_clock(LOADER_STEP);
+        visual.run_until_parked();
+        visual.refresh().unwrap();
+        assert_eq!(lit(visual), 2);
+        visual.executor().advance_clock(LOADER_STEP * 2);
+        visual.run_until_parked();
+        visual.refresh().unwrap();
+        assert_eq!(lit(visual), 1, "after three it starts over");
+    }
 }
