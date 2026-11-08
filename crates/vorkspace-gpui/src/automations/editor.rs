@@ -357,11 +357,9 @@ impl Automations {
                     cx,
                 ));
             }
-            sentence = sentence
-                .child(page::meta().child(gmt_offset()))
-                .child(page::meta().child(next_run_preview(
-                    preview_trigger.next_at(vorkspace_core::time::now_ms() as i64),
-                )));
+            sentence = sentence.child(page::meta().child(next_run_preview(
+                preview_trigger.next_at(vorkspace_core::time::now_ms() as i64),
+            )));
         } else {
             sentence = sentence
                 .child(self.select_control(

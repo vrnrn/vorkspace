@@ -949,7 +949,11 @@ impl Automations {
                 page::empty(
                     icon("zap", 20.),
                     "No automations yet",
-                    "Pick an example or start from scratch to run work on a schedule.",
+                    if self.gallery {
+                        "Pick an example or start from scratch to run work on a schedule."
+                    } else {
+                        "The one you are drafting appears here once it is created."
+                    },
                 )
                 .h(px(240.))
             } else {
