@@ -134,7 +134,10 @@ impl Shell {
     pub(super) fn sync_rails(&mut self, ids: &[i64], cx: &mut Context<Self>) {
         let (started, children) = self.started_groups(ids);
         let now = Instant::now();
+        // Folding rails move every frame; a spinner alone only needs the dot
+        // grid's own 33 ms step, so it ticks at half the rate.
         let mut animating = false;
+        let mut spinning = false;
         let mut seen = HashSet::new();
         for &id in ids {
             let Some(rail) = self.rail(id, &started) else {
@@ -172,16 +175,21 @@ impl Shell {
                 && summary.live
                 && summary.tasks.iter().any(|t| t.status == "running")
             {
-                animating = true;
+                spinning = true;
             }
         }
         self.rails.motions.retain(|id, _| seen.contains(id));
         self.rails.started = started;
         self.rails.children = children;
-        if animating && self.rails.frames.is_none() {
+        if (animating || spinning) && self.rails.frames.is_none() {
+            let step = if animating {
+                16
+            } else {
+                vorkspace_ui::session_mark::TICK_MS
+            };
             self.rails.frames = Some(cx.spawn(async move |this, cx| {
                 cx.background_executor()
-                    .timer(Duration::from_millis(16))
+                    .timer(Duration::from_millis(step))
                     .await;
                 let _ = this.update(cx, |this, cx| {
                     this.rails.frames = None;

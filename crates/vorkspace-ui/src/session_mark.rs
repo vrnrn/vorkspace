@@ -6,7 +6,8 @@ use std::f32::consts::TAU;
 use std::time::Duration;
 
 /// The spinner repaints at about 30fps so its fades stay smooth.
-const TICK_MS: u64 = 33;
+/// The spinner's frame step: the dot grid changes no faster than this.
+pub const TICK_MS: u64 = 33;
 /// One wave across the grid, as TerminalSpinner's `vorkspace-spinner-wave`.
 const CYCLE_SECS: f32 = 1.2;
 /// Slate, peach and pink, top row to bottom.
