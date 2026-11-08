@@ -354,8 +354,8 @@ impl Render for AppearanceControls {
                     .justify_between()
                     .child(
                         div()
-                            .text_size(px(11.))
-                            .text_color(content(0.5))
+                            .text_size(px(12.))
+                            .text_color(content(0.75))
                             .child("Texture"),
                     )
                     .child(
@@ -390,8 +390,8 @@ impl Render for AppearanceControls {
                                 .flex()
                                 .items_center()
                                 .justify_between()
-                                .text_size(px(11.))
-                                .text_color(content(0.5))
+                                .text_size(px(12.))
+                                .text_color(content(0.75))
                                 .child("Grid scale")
                                 .child(
                                     div()
@@ -477,8 +477,8 @@ impl Render for AppearanceControls {
                     .gap_1p5()
                     .child(
                         div()
-                            .text_size(px(11.))
-                            .text_color(content(0.5))
+                            .text_size(px(12.))
+                            .text_color(content(0.75))
                             .child(if textured { "Colors" } else { "Color" }),
                     )
                     .child(

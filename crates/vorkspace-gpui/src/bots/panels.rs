@@ -318,16 +318,8 @@ impl LookEditor {
             .into_any_element()
     }
     fn texture_and_grid_section(&self, prefix: &'static str, cx: &mut Context<Self>) -> AnyElement {
-        let textured = self.bot.textured;
-        let grid = self.bot.resolved_grid();
-        let fraction = (grid.saturating_sub(2) as f32 / 6.).clamp(0., 1.);
-        let probe = self.grid_bounds.clone();
         let toggle_id = format!("{prefix}-texture-toggle");
         let toggle_sel = toggle_id.clone();
-        let rand_id = format!("{prefix}-randomize-seed");
-        let rand_sel = rand_id.clone();
-        let slider_id = format!("{prefix}-grid-slider");
-        let slider_sel = slider_id.clone();
         div()
             .px_1()
             .flex()
@@ -406,6 +398,24 @@ impl LookEditor {
                         },
                     )),
             )
+            .into_any_element()
+    }
+    /// Where the print sits and how coarse it is; beside the colors so the
+    /// editor's two columns carry similar weight.
+    fn print_and_scale_section(&self, prefix: &'static str, cx: &mut Context<Self>) -> AnyElement {
+        let textured = self.bot.textured;
+        let grid = self.bot.resolved_grid();
+        let fraction = (grid.saturating_sub(2) as f32 / 6.).clamp(0., 1.);
+        let probe = self.grid_bounds.clone();
+        let rand_id = format!("{prefix}-randomize-seed");
+        let rand_sel = rand_id.clone();
+        let slider_id = format!("{prefix}-grid-slider");
+        let slider_sel = slider_id.clone();
+        div()
+            .px_1()
+            .flex()
+            .flex_col()
+            .gap_2()
             // Where the print sits: rising from the base, falling from the
             // top, or across the whole body.
             .when(textured, |d| {
@@ -417,8 +427,8 @@ impl LookEditor {
                         .justify_between()
                         .child(
                             div()
-                                .text_size(px(11.))
-                                .text_color(content(0.5))
+                                .text_size(px(12.))
+                                .text_color(content(0.75))
                                 .child("Print"),
                         )
                         .child(
@@ -480,8 +490,8 @@ impl LookEditor {
                                 .flex()
                                 .items_center()
                                 .justify_between()
-                                .text_size(px(11.))
-                                .text_color(content(0.5))
+                                .text_size(px(12.))
+                                .text_color(content(0.75))
                                 .child("Scale")
                                 .child(
                                     div()
@@ -580,8 +590,8 @@ impl LookEditor {
             .gap_1p5()
             .child(
                 div()
-                    .text_size(px(11.))
-                    .text_color(content(0.5))
+                    .text_size(px(12.))
+                    .text_color(content(0.75))
                     .child(if textured { "Colors" } else { "Color" }),
             )
             .child(
@@ -857,6 +867,7 @@ impl LookEditor {
                                 },
                             )),
                     )
+                    .child(self.print_and_scale_section("settings-bot", cx))
                     .when(self.editing_color.is_some(), |d| {
                         d.child(div().px_1().pt_2().child(self.custom.clone()))
                     }),

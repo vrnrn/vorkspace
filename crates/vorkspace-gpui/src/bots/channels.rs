@@ -172,8 +172,8 @@ impl gpui::Render for ChannelLookEditor {
                     .justify_between()
                     .child(
                         div()
-                            .text_size(px(11.))
-                            .text_color(content(0.5))
+                            .text_size(px(12.))
+                            .text_color(content(0.75))
                             .child("Texture"),
                     )
                     .child(
@@ -208,8 +208,8 @@ impl gpui::Render for ChannelLookEditor {
                                 .flex()
                                 .items_center()
                                 .justify_between()
-                                .text_size(px(11.))
-                                .text_color(content(0.5))
+                                .text_size(px(12.))
+                                .text_color(content(0.75))
                                 .child("Grid scale")
                                 .child(
                                     div()
@@ -295,8 +295,8 @@ impl gpui::Render for ChannelLookEditor {
                     .gap_1p5()
                     .child(
                         div()
-                            .text_size(px(11.))
-                            .text_color(content(0.5))
+                            .text_size(px(12.))
+                            .text_color(content(0.75))
                             .child(if textured { "Colors" } else { "Color" }),
                     )
                     .child(
