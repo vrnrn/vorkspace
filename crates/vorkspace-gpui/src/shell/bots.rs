@@ -10,15 +10,16 @@ impl Shell {
         self.bots.as_ref().unwrap().clone()
     }
     pub(super) fn bot_active(&self, _cx: &App) -> bool {
-        self.workspace
-            .active
-            .and_then(|id| self.workspace.app_panes.get(&id))
-            .is_some_and(|pane| {
-                matches!(
-                    pane.content,
-                    crate::workspace::AppPane::Bot(_) | crate::workspace::AppPane::Channels
-                )
-            })
+        self.workspace.active.is_some_and(|id| self.is_bot_pane(id))
+    }
+    /// A Bot or Channels pane: the surfaces a project click leaves behind.
+    pub(super) fn is_bot_pane(&self, id: i64) -> bool {
+        self.workspace.app_panes.get(&id).is_some_and(|pane| {
+            matches!(
+                pane.content,
+                crate::workspace::AppPane::Bot(_) | crate::workspace::AppPane::Channels
+            )
+        })
     }
     pub(super) fn workspace_bot_context(&self) -> Option<String> {
         if !self.workspace.preferences.bots {

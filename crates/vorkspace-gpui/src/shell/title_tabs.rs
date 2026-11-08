@@ -396,12 +396,20 @@ impl Shell {
     }
     pub(super) fn restore_scope_tab(
         &mut self,
+        allow_bot: bool,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> bool {
         let tab = self.workspace.scope_focus.get(&self.tab_scope()).cloned();
         if let Some(tab) = tab.filter(|tab| {
-            !self.is_standalone_channels_tab(tab) && self.visible_tabs(cx).contains(tab)
+            !self.is_standalone_channels_tab(tab)
+                && (allow_bot
+                    || !match tab {
+                        TitleTab::Bot { .. } => true,
+                        TitleTab::Workspace(id) => self.is_bot_pane(self.workspace.tab_focus(*id)),
+                        _ => false,
+                    })
+                && self.visible_tabs(cx).contains(tab)
         }) {
             if matches!(tab, TitleTab::Bot { .. }) {
                 self.workspace.active = None;

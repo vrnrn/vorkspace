@@ -211,7 +211,7 @@ impl Shell {
         if let Some(bots) = self.bots.clone() {
             bots.update(cx, |m, cx| m.close(cx));
         }
-        if self.restore_scope_tab(window, cx) {
+        if self.restore_scope_tab(true, window, cx) {
             return;
         }
         let matches = |id: &i64| {

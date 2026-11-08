@@ -247,7 +247,7 @@ impl Shell {
                         this.close_menu(cx);
                         match picked {
                             ProjectPicked::Project(path) if *path != this.workspace.project => {
-                                this.select_project(path.clone(), window, cx)
+                                this.open_project_from_user(path.clone(), window, cx)
                             }
                             ProjectPicked::Project(_) => {}
                             ProjectPicked::New => this.open_project(cx),

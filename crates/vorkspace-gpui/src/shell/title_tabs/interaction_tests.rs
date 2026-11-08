@@ -116,15 +116,18 @@ fn sidebar_highlights_only_the_visible_bot_or_session(cx: &mut TestAppContext) {
     click(&project_row, cx);
     window
         .update(cx, |shell, _, cx| {
-            assert!(shell.bot_active(cx));
-            assert_eq!(shell.workspace.project, "/work/vorkspace");
-            assert_eq!(shell.workspace.active, bot.session());
-            assert_eq!(
-                shell.active_title_tab(cx),
-                Some(bot.clone()),
-                "a project restores its last workspace tab, including Bots"
+            assert!(
+                !shell.bot_active(cx),
+                "a project click opens the project, never the Bot it left"
             );
+            assert_eq!(shell.workspace.project, "/work/vorkspace");
+            assert_eq!(shell.workspace.active, Some(session));
         })
+        .unwrap();
+    // The Bot remains one click away on its own row.
+    click(&bot_row, cx);
+    window
+        .update(cx, |shell, _, cx| assert!(shell.bot_active(cx)))
         .unwrap();
     let session_tab = format!("title-tab-{session}");
     click(&session_tab, cx);

@@ -4871,3 +4871,34 @@ fn an_empty_bot_chat_offers_starters_that_fill_the_composer(cx: &mut TestAppCont
     });
     assert!(text.starts_with("What changed in"), "{text}");
 }
+
+#[gpui::test]
+fn clicking_a_project_row_from_a_bot_leaves_the_bot_for_that_project(cx: &mut TestAppContext) {
+    let s = setup(cx);
+    let visual = &mut gpui::VisualTestContext::from_window(s.window.into(), cx);
+    s.window
+        .update(visual, |_, w, cx| {
+            s.manager.update(cx, |m, cx| m.dismiss_settings(w, cx))
+        })
+        .unwrap();
+    visual.run_until_parked();
+    visual.refresh().unwrap();
+    assert!(
+        s.manager.read_with(visual, |m, _| m.active.is_some()),
+        "the Bot is open"
+    );
+    let row = visual
+        .debug_bounds("classic-project-0")
+        .expect("the Bot's project is listed");
+    visual.simulate_click(row.center(), Default::default());
+    visual.run_until_parked();
+    visual.refresh().unwrap();
+    let (bot_open, active) = s
+        .window
+        .update(visual, |shell, _, cx| {
+            (s.manager.read(cx).active.is_some(), shell.workspace.active)
+        })
+        .unwrap();
+    assert!(!bot_open, "clicking the project row left the Bot");
+    assert!(active.is_some(), "the project's session is shown");
+}

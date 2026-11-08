@@ -1220,7 +1220,7 @@ impl Shell {
                     });
                     if let Some(id) = saved_app {
                         this.open(id, window, cx);
-                    } else if !this.restore_scope_tab(window, cx) {
+                    } else if !this.restore_scope_tab(true, window, cx) {
                         this.ensure_project_session(window, cx);
                     }
                 }
@@ -2062,6 +2062,26 @@ impl Shell {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        self.enter_project(path, false, window, cx)
+    }
+    /// A deliberate click on a project means "show me this project": it
+    /// always leaves a visible Bot and lands on a session, even when the
+    /// Bot belongs to that project or was the project's last focused tab.
+    pub(crate) fn open_project_from_user(
+        &mut self,
+        path: String,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.enter_project(path, true, window, cx)
+    }
+    fn enter_project(
+        &mut self,
+        path: String,
+        explicit: bool,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         if self
             .deleting_projects
             .contains(&vorkspace_core::files::path_key(&path))
@@ -2070,8 +2090,10 @@ impl Shell {
             cx.notify();
             return;
         }
-        // Reselecting the visible Bot's project keeps its live detail editor.
-        if path == self.workspace.project
+        // Programmatic reselection of the visible Bot's project keeps its
+        // live detail editor; a user's click on the project leaves the Bot.
+        if !explicit
+            && path == self.workspace.project
             && self.settings.is_none()
             && let Some(bot) = self.workspace_bot_context()
             && self
@@ -2100,8 +2122,9 @@ impl Shell {
         self.sidebar_search
             .update(cx, |input, cx| input.set_text(String::new(), cx));
         self.workspace.collapsed.remove(&path);
-        // Restore the last scoped tab before falling back to a session.
-        if self.restore_scope_tab(window, cx) {
+        // Restore the last scoped tab before falling back to a session; an
+        // explicit project click never lands back on the Bot it just left.
+        if self.restore_scope_tab(!explicit, window, cx) {
             return;
         }
         self.workspace.active = self
@@ -2110,6 +2133,8 @@ impl Shell {
             .get(&path)
             .copied()
             .filter(|id| self.workspace.tab_of(*id).is_some() && self.pane_in_scope(*id, cx))
+            // The project's last focus may be the Bot being left.
+            .filter(|id| !explicit || !self.is_bot_pane(*id))
             .or_else(|| {
                 self.visible_tabs(cx)
                     .iter()

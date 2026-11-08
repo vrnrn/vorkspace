@@ -590,7 +590,7 @@ impl Shell {
                 }),
             )
             .on_click(cx.listener(move |this, _, window, cx| {
-                this.select_project(path.clone(), window, cx)
+                this.open_project_from_user(path.clone(), window, cx)
             }));
         div()
             .flex()
