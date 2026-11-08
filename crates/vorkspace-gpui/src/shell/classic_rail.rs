@@ -693,38 +693,6 @@ impl Shell {
             .pb_2()
             .flex()
             .flex_col()
-            // Sidebar options: a thin row above Settings; its menu opens upward.
-            // It opens nothing in the pane, so it has a plain hover, not a pill.
-            .child(
-                div()
-                    .id("classic-sidebar-options")
-                    .debug_selector(|| "sidebar-options".into())
-                    .role(Role::Button)
-                    .aria_label("Sidebar options")
-                    .focusable()
-                    .tab_stop(true)
-                    .relative()
-                    .h(px(20.))
-                    .rounded(px(radius::CONTROL))
-                    .flex()
-                    .items_center()
-                    .justify_center()
-                    .text_color(content(0.5))
-                    .hover(|s| {
-                        s.bg(vorkspace_ui::fluid::hover(0.08))
-                            .text_color(content(1.))
-                    })
-                    .child(self.sidebar_options_anchor.probe())
-                    .child(icon("more-horizontal", 14.))
-                    .on_click(cx.listener(|this, _, window, cx| {
-                        this.open_menu(
-                            MenuTarget::SidebarOptions,
-                            Anchor::Slot(this.sidebar_options_anchor.clone()),
-                            window,
-                            cx,
-                        );
-                    })),
-            )
             .child(
                 div()
                     .id("classic-rail-settings")
@@ -749,6 +717,41 @@ impl Shell {
                     .focus(|s| s.bg(content(0.1)).text_color(content(1.)))
                     .child(icon("settings", 16.))
                     .child(div().flex_1().child("Settings"))
+                    // Sidebar options ride at the row's end rather than on a
+                    // row of their own; the menu opens upward from here.
+                    .child(
+                        div()
+                            .id("classic-sidebar-options")
+                            .debug_selector(|| "sidebar-options".into())
+                            .role(Role::Button)
+                            .aria_label("Sidebar options")
+                            .focusable()
+                            .tab_stop(true)
+                            .relative()
+                            .size(px(24.))
+                            .flex_shrink_0()
+                            .rounded(px(radius::CONTROL))
+                            .flex()
+                            .items_center()
+                            .justify_center()
+                            .text_color(content(0.45))
+                            .hover(|s| {
+                                s.bg(vorkspace_ui::fluid::hover(0.08))
+                                    .text_color(content(1.))
+                            })
+                            .child(self.sidebar_options_anchor.probe())
+                            .child(icon("more-horizontal", 14.))
+                            .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+                            .on_click(cx.listener(|this, _, window, cx| {
+                                cx.stop_propagation();
+                                this.open_menu(
+                                    MenuTarget::SidebarOptions,
+                                    Anchor::Slot(this.sidebar_options_anchor.clone()),
+                                    window,
+                                    cx,
+                                );
+                            })),
+                    )
                     .on_click(cx.listener(|this, _, window, cx| {
                         this.open_settings(crate::settings::Section::General, window, cx)
                     })),

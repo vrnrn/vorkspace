@@ -84,7 +84,10 @@ fn sidebar_visibility_switches_stay_open_preserve_notes_and_survive_restart(
         .update(visual, |shell, _, cx| {
             let menu = shell.menu.as_ref().unwrap().menu.read(cx);
             let bounds = menu.surface_region().get().unwrap();
-            assert_eq!(bounds.left(), options.left());
+            // It ends at the trigger, kept inside the window, so it spans
+            // the trigger and never leaves the screen.
+            assert!(bounds.left() >= px(0.));
+            assert!(bounds.left() <= options.left() && bounds.right() >= options.right());
             assert_eq!(bounds.size.width, px(212.));
         })
         .unwrap();

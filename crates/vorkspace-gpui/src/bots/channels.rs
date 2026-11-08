@@ -908,6 +908,28 @@ impl Bots {
         self.changed(cx);
         Ok(())
     }
+    /// Creates a channel with these members and selects it, for captures.
+    #[cfg(test)]
+    pub(crate) fn create_channel_for_capture(
+        &mut self,
+        name: &str,
+        cx: &mut Context<Self>,
+    ) -> Option<String> {
+        let members: Vec<String> = self.roster.bots.iter().map(|b| b.id.clone()).collect();
+        let result = self
+            .channel_action(
+                "channels.create",
+                &serde_json::json!({"name": name, "members": members}),
+                None,
+                "create",
+                cx,
+            )
+            .ok()?;
+        let id = result["id"].as_str()?.to_string();
+        self.channels.selected = Some(id.clone());
+        cx.notify();
+        Some(id)
+    }
     #[cfg(test)]
     pub(super) fn channel_action(
         &mut self,

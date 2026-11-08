@@ -605,7 +605,7 @@ impl TranscriptView {
                                                 .top(px(22.))
                                                 .bottom(px(-4.))
                                                 .w(px(1.))
-                                                .bg(rgb(0x323232)),
+                                                .bg(content(0.14)),
                                         )
                                     })
                                     .child(body),

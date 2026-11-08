@@ -1,7 +1,7 @@
 //! Direct presentation port of AgentTranscript's ActivityPhaseGroup and PhaseStep.
 use gpui::{
     AnyElement, App, Bounds, ContentMask, Element, ElementId, GlobalElementId, InspectorElementId,
-    LayoutId, Pixels, StyledText, Window, point, prelude::*, rgb,
+    LayoutId, Pixels, StyledText, Window, point, prelude::*,
 };
 use std::collections::HashSet;
 use vorkspace_core::tool::{ToolCall, ToolState};
@@ -267,7 +267,8 @@ pub(crate) fn rail_branch(last: bool, branch: bool) -> impl IntoElement {
 /// The same rail for a step whose content sits `offset` lower, as the
 /// sidebar's `.orchestration-tree-step` does with its 2px padding.
 pub(crate) fn rail_branch_at(last: bool, branch: bool, offset: f32) -> impl IntoElement {
-    let color = rgb(0x323232);
+    // Theme ink, so the rail is as quiet on paper as it is on dark.
+    let color = vorkspace_ui::theme::content(0.14);
     gpui::div()
         .absolute()
         .top_0()

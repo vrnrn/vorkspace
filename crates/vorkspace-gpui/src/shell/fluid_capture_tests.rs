@@ -67,6 +67,7 @@ const SHOTS: &[(&str, Option<usize>, (f32, f32))] = &[
     // Bots persist in the shared store, so their scenes run last.
     ("bot", Some(0), (1390., 890.)),
     ("bot-new", Some(0), (1390., 890.)),
+    ("bot-channel", Some(0), (1390., 890.)),
     ("bot-soul", Some(0), (1390., 890.)),
     ("bot-memory", Some(0), (1390., 890.)),
     ("bot-habits", Some(0), (1390., 890.)),
@@ -328,6 +329,8 @@ fn fluid_capture() {
             let name = &base;
             let mut state = Workspace::default();
             state.preferences.theme = theme.into();
+            // Channels are opt-in; the channel scene turns them on.
+            state.preferences.channels = *name == "bot-channel";
             state.add_project(PROJECT);
             state.project = PROJECT.into();
             if *name == "glide" {
@@ -552,14 +555,21 @@ fn fluid_capture() {
                             } else {
                                 manager.create_named(vec![PROJECT.into()], w, cx);
                                 match name.strip_prefix("bot-") {
-                                    Some(section) => manager.show_settings_section(section, cx),
                                     // The bot's own pane, not its settings.
                                     None => {
                                         manager.dismiss_settings(w, cx);
                                     }
+                                    Some("channel") => {
+                                        manager.dismiss_settings(w, cx);
+                                        manager.create_channel_for_capture("Design review", cx);
+                                    }
+                                    Some(section) => manager.show_settings_section(section, cx),
                                 }
                             }
                         });
+                        if *name == "bot-channel" {
+                            shell.open_classic_channels(w, cx);
+                        }
                         cx.notify();
                     })
                     .unwrap();

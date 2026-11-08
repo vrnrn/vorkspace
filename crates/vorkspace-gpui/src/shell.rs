@@ -2990,7 +2990,7 @@ impl Render for Shell {
                     .when(point, |p| p.gap(0.))
                     .when(beside, |p| p.side(Side::Right))
                     .when(open.target == MenuTarget::SidebarOptions, |p| {
-                        p.align(Align::Start)
+                        p.align(Align::End)
                     })
             }))
             .children(self.drag_ghost(cx))

@@ -270,7 +270,7 @@ fn expanded_folders_use_compact_connected_rows_and_keep_operator_children(cx: &m
                         && quad
                             .background
                             .as_solid()
-                            .is_some_and(|color| color == gpui::Hsla::from(rgb(0x323232)))
+                            .is_some_and(|color| color == vorkspace_ui::theme::content(0.14))
                 }),
                 "the same spine as Operator rows connects folder members"
             );
