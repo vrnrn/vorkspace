@@ -72,6 +72,8 @@ use vorkspace_ui::{composer_motion::ComposerMotion, theme::*};
 // Keep empty and docked composers aligned with the transcript column. Below
 // this width the empty session drops its title.
 const COMPOSER_COLUMN: f32 = COLUMN;
+/// Below this height an empty page keeps only its question and composer.
+const SHORT_EMPTY_HEIGHT: f32 = 520.;
 const UNCONFIRMED_TURN: &str =
     "Provider connection ended before completion was confirmed. This turn was not replayed.";
 // RUNTIME_MODE_LABEL and RUNTIME_MODE_HINT from the React session model,
@@ -275,6 +277,8 @@ pub(crate) struct Conversation {
     composer_anchor: AnchorSlot,
     composer_motion: ComposerMotion,
     narrow: bool,
+    /// The empty page is too short for its decorative field and starters.
+    short: bool,
     // A split or review pane sits beside this chat; only then does a narrow
     // pane rest the composer where it docks.
     beside_pane: bool,
@@ -614,6 +618,7 @@ impl Conversation {
             composer_anchor: AnchorSlot::default(),
             composer_motion: ComposerMotion::default(),
             narrow: false,
+            short: false,
             beside_pane: false,
             cancel: Arc::new(AtomicBool::new(false)),
             title_cancel: None,

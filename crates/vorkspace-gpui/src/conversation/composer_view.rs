@@ -790,6 +790,7 @@ impl Conversation {
     pub(super) fn empty(&mut self, window: &Window, cx: &mut Context<Self>) -> AnyElement {
         let this = cx.entity().downgrade();
         let narrow = self.narrow;
+        let short = self.short;
         let docked = narrow && self.beside_pane;
         self.attachment_drop_target("empty-session", cx)
             .relative()
@@ -800,10 +801,12 @@ impl Conversation {
                 canvas(
                     move |bounds, _, cx| {
                         let now = bounds.size.width < px(COMPOSER_COLUMN);
-                        if now != narrow {
+                        let now_short = bounds.size.height < px(SHORT_EMPTY_HEIGHT);
+                        if now != narrow || now_short != short {
                             cx.defer(move |cx| {
                                 let _ = this.update(cx, |this, cx| {
                                     this.narrow = now;
+                                    this.short = now_short;
                                     cx.notify();
                                 });
                             });
@@ -824,7 +827,7 @@ impl Conversation {
                     .pt(px(24.))
                     .pb(px(6.))
                     .child(div().flex_grow(1.).flex_basis(px(0.)))
-                    .when(!docked, |d| {
+                    .when(!docked && !short, |d| {
                         // A still, printed field above the prompt: the page is
                         // empty, not blank.
                         d.child(
@@ -864,7 +867,7 @@ impl Conversation {
                     // Three ways to begin, below the prompt; hidden once the
                     // pane is too narrow to show them on one or two rows.
                     // Project-shaped prompts need a project to be about.
-                    .when(!narrow && !self.summary.cwd.is_empty(), |d| {
+                    .when(!narrow && !short && !self.summary.cwd.is_empty(), |d| {
                         d.child(div().mt_4().flex().justify_center().child(self.starters(
                             "session-starter",
                             vec![

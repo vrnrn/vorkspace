@@ -780,3 +780,37 @@ fn a_session_without_a_project_asks_plainly_and_offers_no_project_starters(
     assert!(visual.debug_bounds("session-starter-0").is_none());
     assert!(visual.debug_bounds("composer-workspace").is_none());
 }
+
+#[gpui::test]
+fn a_short_empty_session_keeps_only_its_question_and_composer(cx: &mut TestAppContext) {
+    vorkspace_ui::theme::configure(&Default::default(), false, true);
+    cx.update(|cx| {
+        cx.set_global(vorkspace_ui::preferences::Preferences::default());
+        vorkspace_ui::clock::use_test_clock(cx);
+        input::bind(cx);
+        crate::popover::bind(cx);
+    });
+    let window = window(cx, 1000.);
+    let visual = &mut gpui::VisualTestContext::from_window(window.into(), cx);
+    window
+        .update(visual, |c, w, cx| {
+            c.input
+                .update(cx, |i, cx| i.replace_text_in_range(None, "", w, cx));
+        })
+        .unwrap();
+    visual.run_until_parked();
+    visual.refresh().unwrap();
+    assert!(visual.debug_bounds("session-starter-0").is_some());
+    visual.simulate_resize(size(px(1000.), px(420.)));
+    visual.run_until_parked();
+    visual.refresh().unwrap();
+    visual.run_until_parked();
+    visual.refresh().unwrap();
+    assert!(visual.debug_bounds("session-starter-0").is_none());
+    visual.simulate_resize(size(px(1000.), px(700.)));
+    visual.run_until_parked();
+    visual.refresh().unwrap();
+    visual.run_until_parked();
+    visual.refresh().unwrap();
+    assert!(visual.debug_bounds("session-starter-0").is_some());
+}
