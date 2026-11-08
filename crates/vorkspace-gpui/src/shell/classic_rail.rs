@@ -349,6 +349,12 @@ impl Shell {
             !self.app_view_open() && self.app_search.is_none() && !self.bot_active(cx);
         let tab = self.workspace.sidebar_tab();
         let tabs = SidebarTab::normalize(&self.workspace.sidebar_tab_order);
+        let hidden_bots = self.workspace.hidden_bots();
+        let (vorkspace_id, vorkspace_name) = self
+            .workspace
+            .active_vorkspace()
+            .map(|v| (v.id.clone(), v.name.clone()))
+            .unwrap_or_default();
         let pinned_bots: Vec<_> = if self.workspace.preferences.rail_bots_pinned {
             self.bots
                 .as_ref()
@@ -359,7 +365,7 @@ impl Shell {
                         .roster
                         .bots
                         .iter()
-                        .filter(|bot| !bot.is_minion())
+                        .filter(|bot| !bot.is_minion() && !hidden_bots.contains(&bot.id))
                         .map(|bot| {
                             let id = bot.id.clone();
                             let selected = manager.active.as_ref() == Some(&id);
@@ -413,6 +419,34 @@ impl Shell {
                 .flex_col()
                 .items_center()
                 .gap_1p5()
+                // The vorkspace leads the icon rail as it does the full one.
+                .child(
+                    div()
+                        .id("classic-compact-vorkspace")
+                        .debug_selector(|| "classic-compact-vorkspace".into())
+                        .role(Role::Button)
+                        .aria_label(format!("Vorkspace {vorkspace_name}. Switch vorkspace"))
+                        .map(vorkspace_ui::theme::tab_reachable)
+                        .size(px(32.))
+                        .rounded(px(radius::CONTROL))
+                        .flex()
+                        .items_center()
+                        .justify_center()
+                        .hover(|s| s.bg(vorkspace_ui::fluid::hover(0.08)))
+                        .child(super::vorkspaces::vorkspace_mark(
+                            &vorkspace_id,
+                            &vorkspace_name,
+                            20.,
+                        ))
+                        .on_click(cx.listener(|this, event: &gpui::ClickEvent, window, cx| {
+                            this.open_menu(
+                                MenuTarget::Vorkspace,
+                                Anchor::Point(event.position()),
+                                window,
+                                cx,
+                            );
+                        })),
+                )
                 .when(!pinned_bots.is_empty(), |d| {
                     d.child(div().flex().flex_col().gap_1p5().children(pinned_bots))
                         .child(div().h_px().w(px(24.)).bg(content(0.08)))
