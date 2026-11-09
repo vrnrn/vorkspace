@@ -171,17 +171,7 @@ fn status_letter(status: &str) -> &'static str {
         _ => "M",
     }
 }
-/// A file's change state, in the user's diff palette (default, colorblind
-/// or high contrast) for added and deleted, and the theme's warning ink for
-/// edits, all paired for light and dark.
-pub(crate) fn status_color(status: &str) -> Hsla {
-    match status {
-        "untracked" => vorkspace_ui::theme::accent_color(),
-        "added" => vorkspace_ui::theme::diff_foreground(true),
-        "deleted" => vorkspace_ui::theme::diff_foreground(false),
-        _ => vorkspace_ui::theme::warning(),
-    }
-}
+pub(crate) use crate::git_status::status_color;
 fn sync_status_label(index: &DiffIndex) -> String {
     let plural = |n: i64| if n == 1 { "" } else { "s" };
     if index.ahead > 0 && index.behind > 0 {

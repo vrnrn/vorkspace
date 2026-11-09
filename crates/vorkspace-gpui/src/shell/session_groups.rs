@@ -47,7 +47,6 @@ pub(super) fn local_reminder_label(ms: u64) -> String {
 #[derive(Clone, PartialEq)]
 pub(super) enum RenameTarget {
     Session(i64),
-    ProjectGroup(String),
 }
 pub(super) struct Renaming {
     pub(super) target: RenameTarget,
@@ -64,6 +63,9 @@ pub(super) struct LinkDialog {
 
 impl Shell {
     pub(super) fn rename_sidebar_item(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if !self.workspace.project_rail_open {
+            return;
+        }
         let target = if self.sidebar_focus.is_focused(window) {
             self.sidebar_target.clone()
         } else {
@@ -71,8 +73,10 @@ impl Shell {
                 .or(self.workspace.active)
                 .map(RenameTarget::Session)
         };
-        if let Some(target) = target {
-            self.start_rename(target, window, cx);
+        if let Some(RenameTarget::Session(id)) = target
+            && self.sidebar_session_ids(cx).contains(&id)
+        {
+            self.start_rename(RenameTarget::Session(id), window, cx);
         }
     }
     pub(super) fn delete_sidebar_selection(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -581,13 +585,6 @@ impl Shell {
         self.close_preview(cx);
         let text = match &target {
             RenameTarget::Session(id) => self.session_metadata(*id, cx).display_title(),
-            RenameTarget::ProjectGroup(id) => self
-                .workspace
-                .project_rail_state
-                .as_ref()
-                .and_then(|r| r.groups.iter().find(|g| &g.id == id))
-                .map(|g| g.name.clone())
-                .unwrap_or_default(),
         };
         let input = cx.new(|cx| {
             let mut input = input::Input::field(
@@ -648,18 +645,6 @@ impl Shell {
                         self.store_write("rename the session", cx, move |s| s.title(id, &name));
                     }
                 }
-                RenameTarget::ProjectGroup(id) => {
-                    if let Some(group) = self
-                        .workspace
-                        .project_rail_mut()
-                        .groups
-                        .iter_mut()
-                        .find(|g| g.id == id)
-                    {
-                        group.name = name;
-                        self.persist(cx);
-                    }
-                }
             }
         }
         if renaming.input.read(cx).focus_handle(cx).is_focused(window) {
@@ -668,7 +653,7 @@ impl Shell {
         self.invalidate_chrome(cx);
         cx.notify();
     }
-    /// SessionRenameRow and FolderRenameRow: the name in a focused field.
+    /// SessionRenameRow: the name in a focused field.
     pub(super) fn rename_row(
         &self,
         target: &RenameTarget,
@@ -685,15 +670,6 @@ impl Shell {
                 .px_2()
                 .flex()
                 .items_center()
-                .gap_2()
-                .child(
-                    div()
-                        .size(px(16.))
-                        .flex_shrink_0()
-                        .flex()
-                        .items_center()
-                        .justify_center(),
-                )
                 .child(
                     div()
                         .flex_1()

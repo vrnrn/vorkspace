@@ -426,7 +426,6 @@ impl Render for ProjectSearch {
                                     .flex_shrink_0()
                                     .pt(px(1.))
                                     .text_align(gpui::TextAlign::Right)
-                                    .font_family("monospace")
                                     .font_features(tabular())
                                     .font_family(vorkspace_ui::fonts::MONO)
                                     .text_size(px(11.))

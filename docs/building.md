@@ -10,7 +10,6 @@ The root Cargo workspace owns the desktop app, its background helper, and the sh
 - Node.js 24 or newer.
 - Xcode with macOS 26 or newer platform components, for Metal and for `xcrun swiftc`, which compiles the clipboard panel and native speech bridge.
 - [`cargo-nextest`](https://nexte.st) to run Rust tests: `cargo install --locked cargo-nextest`.
-- A checkout of [fluidither](https://github.com/vrnrn/fluidither) beside this repository at `../fluidither-gpui-pre`, on a branch with the `pre` feature. `vorkspace-ui` builds its GPUI crate against this workspace's GPUI fork and uses it for dither, springs and Obel Mono (see `DESIGN.md`).
 
 `npm ci` installs the build and test tools. The app itself needs no JavaScript dependencies to compile, so you can skip that step when you only want to run it.
 
@@ -84,8 +83,8 @@ The GPUI fork and a patched `block` crate live in `vendor/` and are edited direc
 
 Cargo keeps every build's output and never deletes superseded files, so a busy checkout grows by gigabytes a day unless something prunes it. The repository bounds it in four ways:
 
-- **Light debug info.** The `dev` profile, used by plain `cargo build`, `cargo test` and editor tooling, keeps file-and-line tables for workspace crates and no debug info for dependencies. `native-dev` and `verify` carry none.
-- **Pruning after builds.** `scripts/desktop/prune-target.mjs` keeps the two newest linked binaries and incremental caches per crate in each profile and removes the rest; libraries stay. `npm run dev` runs it after each successful build, `npm run test:rust` after its tests, and `npm run target:prune` on demand.
+- **Light debug info.** The `dev` profile, used by plain `cargo build`, `cargo test` and editor tooling, keeps file-and-line tables for workspace crates and no debug info for dependencies. `native-dev` handles the interactive development app with incremental compilation enabled; `verify` disables incremental compilation so check and test runs do not leave duplicate incremental caches behind. Both carry no debug info.
+- **Pruning after builds.** `scripts/desktop/prune-target.mjs` keeps the two newest linked binaries and incremental caches per crate in each profile (including target-triple and sub-target directories) and removes the rest along with stale `.rcgu.o` debug objects; libraries stay. `npm run dev` runs it after each successful build, `npm run check:fast` and `npm run test:rust` after their checks, and `npm run target:prune` on demand.
 - **One output directory per checkout.** Do not point a task at its own `CARGO_TARGET_DIR`; that duplicates every dependency.
 - **Warm worktrees.** Seed new worktrees as described below rather than building them cold.
 

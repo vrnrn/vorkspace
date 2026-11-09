@@ -36,6 +36,7 @@ impl Shell {
             return;
         };
         let appearance = ProjectAppearance {
+            name: def.name.clone(),
             background: def.background.clone(),
             ..Default::default()
         };
@@ -67,10 +68,10 @@ impl Shell {
         cx.notify();
     }
     pub(super) fn project_label(&self, path: &str) -> String {
-        self.appearance(path).label(path)
+        ProjectAppearance::default().label(path)
     }
     pub(super) fn project_mark(&self, path: &str, side: f32) -> AnyElement {
-        project_icon(&self.appearance(path), path, side)
+        project_icon(&ProjectAppearance::default(), path, side)
     }
     /// A project's settings live in its vorkspace's dialog, on its own tab.
     pub(super) fn open_project_settings(
@@ -245,7 +246,7 @@ impl Shell {
             .into_any_element()
     }
 
-    fn close_background_dialog(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    pub(super) fn close_background_dialog(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let vorkspace = self.background_dialog.take().map(|open| open.vorkspace);
         if let Some(bots) = &self.bots {
             bots.update(cx, |bots, cx| bots.close_background(cx));

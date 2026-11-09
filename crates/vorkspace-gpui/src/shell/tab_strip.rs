@@ -532,17 +532,14 @@ impl Shell {
         let now = vorkspace_ui::clock::Instant::now();
         // The dragged tab rides the pointer; it eases only into a slot.
         if follow {
-            self.tab_shifts.remove(&id);
-            if follow {
-                self.tab_shifts.insert(
-                    id.clone(),
-                    TabShift {
-                        from: target,
-                        to: target,
-                        start: now - std::time::Duration::from_secs(1),
-                    },
-                );
-            }
+            self.tab_shifts.insert(
+                id,
+                TabShift {
+                    from: target,
+                    to: target,
+                    start: now - std::time::Duration::from_secs(1),
+                },
+            );
             return (target, false);
         }
         let current = self.tab_shifts.get(&id).map(|s| s.at(now));
@@ -767,7 +764,6 @@ impl Shell {
             cx,
         );
         let thumb_ready = glide.ready();
-        vorkspace_ui::glide::forget_beyond(&glide, tabs.len());
         let mut workspace_elements: HashMap<i64, AnyElement> =
             tabs.iter()
                 .enumerate()

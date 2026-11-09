@@ -10,7 +10,7 @@ use vorkspace_core::tool::{ToolCall, ToolState};
 /// it, drawn on its own clock while it is on screen.
 pub(crate) fn shimmer(text: String, elapsed: f32) -> AnyElement {
     GlyphShimmer {
-        key: Some(gpui::SharedString::from(format!("shimmer:{text}"))),
+        key: Some(gpui::SharedString::new_static("shimmer:clock")),
         text: StyledText::new(text),
         elapsed,
     }

@@ -54,7 +54,7 @@ impl Shell {
         );
         // Each button rounds to whole device pixels: at most half a pixel more
         // at 1x (`navigation_button_size`).
-        (lights + 3. * 24.5 + 6.).ceil()
+        (lights + 2. * 24.5 + 6.).ceil()
     }
 
     /// Navigation always overhangs the icon rail, under a rule across the pane
@@ -169,6 +169,7 @@ impl Shell {
         self.usage_footer.update(cx, |usage, cx| {
             usage.set_compact(!self.workspace.project_rail_open, cx)
         });
+        self.reconcile_vorkspace_bots(cx);
 
         if !self.workspace.project_rail_open {
             return self.compact_project_rail(rail, cx);
@@ -180,7 +181,6 @@ impl Shell {
         // The rail lists the vorkspace's sessions rather than its projects;
         // projects are picked from the sidebar header within the vorkspace.
         self.retain_project_marks(|_| false, cx);
-        self.reconcile_vorkspace_bots(cx);
         let bots = self.bots.clone().map(|bots| {
             bots.update(cx, |bots, cx| {
                 div().child(bots.rail(None, cx)).into_any_element()
@@ -375,7 +375,10 @@ impl Shell {
         // anywhere in the vorkspace.
         let listed = self.sidebar_session_ids(cx);
         let unread = listed.iter().any(|id| self.unseen_finished.contains(id));
-        let working = listed.iter().any(|id| self.session_metadata(*id, cx).busy);
+        let working = listed.iter().any(|id| {
+            let meta = self.session_metadata(*id, cx);
+            meta.responding() || meta.needs_approval()
+        });
         rail.child(
             div()
                 .id("classic-compact-actions")

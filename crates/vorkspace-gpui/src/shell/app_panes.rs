@@ -8,7 +8,7 @@ use crate::workspace::{AppPane, AppView};
 pub(super) struct BotPaneView {
     shell: gpui::WeakEntity<Shell>,
     manager: Entity<crate::bots::Bots>,
-    bot: Option<String>,
+    bot: String,
     width: f32,
     wide: bool,
     _changed: Subscription,
@@ -20,23 +20,20 @@ impl Render for BotPaneView {
         let resized = wide != self.wide;
         self.wide = wide;
         let linked = self
-            .bot
-            .as_ref()
-            .and_then(|id| self.manager.read(cx).pane_notification_session(id, cx))
+            .manager
+            .read(cx)
+            .pane_notification_session(&self.bot, cx)
             .and_then(|session| {
                 self.shell
                     .update(cx, |shell, cx| shell.linked_notice(session, cx))
                     .ok()
                     .flatten()
             });
-        self.manager.update(cx, |manager, cx| match &self.bot {
-            Some(id) => {
-                if resized {
-                    manager.collapse_island(id);
-                }
-                manager.render_bot_pane(id, self.width, linked, window, cx)
+        self.manager.update(cx, |manager, cx| {
+            if resized {
+                manager.collapse_island(&self.bot);
             }
-            None => div().into_any_element(),
+            manager.render_bot_pane(&self.bot, self.width, linked, window, cx)
         })
     }
 }
@@ -45,7 +42,7 @@ impl Shell {
     fn bot_pane_body(
         &mut self,
         pane: i64,
-        bot: Option<String>,
+        bot: String,
         cx: &mut Context<Self>,
     ) -> Option<AnyElement> {
         let manager = self.bots.clone()?;
@@ -572,7 +569,7 @@ impl Shell {
                 .view
                 .clone()
                 .into_any_element(),
-            AppPane::Bot(bot) => self.bot_pane_body(id, Some(bot), cx)?,
+            AppPane::Bot(bot) => self.bot_pane_body(id, bot, cx)?,
         })
     }
 
@@ -590,7 +587,7 @@ impl Shell {
                 }
             }
             AppPane::Bot(bot) => {
-                self.bot_pane_body(id, Some(bot.clone()), cx);
+                self.bot_pane_body(id, bot.clone(), cx);
                 if let Some(view) = self.bot_pane_views.get(&id) {
                     view.update(cx, |view, cx| {
                         if view.width != width {

@@ -327,10 +327,12 @@ impl Shell {
     fn other_project(&self, path: &str) -> Result<String, String> {
         let key = vorkspace_core::files::path_key(path);
         self.workspace
-            .projects
-            .iter()
-            .find(|p| vorkspace_core::files::path_key(p) != key)
-            .cloned()
+            .vorkspace_projects()
+            .into_iter()
+            .chain(self.workspace.projects.iter().cloned())
+            .find(|p| {
+                vorkspace_core::files::path_key(p) != key && self.workspace.is_project_available(p)
+            })
             .ok_or_else(|| "Add another project before removing your only one.".into())
     }
 
@@ -531,6 +533,7 @@ impl Shell {
                 } else {
                     this.workspace.projects.retain(|p| vorkspace_core::files::path_key(p) != key);
                     this.workspace.deleted_projects.insert(key.clone());
+                    this.workspace.purge_project_from_vorkspaces(&path);
                     let rail = this.workspace.project_rail_mut();
                     rail.pinned.remove(&key);
                     rail.assignments.remove(&key);

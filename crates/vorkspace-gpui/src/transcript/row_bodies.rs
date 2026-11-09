@@ -207,7 +207,7 @@ impl TranscriptView {
                     .flex_1()
                     .truncate()
                     .when(live, |d| d.debug_selector(|| "live-work-receipt".into()))
-                    .child(if live {
+                    .child(if live && self.visible {
                         crate::activity::shimmer(
                             title,
                             self.started.map_or(0., |s| s.elapsed().as_secs_f32()),
@@ -301,14 +301,20 @@ impl TranscriptView {
                             .group_hover("activity-phase", |s| s.opacity(1.)),
                     ),
             )
-            .child(div().min_w_0().flex_1().truncate().child(if active {
-                crate::activity::shimmer(
-                    title,
-                    self.started.map_or(0., |s| s.elapsed().as_secs_f32()),
-                )
-            } else {
-                div().child(title).into_any_element()
-            }))
+            .child(
+                div()
+                    .min_w_0()
+                    .flex_1()
+                    .truncate()
+                    .child(if active && self.visible {
+                        crate::activity::shimmer(
+                            title,
+                            self.started.map_or(0., |s| s.elapsed().as_secs_f32()),
+                        )
+                    } else {
+                        div().child(title).into_any_element()
+                    }),
+            )
             .hover(|s| s.text_color(content(0.8)))
             .on_click(cx.listener(move |this, _, _, cx| {
                 this.toggle_phase(group, !open, cx);

@@ -447,6 +447,7 @@ impl SettingsView {
                                 .role(Role::RadioButton)
                                 .aria_label(text.clone())
                                 .aria_selected(selected)
+                                .map(vorkspace_ui::theme::tab_reachable)
                                 .relative()
                                 .min_w_0()
                                 .flex()

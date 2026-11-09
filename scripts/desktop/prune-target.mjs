@@ -13,8 +13,11 @@ import { fileURLToPath } from "node:url";
 // current build and the one before it.
 export const KEEP = 2;
 
-// `name-0123456789abcdef`, the shape Cargo gives hashed outputs.
+// `name-0123456789abcdef`, the shape Cargo gives hashed outputs in `deps/` and `examples/`.
 const HASHED = /^(.+)-[0-9a-f]{16}$/;
+
+// `name-0h32cv21lt6eb`, the base-36 crate-id suffix rustc gives `incremental/` directories.
+const INCREMENTAL = /^(.+)-[0-9a-z]{13}$/;
 
 function entries(dir) {
   try {
@@ -33,19 +36,64 @@ function modified(path) {
 }
 
 /** Newest-first groups of hashed entries in `dir`, keyed by their name. */
-function groups(dir, pick) {
+function groups(dir, pattern, pick, all = entries(dir)) {
   const byName = new Map();
-  for (const entry of entries(dir)) {
+  for (const entry of all) {
     if (!pick(entry)) continue;
-    const match = HASHED.exec(entry.name);
+    const match = pattern.exec(entry.name);
     if (!match) continue;
     const path = join(dir, entry.name);
     const list = byName.get(match[1]) ?? [];
-    list.push({ path, time: modified(path) });
+    list.push({ name: entry.name, path, time: modified(path) });
     byName.set(match[1], list);
   }
-  for (const list of byName.values()) list.sort((a, b) => b.time - a.time);
+  for (const list of byName.values()) {
+    list.sort((a, b) => b.time - a.time || a.name.localeCompare(b.name));
+  }
   return byName;
+}
+
+function isProfileRoot(dir) {
+  return entries(dir).some(
+    (entry) =>
+      entry.isDirectory() &&
+      (entry.name === "deps" || entry.name === "incremental" || entry.name === "examples"),
+  );
+}
+
+/**
+ * Finds profile directories under `dir`, whether built directly (`<target>/<profile>`),
+ * for a target triple (`<target>/<triple>/<profile>`), or in a nested sub-target
+ * (`<target>/block/<profile>`).
+ */
+function profileRoots(dir, depth = 3) {
+  if (depth <= 0) return [];
+  const roots = [];
+  for (const entry of entries(dir)) {
+    if (!entry.isDirectory()) continue;
+    const path = join(dir, entry.name);
+    if (isProfileRoot(path)) {
+      roots.push(path);
+    } else {
+      roots.push(...profileRoots(path, depth - 1));
+    }
+  }
+  return roots;
+}
+
+function pruneBinaries(dir, keep, remove) {
+  const all = entries(dir);
+  for (const list of groups(dir, HASHED, (e) => e.isFile() && !e.name.includes("."), all).values()) {
+    for (const { name, path } of list.slice(keep)) {
+      remove(path);
+      const prefix = `${name}.`;
+      for (const companion of all) {
+        if (companion.name.startsWith(prefix)) {
+          rmSync(join(dir, companion.name), { recursive: true, force: true });
+        }
+      }
+    }
+  }
 }
 
 /**
@@ -58,21 +106,13 @@ export function pruneTarget(target, keep = KEEP) {
     rmSync(path, { recursive: true, force: true });
     removed.push(path);
   };
-  for (const profile of entries(target)) {
-    if (!profile.isDirectory()) continue;
-    const root = join(target, profile.name);
+  for (const root of profileRoots(target)) {
     // Linked executables carry no extension; libraries end in .rlib, .rmeta,
     // .dylib or .d and are shared by every build, so they stay.
-    const deps = join(root, "deps");
-    for (const list of groups(deps, (e) => e.isFile() && !e.name.includes(".")).values()) {
-      for (const { path } of list.slice(keep)) {
-        remove(path);
-        rmSync(`${path}.d`, { force: true });
-        rmSync(`${path}.dSYM`, { recursive: true, force: true });
-      }
-    }
+    pruneBinaries(join(root, "deps"), keep, remove);
+    pruneBinaries(join(root, "examples"), keep, remove);
     const incremental = join(root, "incremental");
-    for (const list of groups(incremental, (e) => e.isDirectory()).values()) {
+    for (const list of groups(incremental, INCREMENTAL, (e) => e.isDirectory()).values()) {
       for (const { path } of list.slice(keep)) remove(path);
     }
   }

@@ -9,13 +9,11 @@
 use crate::theme::{black, content};
 use gpui::{App, Background, Global};
 
-pub use fluidither::generated::{GLIDE, GLIDE_OUT, QUICK, QUICK_OUT, SETTLE, SETTLE_OUT};
+pub use fluidither::generated::{GLIDE, QUICK};
 pub use fluidither::spring::{LONGEST_STEP, Spring};
 
 /// Pattern cells, in logical points. fluidither's own fine cell.
 pub const CELL: f32 = fluidither::generated::DITHER_HOVER_CELL;
-/// Scrim and empty-state cells, in logical points.
-pub const FIELD_CELL: f32 = fluidither::generated::DITHER_CELL;
 
 /// A hover wash: a flat tint of content ink. Hover stays quiet and solid; the
 /// printed look belongs to surfaces that carry meaning (tracks, charts, empty
@@ -459,11 +457,16 @@ impl gpui::RenderOnce for Count {
     fn render(self, window: &mut gpui::Window, cx: &mut App) -> impl gpui::IntoElement {
         use gpui::ParentElement;
         let value = self.value;
+        let reduce_motion = cx.reduce_motion();
         let state = window.use_keyed_state(self.id, cx, |_, _| Rolling {
             spring: Spring::new(QUICK, value as f64),
             last: crate::clock::Instant::now(),
         });
         let (shown, landed) = state.update(cx, |rolling, _| {
+            if reduce_motion {
+                rolling.spring = Spring::new(QUICK, value as f64);
+                return (value, true);
+            }
             if rolling.spring.target != value as f64 {
                 rolling.spring.target = value as f64;
             }
@@ -474,77 +477,6 @@ impl gpui::RenderOnce for Count {
             window.request_animation_frame();
         }
         gpui::div().child((self.format)(if landed { value } else { shown }))
-    }
-}
-
-/// Text that arrives with some character, as fluidither's `Scramble`: when
-/// the text changes after its first showing (a session's generated title
-/// landing, a rename), its letters settle from stand-in glyphs over 0.7 s.
-/// The first showing, and any text seen for the first time, appears at once.
-#[derive(gpui::IntoElement)]
-pub struct Scramble {
-    id: gpui::ElementId,
-    text: gpui::SharedString,
-}
-
-impl Scramble {
-    pub fn new(id: impl Into<gpui::ElementId>, text: impl Into<gpui::SharedString>) -> Self {
-        Self {
-            id: id.into(),
-            text: text.into(),
-        }
-    }
-}
-
-const SCRAMBLE_SECONDS: f64 = 0.7;
-/// Stand-ins change every 40 ms, not every frame, so they read as letters.
-const SCRAMBLE_STEP: f64 = 0.04;
-
-struct Settling {
-    text: gpui::SharedString,
-    since: Option<crate::clock::Instant>,
-}
-
-impl Settling {
-    /// What to show for `text` at `now`: the stand-in letters while it
-    /// settles, or `None` once it reads as itself.
-    fn advance(&mut self, text: &gpui::SharedString, now: crate::clock::Instant) -> Option<String> {
-        if &self.text != text {
-            // A change from nothing (a row's first title) appears at once.
-            self.since = (!self.text.is_empty()).then_some(now);
-            self.text = text.clone();
-        }
-        let elapsed = now.saturating_duration_since(self.since?).as_secs_f64();
-        if elapsed >= SCRAMBLE_SECONDS {
-            self.since = None;
-            return None;
-        }
-        Some(fluidither::text_effects::scrambled(
-            text,
-            elapsed / SCRAMBLE_SECONDS,
-            (elapsed / SCRAMBLE_STEP) as u32,
-        ))
-    }
-}
-
-impl gpui::RenderOnce for Scramble {
-    fn render(self, window: &mut gpui::Window, cx: &mut App) -> impl gpui::IntoElement {
-        use gpui::IntoElement;
-        let text = self.text;
-        let state = window.use_keyed_state(self.id, cx, |_, _| Settling {
-            text: text.clone(),
-            since: None,
-        });
-        let now = crate::clock::Instant::now();
-        let shown = state.update(cx, |settling, _| settling.advance(&text, now));
-        // Bare text, so the parent's truncation and type still apply.
-        match shown {
-            Some(shown) => {
-                window.request_animation_frame();
-                shown.into_any_element()
-            }
-            None => text.into_any_element(),
-        }
     }
 }
 
@@ -600,35 +532,6 @@ mod tests {
             assert_eq!(hover(weight).as_solid(), Some(content(weight)));
         }
         assert!(track(0.1).as_solid().is_none());
-    }
-
-    #[test]
-    fn a_changed_text_settles_from_stand_ins_and_then_reads_as_itself() {
-        let start = crate::clock::Instant::now();
-        let at = |ms: u64| start + std::time::Duration::from_millis(ms);
-        let first: gpui::SharedString = "New session".into();
-        let mut settling = Settling {
-            text: first.clone(),
-            since: None,
-        };
-        // The first showing is plain.
-        assert_eq!(settling.advance(&first, at(0)), None);
-        let title: gpui::SharedString = "Fix scroll anchor".into();
-        let early = settling.advance(&title, at(0)).expect("a change scrambles");
-        assert_ne!(early, title.as_ref());
-        // Same length, and spaces stay, so the words keep their shape.
-        assert_eq!(early.chars().count(), title.chars().count());
-        assert_eq!(early.find(' '), title.find(' '));
-        let late = settling.advance(&title, at(600)).unwrap();
-        assert!(late.starts_with("Fix scroll"), "{late}");
-        assert_eq!(settling.advance(&title, at(700)), None);
-        assert_eq!(settling.advance(&title, at(800)), None);
-        // Text that arrives from nothing appears at once.
-        let mut blank = Settling {
-            text: "".into(),
-            since: None,
-        };
-        assert_eq!(blank.advance(&title, at(0)), None);
     }
 
     #[test]

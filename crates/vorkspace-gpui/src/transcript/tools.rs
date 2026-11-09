@@ -123,11 +123,16 @@ impl TranscriptView {
                         })
                         .into_any_element()
                 })
-                .child(div().min_w_0().truncate().child(if running {
-                    crate::activity::shimmer(label, self.started_at.elapsed().as_secs_f32())
-                } else {
-                    div().child(label).into_any_element()
-                }))
+                .child(
+                    div()
+                        .min_w_0()
+                        .truncate()
+                        .child(if running && self.visible {
+                            crate::activity::shimmer(label, self.started_at.elapsed().as_secs_f32())
+                        } else {
+                            div().child(label).into_any_element()
+                        }),
+                )
                 .into_any_element();
         }
         let shown = tool.presentation_in(self.file_link_base.as_deref());

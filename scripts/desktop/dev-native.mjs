@@ -94,6 +94,8 @@ export async function startDev({
           log("Build failed. Keeping the current app; type r to retry after fixing the error.");
           continue;
         }
+        // Another restart request during compilation gets a fresh build first.
+        if (builtRevision !== revision) continue;
         // Superseded binaries and incremental caches would otherwise pile up
         // with every rebuild. Best effort: it never holds up a launch.
         try {
@@ -101,8 +103,6 @@ export async function startDev({
         } catch (error) {
           log(`Skipped pruning old build output: ${error.message}`);
         }
-        // Another restart request during compilation gets a fresh build first.
-        if (builtRevision !== revision) continue;
         const dataMode = args.reduce((mode, arg, index) => {
           if (["--cwd", "--vorkspace-db"].includes(args[index - 1])) return mode;
           if (arg === "--dev-data") return "dev-data";

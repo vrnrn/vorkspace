@@ -16,7 +16,7 @@ serde.workspace = true
 serde_json.workspace = true
 vorkspace-core = { path = "../vorkspace-core" }
 # Dithered, spring-driven components, built against this workspace's GPUI fork.
-fluidither = { path = "../../../fluidither-gpui-pre/gpui", default-features = false, features = ["pre"] }
+fluidither = { git = "https://github.com/vrnrn/fluidither", rev = "61a6d61f848bdc98a79d934499f6f1aa612929aa", default-features = false, features = ["pre"] }
 objc2 = "0.6"
 objc2-app-kit = { version = "0.3", default-features = false, features = ["std", "objc2-core-foundation", "block2", "NSEvent", "NSApplication", "NSDockTile", "NSButton", "NSControl", "NSLayoutAnchor", "NSLayoutConstraint", "NSResponder", "NSView", "NSWindow", "NSStatusBar", "NSStatusItem", "NSStatusBarButton", "NSMenu", "NSMenuItem", "NSImage", "NSBezierPath", "NSColor", "NSFont", "NSFontDescriptor", "NSImageView", "NSTextField", "NSPasteboard", "NSScreen", "NSWorkspace", "NSRunningApplication", "libc"] }
 objc2-foundation = { version = "0.3", default-features = false, features = ["std", "block2", "NSNotification", "NSString", "NSGeometry", "NSData", "NSRange", "NSArray", "NSSet", "NSError", "NSBundle", "NSURL", "NSURLRequest"] }

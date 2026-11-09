@@ -13,6 +13,9 @@ impl Shell {
         self.preview_close = None;
         if self.session_preview.take().is_some() {
             self.sidebar_frame.update(cx, |_, cx| cx.notify());
+            self.project_rail_frame.update(cx, |_, cx| cx.notify());
+            self.invalidate_chrome(cx);
+            cx.notify();
         }
     }
     pub(super) fn schedule_preview(&mut self, id: i64, anchor: AnchorSlot, cx: &mut Context<Self>) {
@@ -44,6 +47,9 @@ impl Shell {
                     surface: AnchorSlot::default(),
                 });
                 this.sidebar_frame.update(cx, |_, cx| cx.notify());
+                this.project_rail_frame.update(cx, |_, cx| cx.notify());
+                this.invalidate_chrome(cx);
+                cx.notify();
                 // An already-open conversation has its own live metadata.
                 (!this.sessions.contains_key(&id)).then(|| this.store.clone())
             }) else {
@@ -62,6 +68,9 @@ impl Shell {
                 {
                     preview.data = data;
                     this.sidebar_frame.update(cx, |_, cx| cx.notify());
+                    this.project_rail_frame.update(cx, |_, cx| cx.notify());
+                    this.invalidate_chrome(cx);
+                    cx.notify();
                 }
             });
         }));
@@ -86,6 +95,9 @@ impl Shell {
         }
         if previous != self.session_hover {
             self.sidebar_frame.update(cx, |_, cx| cx.notify());
+            self.project_rail_frame.update(cx, |_, cx| cx.notify());
+            self.invalidate_chrome(cx);
+            cx.notify();
         }
         if hovered && compact {
             self.preview_close = None;

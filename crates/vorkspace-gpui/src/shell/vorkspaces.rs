@@ -15,9 +15,9 @@ pub(crate) struct VorkspaceDialog {
     /// A project's own tab (Codebase, Notifications); none shows the
     /// vorkspace itself.
     pub(crate) project: Option<String>,
-    name: Entity<input::Input>,
+    pub(super) name: Entity<input::Input>,
     focus: FocusHandle,
-    confirm_delete: bool,
+    pub(super) confirm_delete: bool,
     _name: Subscription,
 }
 
@@ -64,6 +64,7 @@ struct RailSession {
     project: String,
     busy: bool,
     needs_input: bool,
+    pinned: bool,
     archived: bool,
     updated_at: u64,
 }
@@ -88,6 +89,7 @@ impl Shell {
         }
         self.workspace.active_vorkspace = id.to_owned();
         self.rail_sessions_expanded = false;
+        self.reconcile_vorkspace_bots(cx);
         let landing = self.workspace.vorkspace_landing(id);
         self.open_project_from_user(landing, window, cx);
         self.persist(cx);
@@ -283,23 +285,36 @@ impl Shell {
                     title: meta.display_title().to_string(),
                     provider: meta.summary.provider.clone(),
                     project: self.project_label(&meta.summary.cwd),
-                    busy: meta.busy,
+                    busy: meta.responding(),
                     needs_input: meta.needs_approval(),
+                    pinned: meta.summary.pinned,
                     archived: meta.summary.archived,
                     updated_at: meta.summary.updated_at,
                 }
             })
             .collect();
-        sessions.sort_by_key(|s| std::cmp::Reverse((s.busy || s.needs_input, s.updated_at)));
+        sessions
+            .sort_by_key(|s| std::cmp::Reverse((s.busy || s.needs_input, s.pinned, s.updated_at)));
         let total = sessions.len();
-        let narrowed = !self.query.is_empty()
-            || self
-                .workspace
-                .session_filters
-                .active(self.workspace.preferences.show_archived);
+        let narrowed = !self.query.is_empty() || self.session_filters_active(cx);
         // Expanded, searching or filtering, every match is listed.
-        if !(self.rail_sessions_expanded || narrowed) {
+        if !(self.rail_sessions_expanded || narrowed) && sessions.len() > RAIL_SESSIONS {
+            let renaming = self.renaming.as_ref().map(
+                |super::session_groups::Renaming {
+                     target: super::session_groups::RenameTarget::Session(id),
+                     ..
+                 }| *id,
+            );
+            let extra = renaming.and_then(|id| {
+                sessions[RAIL_SESSIONS..]
+                    .iter()
+                    .position(|s| s.id == id)
+                    .map(|ix| sessions.remove(RAIL_SESSIONS + ix))
+            });
             sessions.truncate(RAIL_SESSIONS);
+            if let Some(session) = extra {
+                sessions.push(session);
+            }
         }
         (sessions, total)
     }
@@ -348,10 +363,7 @@ impl Shell {
             .unwrap_or_default();
         let expanded = self.rail_sessions_expanded;
         let more = total > sessions.len() || expanded;
-        let filtering = self
-            .workspace
-            .session_filters
-            .active(self.workspace.preferences.show_archived);
+        let filtering = self.session_filters_active(cx);
         let searching = self.rail_search_open || !self.query.is_empty();
         let search = searching.then(|| {
             div()
@@ -605,6 +617,13 @@ impl Shell {
                                             .text_color(content(if active { 1. } else { 0.85 }))
                                             .child(s.title),
                                     )
+                                    .when(s.pinned, |d| {
+                                        d.child(
+                                            icon("pin", 11.)
+                                                .flex_shrink_0()
+                                                .text_color(content(0.45)),
+                                        )
+                                    })
                                     .children(self.work_item_badge(id, true, cx))
                                     .child(div().flex_shrink_0().text_size(px(11.)).child(status)),
                             )
@@ -796,6 +815,7 @@ impl Shell {
                         {
                             if let Some(d) = this.vorkspace_dialog.as_mut() {
                                 d.project = None;
+                                d.confirm_delete = false;
                             }
                             cx.notify();
                         } else {
@@ -808,7 +828,11 @@ impl Shell {
                 continue;
             }
             // Each of the vorkspace's projects has its own settings tab.
-            for path in &v.projects {
+            for path in v
+                .projects
+                .iter()
+                .filter(|p| self.workspace.is_project_available(p))
+            {
                 let selected = open_project.as_deref() == Some(path.as_str());
                 let target = path.clone();
                 let key = path_key(path);
@@ -861,63 +885,77 @@ impl Shell {
                 .text_color(content(0.55))
                 .child(label)
         };
-        let projects = def.projects.clone().into_iter().map(|path| {
-            let remove = path.clone();
-            let editing = editing.clone();
-            let key = path_key(&path);
-            div()
-                .id(SharedString::from(format!("vorkspace-project-{key}")))
-                .h(px(40.))
-                .px_2()
-                .flex()
-                .items_center()
-                .gap_2()
-                .rounded(px(radius::CONTROL))
-                .hover(|s| s.bg(vorkspace_ui::fluid::hover(0.04)))
-                .child(self.project_mark(&path, 16.))
-                .child(
-                    div()
-                        .flex_1()
-                        .min_w_0()
-                        .flex()
-                        .flex_col()
-                        .child(
-                            div()
-                                .truncate()
-                                .text_size(px(13.))
-                                .child(self.project_label(&path)),
-                        )
-                        .child(
-                            div()
-                                .truncate()
-                                .text_size(px(11.))
-                                .text_color(content(0.45))
-                                .child(crate::panel_kit::home_relative(std::path::Path::new(
-                                    &path,
-                                ))),
-                        ),
-                )
-                .child(
-                    icon_button(
-                        "vorkspace-remove-project",
-                        "Remove from this vorkspace",
-                        "close",
+        let projects = def
+            .projects
+            .clone()
+            .into_iter()
+            .filter(|p| self.workspace.is_project_available(p))
+            .map(|path| {
+                let remove = path.clone();
+                let editing = editing.clone();
+                let key = path_key(&path);
+                div()
+                    .id(SharedString::from(format!("vorkspace-project-{key}")))
+                    .h(px(40.))
+                    .px_2()
+                    .flex()
+                    .items_center()
+                    .gap_2()
+                    .rounded(px(radius::CONTROL))
+                    .hover(|s| s.bg(vorkspace_ui::fluid::hover(0.04)))
+                    .child(self.project_mark(&path, 16.))
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_w_0()
+                            .flex()
+                            .flex_col()
+                            .child(
+                                div()
+                                    .truncate()
+                                    .text_size(px(13.))
+                                    .child(self.project_label(&path)),
+                            )
+                            .child(
+                                div()
+                                    .truncate()
+                                    .text_size(px(11.))
+                                    .text_color(content(0.45))
+                                    .child(crate::panel_kit::home_relative(std::path::Path::new(
+                                        &path,
+                                    ))),
+                            ),
                     )
-                    .on_click(cx.listener(move |this, _, _, cx| {
-                        this.workspace
-                            .remove_project_from_vorkspace(&editing, &remove);
-                        this.persist(cx);
-                        cx.notify();
-                    })),
-                )
-        });
+                    .child(
+                        icon_button(
+                            "vorkspace-remove-project",
+                            "Remove from this vorkspace",
+                            "close",
+                        )
+                        .on_click(cx.listener(
+                            move |this, _, window, cx| {
+                                this.workspace
+                                    .remove_project_from_vorkspace(&editing, &remove);
+                                if editing == this.workspace.active_vorkspace
+                                    && path_key(&remove) == path_key(&this.workspace.project)
+                                {
+                                    let landing = this.workspace.vorkspace_landing(&editing);
+                                    this.open_project_from_user(landing, window, cx);
+                                } else {
+                                    this.persist(cx);
+                                    cx.notify();
+                                }
+                            },
+                        )),
+                    )
+            });
         // Folders already known elsewhere can join with one click.
         let addable: Vec<String> = self
             .workspace
             .projects
             .iter()
             .filter(|p| {
-                !self.workspace.deleted_projects.contains(&path_key(p))
+                self.workspace.is_project_available(p)
                     && !def.projects.iter().any(|q| path_key(q) == path_key(p))
             })
             .cloned()
@@ -1349,6 +1387,9 @@ impl Shell {
         let hidden = self.workspace.hidden_bots();
         if let Some(manager) = self.bots.clone() {
             manager.update(cx, |m, cx| {
+                if m.active.as_ref().is_some_and(|id| hidden.contains(id)) {
+                    m.close(cx);
+                }
                 m.vorkspace_hidden = hidden;
                 cx.notify();
             });

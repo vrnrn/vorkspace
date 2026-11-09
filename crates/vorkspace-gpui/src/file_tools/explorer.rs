@@ -1343,7 +1343,7 @@ impl Explorer {
                 };
                 let git_color: Option<Hsla> = status.and_then(|s| match s.as_str() {
                     "modified" | "added" | "untracked" | "deleted" => {
-                        Some(crate::git_tools::changes::status_color(s))
+                        Some(crate::git_status::status_color(s))
                     }
                     _ => None,
                 });

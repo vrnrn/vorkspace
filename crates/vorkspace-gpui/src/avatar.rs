@@ -13,11 +13,13 @@ use std::{
     sync::{Arc, LazyLock, Mutex},
     time::Duration,
 };
+#[cfg(test)]
+use vorkspace_core::project_appearance::render_badge_or_bot_with_eyes;
 use vorkspace_core::{
     bot::Bot,
     project_appearance::{
         BADGE_SHAPES, BOT_FACES, BotAnimState, default_foreground_color, default_seed_for,
-        normalize_badge_shape, normalize_bot_face, render_badge_or_bot_with_eyes,
+        normalize_badge_shape, normalize_bot_face,
     },
 };
 use vorkspace_ui::clock::Instant;
@@ -591,9 +593,7 @@ pub(crate) fn minion_look(parent: &Bot, identity: &str) -> BotLookConfig {
     }
 }
 
-// Unused since projects lost their badge marks; the bot frame tests still
-// cover it. Remove together with those tests.
-#[allow(dead_code)]
+#[cfg(test)]
 #[derive(Clone, PartialEq, Eq, Hash)]
 struct FrameCacheKey {
     is_bot: bool,
@@ -619,21 +619,7 @@ struct FrameCacheKey {
     crossed_eyes: bool,
 }
 
-/// About 3,000 sidebar poses or 250 header poses: every idle pose of a full
-/// sidebar stays warm, while working motion and pointer gaze recycle.
-// Unused since projects lost their badge marks; the bot frame tests still
-// cover it. Remove together with those tests.
-#[allow(dead_code)]
-const FRAME_CACHE_BYTES: usize = 16 * 1024 * 1024;
-// Unused since projects lost their badge marks; the bot frame tests still
-// cover it. Remove together with those tests.
-#[allow(dead_code)]
-static FRAME_CACHE: LazyLock<Mutex<ImageCache<FrameCacheKey>>> =
-    LazyLock::new(|| Mutex::new(ImageCache::new(FRAME_CACHE_BYTES)));
-
-// Unused since projects lost their badge marks; the bot frame tests still
-// cover it. Remove together with those tests.
-#[allow(dead_code)]
+#[cfg(test)]
 fn frame_cache_key(
     is_bot: bool,
     look: &BotLookConfig,
@@ -666,25 +652,25 @@ fn frame_cache_key(
     }
 }
 
-// Unused since projects lost their badge marks; the bot frame tests still
-// cover it. Remove together with those tests.
-#[allow(dead_code)]
+#[cfg(test)]
 fn render_frame(key: &FrameCacheKey, look: &BotLookConfig, anim: BotAnimState) -> Arc<RenderImage> {
-    to_render_image(render_badge_or_bot_with_eyes(
-        key.is_bot,
-        &key.shape,
-        &key.face,
-        key.needs_you,
-        key.pattern,
-        look.textured,
-        look.seed,
-        look.grid,
-        look.bg_color,
-        look.fg_color,
-        key.pixel_side,
-        key.one_eye,
-        anim,
-    ))
+    to_render_image(
+        vorkspace_core::project_appearance::render_badge_or_bot_with_eyes(
+            key.is_bot,
+            &key.shape,
+            &key.face,
+            key.needs_you,
+            key.pattern,
+            look.textured,
+            look.seed,
+            look.grid,
+            look.bg_color,
+            look.fg_color,
+            key.pixel_side,
+            key.one_eye,
+            anim,
+        ),
+    )
 }
 
 #[derive(Clone, PartialEq, Eq, Hash)]
@@ -895,24 +881,6 @@ pub(crate) fn paint_bot(
         window.paint_quad(fill(dot(r + ring / 2.), rgb_hsla(0x141416)).corner_radii(px(r + ring)));
         window.paint_quad(fill(dot(r - ring / 2.), rgb_hsla(0xffd24a)).corner_radii(px(r)));
     }
-}
-
-// Unused since projects lost their badge marks; the bot frame tests still
-// cover it. Remove together with those tests.
-#[allow(dead_code)]
-pub(crate) fn cached_badge_or_bot_image(
-    is_bot: bool,
-    look: &BotLookConfig,
-    needs_you: bool,
-    pixel_side: u32,
-    anim: BotAnimState,
-    window: &mut Window,
-    cx: &mut gpui::App,
-) -> Arc<RenderImage> {
-    let key = frame_cache_key(is_bot, look, needs_you, pixel_side, anim);
-    cached_image(&FRAME_CACHE, key.clone(), window, cx, || {
-        render_frame(&key, look, anim)
-    })
 }
 
 /// Render a 30% opacity full-button concentric texture / color highlight pill for

@@ -258,13 +258,9 @@ pub fn title_tab_fill(selected: bool, hovered: bool) -> Hsla {
     })
 }
 
-/// The plate's fill, through the fluid owner so every hover reads alike.
+/// The plate's fill: a flat tint of content ink.
 pub fn title_tab_background(selected: bool, hovered: bool) -> gpui::Background {
-    if hovered && !selected {
-        crate::fluid::hover(title_tab_fill(false, true).a)
-    } else {
-        title_tab_fill(selected, hovered).into()
-    }
+    title_tab_fill(selected, hovered).into()
 }
 
 /// A separate rounded highlight, centred in the title bar.

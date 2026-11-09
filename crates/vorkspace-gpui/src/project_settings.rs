@@ -659,7 +659,7 @@ impl Render for BackgroundDialog {
                     .child(button("choose-project-background",if self.busy{"Saving image…"}else if has_image{"Change image"}else{"Choose image"})
                         .mt_2().flex_shrink_0().on_click(cx.listener(|this,_,_,cx|this.choose(cx))))
                     .child(div().mt(px(6.)).text_size(px(11.)).line_height(px(17.875)).text_color(content(0.45))
-                        .child(if has_image{"This image overrides the global background for this project."}else{"An image here shows behind this project's chats instead of the global background."}))
+                        .child(if has_image{"This image overrides the global background for this vorkspace."}else{"An image here shows behind this vorkspace's chats instead of the global background."}))
                     .when_some(error,|d,error|d.child(div().mt(px(6.)).text_size(px(12.)).line_height(px(18.)).text_color(vorkspace_ui::theme::danger()).child(error))))
                 .when(has_image,|d|d.child(self.effect_row(cx)))
                 // Placement and strength only mean something once there is an image.

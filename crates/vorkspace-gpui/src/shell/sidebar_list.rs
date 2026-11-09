@@ -2,8 +2,6 @@
 use super::*;
 use vorkspace_ui::radius;
 
-impl Shell {}
-
 impl Shell {
     fn available_sidebar_navigation(&self, cx: &App) -> Vec<SidebarNavigation> {
         let enabled = self.enabled_connectors(cx);

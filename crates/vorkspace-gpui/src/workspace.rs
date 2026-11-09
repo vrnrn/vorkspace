@@ -380,6 +380,10 @@ pub(crate) struct Workspace {
     pub vorkspace_project: HashMap<String, String>,
     /// Bots already placed in a vorkspace once; a new one joins the active.
     pub seen_bots: HashSet<String>,
+    /// Folders first discovered during `restore`, carried into `AppCore` when
+    /// shared vorkspaces load.
+    #[serde(skip)]
+    pub restored_new_projects: Vec<String>,
 }
 
 /// Port of src/features/projects/model/projectTerminal.ts.
@@ -558,6 +562,7 @@ impl Default for Workspace {
             active_vorkspace: String::new(),
             vorkspace_project: HashMap::new(),
             seen_bots: HashSet::new(),
+            restored_new_projects: Vec::new(),
         }
     }
 }
@@ -569,6 +574,11 @@ impl Workspace {
                 vorkspace_core::desktop_preferences::DesktopPreferences::restore_sidebar_preferences(
                     &mut value,
                 );
+                if let Some(panes) = value.get_mut("app_panes").and_then(|v| v.as_object_mut()) {
+                    panes.retain(|_, pane| {
+                        serde_json::from_value::<AppPaneState>(pane.clone()).is_ok()
+                    });
+                }
                 serde_json::from_value::<Self>(value).ok()
             })
             .unwrap_or_default();
@@ -761,6 +771,12 @@ impl Workspace {
             state.project = state.projects.first().cloned().unwrap_or_default();
             state.active = None;
         }
+        let known_before_restore: HashSet<String> = state
+            .projects
+            .iter()
+            .map(|p| vorkspace_core::files::path_key(p))
+            .collect();
+        state.ensure_vorkspaces();
         if state
             .project_archive
             .get(&vorkspace_core::files::path_key(cwd))
@@ -799,7 +815,12 @@ impl Workspace {
         if !state.project.is_empty() {
             state.add_project(&state.project.clone());
         }
-        state.ensure_vorkspaces();
+        state.restored_new_projects = state
+            .projects
+            .iter()
+            .filter(|p| !known_before_restore.contains(&vorkspace_core::files::path_key(p)))
+            .cloned()
+            .collect();
         state
     }
     /// Reorder the available projection, merging it into the complete order so

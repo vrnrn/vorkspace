@@ -50,7 +50,6 @@ impl Shell {
                     return;
                 }
                 if let MenuEvent::Picked(id, _) = event
-                    && id != "archived"
                     && let Some(open) = this
                         .menu
                         .as_ref()
@@ -263,32 +262,30 @@ impl Shell {
                 let focus = picker.read(cx).search_focus(cx);
                 // The project name opens the vorkspace's project picker itself;
                 // the worktree Explorer and Changes show stays one row below.
-                let branch = self
-                    .worktree_focus
-                    .get(&self.workspace.project)
-                    .and_then(|focus| focus.branch.clone())
-                    .or_else(|| {
-                        crate::conversation::git_branch(std::path::Path::new(
-                            &self.workspace.project,
-                        ))
-                    });
-                let worktree = MenuAction::new("switch-worktree", "Switch worktree")
-                    .icon("folder-tree")
-                    .flyout(self.worktree_flyout(events, window, cx));
-                (
-                    "Switch project".into(),
-                    vec![
-                        MenuItem::Custom(picker.into(), focus),
-                        MenuItem::Separator,
+                let mut items = vec![MenuItem::Custom(picker.into(), focus)];
+                if !self.workspace.project.is_empty() {
+                    let branch = self
+                        .worktree_focus
+                        .get(&self.workspace.project)
+                        .and_then(|focus| focus.branch.clone())
+                        .or_else(|| {
+                            crate::conversation::git_branch(std::path::Path::new(
+                                &self.workspace.project,
+                            ))
+                        });
+                    let worktree = MenuAction::new("switch-worktree", "Switch worktree")
+                        .icon("folder-tree")
+                        .flyout(self.worktree_flyout(events, window, cx));
+                    items.push(MenuItem::Separator);
+                    items.push(
                         match branch {
                             Some(branch) => worktree.value(branch),
                             None => worktree,
                         }
                         .into(),
-                    ],
-                    286.,
-                    MenuStyle::Switcher,
-                )
+                    );
+                }
+                ("Switch project".into(), items, 286., MenuStyle::Switcher)
             }
             // TabGroupMenu's appearance controls and project actions.
             MenuTarget::Project { path, rail } => {
@@ -307,45 +304,6 @@ impl Shell {
                         .clone()
                         .unwrap_or_default();
                     let key = vorkspace_core::files::path_key(path);
-                    let mut groups = vec![
-                        MenuAction::new("project-group:new", "New group…"),
-                        MenuAction::new("project-group:set:", "No group")
-                            .checked(!rail.assignments.contains_key(&key)),
-                    ];
-                    groups.extend(rail.groups.iter().map(|g| {
-                        MenuAction::new(format!("project-group:set:{}", g.id), g.name.clone())
-                            .checked(rail.assignments.get(&key) == Some(&g.id))
-                    }));
-                    let manage = rail
-                        .groups
-                        .iter()
-                        .flat_map(|g| {
-                            [
-                                MenuAction::new(
-                                    format!("group-rename:{}", g.id),
-                                    format!("Rename {}…", g.name),
-                                ),
-                                MenuAction::new(
-                                    format!("group-remove:{}", g.id),
-                                    format!("Remove {}", g.name),
-                                ),
-                            ]
-                        })
-                        .collect::<Vec<_>>();
-                    items.push(
-                        MenuAction::new("project-group", "Move to group")
-                            .icon("folder-tree")
-                            .submenu(groups)
-                            .into(),
-                    );
-                    if !manage.is_empty() {
-                        items.push(
-                            MenuAction::new("manage-groups", "Manage groups")
-                                .icon("folder-tree")
-                                .submenu(manage)
-                                .into(),
-                        );
-                    }
                     items.push(
                         MenuAction::new(
                             "pin",
@@ -438,14 +396,11 @@ impl Shell {
                 }
             }
             MenuTarget::Project { path, .. } => {
-                if (action == "pin"
-                    || action.starts_with("project-group:")
-                    || action.starts_with("group-rename:")
-                    || action.starts_with("group-remove:"))
+                if action == "pin"
                     && let Err(error) = self.workspace.migrate_project_rail()
                 {
                     self.error = Some(format!(
-                        "Cannot change project groups: {error}. Existing preferences were kept."
+                        "Cannot change project rail state: {error}. Existing preferences were kept."
                     ));
                     cx.notify();
                     return;
@@ -463,68 +418,6 @@ impl Shell {
                     };
                     if rail.awaiting_legacy_pins {
                         rail.pin_overrides.insert(key, value);
-                    }
-                    self.persist(cx);
-                    self.invalidate_chrome(cx);
-                    cx.notify();
-                } else if action == "project-group:new" {
-                    let rail = self.workspace.project_rail_mut();
-                    let id = format!("native-group-{}", vorkspace_core::bot::new_id());
-                    rail.groups.push(crate::workspace::ProjectRailGroup {
-                        id: id.clone(),
-                        name: "New group".into(),
-                        collapsed: false,
-                    });
-                    let key = vorkspace_core::files::path_key(&path);
-                    rail.assignments.insert(key.clone(), id.clone());
-                    if rail.awaiting_legacy_assignments {
-                        rail.assignment_overrides
-                            .insert(key.clone(), Some(id.clone()));
-                    }
-                    rail.pinned.remove(&key);
-                    if rail.awaiting_legacy_pins {
-                        rail.pin_overrides.insert(key, false);
-                    }
-                    self.persist(cx);
-                    self.start_rename(session_groups::RenameTarget::ProjectGroup(id), window, cx);
-                } else if let Some(id) = action.strip_prefix("group-rename:") {
-                    self.start_rename(
-                        session_groups::RenameTarget::ProjectGroup(id.into()),
-                        window,
-                        cx,
-                    );
-                } else if let Some(id) = action.strip_prefix("group-remove:") {
-                    let rail = self.workspace.project_rail_mut();
-                    rail.groups.retain(|g| g.id != id);
-                    if rail.awaiting_legacy_assignments {
-                        let removed: Vec<_> = rail
-                            .assignments
-                            .iter()
-                            .filter(|(_, g)| g.as_str() == id)
-                            .map(|(p, _)| p.clone())
-                            .collect();
-                        for path in removed {
-                            rail.assignment_overrides.insert(path, None);
-                        }
-                    }
-                    rail.assignments.retain(|_, g| g != id);
-                    self.workspace.project_group_collapsed.remove(id);
-                    self.persist(cx);
-                    self.invalidate_chrome(cx);
-                    cx.notify();
-                } else if let Some(id) = action.strip_prefix("project-group:set:") {
-                    let rail = self.workspace.project_rail_mut();
-                    let key = vorkspace_core::files::path_key(&path);
-                    if id.is_empty() {
-                        rail.assignments.remove(&key);
-                        if rail.awaiting_legacy_assignments {
-                            rail.assignment_overrides.insert(key, None);
-                        }
-                    } else if rail.groups.iter().any(|g| g.id == id) {
-                        rail.assignments.insert(key.clone(), id.into());
-                        if rail.awaiting_legacy_assignments {
-                            rail.assignment_overrides.insert(key, Some(id.into()));
-                        }
                     }
                     self.persist(cx);
                     self.invalidate_chrome(cx);
@@ -562,6 +455,7 @@ impl Shell {
         } else {
             *self.latest_state.lock().unwrap_or_else(|e| e.into_inner()) = state;
             self.workspace = next;
+            self.share_vorkspaces(cx);
             self.invalidate_chrome(cx);
         }
         cx.notify();

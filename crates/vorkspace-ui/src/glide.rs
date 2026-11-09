@@ -76,7 +76,11 @@ impl State {
     /// painting, after every probe has recorded this frame's layout, so the
     /// thumb never trails a tab that slides, opens or is dragged. Returns the
     /// thumb's window bounds and whether it needs another frame.
-    fn advance(&mut self, selected: Option<usize>) -> (Option<Bounds<Pixels>>, bool) {
+    fn advance(
+        &mut self,
+        selected: Option<usize>,
+        reduce_motion: bool,
+    ) -> (Option<Bounds<Pixels>>, bool) {
         let now = Instant::now();
         let gap = now.saturating_duration_since(self.last).as_secs_f64();
         // A gap longer than a whole glide (a stalled or hidden window) lands
@@ -111,7 +115,7 @@ impl State {
         };
         springs.aim(target);
         // A relayout (resize, scroll, a tab sliding aside) is not a move.
-        if !changed && ((springs.x.landed() && springs.y.landed()) || stalled) {
+        if reduce_motion || (!changed && ((springs.x.landed() && springs.y.landed()) || stalled)) {
             *springs = Springs::at(target);
         }
         let moving = !springs.step(dt);
@@ -167,11 +171,16 @@ impl Glide {
         self.ready
     }
 
-    /// Records the list's own bounds. Place it as an absolute child.
+    /// Records the list's own bounds and clears stale item probes before child
+    /// probes run in this frame's prepaint pass. Place it as an absolute child.
     pub fn container(&self) -> impl IntoElement {
         let measured = self.measured.clone();
         canvas(
-            move |bounds, _, _| measured.borrow_mut().container = Some(bounds),
+            move |bounds, _, _| {
+                let mut measured = measured.borrow_mut();
+                measured.container = Some(bounds);
+                measured.items.clear();
+            },
             |_, _, _, _| {},
         )
         .absolute()
@@ -201,7 +210,9 @@ impl Glide {
         canvas(
             |_, _, _| {},
             move |_, _, window, cx| {
-                let (bounds, moving) = state.update(cx, |state, _| state.advance(selected));
+                let reduce_motion = cx.reduce_motion();
+                let (bounds, moving) =
+                    state.update(cx, |state, _| state.advance(selected, reduce_motion));
                 if let Some(bounds) = bounds.filter(|_| ready) {
                     window.paint_quad(gpui::fill(bounds, fill).corner_radii(px(radius)));
                 }
@@ -213,15 +224,6 @@ impl Glide {
         .absolute()
         .inset_0()
     }
-}
-
-/// Keeps the probes' records alive only for items that still exist.
-pub fn forget_beyond(glide: &Glide, count: usize) {
-    glide
-        .measured
-        .borrow_mut()
-        .items
-        .retain(|index, _| *index < count);
 }
 
 type Items = Box<dyn FnOnce(&Glide) -> Vec<AnyElement>>;
@@ -263,7 +265,6 @@ impl gpui::RenderOnce for GlideList {
     fn render(self, window: &mut Window, cx: &mut App) -> impl IntoElement {
         let glide = Glide::new(self.id, self.selected, window, cx);
         let items = (self.items)(&glide);
-        forget_beyond(&glide, items.len());
         self.base
             .relative()
             .child(glide.container())

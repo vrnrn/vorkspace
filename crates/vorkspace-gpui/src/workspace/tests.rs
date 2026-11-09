@@ -715,3 +715,36 @@ fn desktop_snapshot_translation_deserializes_and_retains_unported_metadata() {
     assert!(!restored.docks["/work"].open);
     assert_eq!(restored.desktop_workspace_snapshot.as_ref(), Some(&source));
 }
+#[test]
+fn restore_drops_retired_channels_app_pane_without_losing_workspace_state() {
+    let saved = serde_json::json!({
+        "project": "/work/a",
+        "projects": ["/work/a"],
+        "tabs": [1, -10, -11],
+        "active": -10,
+        "app_panes": {
+            "-10": { "content": "Channels", "project": "/work/a", "worktree": "/work/a" },
+            "-11": { "content": { "App": "Notes" }, "project": "/work/a", "worktree": "/work/a" }
+        },
+        "vorkspaces": [{
+            "id": "vk-main",
+            "name": "Main",
+            "projects": ["/work/a"]
+        }],
+        "active_vorkspace": "vk-main"
+    })
+    .to_string();
+    let restored = Workspace::restore(
+        Some(&saved),
+        &[(1, "/work/a".into())],
+        "/work/new-startup-folder",
+    );
+    assert_eq!(restored.tabs, [1, -11]);
+    assert!(!restored.app_panes.contains_key(&-10));
+    assert!(restored.app_panes.contains_key(&-11));
+    assert_eq!(
+        restored.vorkspaces[0].projects,
+        ["/work/a", "/work/new-startup-folder"]
+    );
+    assert_eq!(restored.restored_new_projects, ["/work/new-startup-folder"]);
+}

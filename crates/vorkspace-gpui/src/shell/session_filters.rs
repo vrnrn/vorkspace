@@ -3,11 +3,45 @@ use super::*;
 use vorkspace_core::session_filters::{BotFilter, Status, TimeFilter};
 
 impl Shell {
+    pub(super) fn effective_session_filters(
+        &self,
+        cx: &App,
+    ) -> vorkspace_core::session_filters::Filters {
+        let mut filters = self.workspace.session_filters.clone();
+        let projects = self.workspace.vorkspace_projects();
+        if projects.len() <= 1 {
+            filters.hidden_projects.clear();
+        } else {
+            let keys: std::collections::HashSet<String> = projects
+                .iter()
+                .map(|p| vorkspace_core::files::path_key(p))
+                .collect();
+            filters.hidden_projects.retain(|k| keys.contains(k));
+        }
+        if let BotFilter::Bot(ref bot_id) = filters.bot {
+            let visible = self.bots.as_ref().is_some_and(|manager| {
+                let m = manager.read(cx);
+                !m.vorkspace_hidden.contains(bot_id)
+                    && m.roster.bots.iter().any(|b| &b.id == bot_id)
+            });
+            if !visible {
+                filters.bot = BotFilter::Any;
+            }
+        }
+        filters
+    }
+
+    pub(super) fn session_filters_active(&self, cx: &App) -> bool {
+        self.effective_session_filters(cx)
+            .active(self.workspace.preferences.show_archived)
+    }
+
     pub(super) fn filter_menu_items(&self, cx: &App) -> Vec<MenuItem> {
-        let filters = &self.workspace.session_filters;
+        let filters = self.effective_session_filters(cx);
         let mut items = vec![
             MenuAction::new("archived", "Archived")
                 .checked(self.workspace.preferences.show_archived)
+                .keep_open()
                 .into(),
             MenuItem::Header("Status".into()),
         ];
@@ -103,7 +137,7 @@ impl Shell {
                     .into(),
             );
         }
-        if filters.active(self.workspace.preferences.show_archived) {
+        if self.session_filters_active(cx) {
             items.push(MenuItem::Separator);
             items.push(MenuAction::new("clear", "Clear filters").keep_open().into());
         }
@@ -173,7 +207,7 @@ impl Shell {
 
     pub(super) fn filter_session(&self, id: i64, start: u64, cx: &App) -> bool {
         let session = self.session_metadata(id, cx);
-        let filters = &self.workspace.session_filters;
+        let filters = self.effective_session_filters(cx);
         if !filters.bot.is_any()
             && !filters
                 .bot
@@ -184,7 +218,7 @@ impl Shell {
         filters.matches(
             session.summary,
             Status {
-                working: session.busy,
+                working: session.responding(),
                 needs_approval: session.needs_approval(),
                 done: self.unseen_finished.contains(&id),
             },

@@ -1082,6 +1082,7 @@ impl Shell {
         }
         this.observations.push(
             cx.subscribe(&bots, |this, _, _: &crate::bots::Changed, cx| {
+                this.reconcile_vorkspace_bots(cx);
                 if this.prune_deleted_bot_tabs(cx) {
                     this.persist(cx);
                 }
@@ -1360,6 +1361,8 @@ impl Shell {
                     .is_some_and(|preview| preview.id == id)
                 {
                     this.sidebar_frame.update(cx, |_, cx| cx.notify());
+                    this.invalidate_chrome(cx);
+                    cx.notify();
                 }
             }));
         self.observe_orchestration(&view, id, cx);
@@ -2092,7 +2095,9 @@ impl Shell {
         }
         self.workspace.project = path.clone();
         self.workspace.active = None;
-        self.workspace.collapsed.remove(&path);
+        if !path.is_empty() {
+            self.workspace.collapsed.remove(&path);
+        }
         // Restore the last scoped tab before falling back to a session; an
         // explicit project click never lands back on the Bot it just left.
         if self.restore_scope_tab(!explicit, window, cx) {
@@ -2123,7 +2128,8 @@ impl Shell {
         cx.notify();
     }
     fn ensure_project_session(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if self.workspace.active.is_some()
+        if self.workspace.project.is_empty()
+            || self.workspace.active.is_some()
             || self.bot_active(cx)
             || self.active_terminal_tab.is_some()
         {
@@ -2199,6 +2205,9 @@ impl Shell {
     fn create_session(&mut self, kind: Kind, only_if_empty: bool, cx: &mut Context<Self>) {
         let store = self.store.clone();
         let cwd = self.workspace.project.clone();
+        if cwd.is_empty() {
+            return;
+        }
         let focus = self.worktree_focus.get(&cwd).cloned();
         let blank_key = format!("{cwd}\0{}", focus.as_ref().map_or("", |f| f.path.as_str()));
         if only_if_empty && !self.pending_project_blanks.insert(blank_key.clone()) {
@@ -2820,6 +2829,14 @@ impl Render for Shell {
                         this.close_link_dialog(window, cx);
                         return;
                     }
+                    if this.background_dialog.is_some() {
+                        this.close_background_dialog(window, cx);
+                        return;
+                    }
+                    if this.vorkspace_dialog.is_some() {
+                        this.close_vorkspace_dialog(window, cx);
+                        return;
+                    }
                     if let Some(settings) = this.settings.clone() {
                         if !settings.update(cx, |s, cx| s.dismiss_transient(window, cx)) {
                             this.close_settings(window, cx);
@@ -2837,6 +2854,10 @@ impl Render for Shell {
                     }
                     if this.session_preview.is_some() {
                         this.close_preview(cx);
+                        return;
+                    }
+                    if this.rail_search_open {
+                        this.close_rail_search(window, cx);
                         return;
                     }
                     if this.menu.is_none()
@@ -2892,12 +2913,14 @@ impl Render for Shell {
                 }
                 this.close_app_search(window, cx);
                 this.ensure_right_panel(window, cx);
-                this.set_right_panel_open(true, window, cx);
                 if let Some(panel) = &this.right_panel {
-                    let explorer = panel.read(cx).explorer.clone();
                     panel.update(cx, |panel, cx| {
                         panel.select(crate::panel_kit::RightTab::Files, cx)
                     });
+                }
+                this.set_right_panel_open(true, window, cx);
+                if let Some(panel) = &this.right_panel {
+                    let explorer = panel.read(cx).explorer.clone();
                     explorer.update(cx, |explorer, cx| explorer.open_search(window, cx));
                 }
             }))

@@ -48,6 +48,7 @@ impl Bots {
                     })
                     .role(Role::Button)
                     .aria_label(format!("Open {} {}", label.to_lowercase(), document.title))
+                    .map(vorkspace_ui::theme::tab_reachable)
                     .w_full()
                     .flex_shrink_0()
                     .min_w_0()

@@ -29,6 +29,7 @@ struct Saved {
 
 pub(crate) struct AppCore {
     store: Database,
+    generation: Arc<AtomicU64>,
     pub(crate) vorkspaces: Vec<VorkspaceDef>,
     pub(crate) seen_bots: HashSet<String>,
     scheduler: Option<WeakEntity<Shell>>,
@@ -64,6 +65,7 @@ impl AppCore {
             .unwrap_or_default();
         let core = cx.new(|_| AppCore {
             store: store.clone(),
+            generation: Arc::new(AtomicU64::new(0)),
             vorkspaces: saved.vorkspaces,
             seen_bots: saved.seen_bots,
             scheduler: None,
@@ -92,10 +94,14 @@ impl AppCore {
             seen_bots: self.seen_bots.clone(),
         })
         .unwrap_or_default();
+        let revision = self.generation.fetch_add(1, Ordering::SeqCst) + 1;
+        let generation = self.generation.clone();
         let store = self.store.clone();
         cx.background_executor()
             .spawn(async move {
-                if let Ok(store) = locked(&store) {
+                if let Ok(store) = locked(&store)
+                    && generation.load(Ordering::SeqCst) == revision
+                {
                     let _ = store.save_setting(STORE_KEY, &json);
                 }
             })
@@ -196,6 +202,7 @@ impl Shell {
     /// Joins this window to the application's shared state. The first
     /// window seeds it from its own (possibly migrated) definitions.
     pub(super) fn adopt_app_core(&mut self, cx: &mut Context<Self>) {
+        let new_projects = std::mem::take(&mut self.workspace.restored_new_projects);
         let core = AppCore::get(&self.store, cx);
         if core.read(cx).vorkspaces.is_empty() {
             let (defs, seen) = (
@@ -205,6 +212,27 @@ impl Shell {
             core.update(cx, |core, cx| core.publish(&defs, &seen, cx));
         } else {
             self.take_shared_vorkspaces(&core, cx);
+            let active = self.workspace.active_vorkspace.clone();
+            let mut added = false;
+            for path in new_projects {
+                let key = vorkspace_core::files::path_key(&path);
+                if let Some(v) = self.workspace.vorkspace_mut(&active)
+                    && !v
+                        .projects
+                        .iter()
+                        .any(|p| vorkspace_core::files::path_key(p) == key)
+                {
+                    v.projects.push(path);
+                    added = true;
+                }
+            }
+            if added {
+                let (defs, seen) = (
+                    self.workspace.vorkspaces.clone(),
+                    self.workspace.seen_bots.clone(),
+                );
+                core.update(cx, |core, cx| core.publish(&defs, &seen, cx));
+            }
         }
         self.observations.push(cx.observe(&core, |this, core, cx| {
             if this.take_shared_vorkspaces(&core, cx) {
@@ -252,9 +280,53 @@ impl Shell {
     }
 
     fn reconcile_after_shared_change(&mut self, cx: &mut Context<Self>) {
+        if !self.workspace.project.is_empty()
+            && !self.workspace.vorkspace_projects().iter().any(|p| {
+                vorkspace_core::files::path_key(p)
+                    == vorkspace_core::files::path_key(&self.workspace.project)
+            })
+        {
+            self.workspace.project = self
+                .workspace
+                .vorkspace_landing(&self.workspace.active_vorkspace);
+            self.workspace.active = None;
+            self.sync_git(cx);
+        }
+        if let Some(dialog) = self.vorkspace_dialog.as_mut() {
+            if !self
+                .workspace
+                .vorkspaces
+                .iter()
+                .any(|v| v.id == dialog.editing)
+            {
+                dialog.editing = self.workspace.active_vorkspace.clone();
+                dialog.project = None;
+                dialog.confirm_delete = false;
+                if let Some(name) = self.workspace.active_vorkspace().map(|v| v.name.clone()) {
+                    dialog.name.update(cx, |input, cx| input.set_text(name, cx));
+                }
+            } else if let Some(project) = &dialog.project
+                && !self
+                    .workspace
+                    .vorkspaces
+                    .iter()
+                    .find(|v| v.id == dialog.editing)
+                    .is_some_and(|v| {
+                        v.projects.iter().any(|p| {
+                            vorkspace_core::files::path_key(p)
+                                == vorkspace_core::files::path_key(project)
+                        })
+                    })
+            {
+                dialog.project = None;
+            }
+        }
         let hidden = self.workspace.hidden_bots();
         if let Some(manager) = self.bots.clone() {
             manager.update(cx, |m, cx| {
+                if m.active.as_ref().is_some_and(|id| hidden.contains(id)) {
+                    m.close(cx);
+                }
                 m.vorkspace_hidden = hidden;
                 cx.notify();
             });
@@ -425,5 +497,54 @@ mod tests {
             // A call from no known session goes to the oldest open window.
             assert_eq!(core.route(-42, cx), Some(a_root.clone()));
         });
+    }
+
+    #[gpui::test]
+    fn shared_vorkspace_changes_reconcile_other_windows_project_and_dialog(
+        cx: &mut TestAppContext,
+    ) {
+        let (a, b, _, dir) = two_windows(cx);
+        let second_project = dir.path().join("second").to_string_lossy().into_owned();
+        std::fs::create_dir_all(&second_project).unwrap();
+        let side_id = a
+            .update(cx, |shell, _, cx| {
+                let main = shell.workspace.active_vorkspace.clone();
+                shell
+                    .workspace
+                    .add_project_to_vorkspace(&main, &second_project);
+                let side = shell.workspace.create_vorkspace("Side");
+                shell.persist(cx);
+                side
+            })
+            .unwrap();
+        cx.run_until_parked();
+        b.update(cx, |shell, window, cx| {
+            shell.select_project(second_project.clone(), window, cx);
+            shell.open_vorkspace_dialog(Some(side_id.clone()), window, cx);
+            assert_eq!(shell.workspace.project, second_project);
+            assert_eq!(
+                shell.vorkspace_dialog.as_ref().map(|d| d.editing.as_str()),
+                Some(side_id.as_str())
+            );
+        })
+        .unwrap();
+        a.update(cx, |shell, _, cx| {
+            let main = shell.workspace.active_vorkspace.clone();
+            shell
+                .workspace
+                .remove_project_from_vorkspace(&main, &second_project);
+            shell.workspace.delete_vorkspace(&side_id);
+            shell.persist(cx);
+        })
+        .unwrap();
+        cx.run_until_parked();
+        b.update(cx, |shell, _, _| {
+            assert_ne!(shell.workspace.project, second_project);
+            assert_eq!(
+                shell.vorkspace_dialog.as_ref().map(|d| d.editing.as_str()),
+                Some(shell.workspace.active_vorkspace.as_str())
+            );
+        })
+        .unwrap();
     }
 }

@@ -75,8 +75,7 @@ impl Shell {
                     .debug_selector(|| "sidebar-project-button".into())
                     .role(Role::Button)
                     .aria_label("Switch project")
-                    .focusable()
-                    .tab_stop(true)
+                    .map(vorkspace_ui::theme::tab_reachable)
                     .min_w_0()
                     .flex_1()
                     .flex()
@@ -172,8 +171,7 @@ impl Shell {
                                             .role(Role::Tab)
                                             .aria_label(item.label())
                                             .aria_selected(selected)
-                                            .focusable()
-                                            .tab_stop(true)
+                                            .map(vorkspace_ui::theme::tab_reachable)
                                             .h(px(28.))
                                             .flex_1()
                                             .min_w_0()
@@ -188,11 +186,12 @@ impl Shell {
                                             // The glide's thumb draws the selection once it
                                             // has measured the strip.
                                             .when(selected && !ready, |d| d.bg(content(0.1)))
-                                            .hover(|s| {
-                                                s.bg(vorkspace_ui::fluid::hover(0.08))
-                                                    .text_color(content(1.))
+                                            .when(!selected, |d| {
+                                                d.hover(|s| {
+                                                    s.bg(vorkspace_ui::fluid::hover(0.08))
+                                                        .text_color(content(1.))
+                                                })
                                             })
-                                            .focus(|s| s.bg(content(0.1)).text_color(content(1.)))
                                             .child(glide.probe(index))
                                             .child(item.label())
                                             // Keep the cached sidebar's hover fill current,
@@ -242,7 +241,18 @@ impl Shell {
                     .debug_selector(|| "sidebar-open-project".into())
                     .mt(px(12.))
                     .child("Open project…")
-                    .on_click(cx.listener(|this, _, _, cx| this.open_project(cx))),
+                    .on_click(cx.listener(|this, _, window, cx| {
+                        if this.workspace.vorkspace_projects().is_empty() {
+                            this.open_project(cx);
+                        } else {
+                            this.open_menu(
+                                MenuTarget::Header,
+                                Anchor::Slot(this.project_anchor.clone()),
+                                window,
+                                cx,
+                            );
+                        }
+                    })),
                 ),
             );
         } else if tab == SidebarTab::Todos {

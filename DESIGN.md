@@ -22,7 +22,7 @@ Paths are relative to `crates/vorkspace-gpui/src/`, except `theme.rs`, `radius.r
 4. **Native first.** Vorkspace is macOS-only. Match macOS behavior: system font, arrow cursor on window
    chrome, instant dismissal, glass only where the platform provides it.
 5. **Calm motion.** Animation explains a change of place or state and is
-   short. There is no reduced-motion mode; animations always run.
+   short. Follow macOS Reduce Motion (`cx.reduce_motion()`).
 6. **Every intermediate frame counts.** No flashes, jumps, re-played entrances
    or layout collapse during a transition (see AGENTS.md).
 
@@ -61,7 +61,6 @@ its helpers, never `gpui::dither` directly.
 | `panel_kit::home_relative(path)` | A path as people read it, starting at `~` under the home folder; long hover-card paths also elide their middle |
 | `is_numeric(text)` | Whether a table cell is a number; numeric cells use Obel Mono's tabular digits, and a visual's all-numeric columns right-align |
 | `Count` | A whole number that rolls to each new value on the `QUICK` spring (the diff stat) |
-| `Scramble` | Text that settles from stand-in glyphs over 0.7 s when it changes after its first showing (session titles in the sidebar) |
 
 fluidither's own components draw with its theme and, in places, the 50%
 checker, so vorkspace adopts their patterns through these helpers in its own
@@ -241,7 +240,7 @@ From back to front:
   retain their separate motion settings.
 - **Shadows** belong to floating layers only; flat panes and cards have none.
   Popovers and their modal variant share the layered pair in `popover.rs`.
-- **Settings dialogs** for one thing (a Bot, a project) share one frame: a
+- **Settings dialogs** for one thing (a Bot, a vorkspace) share one frame: a
   navigation rail headed by the thing's own mark and name, a titled section
   on the right, a close button top-right, and the flat scrim. Customization
   lives there; a right-click menu keeps actions and opens the dialog.
@@ -364,8 +363,8 @@ Behavior rules for controls:
   the selection has been measured, the item paints its own fill, so no frame
   loses the selection; a frame gap longer than a glide lands the thumb at
   once. Keep a glide's probes and thumb outside a scroll handle's tracked
-  children. Virtualized lists (the
-  session list) keep per-row fills.
+  children. Dynamic or virtualized lists (the session list, file trees) keep
+  per-row fills.
 - Busy indicators are fluidither's loader: three cells counting up
   (`panel_kit::spinner`), never a spinning icon.
 - Working and thinking labels shimmer with fluidither's sweep

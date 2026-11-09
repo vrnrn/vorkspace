@@ -25,17 +25,25 @@ pub(crate) struct VorkspaceDef {
 
 pub(crate) const FIRST_VORKSPACE_NAME: &str = "Main";
 
+static NEXT_VORKSPACE_ID: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+
 fn new_id() -> String {
-    format!(
-        "vk-{:x}",
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map(|d| d.as_nanos())
-            .unwrap_or_default()
-    )
+    let seq = NEXT_VORKSPACE_ID.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_nanos())
+        .unwrap_or_default();
+    format!("vk-{nanos:x}-{seq:x}")
 }
 
 impl Workspace {
+    pub(crate) fn is_project_available(&self, path: &str) -> bool {
+        let key = path_key(path);
+        !path.is_empty()
+            && !self.deleted_projects.contains(&key)
+            && self.project_archive.get(&key) != Some(&true)
+    }
+
     /// The first launch after vorkspaces exist keeps everything visible by
     /// putting every known project into one vorkspace. Bots join through
     /// `assign_unowned_bots` once their roster loads.
@@ -44,7 +52,7 @@ impl Workspace {
             let projects = self
                 .projects
                 .iter()
-                .filter(|p| !self.deleted_projects.contains(&path_key(p)))
+                .filter(|p| self.is_project_available(p))
                 .cloned()
                 .collect();
             self.vorkspaces.push(VorkspaceDef {
@@ -87,12 +95,17 @@ impl Workspace {
     /// The active vorkspace's projects that still exist, in its own order.
     pub(crate) fn vorkspace_projects(&self) -> Vec<String> {
         let Some(active) = self.active_vorkspace() else {
-            return self.projects.clone();
+            return self
+                .projects
+                .iter()
+                .filter(|p| self.is_project_available(p))
+                .cloned()
+                .collect();
         };
         active
             .projects
             .iter()
-            .filter(|p| !self.deleted_projects.contains(&path_key(p)))
+            .filter(|p| self.is_project_available(p))
             .cloned()
             .collect()
     }
@@ -129,6 +142,21 @@ impl Workspace {
         if let Some(v) = self.vorkspace_mut(id) {
             v.projects.retain(|p| path_key(p) != key);
         }
+        if self
+            .vorkspace_project
+            .get(id)
+            .is_some_and(|p| path_key(p) == key)
+        {
+            self.vorkspace_project.remove(id);
+        }
+    }
+
+    pub(crate) fn purge_project_from_vorkspaces(&mut self, path: &str) {
+        let key = path_key(path);
+        for v in &mut self.vorkspaces {
+            v.projects.retain(|p| path_key(p) != key);
+        }
+        self.vorkspace_project.retain(|_, p| path_key(p) != key);
     }
 
     /// A Bot belongs to one vorkspace: adding it here takes it out of any other.
@@ -214,9 +242,17 @@ impl Workspace {
         };
         self.vorkspace_project
             .get(id)
-            .filter(|p| v.projects.iter().any(|q| path_key(q) == path_key(p)))
+            .filter(|p| {
+                self.is_project_available(p)
+                    && v.projects.iter().any(|q| path_key(q) == path_key(p))
+            })
             .cloned()
-            .or_else(|| v.projects.first().cloned())
+            .or_else(|| {
+                v.projects
+                    .iter()
+                    .find(|p| self.is_project_available(p))
+                    .cloned()
+            })
             .unwrap_or_default()
     }
 }

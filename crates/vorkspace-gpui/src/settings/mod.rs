@@ -1063,6 +1063,7 @@ pub(crate) fn nav(
                 .role(Role::Button)
                 .aria_label(label)
                 .aria_selected(active)
+                .map(vorkspace_ui::theme::tab_reachable)
                 .relative()
                 .w_full()
                 .flex()

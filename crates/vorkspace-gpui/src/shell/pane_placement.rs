@@ -537,10 +537,20 @@ impl Shell {
         }
         if let Some((target, edge)) = drag.over
             && drag.insert.is_none()
-            && !self.placement_allowed(drag.source, target, edge)
         {
-            self.reject_pane_placement(cx);
-            return;
+            if let DragSource::Session(id) = drag.source
+                && let Some(tab) = self.workspace.tab_of(target)
+                && let Some((project, _)) = self.pane_layout_anchor(id, cx)
+                && !self.split_project_fits(&self.workspace.layout(tab), project, cx)
+            {
+                self.error = Some(SPLIT_PROJECT_MISMATCH.into());
+                cx.notify();
+                return;
+            }
+            if !self.placement_allowed(drag.source, target, edge) {
+                self.reject_pane_placement(cx);
+                return;
+            }
         }
         let mut before = self.active_leaves();
         let id = drag.source.session();
