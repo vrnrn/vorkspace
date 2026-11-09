@@ -368,10 +368,11 @@ Behavior rules for controls:
   session list) keep per-row fills.
 - Busy indicators are fluidither's loader: three cells counting up
   (`panel_kit::spinner`), never a spinning icon.
-- Working and thinking labels shimmer with fluidither's paperless glyph
-  shimmer (`fluid::shimmer_lit`): the band lights glyphs in full ink at its
-  core and in Bayer order at its edges, the rest rest in soft ink. It needs no
-  paper colour, so it works on glass, and steps on its own 12 fps clock that
+- Working and thinking labels shimmer with fluidither's sweep
+  (`fluid::shimmer_sweep`): each glyph's ink follows the band smoothly, from
+  soft ink at rest to full ink at its centre. Never dither per glyph; one
+  sample per letter reads as random flicker, not a gradient. It needs no
+  paper colour, so it works on glass, and steps on its own 20 fps clock that
   lives only while the label is drawn and stops under Reduce Motion.
 
 ---

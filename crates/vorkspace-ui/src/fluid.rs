@@ -182,11 +182,12 @@ pub fn kbd(keys: impl Into<gpui::SharedString>) -> gpui::Div {
         .child(keys)
 }
 
-/// Whether the glyph at `x` (0 to 1 across its line), the `index`th on it,
-/// is lit by the working shimmer at `seconds`: fluidither's paperless text
-/// shimmer, which needs no background colour, so it works on glass.
-pub fn shimmer_lit(x: f32, index: usize, seconds: f32) -> bool {
-    fluidither::dither::shimmer_lit(f64::from(x), index, f64::from(seconds))
+/// How lit the point at `x` (0 to 1 across a line of text) is by the working
+/// shimmer at `seconds`, from 0 at rest to 1 at the band's centre: the sweep
+/// of fluidither's shimmer, applied smoothly per glyph. Glyphs are too few
+/// samples to dither, so the band is drawn as a gradient of ink instead.
+pub fn shimmer_sweep(x: f32, seconds: f32) -> f32 {
+    fluidither::dither::shimmer_sweep(f64::from(x), f64::from(seconds)) as f32
 }
 
 /// Keyboard hints for a picker or field: each key as a `kbd` chip beside
