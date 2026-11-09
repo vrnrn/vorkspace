@@ -258,3 +258,17 @@ test("closing during compilation terminates Cargo and never launches an app", { 
   assert.equal(f.starts(await f.events()), 0);
   assert.ok(f.calls.every((call) => call.command === "cargo"));
 });
+
+test("prunes superseded build outputs after a successful build", async (t) => {
+  const f = await fixture(t, {}, { profile: "native-dev" });
+  await f.until((events) => f.starts(events) === 1);
+  const incremental = join(f.root, "custom-target", "native-dev", "incremental");
+  await mkdir(incremental, { recursive: true });
+  for (const hash of ["0lf6r14n965nd", "2x07w7tarx0df", "0h32cv21lt6eb"]) {
+    await mkdir(join(incremental, `vorkspace_gpui-${hash}`), { recursive: true });
+  }
+  f.dev.requestBuild();
+  await f.until((events) => f.starts(events) === 2);
+  const { readdir } = await import("node:fs/promises");
+  assert.equal((await readdir(incremental)).length, 2);
+});

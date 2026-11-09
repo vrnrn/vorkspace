@@ -99,3 +99,15 @@ Explicitly review overlapping transitions derived from the ownership model: acti
 - **Ground in live truth:** Every document in `docs/` must reflect the actual features, commands, flags, file paths, and architecture of the current codebase.
 - **No changelogs or work logs:** Keep only timeless product and architecture documentation in the repository. Never commit `CHANGELOG.md`, upstream import logs, QA notes, or point-in-time work logs; fold lasting architectural or product changes directly into the relevant docs.
 - **1-to-1 ELI5 companions:** Every technical document at `docs/<name>.md` must have a matching plain-English companion at `docs/eli5/<name>.md`. Whenever you add, update, or remove a document in `docs/`, create, update, or remove its `docs/eli5/<name>.md` counterpart in the same change.
+
+---
+
+## 6. Builds, Checkouts & Disk
+
+Every agent and person builds this repository the same way, so build output stays shared, reusable and bounded. Details live in [docs/building.md](docs/building.md#build-output-and-disk).
+
+- **Use the repository's entry points.** Build and run with `npm run dev`; check with `npm run check`, `npm run check:fast` or `npm run test:rust`. When you invoke Cargo directly, name a profile the repository defines: `native-dev` for the app, `verify` for checks, `release` only for shipping. Do not invent profiles.
+- **One target directory per checkout.** Do not set `CARGO_TARGET_DIR` or `--target-dir` per session or per task; each private directory is another full copy of every dependency. Isolate output only when a document explicitly requires it, and delete that directory when done.
+- **Seed every new worktree.** Run `npm run worktree:seed` before the first build in a linked worktree, whichever tool created it. It clones the main checkout's output with copy-on-write, so the new checkout starts warm and takes no extra disk.
+- **Leave a checkout as you found it.** The dev runner, `npm run check:fast` and `npm run test:rust` prune superseded binaries and incremental caches. After running Cargo by hand, run `npm run target:prune`. Never `cargo clean` another checkout's output; it belongs to whoever works there.
+- **Remove a worktree's output with the worktree.** Its `target/` is rebuildable and is the bulk of its size.

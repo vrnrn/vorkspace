@@ -20,6 +20,8 @@ The **Mac release** workflow is started manually from `main`. It picks a free ve
 
 Restart always reopens the copy of the app you are using, so a development build stays a development build even if an older app sits in your Applications folder.
 
+Building leaves a lot of files behind, and the Rust tools never throw old ones away on their own. To keep your disk from filling up, the app's build commands tidy up after themselves: they keep the newest couple of copies of each built program and delete the older ones. If you build by hand with `cargo`, run `npm run target:prune` afterwards to do the same. Try not to give each task its own build folder; every extra folder is another full copy of everything.
+
 Starting a new worktree? Run `npm run worktree:seed` first to reuse build files from your main checkout and speed up the first build. To seed new worktrees automatically, set `npm run worktree:seed` as the project's setup command under **Settings → Worktrees**.
 
 Add `--dev-data` to `npm run dev` to use a separate set of practice data. The sample conversations from `--fixture` only work with that option.
