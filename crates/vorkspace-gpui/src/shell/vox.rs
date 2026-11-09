@@ -139,7 +139,7 @@ impl Shell {
             return Err("Choose one Bot or session".into());
         }
         let mut bot = bot_query
-            .map(|q| vorkspace_core::bot::channels::resolve(&bots, q).cloned())
+            .map(|q| vorkspace_core::bot::peers::resolve(&bots, q).cloned())
             .transpose()?;
         if bot.is_none()
             && input.get("sessionId").is_none()

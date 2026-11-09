@@ -1216,19 +1216,6 @@ impl Bots {
             view.update(cx, |chat, cx| chat.sync_native_history(cx));
         }
         self.resume_peer_queues(cx);
-        // A failed settlement write may be retried locally. The provider turn
-        // itself is never replayed; starts belong only to this live owner.
-        let unsettled = self
-            .channels
-            .views
-            .iter()
-            .filter(|(_, v)| !v.read(cx).busy)
-            .map(|(key, _)| key.clone())
-            .collect::<Vec<_>>();
-        for key in unsettled {
-            self.channel_finished(&key, cx);
-        }
-        self.channel_tick(cx);
         self.check_habits(cx);
         cx.notify();
     }

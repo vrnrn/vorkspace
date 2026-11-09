@@ -23,9 +23,6 @@ fn mixed_window(cx: &mut TestAppContext) -> (WindowHandle<Shell>, Entity<Bots>, 
     let (window, _, session) = window(cx);
     let (manager, id) = window
         .update(cx, |shell, w, cx| {
-            // Channels are experimental and hidden by default.
-            shell.workspace.preferences.channels = true;
-            shell.apply_preferences(cx);
             let manager = shell.bot_manager();
             manager.update(cx, |m, cx| {
                 m.create_named(Vec::new(), w, cx);
@@ -269,34 +266,6 @@ fn search_header_clears_navigation_and_keeps_its_query_across_rail_modes(cx: &mu
 }
 
 #[gpui::test]
-fn channels_after_bot_details_keep_a_plain_header_and_full_tab_width(cx: &mut TestAppContext) {
-    vorkspace_ui::clock::use_test_clock(cx);
-    let (window, manager, _, _) = mixed_window(cx);
-    let visual = &mut gpui::VisualTestContext::from_window(window.into(), cx);
-    visual.simulate_resize(gpui::size(px(1600.), px(1000.)));
-    visual.run_until_parked();
-    assert!(visual.debug_bounds("bot-island").is_some());
-
-    let channels = visual.debug_bounds("classic-add-channel").unwrap();
-    visual.simulate_click(channels.center(), Default::default());
-    visual.run_until_parked();
-    assert!(manager.read_with(visual, |manager, _| manager.classic_channels_open()));
-    assert!(visual.debug_bounds("right-panel-frame").is_none());
-    assert!(visual.debug_bounds("bot-overview-tabs").is_none());
-    assert!(visual.debug_bounds("toggle-right-panel").is_none());
-    window
-        .update(visual, |shell, window, cx| {
-            assert_eq!(shell.right_drawn, 0.);
-            assert_eq!(shell.corner_room(cx), 42.);
-            assert_eq!(
-                shell.tabs_width(window, cx),
-                1600. - shell.classic_rail_width() - 42.
-            );
-        })
-        .unwrap();
-}
-
-#[gpui::test]
 fn hidden_workspace_panes_do_not_leave_a_resize_hitbox_over_global_surfaces(
     cx: &mut TestAppContext,
 ) {
@@ -327,7 +296,7 @@ fn hidden_workspace_panes_do_not_leave_a_resize_hitbox_over_global_surfaces(
         })
         .unwrap();
 
-    for surface in ["GitHub", "Notes", "Search", "Bot", "Settings", "Channels"] {
+    for surface in ["GitHub", "Notes", "Search", "Bot", "Settings"] {
         window
             .update(visual, |shell, window, cx| {
                 if shell.settings.is_some() {
@@ -343,18 +312,12 @@ fn hidden_workspace_panes_do_not_leave_a_resize_hitbox_over_global_surfaces(
                     "Settings" => {
                         shell.open_settings(crate::settings::Section::General, window, cx)
                     }
-                    "Channels" => (),
                     _ => unreachable!(),
                 }
                 cx.notify();
             })
             .unwrap();
         visual.run_until_parked();
-        if surface == "Channels" {
-            let add = visual.debug_bounds("classic-add-channel").unwrap();
-            visual.simulate_click(add.center(), Default::default());
-            visual.run_until_parked();
-        }
         assert!(visual.debug_bounds("sidebar-frame").is_none(), "{surface}");
         assert!(visual.debug_bounds("sidebar-resize").is_none(), "{surface}");
         let (old_sash, before) = window

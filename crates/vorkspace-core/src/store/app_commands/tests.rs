@@ -141,11 +141,8 @@ fn only_one_connection_can_admit_the_same_effect() {
     );
 }
 #[test]
-fn cold_hidden_habit_channel_and_worker_targets_are_protected_at_the_mutation_owner() {
-    use crate::bot::{
-        channels::{Channel, Channels},
-        Roster,
-    };
+fn cold_hidden_habit_and_worker_targets_are_protected_at_the_mutation_owner() {
+    use crate::bot::Roster;
     let root = tempfile::tempdir().unwrap();
     let path = root.path().join("db");
     let mut store = Store::open_vorkspace(&path).unwrap();
@@ -182,16 +179,6 @@ fn cold_hidden_habit_channel_and_worker_targets_are_protected_at_the_mutation_ow
     assert!(store.check_app_target(caller, target, "/project").is_err());
     roster.get_mut(&bot).unwrap().habit_sessions.clear();
     roster.save(&store).unwrap();
-    Channels {
-        channels: vec![Channel {
-            member_sessions: [(bot, target)].into(),
-            ..Default::default()
-        }],
-    }
-    .save(&store)
-    .unwrap();
-    assert!(store.check_app_target(caller, target, "/project").is_err());
-    Channels::default().save(&store).unwrap();
     store
         .save_orchestration_summary(
             caller,

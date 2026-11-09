@@ -1,5 +1,5 @@
 use super::*;
-use crate::bot::{channels::Channels, peers};
+use crate::bot::peers;
 use crate::store::Store;
 use crate::transcript::Row;
 
@@ -176,61 +176,6 @@ fn peer_admission_is_bidirectional_and_retirement_cannot_resurrect_queued_work()
         db.load(session).unwrap().rows[0].text,
         "Saved work before retirement"
     );
-}
-#[test]
-fn team_channels_reject_users_outsiders_reuse_and_stale_deliveries() {
-    let mut r = roster();
-    let a = r
-        .hire_minion("parent", "A", "Review", vec![], None)
-        .unwrap();
-    let b = r.hire_minion("parent", "B", "Test", vec![], None).unwrap();
-    let mut channels = Channels::default();
-    assert!(channels
-        .create("mixed", "", vec![a.clone(), "other".into()], &r)
-        .is_err());
-    let normal = channels
-        .create("normal", "", vec!["parent".into(), "other".into()], &r)
-        .unwrap();
-    assert!(channels.create("normal", "", vec![a.clone()], &r).is_err());
-    let team = channels
-        .create("team", "", vec!["parent".into(), a.clone(), b.clone()], &r)
-        .unwrap();
-    assert!(channels.get(&team).unwrap().user_read_only(&r));
-    assert!(!channels.get(&team).unwrap().can_access(Some("other"), &r));
-    assert!(!channels.get(&normal).unwrap().can_access(Some(&a), &r));
-    assert!(channels
-        .post(&team, None, "user input", "user", 0, &[], &r)
-        .is_err());
-    assert!(channels
-        .post(
-            &team,
-            r.get("other"),
-            "foreign input",
-            "foreign",
-            0,
-            &[],
-            &r
-        )
-        .is_err());
-    channels
-        .post(
-            &team,
-            r.get(&a),
-            "Review",
-            "allowed",
-            0,
-            std::slice::from_ref(&b),
-            &r,
-        )
-        .unwrap();
-    let delivery = channels.get(&team).unwrap().deliveries[0].clone();
-    assert!(channels.get(&team).unwrap().delivery_allowed(&delivery, &r));
-    r.retire_minion("parent", &a).unwrap();
-    assert!(!channels.get(&team).unwrap().delivery_allowed(&delivery, &r));
-    assert!(channels
-        .post(&team, r.get(&a), "Late reply", "late", 1, &[], &r)
-        .is_err());
-    assert_eq!(channels.get(&team).unwrap().messages.len(), 1);
 }
 #[test]
 fn execution_scope_and_shared_context_follow_the_live_parent_without_changing_actor() {

@@ -1226,12 +1226,10 @@ impl Shell {
             let _ = this.update_in(cx, |this, window, cx| {
                 if this.navigation_revision == 0 {
                     // Sidebar worktree selection resets at launch. An active
-                    // app pane restores from its layout, while standalone
-                    // Channels use the saved active pane, not project recall.
+                    // app pane restores from its layout.
                     let saved_app = this.workspace.active.filter(|id| {
                         this.workspace.app_panes.get(id).is_some_and(|pane| {
-                            (pane.content.project_scoped()
-                                || pane.content == crate::workspace::AppPane::Channels)
+                            pane.content.project_scoped()
                                 && this.app_pane_available(&pane.content, cx)
                         })
                     });
@@ -2163,7 +2161,6 @@ impl Shell {
                 self.visible_tabs(cx)
                     .iter()
                     .rev()
-                    .filter(|tab| !self.is_standalone_channels_tab(tab))
                     .find_map(|tab| tab.session())
                     .map(|tab| self.workspace.tab_focus(tab))
             });

@@ -185,50 +185,6 @@ fn search_opened_from_a_connector_returns_to_that_connector(cx: &mut TestAppCont
 }
 
 #[gpui::test]
-fn command_w_closes_channels_without_closing_parked_session(cx: &mut TestAppContext) {
-    cx.update(|cx| {
-        bind_keys(cx);
-        crate::input::bind(cx);
-    });
-    let (window, _, session) = window(cx);
-    let strip = window
-        .update(cx, |shell, _, cx| {
-            shell.workspace.preferences.channels = true;
-            shell.apply_preferences(cx);
-            shell.invalidate_chrome(cx);
-            cx.notify();
-            shell.workspace.title_order.clone()
-        })
-        .unwrap();
-    let visual = &mut gpui::VisualTestContext::from_window(window.into(), cx);
-    visual.run_until_parked();
-    let add = visual.debug_bounds("classic-add-channel").unwrap();
-    visual.simulate_click(add.center(), Default::default());
-    visual.run_until_parked();
-    window
-        .update(visual, |shell, _, cx| {
-            assert!(shell.bot_manager().read(cx).classic_channels_open())
-        })
-        .unwrap();
-    visual.simulate_keystrokes("cmd-w");
-    visual.run_until_parked();
-    window
-        .update(visual, |shell, w, cx| {
-            assert!(!shell.bot_active(cx));
-            assert_eq!(shell.workspace.title_order, strip);
-            assert_eq!(shell.workspace.active, Some(session));
-            assert!(
-                shell.sessions[&session]
-                    .read(cx)
-                    .input
-                    .focus_handle(cx)
-                    .is_focused(w)
-            );
-        })
-        .unwrap();
-}
-
-#[gpui::test]
 fn command_w_parks_bot_work_and_draft_and_restores_conversation(cx: &mut TestAppContext) {
     cx.update(|cx| {
         bind_keys(cx);

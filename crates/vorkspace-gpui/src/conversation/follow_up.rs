@@ -50,7 +50,7 @@ impl Conversation {
         cx: &mut Context<Self>,
     ) -> Result<(), String> {
         if self.user_read_only() {
-            return Err("Users cannot message team members or team channels".into());
+            return Err("Users cannot message team members".into());
         }
 
         self.execution_provider()?;
@@ -73,7 +73,7 @@ impl Conversation {
         cx: &mut Context<Self>,
     ) -> Result<(), String> {
         if self.user_read_only() {
-            return Err("Users cannot message team members or team channels".into());
+            return Err("Users cannot message team members".into());
         }
 
         self.execution_provider()?;

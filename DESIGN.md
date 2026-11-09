@@ -45,7 +45,7 @@ its helpers, never `gpui::dither` directly.
 | `ring_track(color)` | A gauge's unfilled ring, dotted in 1pt cells |
 | `area(color)` / `bar(color)` | Chart fills: solid under the line fading to nothing; bars full at the top printing down to three-quarter tone, never the half-tone checkerboard |
 | `plate()`, `empty_mark(icon, side)` | An empty state's mark: the icon on clean paper standing above a dotted ground that fades from quarter tone to paper (`page::empty` and the Bot empty states use it) |
-| `slider_parts(fraction)` | A compact slider: dotted track, solid fill up to the value, and the upright thumb (project, Bot and channel grid scales) |
+| `slider_parts(fraction)` | A compact slider: dotted track, solid fill up to the value, and the upright thumb (project and Bot grid scales) |
 | `field(id)` | A still fluidither aurora field above the empty session prompt, in blue-noise grain at 2pt cells: Bayer mid-tones form a checkerboard over a field this large. Docked beside another pane the field gives way and the question stays |
 | `hint(weight)`, `hint_in(color, weight)` | Dotted washes for drop targets and split landing zones |
 | `scrim(weight)` | A flat black dim behind dialogs; a printed scrim garbles the text it covers |
@@ -85,7 +85,7 @@ base (dither, halftone, grain, stripes or solid; `BOT_PATTERNS`), never past
 quarter tone, and a vector face over it. The body is rasterized once per look
 and size (`render_bot_body`); gaze, blink, hop and squash move only the face
 and the body's bounds (`avatar::paint_bot`), so animation costs quads, not
-frames. Projects and channels keep their ring-textured hex marks.
+frames. Projects keep their ring-textured hex marks.
 
 ### Tokens (`theme.rs`)
 
@@ -232,7 +232,7 @@ From back to front:
 - **Rail rows** use separate 6px rounded highlights: `content(0.1)` when
   selected and `content(0.08)` on hover. They stay inset from the pane edge;
   the static `content(0.08)` divider follows the pane's 12px outer corners.
-  Projects and Channels use the 3×3 dot grid in their colour as their mark.
+  Projects use the 3×3 dot grid in their colour as their mark.
 - **Title-bar tabs** use 27px plates centred in the 40px bar, with 6px corners
   and `content(0.04)` / `content(0.07)` / `content(0.1)` fills for idle,
   hovered and selected states. Workspace sidebar tabs use 28px rounded
@@ -310,7 +310,7 @@ old call sites at it, instead of copying it.
 | Compact icon hint | `controls::Tooltip`; it supplements the accessible name |
 | Tooltip look | fluidither's inverted tip: `fluid::tip()` (an opaque ink pill, `fluid::tip_fill()`, with `fluid::tip_text(alpha)`); popover tooltips use `Popover::tip()` |
 | Segmented choice | `SettingsView::segmented` (`RadioGroup`/`RadioButton`) |
-| Text input | `input::Input::field` and its variants (`multiline_field`, `commit_message`, `channel_message`) |
+| Text input | `input::Input::field` and its variants (`multiline_field`, `commit_message`) |
 | Menu, dropdown, flyout | `popover::popover` with `MenuAction` items; pick the closest `MenuStyle` |
 | Sidebar section header | `theme::section_label` |
 | Settings card and row | `SettingsView::group`, `SettingsView::row` |

@@ -4,7 +4,7 @@
 
 # vorkspace
 
-A native GPUI workspace for working with coding agents, projects, conversations, files, terminals, Bots, and Channels.
+A native GPUI workspace for working with coding agents, projects, conversations, files, terminals, and Bots.
 
 The desktop is Rust. Provider CLIs run as supervised child processes. A small JavaScript layer supports remote hosts, editor analysis and formatting, and WebRTC audio for Vox. Vox control and the desktop Copilot gateway run in Rust.
 
@@ -32,7 +32,7 @@ npm run check
 
 - Native conversations, approvals, Stop, drafts, attachments, provider accounts, and saved session history.
 - Files, editor syntax and formatting, Git changes, worktrees, search, and terminal docks.
-- Persistent Bots, scheduled habits, Channels, notes, and agent-generated visuals.
+- Persistent Bots, scheduled habits, notes, and agent-generated visuals.
 - SSH connections to a Node host that owns remote processes and durable sessions.
 - Optional Vox calls controlled by Rust with a private WebRTC audio page; microphone access starts only with a call.
 - Optional [dictation](docs/dictation.md) with Apple’s on-device speech engine, custom words and a native notch; its background helper survives application Quit.

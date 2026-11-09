@@ -36,7 +36,7 @@ impl Render for BotPaneView {
                 }
                 manager.render_bot_pane(id, self.width, linked, window, cx)
             }
-            None => manager.render_channels_pane(window, cx),
+            None => div().into_any_element(),
         })
     }
 }
@@ -122,12 +122,7 @@ impl Shell {
                         .or(self.parked_search.as_ref())
                         .is_some_and(|search| search.matches_working_copy(cwd))
                 }
-                Some(
-                    AppPane::Bot(_)
-                    | AppPane::Channels
-                    | AppPane::App(AppView::Inbox)
-                    | AppPane::Review,
-                ) => true,
+                Some(AppPane::Bot(_) | AppPane::App(AppView::Inbox) | AppPane::Review) => true,
                 None => {
                     if let Some(owner) = self.workspace.session_for_pane(leaf) {
                         self.ensure_session(owner, cx);
@@ -186,12 +181,6 @@ impl Shell {
         }
         if let Some(manager) = self.bots.clone() {
             let context = self.workspace_bot_context();
-            let channels_visible = shown.iter().any(|id| {
-                self.workspace
-                    .app_panes
-                    .get(id)
-                    .is_some_and(|p| matches!(p.content, AppPane::Channels))
-            });
             let visible: HashSet<String> = shown
                 .iter()
                 .filter_map(
@@ -203,11 +192,6 @@ impl Shell {
                 .collect();
             manager.update(cx, |manager, cx| {
                 manager.set_workspace_context(context.as_deref(), cx);
-                if channels_visible {
-                    manager.ensure_channels_pane(cx);
-                } else {
-                    manager.close_classic_channels(cx);
-                }
                 manager.set_visible_panes(&visible, cx);
             });
         }
@@ -416,11 +400,6 @@ impl Shell {
             AppPane::Terminal { cwd, .. } => format!("Terminal · {}", project_name(cwd)),
             AppPane::Codebase => "Codebase".into(),
             AppPane::Search => "Search".into(),
-            AppPane::Channels => self
-                .bots
-                .as_ref()
-                .and_then(|view| view.read(cx).selected_channel_title())
-                .unwrap_or_else(|| "Channels".into()),
             AppPane::Review => self
                 .workspace
                 .reviews
@@ -444,7 +423,6 @@ impl Shell {
             Some(AppPane::Terminal { .. }) => "terminal",
             Some(AppPane::Codebase) => "network",
             Some(AppPane::Search) => "search",
-            Some(AppPane::Channels) => "message-multiple",
             _ => "inbox",
         }
     }
@@ -472,9 +450,6 @@ impl Shell {
                         .bots
                         .as_ref()
                         .is_some_and(|m| m.read(cx).roster.get(id).is_some())
-            }
-            AppPane::Channels => {
-                self.workspace.preferences.bots && self.workspace.preferences.channels
             }
             AppPane::App(AppView::Notes) | AppPane::Note(_) => self.workspace.preferences.notes,
             AppPane::App(AppView::Todos) => self.workspace.preferences.todos,
@@ -542,7 +517,6 @@ impl Shell {
             }
             AppPane::Terminal { id, cwd } => self.show_terminal_tab(id, cwd, window, cx),
             AppPane::Search => self.open_app_search(window, cx),
-            AppPane::Channels => self.open_classic_channels(window, cx),
             AppPane::Review => self.open_standalone_review(id, window, cx),
         }
     }
@@ -599,7 +573,6 @@ impl Shell {
                 .clone()
                 .into_any_element(),
             AppPane::Bot(bot) => self.bot_pane_body(id, Some(bot), cx)?,
-            AppPane::Channels => self.bot_pane_body(id, None, cx)?,
         })
     }
 

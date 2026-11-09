@@ -898,7 +898,7 @@ pub(crate) fn cached_badge_or_bot_image(
 }
 
 /// Render a 30% opacity full-button concentric texture / color highlight pill for
-/// selected Project and Channel rows in the sidebar.
+/// selected rows in the sidebar.
 fn compute_bot_anim(
     seed: u32,
     status: &str,

@@ -149,7 +149,6 @@ impl Bots {
             .chats
             .values()
             .chain(self.running.values().map(|run| &run.view))
-            .chain(self.channels.views.values())
             .find(|view| view.read(cx).summary.id == caller)
             .map(|view| view.read(cx).bot_turn)
             .unwrap_or(0);
@@ -200,14 +199,7 @@ impl Bots {
                     .and_then(|r| self.roster.get(&r.bot))
             })
             .cloned();
-        let bot = bot.or_else(|| {
-            self.channels
-                .views
-                .iter()
-                .find(|(_, v)| v.read(cx).summary.id == call.session)
-                .and_then(|((_, bot), _)| self.roster.get(bot))
-                .cloned()
-        });
+
         let Some(actor) = bot
             .and_then(|b| self.roster.effective_bot(&b.id))
             .filter(|b| {
@@ -380,33 +372,6 @@ impl Bots {
             self.finish_call(call, result, cx);
             return;
         }
-        if call.action.starts_with("channels.") {
-            if call.action == "channels.post"
-                && self
-                    .channels
-                    .views
-                    .values()
-                    .any(|v| v.read(cx).summary.id == call.session)
-            {
-                self.finish_call(
-                    call,
-                    Err("Your final reply is posted to the channel automatically".into()),
-                    cx,
-                );
-                return;
-            }
-            let hop = self.collaboration_hop(call.session, cx);
-            let result = self.channel_action_with_hop(
-                &call.action,
-                &call.input,
-                Some(&actor),
-                &call.request_id,
-                hop,
-                cx,
-            );
-            self.finish_call(call, result, cx);
-            return;
-        }
         let input = call.input.clone();
         let action = call.action.clone();
         let root = self.root.clone();
@@ -564,10 +529,7 @@ impl Bots {
                     Err(e)=>Err(e),
                     Ok(())=>{
                         if let Some(view)=self.chats.get(&member){view.update(cx,|v,cx|{v.bot_stop(cx);let _=v.app_stop(cx);});}
-                        let keys=self.channels.views.keys().filter(|(_,b)|b==&member).cloned().collect::<Vec<_>>();
-                        for key in keys {if let Some(view)=self.channels.views.get(&key){view.update(cx,|v,cx|{v.bot_stop(cx);let _=v.app_stop(cx);});}}
                         let sessions=self.minion_sessions(&member);
-                        self.quarantine_channel_work(cx);
                         let value=self.minion_value(self.roster.get(&member).unwrap(),cx);
                         self.save(cx);
                         self.call_work(call,&actor.id,target,move|store|{
@@ -776,7 +738,6 @@ if let Some(enabled)=input.get("enabled").and_then(Value::as_bool){h.enabled=ena
                     .chats
                     .values()
                     .chain(self.running.values().map(|r| &r.view))
-                    .chain(self.channels.views.values())
                     .any(|v| v.read(cx).summary.id == source && v.read(cx).busy)
                 {
                     continue;
@@ -847,13 +808,7 @@ if let Some(enabled)=input.get("enabled").and_then(Value::as_bool){h.enabled=ena
 impl Bots {
     pub(super) fn member_status(&self, id: &str, cx: &App) -> &'static str {
         let mut working = false;
-        for view in self.chats.get(id).into_iter().chain(
-            self.channels
-                .views
-                .iter()
-                .filter(|((_, member), _)| member == id)
-                .map(|(_, view)| view),
-        ) {
+        if let Some(view) = self.chats.get(id) {
             match view.read(cx).bot_status() {
                 "needs-you" => return "needs-you",
                 "working" => working = true,
@@ -863,25 +818,14 @@ impl Bots {
         if working { "working" } else { "idle" }
     }
     fn minion_sessions(&self, id: &str) -> HashSet<i64> {
-        let mut sessions = self
-            .channels
-            .state
-            .channels
-            .iter()
-            .filter_map(|c| c.member_sessions.get(id).copied())
-            .collect::<HashSet<_>>();
+        let mut sessions = HashSet::new();
         sessions.extend(self.roster.get(id).and_then(|b| b.session_id));
         sessions
     }
     pub(crate) fn minion_value(&self, member: &Bot, cx: &App) -> Value {
         let metadata = member.minion.as_ref().unwrap();
         let owner = self.roster.storage_owner(&member.id);
-        let working = self.chats.get(&member.id).is_some_and(|v| v.read(cx).busy)
-            || self
-                .channels
-                .views
-                .iter()
-                .any(|((_, id), v)| id == &member.id && v.read(cx).busy);
+        let working = self.chats.get(&member.id).is_some_and(|v| v.read(cx).busy);
         json!({"id":member.id,"name":member.label(),"parentId":metadata.parent_id,"role":metadata.role,"specialties":metadata.specialties,"retired":metadata.retired,"createdAt":metadata.created_at,"sessionId":member.session_id,"working":working,"status":if metadata.retired {"retired"} else {self.member_status(&member.id,cx)},"pendingMessages":member.outbox.iter().map(|m|json!({"id":m.id,"error":m.error})).collect::<Vec<_>>(),"projects":owner.map(|p|&p.projects),"accepted":true})
     }
     fn next_minion_name(&self, parent: &str) -> String {

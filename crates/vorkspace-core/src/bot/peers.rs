@@ -1,5 +1,27 @@
 //! Direct Bot messages share the recipient's durable outbox and conversation.
-use super::{channels, Message, Peer, Roster};
+use super::{Bot, Message, Peer, Roster};
+
+/// How many Bot-to-Bot forwards a request may take before it stops.
+pub const MAX_HOPS: u8 = 4;
+
+/// A Bot by ID, name or mascot, as agents and voice commands refer to it.
+pub fn resolve<'a>(roster: &'a Roster, query: &str) -> Result<&'a Bot, String> {
+    if let Some(bot) = roster.get(query) {
+        return Ok(bot);
+    }
+    let name = query.trim().trim_start_matches('@');
+    let matches: Vec<_> = roster
+        .bots
+        .iter()
+        .filter(|m| m.label().eq_ignore_ascii_case(name) || m.mascot.eq_ignore_ascii_case(name))
+        .collect();
+    match matches.as_slice() {
+        [bot] => Ok(bot),
+        [] => Err(format!("Unknown Bot: {name}")),
+        _ => Err(format!("Several Bots match {name}; use its ID")),
+    }
+}
+
 use serde::Deserialize;
 
 pub struct Accepted {
@@ -33,7 +55,7 @@ pub fn presentation(prompt: &str) -> Option<(Origin, &str)> {
     let sender: Sender = serde_json::from_str(sender).ok()?;
     if sender.id.trim().is_empty()
         || sender.name.trim().is_empty()
-        || !(1..=channels::MAX_HOPS).contains(&sender.hop)
+        || !(1..=MAX_HOPS).contains(&sender.hop)
     {
         return None;
     }
@@ -97,12 +119,12 @@ pub fn enqueue(
     }
     let hop = source_hop
         .checked_add(1)
-        .filter(|n| *n <= channels::MAX_HOPS)
+        .filter(|n| *n <= MAX_HOPS)
         .ok_or("Autonomous collaboration limit reached; report back to the user")?;
     let peer = Peer {
         from: sender.id.clone(),
         hop,
-        expect_reply: expect_reply && hop < channels::MAX_HOPS,
+        expect_reply: expect_reply && hop < MAX_HOPS,
     };
     let context = serde_json::json!({"id":sender.id,"name":sender.label(),"hop":hop});
     let reply = if peer.expect_reply {

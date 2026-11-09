@@ -12,10 +12,9 @@ impl Shell {
         if let Some(pane) = self.workspace.app_panes.get(&id) {
             let selected = path_key(&self.workspace.project) == path_key(project);
             return match &pane.content {
-                AppPane::App(_)
-                | AppPane::ConnectorItem(_)
-                | AppPane::Search
-                | AppPane::Channels => selected && self.pane_in_scope(id, cx),
+                AppPane::App(_) | AppPane::ConnectorItem(_) | AppPane::Search => {
+                    selected && self.pane_in_scope(id, cx)
+                }
                 AppPane::Note(note) => {
                     selected
                         && locked(&self.store)
@@ -88,7 +87,6 @@ impl Shell {
                 json!({"kind":"codebase","root":pane.worktree,"title":self.pane_title(id,cx)})
             }
             AppPane::Search => json!({"kind":"search","title":self.pane_title(id,cx)}),
-            AppPane::Channels => json!({"kind":"channels","title":self.pane_title(id,cx)}),
             AppPane::Review => json!({"kind":"file","title":self.pane_title(id,cx)}),
         }
     }
@@ -568,12 +566,6 @@ impl Shell {
                 Some(AppPane::App(AppView::Todos))
             }
             "automations" => Some(AppPane::App(AppView::Automations)),
-            "channels" => {
-                if !self.app_pane_available(&AppPane::Channels, cx) {
-                    return Err("Channels are disabled".into());
-                }
-                Some(AppPane::Channels)
-            }
             _ => return Err("Unknown workspace pane kind".into()),
         };
 
@@ -701,7 +693,6 @@ impl Shell {
                     self.show_terminal_tab(*id, cwd.clone(), window, cx)
                 }
                 AppPane::Search => self.open_app_search(window, cx),
-                AppPane::Channels => self.open_classic_channels(window, cx),
                 AppPane::Review => return Err("Choose a file to open".into()),
             }
         }

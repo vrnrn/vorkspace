@@ -77,25 +77,6 @@ impl Shell {
         cx.notify();
     }
 
-    /// Channels occupy the same main surface as Bots, with the project rail
-    /// still available. They do not invent a session or change its project.
-    pub(crate) fn open_classic_channels(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if !self.app_pane_available(&crate::workspace::AppPane::Channels, cx) {
-            return;
-        }
-        self.prepare_app_view(
-            self.app_pane_id(&crate::workspace::AppPane::Channels),
-            window,
-            cx,
-        );
-        self.leave_app_views(cx);
-        self.leave_app_search(cx);
-        self.close_preview(cx);
-        self.navigation_revision += 1;
-        self.admit_app_pane(crate::workspace::AppPane::Channels);
-        self.finish_app_pane_open(window, cx);
-    }
-
     pub(super) fn hide_project_marks(&mut self, cx: &mut Context<Self>) {
         self.retain_project_marks(|_| false, cx);
     }
@@ -203,10 +184,7 @@ impl Shell {
         self.reconcile_vorkspace_bots(cx);
         let bots = self.bots.clone().map(|bots| {
             bots.update(cx, |bots, cx| {
-                div()
-                    .child(bots.rail(None, cx))
-                    .child(bots.classic_channels_rail(cx))
-                    .into_any_element()
+                div().child(bots.rail(None, cx)).into_any_element()
             })
         });
         let navigation = self.sidebar_navigation(cx);

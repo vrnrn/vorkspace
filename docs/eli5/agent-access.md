@@ -48,9 +48,9 @@ Finish the Bot's current turn before switching between the app and a terminal, a
 
 With **Settings › Bots › Minions** enabled, a parent Bot can hire lasting team members with `minions.hire`, giving each a name, role and optional specialties. Hiring does not start a job or require picking a project. The parent checks `minions.list`, then reuses a member with `bots.send` for each new job. Its replies normally return automatically. The older `minions.spawn` shortcut hires a member and sends a first job together. These team actions belong to Bots; typing `/operator` in an ordinary session does not grant them.
 
-Members keep their own conversations but share their parent's instructions, saved memory and current project assignments. Their to-dos belong to those projects. They can talk only with their parent and siblings, directly or in a channel containing just that team. Unrelated Bots cannot message them or read their conversations. Ordinary Bots can still collaborate with each other as usual.
+Members keep their own conversations but share their parent's instructions, saved memory and current project assignments. Their to-dos belong to those projects. They can talk only with their parent and siblings. Unrelated Bots cannot message them or read their conversations. Ordinary Bots can still collaborate with each other as usual.
 
-You can inspect a member's work and past conversations, but its conversation and team channels are read-only for you. Ask the parent Bot to send instructions. Minions cannot hire or fire other members, open more work sessions, or change their parent's personality or habits.
+You can inspect a member's work and past conversations, but its conversation is read-only for you. Ask the parent Bot to send instructions. Minions cannot hire or fire other members, open more work sessions, or change their parent's personality or habits.
 
 When someone is no longer useful, the parent uses `minions.fire` to retire them. Their conversations stay saved, but they stop accepting work. Old queued messages do not restart after reopening the app. See [Minions](minions.md).
 
@@ -60,7 +60,7 @@ When someone is no longer useful, the parent uses `minions.fire` to retire them.
 
 - **Opt-In per Thread**: Only the thread where you typed `/operator` gets the walkie-talkie. Other chats cannot use it unless you give it to them too.
 - **Only While Working**: The agent can only run Vorkspace commands while it is actively answering your turn.
-- **Protected Chats Stay Protected**: The agent cannot stop or remove itself, Bot chats, scheduled habit runs, channel workers, orchestration workers, or private internal chats. A Bot can still follow up with or stop ordinary workers it started, even when they are hidden from the sidebar. Hidden chats with unknown ownership stay protected. Removing a chat keeps its files, terminals, and Git worktrees.
+- **Protected Chats Stay Protected**: The agent cannot stop or remove itself, Bot chats, scheduled habit runs, orchestration workers, or private internal chats. A Bot can still follow up with or stop ordinary workers it started, even when they are hidden from the sidebar. Hidden chats with unknown ownership stay protected. Removing a chat keeps its files, terminals, and Git worktrees.
 
 - **Your Draft Stays Yours**: A follow-up cannot replace text or files you are already preparing. Loading chats wait until their saved queue and draft are known.
 - **Launch Choices Matter**: New sessions use the requested permission mode, model settings, and project checkout. An unrelated folder or misspelled option is rejected before a session is created. It can also split beside an open chat to the right or below. If that chat closes while the new session is being prepared, the launch is rejected instead of appearing beside an unrelated chat.

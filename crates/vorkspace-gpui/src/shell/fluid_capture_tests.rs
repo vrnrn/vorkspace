@@ -80,7 +80,6 @@ const SHOTS: &[(&str, Option<usize>, (f32, f32))] = &[
     // Bots persist in the shared store, so their scenes run last.
     ("bot", Some(0), (1390., 890.)),
     ("bot-new", Some(0), (1390., 890.)),
-    ("bot-channel", Some(0), (1390., 890.)),
     ("bot-look", Some(0), (1390., 890.)),
     ("bot-look-narrow", Some(0), (1390., 890.)),
     ("bot-soul", Some(0), (1390., 890.)),
@@ -344,8 +343,6 @@ fn fluid_capture() {
             let name = &base;
             let mut state = Workspace::default();
             state.preferences.theme = theme.into();
-            // Channels are opt-in; the channel scene turns them on.
-            state.preferences.channels = *name == "bot-channel";
             // A first launch: no project, no session, nothing open.
             let first_run = name.starts_with("first-run");
             if !first_run {
@@ -641,17 +638,10 @@ fn fluid_capture() {
                                         manager.dismiss_settings(w, cx);
                                     }
                                     Some("look") => manager.open_look_for_capture(w, cx),
-                                    Some("channel") => {
-                                        manager.dismiss_settings(w, cx);
-                                        manager.create_channel_for_capture("Design review", cx);
-                                    }
                                     Some(section) => manager.show_settings_section(section, cx),
                                 }
                             }
                         });
-                        if *name == "bot-channel" {
-                            shell.open_classic_channels(w, cx);
-                        }
                         cx.notify();
                     })
                     .unwrap();

@@ -2,15 +2,12 @@ use serde_json::Value;
 /// Reject misspelled fields and ambiguous types before any app mutation.
 pub fn validate(action: &str, input: &Value) -> Result<(), String> {
     let fields = match action {
-        "models.list" | "soul.read" | "habits.list" | "channels.list" | "bots.list" => "",
+        "models.list" | "soul.read" | "habits.list" | "bots.list" => "",
         "bots.read" => "bot before limit maxChars",
         "bots.historyStatus" => "bot",
         "bots.recoverHistory" => "bot expectedHistory confirmStopped",
         "bots.send" => "to message expectReply",
         "bots.configure" => "compactionMode",
-        "channels.create" => "name topic members",
-        "channels.read" => "channel limit",
-        "channels.post" => "channel message to",
         "sessions.list" | "folders.list" | "worktrees.list" => "project",
         "sessions.read" => "sessionId project before limit maxChars",
         "sessions.start" => {
@@ -303,8 +300,7 @@ fn validate_workspace(action: &str, input: &Value) -> Result<(), String> {
                 "item" => Some("itemKey"),
                 "bot" | "botDocument" => Some("bot"),
                 "file" => Some("path"),
-                "notes" | "todos" | "automations" | "terminal" | "search" | "channels"
-                | "codebase" => None,
+                "notes" | "todos" | "automations" | "terminal" | "search" | "codebase" => None,
                 _ => return Err("Unknown workspace pane kind".into()),
             };
             if let Some(key) = required {
@@ -397,8 +393,6 @@ pub fn is_read_only(action: &str) -> bool {
             | "worktrees.list"
             | "artifacts.list"
             | "artifacts.read"
-            | "channels.list"
-            | "channels.read"
             | "soul.read"
             | "memory.read"
             | "memory.search"
@@ -417,10 +411,6 @@ pub fn minion_allowed(action: &str) -> bool {
             "bots.list"
                 | "bots.read"
                 | "bots.send"
-                | "channels.list"
-                | "channels.read"
-                | "channels.create"
-                | "channels.post"
                 | "models.list"
                 | "soul.read"
                 | "sessions.list"

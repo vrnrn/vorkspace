@@ -2,7 +2,7 @@
 
 The [build guide](building.md) explains how to run the app. The [architecture guide](architecture.md) explains which part does what, and the [repository map](repository.md) helps you find its code.
 
-Other guides explain [vorkspaces](vorkspaces.md), [saved data](data-storage.md), [providers](providers.md), [remote machines](remote-access.md), [voice](vox.md), [Meetings](meetings.md), [Bot Channels](channels.md), [Minions](minions.md), [visuals](visuals.md), [Codebase Memory](codebase.md), [the inbox](inbox.md), [Jira](jira.md), [ticket context](ticket-context.md), [agent access](agent-access.md), [hang diagnostics](hang-diagnostics.md), [installing](install.md), [testing](testing.md), and [updates](updates.md).
+Other guides explain [vorkspaces](vorkspaces.md), [saved data](data-storage.md), [providers](providers.md), [remote machines](remote-access.md), [voice](vox.md), [Meetings](meetings.md), [Minions](minions.md), [visuals](visuals.md), [Codebase Memory](codebase.md), [the inbox](inbox.md), [Jira](jira.md), [ticket context](ticket-context.md), [agent access](agent-access.md), [hang diagnostics](hang-diagnostics.md), [installing](install.md), [testing](testing.md), and [updates](updates.md).
 
 The [terminal guide](terminal.md) explains shells, terminal tabs, copy and paste, and the included Ghostty library.
 

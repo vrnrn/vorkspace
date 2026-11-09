@@ -9,7 +9,7 @@ mod tests;
 type DirectSubmission = (String, String, Vec<PathBuf>, std::ops::Range<usize>, bool);
 #[derive(Default)]
 pub(super) struct ChatState {
-    /// Standalone Bot chats opt into identity decoration. Channels keep None;
+    /// Standalone Bot chats opt into identity decoration; others keep None.
     /// Some(false) retains the header but freezes it beneath a host modal.
     pub(super) header_animation: Option<bool>,
     pub(super) header: Option<Entity<crate::bot_header::ChatHeader>>,
@@ -336,9 +336,6 @@ impl Conversation {
             && self.settings.usage_limit.is_none()
             && !self.account_switching
     }
-    pub(crate) fn bot_configuration_ready(&self) -> bool {
-        self.history_ready() && self.loaded && !self.account_switching
-    }
     pub(crate) fn bot_settled(&self) -> bool {
         !self.busy && !self.stopping
     }
@@ -348,62 +345,6 @@ impl Conversation {
         let mut settings = self.settings.clone();
         settings.model = self.model.clone();
         settings
-    }
-    /// Channel history belongs to its own session; execution choices belong to
-    /// the member Bot. Refresh them only at the boundary of a new idle turn.
-    pub(crate) fn inherit_bot_configuration(
-        &mut self,
-        provider: Kind,
-        settings: &Settings,
-        cx: &mut Context<Self>,
-    ) -> bool {
-        if !self.bot_configuration_ready() || self.busy || self.stopping {
-            return false;
-        }
-        if (self.summary.provider != provider.id() || self.model != settings.model)
-            && !self.apply_model_pick(&ModelPicked(provider, settings.model.clone()), cx)
-        {
-            return false;
-        }
-        let account_changed = self.settings.account != settings.account;
-        if account_changed {
-            // Provider resume IDs are account-owned. Keep the local history and
-            // carry a recap into a fresh provider thread under the new account.
-            if self.summary.provider_id.is_some() {
-                if let Err(error) = locked(&self.store).and_then(|store| {
-                    store.reset_provider_id_if(self.summary.id, self.summary.provider_id.as_deref())
-                }) {
-                    self.status = error;
-                    cx.notify();
-                    return false;
-                }
-                self.summary.provider_id = None;
-                self.settings.handoff = Some(vorkspace_core::agent::Handoff {
-                    from: self.summary.provider.clone(),
-                    brief: vorkspace_core::response::handoff(self.bot_rows(cx)),
-                });
-            }
-            self.settings.usage_limit = None;
-            self.status = "Ready".into();
-            self.catalog.clear();
-            self.resolved_model = None;
-        }
-        self.settings.account = settings.account.clone();
-        self.settings.access = settings.access;
-        self.settings.model = settings.model.clone();
-        self.settings.effort = settings.effort.clone();
-        self.settings.fast = settings.fast;
-        self.settings.service_tier = settings.service_tier.clone();
-        self.settings.thinking = settings.thinking;
-        self.settings.model_settings = settings.model_settings.clone();
-        self.settings.plan = settings.plan;
-        self.settings.operator = settings.operator;
-        self.settings.orchestrator = settings.orchestrator;
-        if account_changed {
-            self.attach_account(cx);
-        }
-        self.save_settings(cx);
-        self.bot_ready()
     }
     pub(crate) fn bot_dispatch(&mut self, message: &Message, cx: &mut Context<Self>) -> bool {
         self.bot_dispatch_with_mode(message, None, cx)

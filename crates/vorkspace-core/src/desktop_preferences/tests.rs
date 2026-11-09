@@ -125,19 +125,11 @@ fn earlier_feature_keys_restore_in_place_and_keep_native_edits_after_reopen() {
     let conn = Connection::open(&storage).unwrap();
     conn.execute_batch("CREATE TABLE ItemTable(key TEXT,value BLOB)")
         .unwrap();
-    let mut channel = json!({"id":"channel","name":"team","topic":"saved","memberSessions":{"stable-bot":original},"future":{"keep":true}});
-    channel[format!("{singular}Ids")] = json!(["stable-bot"]);
-    let mut author = json!({"kind":singular,"future":7});
-    author[format!("{singular}Id")] = json!("stable-bot");
-    let mut reaction = json!({"emoji":"yes","future":8});
-    reaction[format!("{singular}Id")] = json!("stable-bot");
     let values = [
             (format!("{app}:{singular}-roster"),json!([{"id":"stable-bot","name":"Before","sessionId":original,"projects":["/project"]}]).to_string()),
             (format!("{app}.{plural}Enabled"),"0".into()),
             (format!("{app}.rail{}{}Pinned",singular[..1].to_uppercase(),&plural[1..]),"1".into()),
             (format!("{app}.{singular}MenuBarIcon"),"0".into()),
-            (format!("{app}:{singular}-channels"),json!([channel]).to_string()),
-            (format!("{app}:{singular}-channel-messages:channel"),json!([{"id":"message","text":singular,"from":author,"reactions":[reaction],"future":9}]).to_string()),
             (format!("{app}:project-chat-backgrounds"),json!({format!("{singular}:stable-bot"):{"path":"/private/background.png","future":true}}).to_string()),
             (format!("{app}.keybindingOverrides"),json!({format!("App: Toggle {}{}",singular[..1].to_uppercase(),&singular[1..]):{"shortcut":"Command+KeyB"},"Future command":{"shortcut":"Command+KeyJ","future":true}}).to_string()),
             (format!("{app}.settingsSection"),plural.clone()),
@@ -176,20 +168,6 @@ fn earlier_feature_keys_restore_in_place_and_keep_native_edits_after_reopen() {
     );
     roster.bots[0].name = "After".into();
     roster.save(&store).unwrap();
-    let channels = crate::bot::channels::Channels::load(&store).unwrap();
-    assert_eq!(channels.channels[0].member_ids, ["stable-bot"]);
-    assert_eq!(
-        channels.channels[0].messages[0]["from"]["botId"],
-        "stable-bot"
-    );
-    assert_eq!(channels.channels[0].messages[0]["from"]["kind"], "bot");
-    assert_eq!(channels.channels[0].messages[0]["text"], singular);
-    assert_eq!(
-        channels.channels[0].messages[0]["reactions"][0]["future"],
-        8
-    );
-    assert_eq!(channels.channels[0].extra["future"]["keep"], true);
-    channels.save(&store).unwrap();
     drop(store);
     let reopened =
         crate::store::Store::open_vorkspace_with_preferences_for_test(&database, preferences)
@@ -197,13 +175,6 @@ fn earlier_feature_keys_restore_in_place_and_keep_native_edits_after_reopen() {
     assert_eq!(
         crate::bot::Roster::load(&reopened).unwrap().bots[0].name,
         "After"
-    );
-    assert_eq!(
-        crate::bot::channels::Channels::load(&reopened)
-            .unwrap()
-            .channels[0]
-            .messages[0]["future"],
-        9
     );
     assert_eq!(std::fs::read(&storage).unwrap(), before);
 }

@@ -19,7 +19,7 @@ On the first launch with vorkspaces, every existing project goes into one vorksp
 
 Everything that lists projects uses the active vorkspace's projects: the sidebar header's project picker, Search, the quick composer, app pages such as Notes and Automations, and a Bot's project choices. The rail's Bots section hides Bots placed in another vorkspace.
 
-Switching remembers the current project, makes the target active and opens its last project (or its first) the same way an explicit project pick does: a visible Bot or Channels pane gives way to that project's session. A vorkspace with no folders shows the no-project state.
+Switching remembers the current project, makes the target active and opens its last project (or its first) the same way an explicit project pick does: a visible Bot pane gives way to that project's session. A vorkspace with no folders shows the no-project state.
 
 The rail no longer lists projects. Its **Sessions** section lists the vorkspace's sessions across its projects: every working or approval-blocked session up to five, otherwise the three most recent. The disclosure shows up to twenty. Each card shows the title, status or age, the provider, the project, and the Bot that started it, when one did. Blank and archived sessions are not listed. Listing a session never loads its saved history. A Bot's floating island now shows only its documents; the sessions it starts appear in the rail with its name.
 
@@ -39,4 +39,4 @@ Vorkspaces are designed so each can own a window. Separate windows are being bui
 
 Leases name their holder and are checked again at every claim, so a closed window never leaves one stuck.
 
-Still owned per window, and the remaining blockers before the app opens a second window: the Bot manager (Habit scheduler, channel workers and outbox, and its saved roster), Vox, remote-host connections and OS notifications.
+Still owned per window, and the remaining blockers before the app opens a second window: the Bot manager (Habit scheduler, peer outbox and its saved roster), Vox, remote-host connections and OS notifications.

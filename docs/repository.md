@@ -4,7 +4,7 @@ The desktop is a Rust workspace that runs as the app plus a small helper process
 
 | Path | Responsibility |
 | --- | --- |
-| `crates/vorkspace-core/` | Provider processes, durable sessions, files/Git, Bots, Channels, Vox control, Copilot gateway, and remote transports |
+| `crates/vorkspace-core/` | Provider processes, durable sessions, files/Git, Bots, Vox control, Copilot gateway, and remote transports |
 | `crates/vorkspace-gpui/` | The application: window shell, conversations, transcript, Bots, settings, inbox, and native input |
 | `crates/vorkspace-ui/` | UI foundation: preferences, theme and palettes, the animation clock, motion, and small shared marks |
 | `crates/vorkspace-runtime/` | Session execution, remote session binding, and persistence coalescing |
@@ -30,7 +30,7 @@ The desktop is a Rust workspace that runs as the app plus a small helper process
 
 ## Runtime modules
 
-In the core, `store` owns SQLite and sidecar persistence; `provider` owns CLI transports and process lifetime; `transcript` projects bounded display data. `bot` owns Bot and Channel state, `voice` owns Vox, and `remote` owns authenticated remote transport. Keep durable writes at those boundaries.
+In the core, `store` owns SQLite and sidecar persistence; `provider` owns CLI transports and process lifetime; `transcript` projects bounded display data. `bot` owns Bot state, `voice` owns Vox, and `remote` owns authenticated remote transport. Keep durable writes at those boundaries.
 
 In GPUI, `conversation` connects the session runtime to input and transcript views. `shell` owns window navigation and workspace surfaces, with its topics in `shell/`. `git_tools/` holds source control surfaces, `file_tools/` the explorer and editor pane, and `composer/` prompt entry. `terminal`, `settings`, and `bots` contain their native views. Rendering consumes core state; it does not create a second persistence authority.
 

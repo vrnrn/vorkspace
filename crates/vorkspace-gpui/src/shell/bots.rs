@@ -12,14 +12,12 @@ impl Shell {
     pub(super) fn bot_active(&self, _cx: &App) -> bool {
         self.workspace.active.is_some_and(|id| self.is_bot_pane(id))
     }
-    /// A Bot or Channels pane: the surfaces a project click leaves behind.
+    /// A Bot pane: the surface a project click leaves behind.
     pub(crate) fn is_bot_pane(&self, id: i64) -> bool {
-        self.workspace.app_panes.get(&id).is_some_and(|pane| {
-            matches!(
-                pane.content,
-                crate::workspace::AppPane::Bot(_) | crate::workspace::AppPane::Channels
-            )
-        })
+        self.workspace
+            .app_panes
+            .get(&id)
+            .is_some_and(|pane| matches!(pane.content, crate::workspace::AppPane::Bot(_)))
     }
     pub(super) fn workspace_bot_context(&self) -> Option<String> {
         if !self.workspace.preferences.bots {
@@ -209,14 +207,6 @@ impl BotsHost for gpui::WeakEntity<Shell> {
         self.update(cx, |shell, cx| {
             shell.app_notes_action(caller, projects, action, input, true, cx)
         })
-    }
-    fn open_channels(&self, window: &mut Window, cx: &mut App) {
-        let _ = self.update(cx, |shell, cx| shell.open_classic_channels(window, cx));
-    }
-    fn close_channels(&self, window: &mut Window, cx: &mut App) {
-        let _ = self.update(cx, |shell, cx| {
-            shell.close_app_resource(crate::workspace::AppPane::Channels, window, cx);
-        });
     }
     fn project_appearance(&self, project: &str, cx: &App) -> Option<ProjectAppearance> {
         self.upgrade().and_then(|shell| {

@@ -18,7 +18,7 @@ impl Shell {
         }) || self
             .bots
             .as_ref()
-            .is_some_and(|bots| bots.read(cx).app_project_allowed(caller, project, cx))
+            .is_some_and(|bots| bots.read(cx).app_project_allowed(caller, project))
     }
     pub(super) fn app_caller_allowed(&self, caller: i64, project: &str, cx: &App) -> bool {
         self.sessions.get(&caller).is_some_and(|view| {
@@ -31,7 +31,7 @@ impl Shell {
         }) || self
             .bots
             .as_ref()
-            .is_some_and(|bots| bots.read(cx).app_project_allowed(caller, project, cx))
+            .is_some_and(|bots| bots.read(cx).app_project_allowed(caller, project))
     }
     fn check_app_placement(
         &self,
@@ -201,7 +201,10 @@ impl Shell {
                 .as_ref()
                 .is_some_and(|bots| bots.read(cx).protected_app_target(id, cx))
         {
-            return Err("Bot, habit, channel, hidden and orchestration sessions are protected from app commands".into());
+            return Err(
+                "Bot, habit, hidden and orchestration sessions are protected from app commands"
+                    .into(),
+            );
         }
         Ok(())
     }

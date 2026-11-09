@@ -239,12 +239,6 @@ pub(crate) const INDEX: &[(&str, Section, &str, &str)] = &[
         "bot rail compact collapsed icons top divider project picker",
     ),
     (
-        "bot-channels",
-        Section::Bots,
-        "Channels",
-        "channels experimental rooms bots rail",
-    ),
-    (
         "bot-list",
         Section::Bots,
         "Your bots",

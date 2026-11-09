@@ -51,11 +51,6 @@ fn dots(color: Option<u32>, elapsed_ms: Option<u64>) -> gpui::Div {
         }))
 }
 
-/// The grid, still and solid in `color`: a mark for a channel.
-pub fn color_dots(color: u32) -> gpui::Div {
-    dots(Some(color), None)
-}
-
 /// A project's mark: the working grid in its colour, still while idle and
 /// waving while any of its sessions works. Only a working mark ticks.
 pub struct ProjectMark {

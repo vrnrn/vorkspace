@@ -279,7 +279,6 @@ impl SettingsView {
                     | "claude-hooks"
                     | "bots-enabled"
                     | "rail-bots-pinned"
-                    | "bot-channels"
                     | "bot-menu-bar-icon"
                     | "show-archived"
             )

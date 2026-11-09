@@ -317,21 +317,7 @@ impl Shell {
         if !self.workspace.title_order.contains(&tab) {
             self.workspace.title_order.push(tab.clone());
         }
-        if !self.is_standalone_channels_tab(&tab) {
-            self.workspace.scope_focus.insert(self.tab_scope(), tab);
-        }
-    }
-
-    /// The Channels browser has its own tab. Clicking a project resumes its
-    /// workspace unless Channels are tiled into that workspace's layout.
-    pub(super) fn is_standalone_channels_tab(&self, tab: &TitleTab) -> bool {
-        tab.session().is_some_and(|id| {
-            self.workspace
-                .app_panes
-                .get(&id)
-                .is_some_and(|pane| pane.content == crate::workspace::AppPane::Channels)
-                && !self.workspace.layout(id).is_split()
-        })
+        self.workspace.scope_focus.insert(self.tab_scope(), tab);
     }
 
     pub(super) fn bot_opened(&mut self, id: String, cx: &mut Context<Self>) {
@@ -403,13 +389,12 @@ impl Shell {
     ) -> bool {
         let tab = self.workspace.scope_focus.get(&self.tab_scope()).cloned();
         if let Some(tab) = tab.filter(|tab| {
-            !self.is_standalone_channels_tab(tab)
-                && (allow_bot
-                    || !match tab {
-                        TitleTab::Bot { .. } => true,
-                        TitleTab::Workspace(id) => self.is_bot_pane(self.workspace.tab_focus(*id)),
-                        _ => false,
-                    })
+            (allow_bot
+                || !match tab {
+                    TitleTab::Bot { .. } => true,
+                    TitleTab::Workspace(id) => self.is_bot_pane(self.workspace.tab_focus(*id)),
+                    _ => false,
+                })
                 && self.visible_tabs(cx).contains(tab)
         }) {
             if matches!(tab, TitleTab::Bot { .. }) {

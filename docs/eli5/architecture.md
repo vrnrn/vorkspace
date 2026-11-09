@@ -26,9 +26,9 @@ Long saved chats are read a piece at a time. Hidden views keep their work withou
 
 Long indexed Bot chats opened from the Bot panel first show their newest messages. Scroll up or choose Load earlier messages to read older parts without losing your place. If the saved chat changes elsewhere, the app reloads it when you request another page; if loading fails temporarily, you can retry. Before a Bot runs or a message changes, the app loads the complete chat so older messages stay safe. Other kinds of history keep their existing loading behavior.
 
-Bots, sessions, terminals, notes, GitHub/GitLab/Jira items, Search, Automations, To-dos and Channels open in tabs. Different notes and items can stay open independently. Opening the same item again takes you back to its existing tab and unfinished work.
+Bots, sessions, terminals, notes, GitHub/GitLab/Jira items, Search, Automations and To-dos open in tabs. Different notes and items can stay open independently. Opening the same item again takes you back to its existing tab and unfinished work.
 
-Click a project to return to its workspace. A separate Channels tab stays open so you can return to it later. If Channels was active when you quit, it opens again on restart.
+Click a project to return to its workspace.
 
 Files opened from Search or a Bot link stay with the working copy they came from. A new file pane opens beside the Bot when there is room, or in its own tab. Closing and reopening the file tab keeps unfinished edits while the app is open. Add to chat puts your comment in the original Bot's draft, even if you've moved the file or restarted. If the chat can't accept it, your comment stays available to copy or try again. GitHub activity appears in the Bot chat it belongs to.
 

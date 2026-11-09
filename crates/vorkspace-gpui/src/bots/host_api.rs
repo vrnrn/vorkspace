@@ -79,8 +79,6 @@ pub(crate) trait BotsHost {
         window: &mut Window,
         cx: &mut App,
     ) -> gpui::Result<Result<Value, String>>;
-    fn open_channels(&self, window: &mut Window, cx: &mut App);
-    fn close_channels(&self, window: &mut Window, cx: &mut App);
     fn project_appearance(&self, project: &str, cx: &App) -> Option<ProjectAppearance>;
     fn projects(&self, cx: &App) -> (Vec<String>, HashMap<String, ProjectAppearance>);
 }

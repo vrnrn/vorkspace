@@ -72,10 +72,6 @@ minions.spawn {prompt,name?,role?,specialties?,project?,harness?,model?}
 artifacts.list {kind?,limit?,offset?}
 artifacts.read {id}
 artifacts.write {id?,kind,title,body,summary?}
-channels.list {}
-channels.create {name,topic?,members:[Bot names]}
-channels.read {channel,limit?}
-channels.post {channel,message,to?:[Bot names]}
 soul.read {}
 soul.update {text,expectedHash}
 memory.read {topic?}
@@ -100,9 +96,9 @@ fn help() -> String {
          bots.configure changes only the calling Bot's context policy for subsequent turns. compactionMode is sessionRollover (the default fresh session at 80%) or native (provider compaction). Minions cannot change this setting.\n\
          bots.historyStatus checks an accessible peer Bot's native transcript. After the user confirms its external CLI has stopped, bots.recoverHistory accepts the returned expectedHistory and confirmStopped:true to release that unfinished turn. It preserves the session and never resends input. New native writes invalidate the token. Minions cannot recover another Bot.\n\
          worktrees.list reports dirty, merged, unpublishedCommits, sessions and removable for each worktree. worktrees.remove refuses uncommitted or unique work, ignored files tools can't regenerate, open terminals and unarchived sessions. A merged branch goes with it.\n\
-         Workspace pane IDs from workspace.list are valid only in the caller's project. Open kinds: session, notes, note, connector, item, bot, botDocument, terminal, search, todos, automations, channels, file. Split with placement right/down and targetPaneId; move one pane with paneId or an entire tab layout with tabId, plus targetPaneId and edge left/right/top/bottom. Reorder a standalone tab with tabId and index. Resize uses a listed sashPath/index and normalized ratio. Closing a running terminal first returns a confirmation-required error; repeat with a new request ID, confirmRunning:true and the listed expectedProcess. Notes list returns both legacy numeric id and native string noteId; use either for notes.read/write, but use noteId to target an exact native note.\n\
+         Workspace pane IDs from workspace.list are valid only in the caller's project. Open kinds: session, notes, note, connector, item, bot, botDocument, terminal, search, todos, automations, file. Split with placement right/down and targetPaneId; move one pane with paneId or an entire tab layout with tabId, plus targetPaneId and edge left/right/top/bottom. Reorder a standalone tab with tabId and index. Resize uses a listed sashPath/index and normalized ratio. Closing a running terminal first returns a confirmation-required error; repeat with a new request ID, confirmRunning:true and the listed expectedProcess. Notes list returns both legacy numeric id and native string noteId; use either for notes.read/write, but use noteId to target an exact native note.\n\
          To-do statuses are todo, inProgress, inReview and done. Bots use an assigned project board; include project when several are assigned. Local to-dos always work. A GitHub project also shows its issues; add with github:true or publish a local item explicitly. An uncertain GitHub create is never retried automatically: reconcile first, then retry only after checking GitHub and setting confirmNoIssue:true.\n\
-         Minions are persistent team members. Reuse bots.send/bots.read and team-only channels for work; users cannot message Minions. minions.spawn is compatibility hire plus an initial peer task.\n\
+         Minions are persistent team members. Reuse bots.send/bots.read for work; users cannot message Minions. minions.spawn is compatibility hire plus an initial peer task.\n\
          {COMMAND_NOTES}\n"
     )
 }

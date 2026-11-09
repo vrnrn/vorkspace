@@ -35,22 +35,6 @@ impl SettingsView {
                 )],
             ),
             self.row(
-                Some("bot-channels"),
-                false,
-                div().flex().items_center().gap_2().child("Channels").child(
-                    vorkspace_ui::fluid::badge("Experimental", vorkspace_ui::theme::warning()),
-                ),
-                Some("Shared conversations with your Bots.".into()),
-                vec![self.toggle(
-                    "bot-channels",
-                    "Channels",
-                    p.channels,
-                    !p.bots,
-                    cx,
-                    |this, on, cx| this.update(cx, |p| p.channels = on),
-                )],
-            ),
-            self.row(
                 Some("bot-minions"),
                 false,
                 div().flex().items_center().gap_2().child("Minions").child(

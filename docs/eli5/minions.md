@@ -6,9 +6,9 @@ The parent uses `minions.hire` to choose a name, role and optional specialties. 
 
 Members share their parent's personality instructions and saved memory. Their to-dos live on the assigned project boards, so the parent and siblings can work on the same tasks. If one saves a useful fact, the parent and siblings can read it. They follow the parent's current project assignments, while keeping their own names and message histories.
 
-Only a member's parent and siblings can communicate with it. They can exchange direct messages or use a channel containing just their team. Members cannot contact unrelated Bots or join their channels. Conversations between ordinary top-level Bots still work as usual.
+Only a member's parent and siblings can communicate with it. They exchange direct messages. Members cannot contact unrelated Bots. Conversations between ordinary top-level Bots still work as usual.
 
-You supervise the team through its activity and saved conversations. Minions sit beneath their parent in Bot navigation, with one eye and the parent's current colour. Each member keeps its own eye style, body shape and pattern. Member conversations and team channels are read-only for you: send instructions to the parent Bot instead. Minions cannot hire or fire teammates, start more sessions, or change their parent's personality or habits.
+You supervise the team through its activity and saved conversations. Minions sit beneath their parent in Bot navigation, with one eye and the parent's current colour. Each member keeps its own eye style, body shape and pattern. Member conversations are read-only for you: send instructions to the parent Bot instead. Minions cannot hire or fire teammates, start more sessions, or change their parent's personality or habits.
 
 The parent uses `minions.fire` when a member is no longer useful. Firing retires it and stops it accepting work, while keeping its past conversations. Queued work does not restart just because the app reopens. Older Minion conversations are kept when they become persistent team members.
 

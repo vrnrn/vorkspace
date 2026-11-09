@@ -74,10 +74,6 @@ fn desktop_feature_key(suffix: &str) -> String {
         "54192bdcda5a0a7d4cff841181dd4fa50432a7a70d8aff5bfff793f07f167245" => {
             Some(":bot-declined-habits")
         }
-        "439dc81975b7a860125d40056a8437fdbf79427631d19b70f3b07558924d808d" => Some(":bot-channels"),
-        "b14718f5973225b79168b6aa9d2c547661341d0f1f3fc69382a73c7f7b9a69b4" => {
-            Some(":open-bot-channel")
-        }
         "4c8b8b6f1376d1c15ee7173384ac2e59905c9e947aa311c1e8e4dacc33dde30a" => {
             Some(":bot-rotations")
         }
@@ -96,13 +92,6 @@ fn desktop_feature_key(suffix: &str) -> String {
     };
     if let Some(current) = current {
         return current.to_owned();
-    }
-    if let Some((feature, id)) = suffix.rsplit_once(':') {
-        if fingerprint(feature)
-            == "c5472cf2ccd8620cb9c2e2560cf0f7f35b57ac55cd23cdfe751bdc4dea198a37"
-        {
-            return format!(":bot-channel-messages:{id}");
-        }
     }
     suffix.to_owned()
 }
@@ -143,14 +132,13 @@ pub(crate) fn desktop_preferences(values: BTreeMap<String, String>) -> BTreeMap<
         let collection = matches!(
             key.as_str(),
             "vorkspace:bot-roster"
-                | "vorkspace:bot-channels"
                 | "vorkspace:bot-declined-habits"
                 | "vorkspace:bot-handed"
                 | "vorkspace:bots"
                 | "vorkspace:bot-profiles"
                 | "vorkspace:bot-rotations"
                 | "vorkspace.inboxBots.v1"
-        ) || key.starts_with("vorkspace:bot-channel-messages:");
+        );
         if collection
             && serde_json::from_str::<Value>(raw).ok().is_some_and(|v| {
                 v.as_array().is_some_and(Vec::is_empty)
@@ -178,48 +166,12 @@ fn desktop_value(key: &str, raw: &str) -> Option<String> {
     }
     if !matches!(
         key,
-        "vorkspace:bot-channels"
-            | "vorkspace:project-chat-backgrounds"
-            | "vorkspace.keybindingOverrides"
-    ) && !key.starts_with("vorkspace:bot-channel-messages:")
-    {
+        "vorkspace:project-chat-backgrounds" | "vorkspace.keybindingOverrides"
+    ) {
         return None;
     }
     let mut value: Value = serde_json::from_str(raw).ok()?;
-    if key == "vorkspace:bot-channels" {
-        for row in value.as_array_mut().into_iter().flatten() {
-            field(
-                row,
-                "25c8a943a204cf96ade0cbcdb59c5432a98057fefe2092d48ace24b8c2c27acd",
-                "botIds",
-            );
-        }
-    } else if key.starts_with("vorkspace:bot-channel-messages:") {
-        for row in value.as_array_mut().into_iter().flatten() {
-            for name in ["from", "author"] {
-                if let Some(author) = row.get_mut(name) {
-                    if author["kind"].as_str().is_some_and(|s|fingerprint(s)=="d7de34b17b4691aa77ab8c17afdd440b004bc87d5d9ab991a8296d032fadb867") { author["kind"] = "bot".into(); }
-                    field(
-                        author,
-                        "cb7384ab0f67c31369b50c300c861c0f859e584a838e951afad6f9738414f3d6",
-                        "botId",
-                    );
-                }
-            }
-            for reaction in row
-                .get_mut("reactions")
-                .and_then(Value::as_array_mut)
-                .into_iter()
-                .flatten()
-            {
-                field(
-                    reaction,
-                    "cb7384ab0f67c31369b50c300c861c0f859e584a838e951afad6f9738414f3d6",
-                    "botId",
-                );
-            }
-        }
-    } else if let Some(object) = value.as_object_mut() {
+    if let Some(object) = value.as_object_mut() {
         for old in object.keys().cloned().collect::<Vec<_>>() {
             let next = if key == "vorkspace.keybindingOverrides"
                 && fingerprint(&old)
