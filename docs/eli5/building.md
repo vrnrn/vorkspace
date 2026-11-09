@@ -16,6 +16,8 @@ The small voice audio helper is embedded in the core library. Rust runs the voic
 
 Developer tools live under `scripts/`. The small JavaScript components that ship inside the app have their own `embedded/` folder.
 
+The copy of the window toolkit under `vendor/` lets the GPU draw the stippled texture used by some controls.
+
 The **Mac release** workflow is started manually from `main`. It picks a free version, numbers the build, includes that version's release notes, runs checks, signs the downloads, and publishes only after those steps succeed. Normal code pushes do not publish anything. The app can show its included notes offline and announces a newly installed version once. If you open notes that were not included in the app, it tries to read that exact version's published notes without blocking the window.
 
 Restart always reopens the copy of the app you are using, so a development build stays a development build even if an older app sits in your Applications folder.

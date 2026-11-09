@@ -77,7 +77,7 @@ npm run check
 
 The editor and formatter bundles are committed under `crates/vorkspace-gpui/assets/`; the Vox audio bundle lives under `crates/vorkspace-core/assets/`. Their maintained sources live in `embedded/editor` and `embedded/vox`. These files are embedded, so Cargo can compile without installing JavaScript dependencies. `npm run assets` installs the separate editor generator dependencies and rebuilds these bundles. Root npm dependencies are build/test tools only.
 
-The GPUI fork and a patched `block` crate live in `vendor/` and are edited directly. The fork adds a `dither` background (`Background::Dither`, a 4×4 Bayer pattern in the Metal quad shader) that `vorkspace_ui::fluid` owns. `cargo clippy` with `-D warnings` doesn't cover them, so check that a rebuild stays free of warnings after changing one. `npm run test:rust` runs the `block` tests separately because that crate sits outside the workspace.
+The GPUI fork and a patched `block` crate live in `vendor/` and are edited directly. `vorkspace_ui::fluid` uses the fork's `gpui::dither` and `gpui::vertical_dither` APIs, which draw a 4×4 Bayer pattern in the Metal quad shader. `cargo clippy` with `-D warnings` doesn't cover these vendored crates, so check that a rebuild stays free of warnings after changing one. `npm run test:rust` runs the `block` tests separately because that crate sits outside the workspace.
 
 ## Build output and disk
 
