@@ -5,6 +5,7 @@
 //!
 //! - Vorkspace definitions, saved under their own key, so every window lists
 //!   the same vorkspaces and an edit in one appears in the others.
+//! - The committed Bot roster, which decides when membership changes.
 //! - The scheduler lease: exactly one window fires reminders and
 //!   automations. It moves to another window when its holder closes.
 //! - Session leases: a session is live in at most one window, so it never
@@ -14,7 +15,10 @@
 //! claim: a lease whose window closed, or which no longer has the session
 //! loaded, is free. Nothing has to remember to release one.
 use super::*;
-use crate::workspace::VorkspaceDef;
+use crate::{
+    bots::{MembershipChanged, SharedRoster},
+    workspace::{VorkspaceDef, move_bot, reconcile_bots},
+};
 use gpui::{AppContext as _, WeakEntity};
 use serde::{Deserialize, Serialize};
 
@@ -32,6 +36,7 @@ pub(crate) struct AppCore {
     writes: Arc<VorkspaceWrites>,
     pub(crate) vorkspaces: Vec<VorkspaceDef>,
     pub(crate) seen_bots: HashSet<String>,
+    pub(super) bot_roster: Entity<SharedRoster>,
     scheduler: Option<WeakEntity<Shell>>,
     sessions: HashMap<i64, WeakEntity<Shell>>,
     /// Windows in the order they joined; the oldest open one is the default
@@ -101,18 +106,91 @@ impl AppCore {
             })
         })
         .detach();
-        let core = cx.new(|_| AppCore {
-            store: store.clone(),
-            writes,
-            vorkspaces: saved.vorkspaces,
-            seen_bots: saved.seen_bots,
-            scheduler: None,
-            sessions: HashMap::new(),
-            windows: Vec::new(),
-            bridge: None,
+        let bot_roster = SharedRoster::install(store.clone(), cx);
+        let core = cx.new(|cx: &mut Context<AppCore>| {
+            cx.subscribe(&bot_roster, |core, _, event: &MembershipChanged, cx| {
+                core.reconcile_bots(
+                    event.vorkspace.as_deref().unwrap_or_default(),
+                    &event.ids,
+                    cx,
+                );
+            })
+            .detach();
+            AppCore {
+                store: store.clone(),
+                writes,
+                vorkspaces: saved.vorkspaces,
+                seen_bots: saved.seen_bots,
+                bot_roster,
+                scheduler: None,
+                sessions: HashMap::new(),
+                windows: Vec::new(),
+                bridge: None,
+            }
         });
         cx.default_global::<Installed>().0.insert(key, core.clone());
         core
+    }
+
+    fn reconcile_bots(&mut self, destination: &str, ids: &[String], cx: &mut Context<Self>) {
+        let mut defs = self.vorkspaces.clone();
+        let mut seen = self.seen_bots.clone();
+        if reconcile_bots(&mut defs, &mut seen, destination, ids) {
+            self.publish(&defs, &seen, cx);
+        }
+    }
+
+    fn set_bot_membership(
+        &mut self,
+        bot: &str,
+        vorkspace: &str,
+        add: bool,
+        cx: &mut Context<Self>,
+    ) {
+        let mut defs = self.vorkspaces.clone();
+        let Some(destination) = defs.iter_mut().find(|def| def.id == vorkspace) else {
+            return;
+        };
+        if add {
+            if !self.seen_bots.contains(bot) {
+                return;
+            }
+            move_bot(&mut defs, vorkspace, bot);
+        } else {
+            destination.bots.retain(|id| id != bot);
+        }
+        self.publish(&defs, &self.seen_bots.clone(), cx);
+    }
+
+    fn apply_window_edits(
+        &mut self,
+        before: &[VorkspaceDef],
+        edited: &[VorkspaceDef],
+        cx: &mut Context<Self>,
+    ) {
+        let mut defs = self.vorkspaces.clone();
+        for def in edited {
+            match before.iter().find(|base| base.id == def.id) {
+                Some(base) => {
+                    if let Some(current) = defs.iter_mut().find(|current| current.id == def.id) {
+                        current.apply_window_edits(base, def);
+                    }
+                }
+                None if !defs.iter().any(|current| current.id == def.id) => {
+                    let mut added = def.clone();
+                    added.bots.clear();
+                    defs.push(added);
+                }
+                None => {}
+            }
+        }
+        let deleted = |id: &str| {
+            before.iter().any(|def| def.id == id) && !edited.iter().any(|def| def.id == id)
+        };
+        if defs.iter().any(|def| !deleted(&def.id)) {
+            defs.retain(|def| !deleted(&def.id));
+        }
+        self.publish(&defs, &self.seen_bots.clone(), cx);
     }
 
     /// Replaces the shared definitions when a window changed them.
@@ -284,6 +362,13 @@ impl Shell {
                 core.update(cx, |core, cx| core.publish(&defs, &seen, cx));
             }
         }
+        let active = self.workspace.active_vorkspace.clone();
+        core.update(cx, |core, cx| {
+            if let Some(ids) = core.bot_roster.read(cx).member_ids() {
+                core.reconcile_bots(&active, &ids, cx);
+            }
+        });
+        self.take_shared_vorkspaces(&core, cx);
         if self.workspace.reconcile_project_scope() {
             self.sync_git(cx);
         }
@@ -322,6 +407,7 @@ impl Shell {
     /// Copies the shared definitions in; returns whether anything changed.
     fn take_shared_vorkspaces(&mut self, core: &Entity<AppCore>, cx: &App) -> bool {
         let core = core.read(cx);
+        self.vorkspace_baseline.clone_from(&core.vorkspaces);
         if self.workspace.vorkspaces == core.vorkspaces
             && self.workspace.seen_bots == core.seen_bots
         {
@@ -397,11 +483,34 @@ impl Shell {
         let Some(core) = self.app_core.clone() else {
             return;
         };
-        let (defs, seen) = (
-            self.workspace.vorkspaces.clone(),
-            self.workspace.seen_bots.clone(),
-        );
-        core.update(cx, |core, cx| core.publish(&defs, &seen, cx));
+        if self.workspace.vorkspaces != self.vorkspace_baseline {
+            core.update(cx, |core, cx| {
+                core.apply_window_edits(&self.vorkspace_baseline, &self.workspace.vorkspaces, cx);
+            });
+        }
+        if self.take_shared_vorkspaces(&core, cx) {
+            // A Bot host call can save while the Bot manager is leased.
+            let shell = cx.weak_entity();
+            cx.defer(move |cx| {
+                let _ = shell.update(cx, |shell, cx| shell.reconcile_after_shared_change(cx));
+            });
+        }
+    }
+
+    pub(super) fn set_bot_membership(
+        &mut self,
+        bot: &str,
+        vorkspace: &str,
+        add: bool,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(core) = self.app_core.clone() else {
+            return;
+        };
+        core.update(cx, |core, cx| {
+            core.set_bot_membership(bot, vorkspace, add, cx)
+        });
+        self.take_shared_vorkspaces(&core, cx);
     }
 
     /// Only the lease holder fires reminders and automations.
@@ -475,6 +584,101 @@ mod tests {
             assert!(shell.workspace.vorkspaces.iter().any(|v| v.id == id));
             // Each window keeps its own choice of which one it shows.
             assert_ne!(shell.workspace.active_vorkspace, id);
+        })
+        .unwrap();
+    }
+
+    #[gpui::test]
+    fn concurrent_bot_creations_keep_their_own_vorkspaces_and_share_the_roster(
+        cx: &mut TestAppContext,
+    ) {
+        let (a, b, _, _dir) = two_windows(cx);
+        let side = b
+            .update(cx, |shell, window, cx| {
+                let id = shell.workspace.create_vorkspace("Side");
+                let project = shell.workspace.project.clone();
+                shell.workspace.add_project_to_vorkspace(&id, &project);
+                shell.persist(cx);
+                shell.switch_vorkspace(&id, window, cx);
+                id
+            })
+            .unwrap();
+        let create = |window: WindowHandle<Shell>, cx: &mut TestAppContext| {
+            window
+                .update(cx, |shell, w, cx| {
+                    let project = shell.workspace.project.clone();
+                    shell.bot_manager().update(cx, |bots, cx| {
+                        bots.create_named(vec![project], w, cx);
+                        bots.roster.bots.last().unwrap().id.clone()
+                    })
+                })
+                .unwrap()
+        };
+        let first = create(a, cx);
+        let second = create(b, cx);
+        cx.run_until_parked();
+        for (window, own, other) in [(a, &first, &second), (b, &second, &first)] {
+            window
+                .update(cx, |shell, _, cx| {
+                    let manager = shell.bot_manager();
+                    let bots = manager.read(cx);
+                    assert!(bots.roster.get(own).unwrap().session_id.is_some());
+                    assert!(bots.roster.get(other).unwrap().session_id.is_some());
+                    assert!(shell.workspace.vorkspace_has_bot(own));
+                    assert!(!shell.workspace.vorkspace_has_bot(other));
+                    shell.persist(cx);
+                })
+                .unwrap();
+        }
+
+        let visual = &mut gpui::VisualTestContext::from_window(b.into(), cx);
+        visual.refresh().unwrap();
+        let delete = visual.debug_bounds("bot-delete").unwrap();
+        visual.simulate_click(delete.center(), Default::default());
+        visual.simulate_prompt_answer("Delete");
+        visual.run_until_parked();
+        a.update(visual, |shell, _, cx| {
+            assert!(shell.bot_manager().read(cx).roster.get(&second).is_none());
+            assert!(shell.workspace.vorkspace_has_bot(&first));
+            assert!(
+                shell
+                    .workspace
+                    .vorkspaces
+                    .iter()
+                    .find(|v| v.id == side)
+                    .unwrap()
+                    .bots
+                    .is_empty()
+            );
+            let durable =
+                vorkspace_core::bot::Roster::load(&locked(&shell.store).unwrap()).unwrap();
+            assert!(durable.get(&second).is_none());
+            assert!(durable.get(&first).is_some());
+        })
+        .unwrap();
+    }
+
+    #[gpui::test]
+    fn accepted_bot_creation_finishes_when_its_window_closes(cx: &mut TestAppContext) {
+        let (a, b, _, _dir) = two_windows(cx);
+        let id = b
+            .update(cx, |shell, w, cx| {
+                let project = shell.workspace.project.clone();
+                let id = shell.bot_manager().update(cx, |bots, cx| {
+                    bots.create_named(vec![project], w, cx);
+                    bots.roster.bots.last().unwrap().id.clone()
+                });
+                w.remove_window();
+                id
+            })
+            .unwrap();
+        cx.run_until_parked();
+        a.update(cx, |shell, _, cx| {
+            assert!(shell.bot_manager().read(cx).roster.get(&id).is_some());
+            assert!(shell.workspace.vorkspace_has_bot(&id));
+            let durable =
+                vorkspace_core::bot::Roster::load(&locked(&shell.store).unwrap()).unwrap();
+            assert!(durable.get(&id).is_some());
         })
         .unwrap();
     }

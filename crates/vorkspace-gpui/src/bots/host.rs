@@ -35,9 +35,8 @@ impl Bots {
             let _ = call.reply.send(result);
             return;
         }
-        let store = self.store.clone();
-        let roster = self.roster.clone();
-        let queued = roster
+        let queued = self
+            .roster
             .bots
             .iter()
             .map(|b| {
@@ -48,29 +47,36 @@ impl Bots {
             })
             .collect::<Vec<_>>();
         let reply = call.reply.clone();
-        let previous = self.writes.take();
-        self.writes=Some(cx.spawn(async move|this,cx|{
-            if let Some(previous)=previous { previous.await; }
-            let work=cx.background_executor().spawn(async move{
-                let store=locked(&store)?;
-                // Acknowledgement follows durable owner publication. Any failed
-                // write leaves admission unconfirmed, never safe to replay.
-                roster.save(&store).map_err(|error|format!("App action may have executed but its state could not be saved; do not replay: {error}"))?;
-                store.finish_app_command(call.session,&call.request_id,&call.action,&call.input,&result)?;
-                Ok::<_,String>(result)
-            });
-            let result = work.await;
-            if result.is_ok() {
-                let _ = this.update(cx, |this, cx| {
+        // Acknowledgement follows the durable roster and command receipt.
+        let saved = self.persist_roster(
+            move |store| {
+                store.finish_app_command(
+                    call.session,
+                    &call.request_id,
+                    &call.action,
+                    &call.input,
+                    &result,
+                )?;
+                Ok(result)
+            },
+            cx,
+        );
+        cx.spawn(async move |this, cx| {
+            let result = saved.recv().await
+                .unwrap_or_else(|_| Err("Bot roster write was interrupted".into()))
+                .map_err(|error| format!("App action may have executed but its state could not be saved; do not replay: {error}"));
+            let _ = this.update(cx, |this, cx| {
+                if result.is_ok() {
                     for (bot, messages) in queued {
                         this.persisted_messages.extend(messages);
                         this.dispatch(&bot, cx);
                     }
                     this.persisted_messages.retain(|id| this.roster.bots.iter().any(|bot| bot.outbox.iter().any(|m| &m.id == id)));
-                });
-            }
-            let _=reply.send(result.and_then(|result|result));
-        }));
+                }
+                this.roster_write_finished(cx);
+            });
+            let _ = reply.send(result.and_then(|result| result));
+        }).detach();
     }
     fn call_work(
         &mut self,

@@ -394,12 +394,14 @@ fn cold_peer_recovery_loads_inactive_recipients_and_pauses_submitted_work(cx: &m
             m.roster.save(&db).unwrap();
             (m.owner.clone(), m.prefs.clone(), receipt)
         });
+        let roster = cx.update(|cx| SharedRoster::install(s.store.clone(), cx));
         let restored = cx.new(|cx| {
             Bots::new(
-                s.store.clone(),
+                roster,
                 owner,
                 prefs,
                 Some("cold-sender".into()),
+                None,
                 AnchorSlot::default(),
                 cx,
             )

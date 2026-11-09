@@ -20,6 +20,8 @@ mod notifications;
 mod panel_stack;
 mod panels;
 mod peers;
+mod roster;
+pub(crate) use roster::{MembershipChanged, SharedRoster};
 mod scheduler;
 mod search;
 #[cfg(test)]
@@ -96,6 +98,10 @@ pub(crate) struct Bots {
     prefs: vorkspace_ui::preferences::Preferences,
     pub(crate) roster: Roster,
     pub(crate) roster_loaded: bool,
+    shared_roster: Entity<SharedRoster>,
+    roster_revision: u64,
+    pending_roster_writes: usize,
+    vorkspace: Option<String>,
     /// Bots placed in another vorkspace, hidden from this window's rail.
     /// A Bot created a moment ago is not here, so it shows at once.
     pub(crate) vorkspace_hidden: HashSet<String>,
@@ -105,7 +111,6 @@ pub(crate) struct Bots {
     observations: Vec<Subscription>,
     _bridge_task: Option<gpui::Task<()>>,
     _clock: Option<gpui::Task<()>>,
-    writes: Option<gpui::Task<()>>,
     loading_chats: HashSet<String>,
     awaiting_creation: HashSet<String>,
     work: work::Cache,
@@ -343,29 +348,25 @@ impl Bots {
         self.save(cx);
     }
     pub(crate) fn new(
-        store: Database,
+        shared_roster: Entity<SharedRoster>,
         owner: std::rc::Rc<dyn host_api::BotsHost>,
         prefs: vorkspace_ui::preferences::Preferences,
         active: Option<String>,
+        vorkspace: Option<String>,
         notice_region: AnchorSlot,
         cx: &mut Context<Self>,
     ) -> Self {
         bot::set_minions_enabled(prefs.bots && prefs.minions);
-        let (roster, root, roster_error) = match locked(&store) {
-            Ok(db) => match Roster::load(&db) {
-                Ok(roster) => (roster, vorkspace_core::store::bot_root(&db), None),
-                Err(error) => (
-                    Roster::default(),
-                    vorkspace_core::store::bot_root(&db),
-                    Some(error),
-                ),
-            },
-            Err(error) => (
-                Roster::default(),
-                std::env::temp_dir().join(bot::new_id()),
-                Some(error),
-            ),
+        let shared = shared_roster.read(cx);
+        let store = shared.store.clone();
+        let root = shared.root.clone();
+        let roster_revision = shared.revision;
+        let (roster, roster_error) = match &shared.snapshot {
+            Ok(roster) => (roster.fork(), None),
+            Err(error) => (Roster::default(), Some(error.clone())),
         };
+        let roster_subscription =
+            cx.observe(&shared_roster, |this, _, cx| this.sync_shared_roster(cx));
         let (bridge, rx) = if cx.is_test() {
             (None, None)
         } else {
@@ -390,14 +391,17 @@ impl Bots {
             prefs,
             roster,
             roster_loaded: roster_error.is_none(),
+            shared_roster,
+            roster_revision,
+            pending_roster_writes: 0,
+            vorkspace,
             vorkspace_hidden: HashSet::new(),
             active: None,
             chats: HashMap::new(),
             bridge,
-            observations: Vec::new(),
+            observations: vec![roster_subscription],
             _bridge_task: None,
             _clock: None,
-            writes: None,
             loading_chats: HashSet::new(),
             awaiting_creation: HashSet::new(),
             work: work::Cache::default(),
@@ -637,6 +641,95 @@ impl Bots {
         cx.emit(Changed);
         cx.notify();
     }
+    pub(crate) fn set_vorkspace(&mut self, id: String, hidden: HashSet<String>) {
+        self.vorkspace = Some(id);
+        self.vorkspace_hidden = hidden;
+    }
+
+    pub(crate) fn confirmed_missing(&self, id: &str, cx: &App) -> bool {
+        self.roster_loaded
+            && !self.awaiting_creation.contains(id)
+            && self
+                .shared_roster
+                .read(cx)
+                .committed()
+                .is_some_and(|roster| roster.get(id).is_none())
+    }
+
+    fn persist_roster<T: Send + 'static>(
+        &mut self,
+        finalize: impl FnOnce(&vorkspace_core::store::Store) -> Result<T, String> + Send + 'static,
+        cx: &mut Context<Self>,
+    ) -> async_channel::Receiver<Result<T, String>> {
+        self.pending_roster_writes += 1;
+        self.shared_roster.update(cx, |shared, cx| {
+            shared.save(self.roster.clone(), self.vorkspace.clone(), finalize, cx)
+        })
+    }
+
+    fn roster_write_finished(&mut self, cx: &mut Context<Self>) {
+        self.pending_roster_writes -= 1;
+        self.sync_shared_roster(cx);
+    }
+
+    fn sync_shared_roster(&mut self, cx: &mut Context<Self>) {
+        let shared = self.shared_roster.read(cx);
+        // A queued snapshot still needs its original editor's save baseline.
+        if self.pending_roster_writes > 0 || self.roster_revision == shared.revision {
+            return;
+        }
+        let Ok(committed) = &shared.snapshot else {
+            return;
+        };
+        let changed = match self.roster.rebase_onto(committed) {
+            Ok(changed) => changed,
+            Err(error) => {
+                self.error = Some(error);
+                cx.emit(Changed);
+                cx.notify();
+                return;
+            }
+        };
+        self.roster_revision = shared.revision;
+        self.roster_loaded = true;
+        self.held.clone_from(&self.roster.held_messages);
+        self.persisted_messages = self
+            .roster
+            .bots
+            .iter()
+            .flat_map(|bot| {
+                let saved = committed.get(&bot.id);
+                bot.outbox
+                    .iter()
+                    .filter(move |message| saved.is_some_and(|bot| bot.outbox.contains(message)))
+                    .map(|message| message.id.clone())
+            })
+            .collect();
+        if changed {
+            let deleted: Vec<_> = self
+                .chats
+                .keys()
+                .filter(|id| self.roster.get(id).is_none())
+                .cloned()
+                .collect();
+            for id in deleted {
+                if let Some(view) = self.chats.remove(&id) {
+                    let session = view.read(cx).summary.id;
+                    self.conversation_views.borrow_mut().remove(&session);
+                    view.update(cx, |chat, cx| chat.bot_stop(cx));
+                }
+            }
+            if let Some(id) = self.active.clone() {
+                if self.roster.get(&id).is_some() {
+                    self.configure_chat(&id, cx);
+                } else {
+                    self.close(cx);
+                }
+            }
+            self.changed(cx);
+        }
+    }
+
     fn save(&mut self, cx: &mut Context<Self>) {
         self.sync_minions();
         let live: HashSet<_> = self
@@ -649,71 +742,70 @@ impl Bots {
         self.roster.message_modes.retain(|id, _| live.contains(id));
         self.held.retain(|id| live.contains(id));
         self.dispatch_claims.retain(|id| live.contains(id));
-        let roster = self.roster.clone();
-        let store = self.store.clone();
-        let queued = roster
+        let queued = self
+            .roster
             .bots
             .iter()
             .map(|m| (m.id.clone(), m.outbox.clone()))
             .collect::<Vec<_>>();
-        let previous = self.writes.take();
-        self.writes = Some(cx.spawn(async move |this, cx| {
-            if let Some(previous) = previous {
-                previous.await;
-            }
-            let work = cx.background_executor().spawn(async move {
-                let db = locked(&store)?;
-                roster.save(&db)
-            });
-            let result = work.await;
-            let _ = this.update(cx, |this, cx| match result {
-                Err(error) => {
-                    for (id, messages) in &queued {
-                        if let Some(view) = this.chats.get(id) {
-                            for message in messages {
-                                view.update(cx, |view, cx| {
-                                    view.bot_draft_outbox_failed(&message.id, &error, cx)
-                                });
-                            }
-                        }
-                    }
-                    this.error = Some(error);
-                    cx.notify();
-                }
-                Ok(()) => {
-                    for (id, messages) in queued {
-                        if this.awaiting_creation.remove(&id) {
-                            this.ensure_chat(&id, cx);
-                        }
-                        if let Some(view) = this.chats.get(&id) {
-                            for message in &messages {
-                                if !this.roster.get(&id).is_some_and(|bot| {
-                                    bot.outbox.iter().any(|current| {
-                                        current.id == message.id
-                                            && current.text == message.text
-                                            && current.attachments == message.attachments
-                                    })
-                                }) {
-                                    continue;
+        let saved = self.persist_roster(|_| Ok(()), cx);
+        cx.spawn(async move |this, cx| {
+            let result = saved
+                .recv()
+                .await
+                .unwrap_or_else(|_| Err("Bot roster write was interrupted".into()));
+            let _ = this.update(cx, |this, cx| {
+                match result {
+                    Err(error) => {
+                        for (id, messages) in &queued {
+                            if let Some(view) = this.chats.get(id) {
+                                for message in messages {
+                                    view.update(cx, |view, cx| {
+                                        view.bot_draft_outbox_failed(&message.id, &error, cx)
+                                    });
                                 }
-                                view.update(cx, |view, cx| {
-                                    view.bot_draft_outbox_saved(message, cx)
-                                });
                             }
                         }
-                        this.persisted_messages
-                            .extend(messages.into_iter().map(|message| message.id));
-                        this.dispatch(&id, cx);
+                        this.error = Some(error);
+                        cx.notify();
                     }
-                    this.persisted_messages.retain(|id| {
-                        this.roster
-                            .bots
-                            .iter()
-                            .any(|bot| bot.outbox.iter().any(|m| &m.id == id))
-                    });
+                    Ok(()) => {
+                        for (id, messages) in queued {
+                            if this.awaiting_creation.remove(&id) {
+                                this.ensure_chat(&id, cx);
+                            }
+                            if let Some(view) = this.chats.get(&id) {
+                                for message in &messages {
+                                    if !this.roster.get(&id).is_some_and(|bot| {
+                                        bot.outbox.iter().any(|current| {
+                                            current.id == message.id
+                                                && current.text == message.text
+                                                && current.attachments == message.attachments
+                                        })
+                                    }) {
+                                        continue;
+                                    }
+                                    view.update(cx, |view, cx| {
+                                        view.bot_draft_outbox_saved(message, cx)
+                                    });
+                                }
+                            }
+                            this.persisted_messages
+                                .extend(messages.into_iter().map(|message| message.id));
+                            this.dispatch(&id, cx);
+                        }
+                        this.persisted_messages.retain(|id| {
+                            this.roster
+                                .bots
+                                .iter()
+                                .any(|bot| bot.outbox.iter().any(|m| &m.id == id))
+                        });
+                    }
                 }
+                this.roster_write_finished(cx);
             });
-        }));
+        })
+        .detach();
         self.changed(cx);
     }
     fn ensure_chat(&mut self, id: &str, cx: &mut Context<Self>) {

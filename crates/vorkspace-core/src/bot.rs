@@ -227,6 +227,25 @@ pub(crate) fn merge_roster_value(
             .collect();
         return Ok((!merged.is_empty()).then_some(Value::Array(merged)));
     }
+    if field == "hidden_sessions" {
+        if let (Some(Value::Array(base)), Some(Value::Array(local)), Some(Value::Array(remote))) =
+            (base, local, remote)
+        {
+            // Concurrent Bot creation can hide different backing sessions.
+            // Preserve the durable order and apply only this editor's delta.
+            let mut merged: Vec<_> = remote
+                .iter()
+                .filter(|id| !base.contains(id) || local.contains(id))
+                .cloned()
+                .collect();
+            for id in local {
+                if !base.contains(id) && !merged.contains(id) {
+                    merged.push(id.clone());
+                }
+            }
+            return Ok(Some(Value::Array(merged)));
+        }
+    }
     if field == "message_modes" && base.is_none() {
         let empty = Value::Object(Default::default());
         return merge_roster_value(Some(&empty), local, remote, "modes");

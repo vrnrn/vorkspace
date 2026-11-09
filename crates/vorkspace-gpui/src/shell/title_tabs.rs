@@ -254,14 +254,14 @@ impl Shell {
             .filter_map(|(&pane, state)| match &state.content {
                 crate::workspace::AppPane::Bot(id)
                 | crate::workspace::AppPane::BotDocument { bot: id, .. }
-                    if bots.roster.get(id).is_none() =>
+                    if bots.confirmed_missing(id, cx) =>
                 {
                     Some(pane)
                 }
                 _ => None,
             })
             .collect::<Vec<_>>();
-        let keep = |tab: &TitleTab| !matches!(tab, TitleTab::Bot { id, .. } if bots.roster.get(id).is_none());
+        let keep = |tab: &TitleTab| !matches!(tab, TitleTab::Bot { id, .. } if bots.confirmed_missing(id, cx));
         let before = (
             self.workspace.title_order.len(),
             self.workspace.scope_focus.len(),
