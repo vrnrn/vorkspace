@@ -123,12 +123,20 @@ impl Workspace {
             .is_none_or(|v| v.bots.iter().any(|b| b == id))
     }
 
-    /// Adds a known folder to a vorkspace; also lists it as a project.
+    /// Adds a folder to exactly the vorkspace `id`; also lists it as a
+    /// project. Unlike `add_project`, a new folder does not also join the
+    /// active vorkspace.
     pub(crate) fn add_project_to_vorkspace(&mut self, id: &str, path: &str) {
         if path.is_empty() {
             return;
         }
-        self.restore_project(path);
+        self.deleted_projects.remove(&path_key(path));
+        self.register_project(path);
+        self.join_vorkspace(id, path);
+    }
+
+    /// Lists `path` in vorkspace `id` if it is not already there.
+    pub(super) fn join_vorkspace(&mut self, id: &str, path: &str) {
         let key = path_key(path);
         if let Some(v) = self.vorkspace_mut(id)
             && !v.projects.iter().any(|p| path_key(p) == key)
@@ -293,6 +301,23 @@ mod tests {
         w.active_vorkspace = first;
         assert_eq!(w.vorkspace_projects(), ["/a", "/b"]);
         assert!(w.projects.contains(&"/a".to_owned()));
+    }
+
+    #[test]
+    fn a_new_folder_added_to_another_vorkspace_stays_out_of_the_active_one() {
+        let mut w = workspace(&["/a"]);
+        let main = w.active_vorkspace.clone();
+        let side = w.create_vorkspace("Side");
+        w.add_project_to_vorkspace(&side, "/new");
+        assert!(w.projects.contains(&"/new".to_owned()));
+        assert_eq!(w.vorkspace_projects(), ["/a"], "Main does not gain it");
+        w.active_vorkspace = side;
+        assert_eq!(w.vorkspace_projects(), ["/new"]);
+        // A folder the app has never seen, arriving without a target, still
+        // joins the vorkspace in view.
+        w.active_vorkspace = main;
+        w.add_project("/other");
+        assert_eq!(w.vorkspace_projects(), ["/a", "/other"]);
     }
 
     #[test]

@@ -975,34 +975,35 @@ impl Workspace {
         self.add_project(path);
     }
     pub fn add_project(&mut self, path: &str) {
+        // A folder the app has never seen joins the vorkspace in view,
+        // however it arrived (a dialog, a remote host, an agent command).
+        if self.register_project(path) {
+            let active = self.active_vorkspace.clone();
+            self.join_vorkspace(&active, path);
+        }
+    }
+    /// Lists `path` as a known project without placing it in any vorkspace.
+    /// Returns whether it was new to the app.
+    pub(crate) fn register_project(&mut self, path: &str) -> bool {
         if path.is_empty() {
-            return;
+            return false;
         }
         let key = vorkspace_core::files::path_key(path);
         if self.deleted_projects.contains(&key) {
-            return;
+            return false;
         }
         if self.project_archive.contains_key(&key) {
             self.project_archive.insert(key.clone(), false);
         }
-        if !self
+        if self
             .projects
             .iter()
             .any(|p| vorkspace_core::files::path_key(p) == key)
         {
-            self.projects.push(path.into());
-            // A folder the app has never seen joins the vorkspace in view,
-            // however it arrived (a dialog, a remote host, an agent command).
-            let active = self.active_vorkspace.clone();
-            if let Some(v) = self.vorkspaces.iter_mut().find(|v| v.id == active)
-                && !v
-                    .projects
-                    .iter()
-                    .any(|p| vorkspace_core::files::path_key(p) == key)
-            {
-                v.projects.push(path.into());
-            }
+            return false;
         }
+        self.projects.push(path.into());
+        true
     }
     pub fn session_for_pane(&self, id: i64) -> Option<i64> {
         self.review_owners
