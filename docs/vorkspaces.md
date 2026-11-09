@@ -21,17 +21,17 @@ Everything that lists projects uses the active vorkspace's projects: the sidebar
 
 Switching remembers the current project, makes the target active and opens its last project (or its first) the same way an explicit project pick does: a visible Bot pane gives way to that project's session. A vorkspace with no folders shows the no-project state.
 
-The rail no longer lists projects. Its **Sessions** section lists the vorkspace's sessions across its projects: every working or approval-blocked session up to five, otherwise the three most recent. The disclosure shows up to twenty. Each card shows the title, status or age, the provider, the project, and the Bot that started it, when one did. Blank and archived sessions are not listed. Listing a session never loads its saved history. A Bot's floating island now shows only its documents; the sessions it starts appear in the rail with its name.
+The rail no longer lists projects. Its **Sessions** section lists the vorkspace's sessions across its projects: every working or approval-blocked session up to five, otherwise the three most recent. Its header holds a filter and a new-session button. The filter narrows by archived, status, time, provider, project and Bot involvement (any, started by a Bot, started by you, or by one Bot); while it is active the list shows up to twenty matches. Otherwise the chevron under the list shows up to twenty. Each card shows the title, status or age, the provider, the project, and the Bot that started it, when one did. Blank sessions are never listed, and archived ones only when the filter includes them. Listing a session never loads its saved history. A Bot's floating island now shows only its documents; the sessions it starts appear in the rail with its name.
 
 **Manage vorkspaces…** opens a dialog with the vorkspace list on the left. For the selected vorkspace it edits the name, its **Look** (a color for its mark, and a chat background shown behind every session in it), its folders (remove, **Add folder…**, or add a folder known from another vorkspace) and its Bots (remove, or add one listed elsewhere). It can switch to that vorkspace or delete it, with a confirming second click.
 
 ## Customization
 
-Customization belongs to the vorkspace. Projects have none: each shows as a folder icon in the color its path hashes to, under its folder name, and any older per-project name, logo, colors or background is dropped on load. **Project settings…** keeps only Codebase and Notifications. The vorkspace's chat background is drawn behind every session while that vorkspace is active.
+Customization belongs to the vorkspace. Projects have none: each shows as a folder icon in the color its path hashes to, under its folder name, and any older per-project name, logo, colors or background is dropped on load. Each of the vorkspace's projects has its own tab under the vorkspace in **Manage vorkspaces…**, holding its Codebase Memory and Notifications settings; a project's **Project settings…** menu item opens that tab. The vorkspace's chat background is drawn behind every session while that vorkspace is active.
 
 ## Sidebar toggle
 
-The project sidebar (Sessions, Explorer, Changes) is a persistent toggle: the button beside the rail toggle in the top bar, or ⇧⌘B. It stays as left over Bot panes, app pages and empty projects, and it is never collapsed automatically to make room for a split; a split is admitted only if it fits beside it. Only Settings hides it while open.
+The project sidebar (Explorer, Changes, To-dos) is a persistent toggle: the button beside the rail toggle in the top bar, or ⇧⌘B. It stays as left over Bot panes, app pages and empty projects, and it is never collapsed automatically to make room for a split; a split is admitted only if it fits beside it. Only Settings hides it while open. Its header is just the project name, which opens the vorkspace's project picker, with a row below it for switching the worktree Explorer and Changes show. The top bar has no back or forward buttons; ⌘[ and ⌘] still step through visits.
 
 ## One window per vorkspace
 
