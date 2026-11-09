@@ -70,6 +70,8 @@ pub struct Item {
     pub team_id: String,
     pub team_name: String,
     pub project_path: String,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub other_project_paths: Vec<String>,
     pub attention_reason: String,
 }
 /// A successful write's URL and server-authored revision, when available.
@@ -80,6 +82,18 @@ pub struct CommentReceipt {
     pub revision: Option<String>,
 }
 impl Item {
+    pub fn project_paths(&self) -> impl Iterator<Item = &str> {
+        std::iter::once(self.project_path.as_str())
+            .chain(self.other_project_paths.iter().map(String::as_str))
+            .filter(|path| !path.is_empty())
+    }
+
+    pub fn belongs_to_project(&self, project: &str) -> bool {
+        let key = crate::files::path_key(project.trim());
+        self.project_paths()
+            .any(|path| crate::files::path_key(path.trim()) == key)
+    }
+
     pub fn key(&self) -> String {
         let identity = if self.provider == "jira" {
             let id = if self.id.trim().is_empty() {
@@ -656,8 +670,8 @@ impl Service {
                         None,
                     )?);
                 }
-                let mut items = Vec::new();
-                let mut visited = HashSet::new();
+                let mut items: Vec<Item> = Vec::new();
+                let mut visited = HashMap::<String, std::ops::Range<usize>>::new();
                 if filters.assigned_to_me && provider == "gitlab" {
                     for kind in ["issue", "pr"] {
                         let rows: Vec<Item> = convert(gitlab::gitlab_list_todos(
@@ -673,6 +687,7 @@ impl Service {
                     return Ok(items);
                 }
                 for project in projects {
+                    let project_path = project.to_string_lossy();
                     let repos = match provider {
                         "github" => github::git_github_repositories_for(project),
                         "gitlab" => gitlab::gitlab_repo(
@@ -686,9 +701,16 @@ impl Service {
                         continue;
                     };
                     for repo in repos {
-                        if !visited.insert(repo.to_lowercase()) {
+                        let key = repo.to_lowercase();
+                        if let Some(range) = visited.get(&key) {
+                            for item in &mut items[range.clone()] {
+                                if !item.belongs_to_project(&project_path) {
+                                    item.other_project_paths.push(project_path.to_string());
+                                }
+                            }
                             continue;
                         }
+                        let start = items.len();
                         for kind in ["issue", "pr"] {
                             let rows: Vec<Item> = match provider {
                                 "github" => convert(github::git_github_work_items_for(
@@ -712,10 +734,11 @@ impl Service {
                             };
                             items.extend(rows.into_iter().map(|mut item| {
                                 item.provider = provider.into();
-                                item.project_path = project.to_string_lossy().into_owned();
+                                item.project_path = project_path.to_string();
                                 item
                             }));
                         }
+                        visited.insert(key, start..items.len());
                     }
                 }
                 Ok(items)
@@ -850,6 +873,7 @@ impl Service {
         )?)?;
         updated.provider = item.provider.clone();
         updated.project_path = item.project_path.clone();
+        updated.other_project_paths = item.other_project_paths.clone();
         Ok(updated)
     }
 }

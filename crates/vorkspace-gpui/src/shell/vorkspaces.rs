@@ -16,7 +16,7 @@ pub(crate) struct VorkspaceDialog {
     /// vorkspace itself.
     pub(crate) project: Option<String>,
     pub(super) name: Entity<input::Input>,
-    focus: FocusHandle,
+    pub(super) focus: FocusHandle,
     pub(super) confirm_delete: bool,
     _name: Subscription,
 }
@@ -24,6 +24,8 @@ pub(crate) struct VorkspaceDialog {
 /// Collapsed, the rail shows this many sessions: working and
 /// approval-blocked ones first, then the latest.
 const RAIL_SESSIONS: usize = 5;
+const RAIL_CARD_HEIGHT: f32 = 46.;
+const RAIL_ROW_HEIGHT: f32 = RAIL_CARD_HEIGHT + 1.;
 
 /// A stable tint for a vorkspace's initial, from its id.
 fn vorkspace_hue(id: &str) -> f32 {
@@ -40,25 +42,38 @@ pub(crate) fn vorkspace_mark(def: &crate::workspace::VorkspaceDef, side: f32) ->
         .find(|c| c.is_alphanumeric())
         .map(|c| c.to_uppercase().to_string())
         .unwrap_or_else(|| "V".into());
+    let background: gpui::Hsla = match def.color {
+        Some(color) => gpui::rgb(color).into(),
+        None => gpui::hsla(vorkspace_hue(id), 0.55, 0.5, 1.),
+    };
+    let rgb: gpui::Rgba = background.into();
+    let linear = |channel: f32| {
+        if channel <= 0.04045 {
+            channel / 12.92
+        } else {
+            ((channel + 0.055) / 1.055).powf(2.4)
+        }
+    };
+    let luminance = 0.2126 * linear(rgb.r) + 0.7152 * linear(rgb.g) + 0.0722 * linear(rgb.b);
     div()
         .size(px(side))
         .flex_shrink_0()
         .rounded(px(vorkspace_ui::radius::CONTROL))
-        .bg(match def.color {
-            Some(color) => gpui::rgb(color).into(),
-            None => gpui::hsla(vorkspace_hue(id), 0.55, 0.5, 1.),
-        })
+        .bg(background)
         .flex()
         .items_center()
         .justify_center()
         .text_size(px(side * 0.55))
         .font_weight(FontWeight::SEMIBOLD)
-        .text_color(gpui::white())
+        .text_color(if luminance > 0.179 {
+            gpui::black()
+        } else {
+            gpui::white()
+        })
         .child(initial)
 }
 
 struct RailSession {
-    id: i64,
     title: String,
     provider: String,
     project: String,
@@ -76,24 +91,67 @@ impl Shell {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        if !self.select_vorkspace(id, cx) {
+            return;
+        }
+        let landing = self.workspace.vorkspace_landing(id);
+        self.open_project_from_user(landing, window, cx);
+        self.persist(cx);
+        cx.notify();
+    }
+
+    fn select_vorkspace(&mut self, id: &str, cx: &mut Context<Self>) -> bool {
         if id == self.workspace.active_vorkspace
             || !self.workspace.vorkspaces.iter().any(|v| v.id == id)
         {
-            return;
+            return false;
         }
         let from = self.workspace.active_vorkspace.clone();
-        if !self.workspace.project.is_empty() {
+        if self
+            .workspace
+            .vorkspace_has_project(&self.workspace.project)
+        {
             self.workspace
                 .vorkspace_project
                 .insert(from, self.workspace.project.clone());
         }
         self.workspace.active_vorkspace = id.to_owned();
         self.rail_sessions_expanded = false;
+        self.rail_search_open = false;
+        self.query.clear();
+        self.sidebar_search
+            .update(cx, |input, cx| input.set_text(String::new(), cx));
+        self.selected_sessions.clear();
+        self.selection_anchor = None;
+        self.sidebar_target = None;
         self.reconcile_vorkspace_bots(cx);
-        let landing = self.workspace.vorkspace_landing(id);
-        self.open_project_from_user(landing, window, cx);
-        self.persist(cx);
-        cx.notify();
+        true
+    }
+
+    /// Cross-project history and search keep the current vorkspace when it
+    /// shares the folder, otherwise they take the user to a vorkspace with it.
+    pub(super) fn route_project(&mut self, path: &str, cx: &mut Context<Self>) -> bool {
+        if path.is_empty() {
+            return true;
+        }
+        let Some(id) = self
+            .workspace
+            .vorkspace_for_project(path)
+            .map(str::to_owned)
+        else {
+            self.error = Some(if self.workspace.is_project_available(path) {
+                "Add this project to a vorkspace before opening its conversations.".into()
+            } else {
+                "Restore this project before opening its conversations.".into()
+            });
+            cx.notify();
+            return false;
+        };
+        if self.select_vorkspace(&id, cx) {
+            self.workspace.project = path.to_owned();
+            self.workspace.active = None;
+        }
+        true
     }
 
     pub(super) fn vorkspace_menu_items(&self) -> (SharedString, Vec<MenuItem>, f32, MenuStyle) {
@@ -162,6 +220,7 @@ impl Shell {
             }
         });
         let focus = cx.focus_handle();
+        self.navigation_revision += 1;
         window.focus(&field.focus_handle(cx), cx);
         self.vorkspace_dialog = Some(VorkspaceDialog {
             editing: id,
@@ -179,6 +238,17 @@ impl Shell {
             self.focus_workspace(window, cx);
             cx.notify();
         }
+    }
+
+    pub(crate) fn management_modal_focus(&self, cx: &App) -> Option<FocusHandle> {
+        self.background_dialog
+            .as_ref()
+            .map(|background| background.view.focus_handle(cx))
+            .or_else(|| {
+                self.vorkspace_dialog
+                    .as_ref()
+                    .map(|dialog| dialog.focus.clone())
+            })
     }
 
     fn vorkspace_bots(&self, cx: &App) -> Vec<vorkspace_core::bot::Bot> {
@@ -274,27 +344,12 @@ impl Shell {
             .into_any_element()
     }
 
-    fn rail_sessions(&self, cx: &App) -> (Vec<RailSession>, usize) {
-        let mut sessions: Vec<RailSession> = self
-            .sidebar_session_ids(cx)
-            .into_iter()
-            .map(|id| {
-                let meta = self.session_metadata(id, cx);
-                RailSession {
-                    id,
-                    title: meta.display_title().to_string(),
-                    provider: meta.summary.provider.clone(),
-                    project: self.project_label(&meta.summary.cwd),
-                    busy: meta.responding(),
-                    needs_input: meta.needs_approval(),
-                    pinned: meta.summary.pinned,
-                    archived: meta.summary.archived,
-                    updated_at: meta.summary.updated_at,
-                }
-            })
-            .collect();
-        sessions
-            .sort_by_key(|s| std::cmp::Reverse((s.busy || s.needs_input, s.pinned, s.updated_at)));
+    fn rail_sessions(
+        &self,
+        launches: &HashMap<i64, &vorkspace_core::bot::Bot>,
+        cx: &App,
+    ) -> (Vec<i64>, usize) {
+        let mut sessions = self.filtered_rail_sessions(launches, cx);
         let total = sessions.len();
         let narrowed = !self.query.is_empty() || self.session_filters_active(cx);
         // Expanded, searching or filtering, every match is listed.
@@ -308,7 +363,7 @@ impl Shell {
             let extra = renaming.and_then(|id| {
                 sessions[RAIL_SESSIONS..]
                     .iter()
-                    .position(|s| s.id == id)
+                    .position(|session| *session == id)
                     .map(|ix| sessions.remove(RAIL_SESSIONS + ix))
             });
             sessions.truncate(RAIL_SESSIONS);
@@ -331,36 +386,41 @@ impl Shell {
 
     /// The sessions the rail shows, in its order, for stepping and ranges.
     pub(super) fn rail_session_ids(&self, cx: &App) -> Vec<i64> {
-        self.rail_sessions(cx).0.into_iter().map(|s| s.id).collect()
+        self.rail_sessions(&self.session_launchers(cx), cx).0
     }
 
     /// Sessions across the vorkspace's projects, borrowed from the Bot island:
     /// what is running first, else the latest few.
     pub(super) fn rail_sessions_section(&mut self, cx: &mut Context<Self>) -> AnyElement {
-        let (sessions, total) = self.rail_sessions(cx);
-        // Each card anchors its hover preview, as the sidebar rows did.
-        let listed: HashSet<i64> = sessions.iter().map(|s| s.id).collect();
-        self.session_row_bounds.retain(|id, _| listed.contains(id));
-        for id in &listed {
-            self.session_row_bounds.entry(*id).or_default();
+        let launches = self.session_launchers(cx);
+        let (sessions, total) = self.rail_sessions(&launches, cx);
+        let launcher_ids = launches
+            .into_iter()
+            .map(|(id, bot)| (id, bot.id.clone()))
+            .collect::<HashMap<_, _>>();
+        let hovered = self.session_hover;
+        self.session_row_bounds.retain(|id, _| Some(*id) == hovered);
+        if self.rail_list_ids.as_slice() != sessions.as_slice() {
+            let mut offset = self.rail_list.logical_scroll_top();
+            let anchor = self.rail_list_ids.get(offset.item_ix);
+            self.rail_list
+                .reset_with_uniform_height(sessions.len(), px(RAIL_ROW_HEIGHT));
+            if (offset.item_ix != 0 || offset.offset_in_item > px(0.))
+                && let Some(ix) = anchor.and_then(|id| sessions.iter().position(|row| row == id))
+            {
+                offset.item_ix = ix;
+                self.rail_list.scroll_to(offset);
+            }
+            self.rail_list_ids = std::rc::Rc::new(sessions);
         }
-        let launcher: HashMap<i64, vorkspace_core::bot::Bot> = self
-            .bots
-            .as_ref()
-            .map(|m| {
-                m.read(cx)
-                    .roster
-                    .bots
-                    .iter()
-                    .flat_map(|bot| {
-                        bot.launches
-                            .iter()
-                            .map(move |l| (l.session_id, bot.clone()))
-                    })
-                    .filter(|(id, _)| sessions.iter().any(|s| s.id == *id))
-                    .collect()
-            })
-            .unwrap_or_default();
+        let sessions = self.rail_list_ids.clone();
+        let owner = cx.weak_entity();
+        self.rail_list.set_scroll_handler(move |_, _, cx| {
+            let _ = owner.update(cx, |this, cx| {
+                this.sidebar_last_scroll = Some(vorkspace_ui::clock::Instant::now());
+                this.close_preview(cx);
+            });
+        });
         let expanded = self.rail_sessions_expanded;
         let more = total > sessions.len() || expanded;
         let filtering = self.session_filters_active(cx);
@@ -437,12 +497,18 @@ impl Shell {
                         })),
                 )
                 .child(
-                    icon_button("rail-sessions-new", "New session", "plus")
-                        .debug_selector(|| "rail-sessions-new".into())
-                        .size(px(20.))
-                        .on_click(
-                            cx.listener(|this, _, _, cx| this.create(this.default_kind(), cx)),
-                        ),
+                    if self.workspace.project.is_empty() {
+                        icon_button(
+                            "rail-sessions-new",
+                            "Open project to start a session",
+                            "folder-open",
+                        )
+                    } else {
+                        icon_button("rail-sessions-new", "New session", "plus")
+                    }
+                    .debug_selector(|| "rail-sessions-new".into())
+                    .size(px(20.))
+                    .on_click(cx.listener(|this, _, _, cx| this.create(this.default_kind(), cx))),
                 ),
         );
         // Below the list, the disclosure reaches further back.
@@ -504,207 +570,269 @@ impl Shell {
                 },
             ))
             .flex_1()
-            .min_h_0()
+            .min_h(px(if searching { 126. } else { 94. }))
             .flex()
             .flex_col()
             .child(heading)
             .children(search)
-            .child(
+            .child(if sessions.is_empty() {
+                div()
+                    .mx_2()
+                    .px_2()
+                    .py_1()
+                    .text_size(px(12.))
+                    .text_color(content(0.55))
+                    .child(if self.workspace.project.is_empty() {
+                        "Open a project to start a session"
+                    } else if filtering || !self.query.is_empty() {
+                        "No sessions match"
+                    } else {
+                        "No sessions yet · ⌘N starts one"
+                    })
+                    .into_any_element()
+            } else {
+                let count = sessions.len();
+                let owner = cx.weak_entity();
                 div()
                     .id("rail-sessions-list")
                     .debug_selector(|| "rail-sessions-list".into())
-                    // Sized by its cards, shrinking to scroll once the rail
-                    // runs out of room, so the chevron stays under the last.
-                    .flex_shrink(1.)
-                    .min_h_0()
-                    .overflow_y_scroll()
+                    .h(px(count as f32 * RAIL_ROW_HEIGHT))
+                    .flex_shrink_1()
+                    .min_h(px(RAIL_CARD_HEIGHT))
                     .px_2()
+                    .child(
+                        gpui::list(self.rail_list.clone(), move |ix, _, cx| {
+                            let id = sessions[ix];
+                            owner
+                                .update(cx, |this, cx| {
+                                    div()
+                                        .pb(px(1.))
+                                        .child(this.rail_session_card(
+                                            id,
+                                            launcher_ids.get(&id),
+                                            now,
+                                            cx,
+                                        ))
+                                        .into_any_element()
+                                })
+                                .unwrap_or_else(|_| div().into_any_element())
+                        })
+                        .size_full(),
+                    )
+                    .into_any_element()
+            })
+            .children(disclosure)
+            .into_any_element()
+    }
+
+    fn rail_session_card(
+        &mut self,
+        id: i64,
+        launcher: Option<&String>,
+        now: u64,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        let meta = self.session_metadata(id, cx);
+        let s = RailSession {
+            title: meta.display_title().to_string(),
+            provider: meta.summary.provider.clone(),
+            project: self.project_label(&meta.summary.cwd),
+            busy: meta.responding(),
+            needs_input: meta.needs_approval(),
+            pinned: meta.summary.pinned,
+            archived: meta.summary.archived,
+            updated_at: meta.summary.updated_at,
+        };
+        if let Some(row) = self.rename_row(&super::session_groups::RenameTarget::Session(id), cx) {
+            return row;
+        }
+        let active = self.selected_sessions.contains(&id)
+            || (self.workspace.active == Some(id) && !self.bot_active(cx) && !self.app_view_open());
+        let anchor = self.session_row_bounds.entry(id).or_default().clone();
+        let menu_anchor = anchor.clone();
+        // Status only: card actions live in the right-click menu,
+        // so hovering never changes a card's size.
+        let status = if s.needs_input {
+            div()
+                .flex()
+                .items_center()
+                .gap_1()
+                .text_color(vorkspace_ui::theme::warning())
+                .child(icon("circle-alert", 12.).text_color(vorkspace_ui::theme::warning()))
+                .child("Approval")
+                .into_any_element()
+        } else if s.busy {
+            div()
+                .text_color(accent_color())
+                .child("Working…")
+                .into_any_element()
+        } else {
+            div()
+                .text_color(content(0.45))
+                .when(s.archived, |d| d.child("Archived · "))
+                .child(vorkspace_core::time::relative(s.updated_at, now))
+                .into_any_element()
+        };
+        let bot = launcher
+            .and_then(|id| self.bots.as_ref()?.read(cx).roster.get(id))
+            .map(|bot| {
+                (
+                    crate::avatar::bot_avatar(bot, "idle", 12., true),
+                    bot.label(),
+                )
+            });
+        let state = if s.needs_input {
+            "Needs approval"
+        } else if s.busy {
+            "Working"
+        } else if s.archived {
+            "Archived"
+        } else {
+            "Idle"
+        };
+        div()
+            .id(("rail-session", id as usize))
+            .debug_selector(move || format!("rail-session-{id}"))
+            .role(Role::Button)
+            .aria_label(s.title.clone())
+            .aria_description(format!(
+                "{} · {} · {state}",
+                s.project,
+                Kind::from_id(&s.provider).label()
+            ))
+            .aria_keyshortcuts("Shift+F10")
+            .aria_selected(active)
+            .h(px(RAIL_CARD_HEIGHT))
+            .map(vorkspace_ui::theme::tab_reachable)
+            .px_2()
+            .py(px(6.))
+            .rounded(px(radius::CONTROL))
+            .cursor_pointer()
+            .when(active, |d| d.bg(content(0.1)))
+            .when(!active, |d| {
+                d.hover(|s| s.bg(vorkspace_ui::fluid::hover(0.06)))
+            })
+            .when(s.needs_input, |d| {
+                d.border_1()
+                    .border_color(vorkspace_ui::theme::warning().opacity(0.4))
+            })
+            .flex()
+            .flex_col()
+            .gap(px(2.))
+            .child(
+                div()
                     .flex()
-                    .flex_col()
-                    .gap_px()
-                    .when(sessions.is_empty(), |d| {
+                    .items_center()
+                    .gap_1p5()
+                    .min_w_0()
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_w_0()
+                            .truncate()
+                            .text_size(px(13.))
+                            .line_height(px(18.))
+                            .text_color(content(if active { 1. } else { 0.85 }))
+                            .child(s.title),
+                    )
+                    .when(s.pinned, |d| {
+                        d.child(icon("pin", 11.).flex_shrink_0().text_color(content(0.45)))
+                    })
+                    .children(self.work_item_badge(id, true, cx))
+                    .child(div().flex_shrink_0().text_size(px(11.)).child(status)),
+            )
+            .child(
+                div()
+                    .flex()
+                    .items_center()
+                    .gap_1p5()
+                    .min_w_0()
+                    .text_size(px(11.))
+                    .text_color(content(0.45))
+                    .child(provider_icon(&s.provider, 12.))
+                    .child(div().flex_1().min_w_0().truncate().child(s.project))
+                    .when_some(bot, |d, (avatar, label)| {
                         d.child(
                             div()
-                                .px_2()
-                                .py_1()
-                                .text_size(px(12.))
-                                .text_color(content(0.45))
-                                .child(if filtering || !self.query.is_empty() {
-                                    "No sessions match"
-                                } else {
-                                    "No sessions yet · ⌘N starts one"
-                                }),
-                        )
-                    })
-                    .children(sessions.into_iter().map(|s| {
-                        let id = s.id;
-                        if let Some(row) =
-                            self.rename_row(&super::session_groups::RenameTarget::Session(id), cx)
-                        {
-                            return row;
-                        }
-                        let active = self.selected_sessions.contains(&id)
-                            || (self.workspace.active == Some(id)
-                                && !self.bot_active(cx)
-                                && !self.app_view_open());
-                        let anchor = self
-                            .session_row_bounds
-                            .get(&id)
-                            .cloned()
-                            .unwrap_or_default();
-                        // Status only: card actions live in the right-click menu,
-                        // so hovering never changes a card's size.
-                        let status = if s.needs_input {
-                            div()
+                                .debug_selector(move || format!("rail-session-bot-{id}"))
+                                .flex_shrink_0()
+                                .max_w(px(96.))
                                 .flex()
                                 .items_center()
                                 .gap_1()
-                                .text_color(vorkspace_ui::theme::warning())
-                                .child(
-                                    icon("circle-alert", 12.)
-                                        .text_color(vorkspace_ui::theme::warning()),
-                                )
-                                .child("Approval")
-                                .into_any_element()
-                        } else if s.busy {
-                            div()
-                                .text_color(accent_color())
-                                .child("Working…")
-                                .into_any_element()
-                        } else {
-                            div()
-                                .text_color(content(0.45))
-                                .when(s.archived, |d| d.child("Archived · "))
-                                .child(vorkspace_core::time::relative(s.updated_at, now))
-                                .into_any_element()
-                        };
-                        let bot = launcher.get(&id);
-                        div()
-                            .id(("rail-session", id as usize))
-                            .debug_selector(move || format!("rail-session-{id}"))
-                            .role(Role::Button)
-                            .aria_label(s.title.clone())
-                            .aria_selected(active)
-                            .map(vorkspace_ui::theme::tab_reachable)
-                            .px_2()
-                            .py(px(6.))
-                            .rounded(px(radius::CONTROL))
-                            .cursor_pointer()
-                            .when(active, |d| d.bg(content(0.1)))
-                            .when(!active, |d| {
-                                d.hover(|s| s.bg(vorkspace_ui::fluid::hover(0.06)))
-                            })
-                            .when(s.needs_input, |d| {
-                                d.border_1()
-                                    .border_color(vorkspace_ui::theme::warning().opacity(0.4))
-                            })
-                            .flex()
-                            .flex_col()
-                            .gap(px(2.))
-                            .child(
-                                div()
-                                    .flex()
-                                    .items_center()
-                                    .gap_1p5()
-                                    .min_w_0()
-                                    .child(
-                                        div()
-                                            .flex_1()
-                                            .min_w_0()
-                                            .truncate()
-                                            .text_size(px(13.))
-                                            .line_height(px(18.))
-                                            .text_color(content(if active { 1. } else { 0.85 }))
-                                            .child(s.title),
-                                    )
-                                    .when(s.pinned, |d| {
-                                        d.child(
-                                            icon("pin", 11.)
-                                                .flex_shrink_0()
-                                                .text_color(content(0.45)),
-                                        )
-                                    })
-                                    .children(self.work_item_badge(id, true, cx))
-                                    .child(div().flex_shrink_0().text_size(px(11.)).child(status)),
-                            )
-                            .child(
-                                div()
-                                    .flex()
-                                    .items_center()
-                                    .gap_1p5()
-                                    .min_w_0()
-                                    .text_size(px(11.))
-                                    .text_color(content(0.45))
-                                    .child(provider_icon(&s.provider, 12.))
-                                    .child(div().flex_1().min_w_0().truncate().child(s.project))
-                                    .when_some(bot, |d, bot| {
-                                        d.child(
-                                            div()
-                                                .debug_selector(move || {
-                                                    format!("rail-session-bot-{id}")
-                                                })
-                                                .flex_shrink_0()
-                                                .max_w(px(96.))
-                                                .flex()
-                                                .items_center()
-                                                .gap_1()
-                                                .child(crate::avatar::bot_avatar(
-                                                    bot, "idle", 12., true,
-                                                ))
-                                                .child(
-                                                    div().min_w_0().truncate().child(bot.label()),
-                                                ),
-                                        )
-                                    }),
-                            )
-                            .when(self.deleting.contains(&id), |d| d.opacity(0.5))
-                            .relative()
-                            .child(anchor.probe())
-                            .on_hover(cx.listener(move |this, hovered, window, cx| {
-                                this.hover_session(id, anchor.clone(), *hovered, true, window, cx);
-                                this.invalidate_chrome(cx);
-                            }))
-                            .on_click(cx.listener(
-                                move |this, event: &gpui::ClickEvent, window, cx| {
-                                    if std::mem::take(&mut this.skip_session_click) {
-                                        return;
-                                    }
-                                    this.select_sidebar_session(id, event.modifiers(), window, cx)
-                                },
-                            ))
-                            // A card dragged onto a pane edge opens there.
-                            .on_mouse_down(
-                                MouseButton::Left,
-                                cx.listener(move |this, event: &MouseDownEvent, _, _| {
-                                    this.skip_session_click = false;
-                                    this.tab_drag = None;
-                                    this.pane_drag = Some(PaneDrag {
-                                        source: DragSource::Session(id),
-                                        start: event.position,
-                                        position: event.position,
-                                        active: false,
-                                        over: None,
-                                        insert: None,
-                                    });
-                                }),
-                            )
-                            .on_mouse_down(
-                                MouseButton::Right,
-                                cx.listener(move |this, event: &MouseDownEvent, window, cx| {
-                                    let anchor = Anchor::Point(event.position);
-                                    this.context_selection = !this.selected_sessions.contains(&id);
-                                    if this.context_selection {
-                                        this.selected_sessions.clear();
-                                        this.selected_sessions.insert(id);
-                                    }
-                                    this.open_menu(MenuTarget::Session(id), anchor, window, cx);
-                                }),
-                            )
-                            .into_any_element()
-                    })),
+                                .child(avatar)
+                                .child(div().min_w_0().truncate().child(label)),
+                        )
+                    }),
             )
-            .children(disclosure)
+            .when(self.deleting.contains(&id), |d| d.opacity(0.5))
+            .relative()
+            .child(anchor.probe())
+            .on_hover(cx.listener(move |this, hovered, window, cx| {
+                this.hover_session(id, anchor.clone(), *hovered, true, window, cx);
+                this.invalidate_chrome(cx);
+            }))
+            .on_click(
+                cx.listener(move |this, event: &gpui::ClickEvent, window, cx| {
+                    if std::mem::take(&mut this.skip_session_click) {
+                        return;
+                    }
+                    this.select_sidebar_session(id, event.modifiers(), window, cx)
+                }),
+            )
+            // A card dragged onto a pane edge opens there.
+            .on_mouse_down(
+                MouseButton::Left,
+                cx.listener(move |this, event: &MouseDownEvent, _, _| {
+                    this.skip_session_click = false;
+                    this.tab_drag = None;
+                    this.pane_drag = Some(PaneDrag {
+                        source: DragSource::Session(id),
+                        start: event.position,
+                        position: event.position,
+                        active: false,
+                        over: None,
+                        insert: None,
+                    });
+                }),
+            )
+            .on_mouse_down(
+                MouseButton::Right,
+                cx.listener(move |this, event: &MouseDownEvent, window, cx| {
+                    this.open_session_actions(id, Anchor::Point(event.position), window, cx);
+                }),
+            )
+            .on_key_down(
+                cx.listener(move |this, event: &gpui::KeyDownEvent, window, cx| {
+                    let key = &event.keystroke;
+                    if key.key == "f10" && key.modifiers.shift {
+                        this.open_session_actions(
+                            id,
+                            Anchor::Slot(menu_anchor.clone()),
+                            window,
+                            cx,
+                        );
+                    }
+                }),
+            )
             .into_any_element()
+    }
+
+    fn open_session_actions(
+        &mut self,
+        id: i64,
+        anchor: Anchor,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.context_selection = !self.selected_sessions.contains(&id);
+        if self.context_selection {
+            self.selected_sessions.clear();
+            self.selected_sessions.insert(id);
+        }
+        self.open_menu(MenuTarget::Session(id), anchor, window, cx);
+        window.prevent_default();
+        cx.stop_propagation();
     }
 
     pub(super) fn vorkspace_modal(
@@ -1147,7 +1275,11 @@ impl Shell {
                     .child(
                         crate::controls::page::secondary(
                             "vorkspace-delete",
-                            "Delete vorkspace",
+                            if confirm {
+                                "Confirm delete"
+                            } else {
+                                "Delete vorkspace"
+                            },
                             true,
                             only,
                         )
@@ -1365,6 +1497,7 @@ impl Shell {
             .child(
                 div()
                     .flex()
+                    .flex_wrap()
                     .items_center()
                     .gap_2()
                     .child(
@@ -1416,6 +1549,63 @@ impl Shell {
 mod tests {
     use super::*;
     use gpui::TestAppContext;
+
+    #[gpui::test]
+    fn history_switches_vorkspace_with_the_conversation(cx: &mut TestAppContext) {
+        let (window, a, b) = super::super::tests::window(cx);
+        window
+            .update(cx, |shell, window, cx| {
+                let main = shell.workspace.active_vorkspace.clone();
+                let side = shell.workspace.create_vorkspace("Side");
+                let project = "/work/another-project";
+                shell
+                    .workspace
+                    .remove_project_from_vorkspace(&main, project);
+                shell.workspace.add_project_to_vorkspace(&side, project);
+
+                shell.open(a, window, cx);
+                assert_eq!(shell.workspace.active_vorkspace, side);
+                assert_eq!(shell.workspace.project, project);
+                shell.open(b, window, cx);
+                assert_eq!(shell.workspace.active_vorkspace, main);
+                shell.visit(-1, window, cx);
+                assert_eq!(shell.workspace.active_vorkspace, side);
+                assert_eq!(shell.workspace.active, Some(a));
+                shell.visit(1, window, cx);
+                assert_eq!(shell.workspace.active_vorkspace, main);
+                assert_eq!(shell.workspace.active, Some(b));
+            })
+            .unwrap();
+    }
+
+    #[gpui::test]
+    fn managing_vorkspaces_keeps_new_session_shortcut_out_of_the_chat(cx: &mut TestAppContext) {
+        cx.update(super::super::bind_keys);
+        let (window, _, b) = super::super::tests::window(cx);
+        let before = window
+            .update(cx, |shell, w, cx| {
+                shell.open(b, w, cx);
+                shell.open_vorkspace_dialog(None, w, cx);
+                shell.order.len()
+            })
+            .unwrap();
+        let visual = &mut gpui::VisualTestContext::from_window(window.into(), cx);
+        visual.run_until_parked();
+        visual.simulate_keystrokes("cmd-n");
+        visual.run_until_parked();
+        window
+            .update(visual, |shell, w, cx| {
+                assert_eq!(shell.order.len(), before);
+                assert_eq!(shell.workspace.active, Some(b));
+                assert!(
+                    shell
+                        .management_modal_focus(cx)
+                        .unwrap()
+                        .contains_focused(w, cx)
+                );
+            })
+            .unwrap();
+    }
 
     #[gpui::test]
     fn adding_first_folder_chip_to_active_empty_vorkspace_enters_that_project(

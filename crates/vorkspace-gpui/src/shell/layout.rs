@@ -15,6 +15,10 @@ use std::collections::HashMap;
 use vorkspace_ui::theme::*;
 
 impl Shell {
+    pub(super) fn docked_sidebar_width(&self) -> f32 {
+        self.sidebar_content_width * self.sidebar_fraction
+    }
+
     pub(super) fn layout_body(
         &mut self,
         sidebar_width: f32,
@@ -86,7 +90,7 @@ impl Shell {
                         .absolute()
                         .left_0()
                         .top_0()
-                        .w(px(self.workspace.right_panel_width))
+                        .w(px(self.sidebar_content_width))
                         .h_full()
                         .flex()
                         .flex_col()
@@ -195,7 +199,7 @@ impl Shell {
                 .clone()
                 .cached(
                     StyleRefinement::default()
-                        .w(px(self.workspace.right_panel_width))
+                        .w(px(self.sidebar_content_width))
                         .h_full(),
                 )
                 .into_any_element()
@@ -204,6 +208,7 @@ impl Shell {
     fn sidebar_resize(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
         (self.workspace.sidebar_visible
             && self.sidebar_fraction > 0.
+            && self.sidebar_content_width == self.workspace.right_panel_width
             && self.sidebar_slide.is_none())
         .then(|| {
             // Drag the sidebar's separator on the pane's side.

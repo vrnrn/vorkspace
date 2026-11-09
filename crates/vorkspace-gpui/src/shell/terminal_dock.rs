@@ -663,17 +663,22 @@ impl Shell {
     /// newTerminalCwd: the focused session's worktree, else its folder, else
     /// the project.
     pub(super) fn terminal_cwd(&self, cx: &App) -> String {
+        self.focused_checkout(cx).to_owned()
+    }
+
+    pub(super) fn focused_checkout<'a>(&'a self, cx: &'a App) -> &'a str {
         self.workspace
             .active
+            .and_then(|id| self.workspace.session_for_pane(id))
             .and_then(|id| self.sessions.get(&id))
             .map(|view| {
                 let view = view.read(cx);
                 view.settings
                     .worktree_cwd
-                    .clone()
-                    .unwrap_or_else(|| view.summary.cwd.clone())
+                    .as_deref()
+                    .unwrap_or(&view.summary.cwd)
             })
-            .unwrap_or_else(|| self.working_copy().to_owned())
+            .unwrap_or_else(|| self.working_copy())
     }
     pub(super) fn spawn_terminal(
         &mut self,

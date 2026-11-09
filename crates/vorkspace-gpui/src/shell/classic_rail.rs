@@ -190,37 +190,50 @@ impl Shell {
         let switcher = self.vorkspace_switcher(cx);
         let sessions = self.rail_sessions_section(cx);
         rail = rail
-            .child(switcher)
+            .child(div().flex_shrink_0().child(switcher))
             .child(
-                // Navigation and Bots hold their place; the session list
-                // takes the remaining height and scrolls on its own.
                 div()
                     .id("classic-project-rail-scroll")
                     .debug_selector(|| "classic-project-rail-scroll".into())
                     .flex_1()
                     .min_h_0()
+                    .overflow_hidden()
                     .flex()
                     .flex_col()
                     .pb_2()
-                    .child(div().flex_shrink_0().child(navigation))
-                    .children(bots.map(|b| div().flex_shrink_0().child(b)))
+                    .child(
+                        div()
+                            .id("rail-navigation-scroll")
+                            .min_h_0()
+                            .flex_shrink_1()
+                            .overflow_y_scroll()
+                            .child(navigation)
+                            .children(bots),
+                    )
                     .child(sessions),
             )
-            .when(
-                self.notification_state.installed.read(cx).is_visible(),
-                |d| {
-                    d.child(
-                        div()
-                            .mx_2()
-                            .mb_2()
-                            .child(self.notification_state.installed.clone()),
+            .child(
+                div()
+                    .id("rail-footer-status")
+                    .max_h(px(72.))
+                    .flex_shrink_0()
+                    .overflow_y_scroll()
+                    .when(
+                        self.notification_state.installed.read(cx).is_visible(),
+                        |d| {
+                            d.child(
+                                div()
+                                    .mx_2()
+                                    .mb_2()
+                                    .child(self.notification_state.installed.clone()),
+                            )
+                        },
                     )
-                },
+                    .child(div().mx_2().child(self.resources.clone()))
+                    .when(self.workspace.sidebar_subscriptions_visible, |d| {
+                        d.child(div().px_2().child(self.usage_footer.clone()))
+                    }),
             )
-            .child(div().mx_2().child(self.resources.clone()))
-            .when(self.workspace.sidebar_subscriptions_visible, |d| {
-                d.child(div().px_2().child(self.usage_footer.clone()))
-            })
             .child(self.classic_rail_footer(cx))
             .child(
                 div()

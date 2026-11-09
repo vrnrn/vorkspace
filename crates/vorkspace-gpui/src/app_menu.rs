@@ -20,14 +20,30 @@ fn workspace_fallback<A: Action>(cx: &mut App) {
                 let Ok(shell) = root.downcast::<shell::Shell>() else {
                     return;
                 };
-                let focus = shell.read(cx).menu_focus();
+                let shell = shell.read(cx);
+                let modal = shell.management_modal_focus(cx);
+                if modal.is_some()
+                    && !matches!(
+                        action.name(),
+                        "application::Quit"
+                            | "application::Restart"
+                            | "image_lightbox::ZoomIn"
+                            | "image_lightbox::ZoomOut"
+                            | "image_lightbox::ResetZoom"
+                    )
+                {
+                    return;
+                }
+                let focus = modal.clone().unwrap_or_else(|| shell.menu_focus());
                 if !window.is_action_available_in(action.as_ref(), &focus) {
                     return;
                 }
                 cx.activate(true);
                 window.activate_window();
                 vorkspace_ui::traffic_lights::show(window);
-                window.focus(&focus, cx);
+                if modal.is_none() {
+                    window.focus(&focus, cx);
+                }
                 focus.dispatch_action(action.as_ref(), window, cx);
             });
         });
@@ -193,6 +209,7 @@ pub(crate) fn build(prefs: &Preferences) -> Vec<Menu> {
         ]),
         Menu::new("File").items([
             MenuItem::action("Open Project…", shell::OpenProject),
+            MenuItem::action("Quick Composer…", crate::background_helper::Composer),
             MenuItem::action("Go to File…", shell::GoToFile),
             MenuItem::action("Find in Files…", shell::SearchFiles),
             MenuItem::action("Command Palette…", shell::OpenCommandPalette),

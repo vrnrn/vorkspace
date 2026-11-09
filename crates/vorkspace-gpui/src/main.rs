@@ -309,7 +309,13 @@ fn main() {
             .and_then(|state| {
                 state["project"]
                     .as_str()
-                    .filter(|s| !s.is_empty())
+                    // A saved empty vorkspace deliberately has no launch cwd.
+                    .filter(|s| {
+                        !s.is_empty()
+                            || state["active_vorkspace"]
+                                .as_str()
+                                .is_some_and(|id| !id.is_empty())
+                    })
                     .map(str::to_owned)
             })
             .or_else(|| {

@@ -168,7 +168,7 @@ impl Shell {
         });
         let view_width = view_width.max(1.);
         let view_height = view_height.max(1.);
-        let width = view_width.max(layout.width_for_minimum(MIN_CHAT_WIDTH));
+        let width = view_width.max(layout.width_for_minimum(MIN_CHAT_WIDTH.min(view_width)));
         let stack = layout.max_session_stack(|id| self.workspace.counts_toward_pane_limit(id));
         let height = if stack > MAX_SESSION_STACK {
             view_height.max(
@@ -191,16 +191,14 @@ impl Shell {
                 let right = left + pane.rect.w * width;
                 let top = pane.rect.y * height;
                 let bottom = top + pane.rect.h * height;
-                if left + x < 0. {
+                if right - left > view_width || left + x < 0. {
                     x = -left;
-                }
-                if right + x > view_width {
+                } else if right + x > view_width {
                     x = view_width - right;
                 }
-                if top + y < 0. {
+                if bottom - top > view_height || top + y < 0. {
                     y = -top;
-                }
-                if bottom + y > view_height {
+                } else if bottom + y > view_height {
                     y = view_height - bottom;
                 }
                 self.pane_scroll.set_offset(gpui::point(

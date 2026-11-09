@@ -34,7 +34,7 @@ impl Shell {
     /// Room before the tabs where navigation overhangs the pane.
     pub(super) fn strip_lead(&self, window: &Window) -> f32 {
         // A left sidebar takes the overhang in its own row (`classic_body`).
-        let sidebar = self.workspace.right_panel_width * self.sidebar_fraction;
+        let sidebar = self.docked_sidebar_width();
         (self.rail_overhang(window) - sidebar).max(0.)
     }
     /// How far navigation reaches past the project rail.

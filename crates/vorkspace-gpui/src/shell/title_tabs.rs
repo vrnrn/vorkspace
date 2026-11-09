@@ -232,11 +232,7 @@ impl Shell {
                 } => {
                     path_key(project) == path_key(&self.workspace.project)
                         && path_key(worktree) == path_key(self.working_copy())
-                        && self.workspace.preferences.bots
-                        && self
-                            .bots
-                            .as_ref()
-                            .is_some_and(|m| m.read(cx).roster.get(id).is_some())
+                        && self.app_pane_available(&crate::workspace::AppPane::Bot(id.clone()), cx)
                 }
                 TitleTab::Search | TitleTab::App(_) => false,
             })
@@ -375,7 +371,9 @@ impl Shell {
                 }
             }
             TitleTab::Bot { id, .. } => {
-                if let Some(bots) = self.bots.clone() {
+                if self.app_pane_available(&crate::workspace::AppPane::Bot(id.clone()), cx)
+                    && let Some(bots) = self.bots.clone()
+                {
                     bots.update(cx, |m, cx| m.open(id, window, cx));
                 }
             }

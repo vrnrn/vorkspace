@@ -234,6 +234,10 @@ impl Shell {
                 core.update(cx, |core, cx| core.publish(&defs, &seen, cx));
             }
         }
+        if self.workspace.reconcile_project_scope() {
+            self.sync_git(cx);
+        }
+        self.sync_inbox_scope(cx);
         self.observations.push(cx.observe(&core, |this, core, cx| {
             if this.take_shared_vorkspaces(&core, cx) {
                 this.reconcile_after_shared_change(cx);
@@ -280,18 +284,10 @@ impl Shell {
     }
 
     fn reconcile_after_shared_change(&mut self, cx: &mut Context<Self>) {
-        if !self.workspace.project.is_empty()
-            && !self.workspace.vorkspace_projects().iter().any(|p| {
-                vorkspace_core::files::path_key(p)
-                    == vorkspace_core::files::path_key(&self.workspace.project)
-            })
-        {
-            self.workspace.project = self
-                .workspace
-                .vorkspace_landing(&self.workspace.active_vorkspace);
-            self.workspace.active = None;
+        if self.workspace.reconcile_project_scope() {
             self.sync_git(cx);
         }
+        self.sync_inbox_scope(cx);
         if let Some(dialog) = self.vorkspace_dialog.as_mut() {
             if !self
                 .workspace

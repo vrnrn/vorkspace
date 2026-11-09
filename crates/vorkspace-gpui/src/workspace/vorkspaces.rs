@@ -110,17 +110,45 @@ impl Workspace {
             .collect()
     }
 
-    #[cfg(test)]
     pub(crate) fn vorkspace_has_project(&self, path: &str) -> bool {
-        let key = path_key(path);
-        self.active_vorkspace()
-            .is_none_or(|v| v.projects.iter().any(|p| path_key(p) == key))
+        self.vorkspace_for_project(path) == Some(self.active_vorkspace.as_str())
     }
 
-    #[cfg(test)]
     pub(crate) fn vorkspace_has_bot(&self, id: &str) -> bool {
         self.active_vorkspace()
-            .is_none_or(|v| v.bots.iter().any(|b| b == id))
+            .is_some_and(|v| v.bots.iter().any(|b| b == id))
+    }
+
+    pub(crate) fn bot_hidden_in_vorkspace(&self, id: &str) -> bool {
+        // The roster can become available before first placement runs.
+        self.seen_bots.contains(id) && !self.vorkspace_has_bot(id)
+    }
+
+    pub(crate) fn vorkspace_for_project(&self, path: &str) -> Option<&str> {
+        if !self.is_project_available(path) {
+            return None;
+        }
+        let key = path_key(path);
+        self.active_vorkspace()
+            .into_iter()
+            .chain(self.vorkspaces.iter())
+            .find(|v| v.projects.iter().any(|p| path_key(p) == key))
+            .map(|v| v.id.as_str())
+    }
+
+    /// Restore the window within its saved vorkspace, even if an old snapshot
+    /// paired that vorkspace with an unrelated project or session.
+    pub(crate) fn reconcile_project_scope(&mut self) -> bool {
+        if self.vorkspace_has_project(&self.project) {
+            return false;
+        }
+        let landing = self.vorkspace_landing(&self.active_vorkspace);
+        if self.project == landing {
+            return false;
+        }
+        self.project = landing;
+        self.active = None;
+        true
     }
 
     /// Adds a folder to exactly the vorkspace `id`; also lists it as a

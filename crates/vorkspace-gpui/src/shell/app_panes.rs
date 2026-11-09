@@ -196,13 +196,16 @@ impl Shell {
 
     /// A global resource may be tiled beside a project-bound leaf. Restore that
     /// layout's project and working copy before configuring the resource view.
-    pub(super) fn restore_app_layout_scope(&mut self, pane: i64, cx: &App) {
+    pub(super) fn restore_app_layout_scope(&mut self, pane: i64, cx: &mut Context<Self>) {
         let Some((project, worktree)) = self
             .app_layout_scope(pane, cx)
             .map(|(project, worktree)| (project.to_owned(), worktree.to_owned()))
         else {
             return;
         };
+        if !self.route_project(&project, cx) {
+            return;
+        }
         self.workspace.project = project.clone();
         if vorkspace_core::files::path_key(self.working_copy())
             != vorkspace_core::files::path_key(&worktree)
@@ -443,6 +446,7 @@ impl Shell {
         match pane {
             AppPane::Bot(id) | AppPane::BotDocument { bot: id, .. } => {
                 self.workspace.preferences.bots
+                    && !self.workspace.bot_hidden_in_vorkspace(id)
                     && self
                         .bots
                         .as_ref()
@@ -463,6 +467,13 @@ impl Shell {
         let Some(pane) = self.workspace.app_panes.get(&id).cloned() else {
             return;
         };
+        if matches!(&pane.content, AppPane::Bot(bot) | AppPane::BotDocument { bot, .. } if self.workspace.bot_hidden_in_vorkspace(bot))
+        {
+            return;
+        }
+        if pane.content.project_scoped() && !self.route_project(&pane.project, cx) {
+            return;
+        }
         if !self.app_pane_available(&pane.content, cx) {
             self.prepare_app_view(Some(id), window, cx);
             self.leave_app_views(cx);
@@ -858,6 +869,9 @@ impl Shell {
             crate::bots::OpenWorkspacePane::Session { bot, .. }
             | crate::bots::OpenWorkspacePane::Document { bot, .. } => bot,
         };
+        if self.workspace.bot_hidden_in_vorkspace(bot) {
+            return;
+        }
         let target = self.app_pane_id(&AppPane::Bot(bot.clone()));
         let opened = match request {
             crate::bots::OpenWorkspacePane::Session { session, .. } => {

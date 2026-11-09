@@ -205,6 +205,35 @@ fn header_settings_and_worktree_actions_open_focused_native_surfaces(cx: &mut Te
 }
 
 #[gpui::test]
+fn new_session_uses_the_focused_chat_checkout(cx: &mut TestAppContext) {
+    let (window, _, main_session) = window(cx);
+    let project = "/work/vorkspace";
+    let feature = WorktreeFocus {
+        path: "/work/vorkspace-worktrees/feature".into(),
+        branch: Some("feature".into()),
+    };
+    window
+        .update(cx, |shell, w, cx| {
+            shell.worktree_focus.insert(project.into(), feature.clone());
+            shell.open(main_session, w, cx);
+            assert_eq!(shell.focused_checkout(cx), project);
+            shell.create(Kind::Codex, cx);
+        })
+        .unwrap();
+    cx.run_until_parked();
+    window
+        .update(cx, |shell, _, cx| {
+            let id = shell.workspace.active.unwrap();
+            assert_ne!(id, main_session);
+            let chat = shell.sessions[&id].read(cx);
+            assert_eq!(chat.summary.cwd, project);
+            assert!(chat.settings.worktree_cwd.is_none());
+            assert_eq!(shell.working_copy(), feature.path);
+        })
+        .unwrap();
+}
+
+#[gpui::test]
 fn copies_keep_running_sessions_and_route_new_tabs_and_splits(cx: &mut TestAppContext) {
     let (window, feature_session, main_session) = window(cx);
     window

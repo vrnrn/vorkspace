@@ -2589,7 +2589,16 @@ fn pane_limit_width_changes_with_window_and_preserves_horizontal_overflow(cx: &m
         .update(visual, |shell, _, _| {
             assert_eq!(shell.workspace.layout(b), before);
             assert_eq!(shell.workspace.layout(b).leaf_ids(), [b, a]);
-            assert!(shell.pane_bounds.get().unwrap().size.width.as_f32() >= 840.);
+            let viewport = shell.pane_viewport.get().unwrap().size.width.as_f32();
+            let canvas = shell.pane_bounds.get().unwrap().size.width.as_f32();
+            assert!(
+                canvas > viewport,
+                "the other pane remains reachable by scrolling"
+            );
+            assert!(
+                (canvas / 2. - viewport.min(MIN_CHAT_WIDTH)).abs() < 1.,
+                "an even split fits one pane within the narrow viewport"
+            );
             assert!(!shell.placement_allowed(DragSource::Session(i64::MAX), a, Edge::Right));
             assert!(shell.placement_allowed(DragSource::Session(i64::MAX), a, Edge::Bottom));
         })

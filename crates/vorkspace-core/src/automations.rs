@@ -1332,22 +1332,7 @@ pub fn claim_inbox_events_retry(
             }
             let tracker_without_project =
                 crate::inbox::is_tracker(&item.provider) && item.project_path.trim().is_empty();
-            let path_key = |path: &str| {
-                let normalized = path.trim().replace('\\', "/");
-                let normalized = normalized.trim_end_matches('/');
-                let normalized = if normalized.is_empty() {
-                    "/"
-                } else {
-                    normalized
-                };
-                if normalized.as_bytes().get(1) == Some(&b':') || normalized.starts_with("//") {
-                    normalized.to_lowercase()
-                } else {
-                    normalized.to_string()
-                }
-            };
-            if !tracker_without_project && path_key(&item.project_path) != path_key(&automation.cwd)
-            {
+            if !tracker_without_project && !item.belongs_to_project(&automation.cwd) {
                 continue;
             }
             let trigger = automation.triggers().into_iter().find(|trigger| {

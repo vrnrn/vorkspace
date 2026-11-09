@@ -2478,6 +2478,34 @@ impl Window {
         }
     }
 
+    /// Move to the next or previous tab stop inside a modal's focus subtree.
+    pub fn focus_tab_within(&mut self, scope: &FocusHandle, reverse: bool, cx: &mut App) {
+        if !self.focus_enabled {
+            return;
+        }
+        let stops = &self.rendered_frame.tab_stops;
+        let step = |from: Option<&FocusId>| {
+            if reverse { stops.prev(from) } else { stops.next(from) }
+        };
+        let Some(first) = step(self.focus.as_ref()) else {
+            return;
+        };
+        let mut candidate = first.clone();
+        loop {
+            if scope.contains(&candidate, self) {
+                self.focus(&candidate, cx);
+                return;
+            }
+            let Some(next) = step(Some(&candidate.id)) else {
+                return;
+            };
+            if next.id == first.id {
+                return;
+            }
+            candidate = next;
+        }
+    }
+
     /// Accessor for the text system.
     pub fn text_system(&self) -> &Arc<WindowTextSystem> {
         &self.text_system

@@ -191,26 +191,27 @@ pub(crate) fn bind_keys(cx: &mut App) {
     // Scoped to the shell, so the focused composer, menus and pickers outrank
     // these: GPUI ranks an unscoped binding above every context.
     let context = Some("Workspace");
+    let window_context = Some("Workspace || VorkspaceModal");
     cx.bind_keys([
         KeyBinding::new(
             &format!("{modifier}-="),
             crate::image_lightbox::ZoomIn,
-            context,
+            window_context,
         ),
         KeyBinding::new(
             &format!("{modifier}-+"),
             crate::image_lightbox::ZoomIn,
-            context,
+            window_context,
         ),
         KeyBinding::new(
             &format!("{modifier}--"),
             crate::image_lightbox::ZoomOut,
-            context,
+            window_context,
         ),
         KeyBinding::new(
             &format!("{modifier}-0"),
             crate::image_lightbox::ResetZoom,
-            context,
+            window_context,
         ),
         KeyBinding::new(&format!("{modifier}-m"), MinimizeWindow, context),
         KeyBinding::new(&format!("{modifier}-n"), NewCodex, context),
@@ -224,7 +225,7 @@ pub(crate) fn bind_keys(cx: &mut App) {
         KeyBinding::new(&format!("{modifier}-shift-w"), CloseAllTabs, context),
         KeyBinding::new(&format!("{modifier}-["), VisitBack, context),
         KeyBinding::new(&format!("{modifier}-]"), VisitForward, context),
-        KeyBinding::new("escape", vorkspace_ui::actions::DismissMenu, context),
+        KeyBinding::new("escape", vorkspace_ui::actions::DismissMenu, window_context),
         KeyBinding::new(&format!("{modifier}-b"), ToggleSidebar, context),
         KeyBinding::new(&format!("{modifier}-k"), FocusSearch, context),
         KeyBinding::new(&format!("{modifier}-shift-f"), SearchFiles, context),
@@ -260,8 +261,8 @@ pub(crate) fn bind_keys(cx: &mut App) {
         KeyBinding::new(&format!("{modifier}-alt-down"), FocusPaneDown, context),
         KeyBinding::new("ctrl-tab", NextTab, context),
         KeyBinding::new("ctrl-shift-tab", PreviousTab, context),
-        KeyBinding::new("tab", FocusNext, context),
-        KeyBinding::new("shift-tab", FocusPrevious, context),
+        KeyBinding::new("tab", FocusNext, window_context),
+        KeyBinding::new("shift-tab", FocusPrevious, window_context),
     ]);
 }
 
@@ -283,6 +284,7 @@ fn adjacent<T: PartialEq + Clone>(items: &[T], current: Option<&T>, step: isize)
 pub(crate) enum MenuTarget {
     Tab(i64),
     TitleTab(TitleTab),
+    Tabs(Vec<TitleTab>),
     Session(i64),
     /// The sidebar project header's menu.
     Header,
@@ -493,6 +495,7 @@ pub(crate) struct Shell {
     sidebar_search: Entity<input::Input>,
     sidebar_slide: Option<PaneSlide>,
     sidebar_fraction: f32,
+    sidebar_content_width: f32,
     /// useTrafficLightsVisible: fullscreen hides the native buttons, so the
     /// title bar takes their room back.
     fullscreen: bool,
@@ -500,7 +503,8 @@ pub(crate) struct Shell {
     store: Database,
     remote: Arc<vorkspace_core::remote::Connections>,
     remote_project_picker: Option<remote_projects::Open>,
-    remote_refreshing: bool,
+    remote_refreshing: HashSet<String>,
+    remote_refresh_cursor: usize,
     remote_marks: HashMap<i64, (bool, bool)>,
     _remote_clock: gpui::Task<()>,
     sessions: HashMap<i64, Entity<Conversation>>,
@@ -598,6 +602,8 @@ pub(crate) struct Shell {
     /// What every window shares; `None` only before the window joins it.
     app_core: Option<Entity<app_core::AppCore>>,
     rail_sessions_expanded: bool,
+    rail_list: gpui::ListState,
+    rail_list_ids: std::rc::Rc<Vec<i64>>,
     /// The rail's title search field is showing.
     rail_search_open: bool,
     vorkspace_anchor: AnchorSlot,
@@ -626,6 +632,7 @@ pub(crate) struct Shell {
     skip_tab_click: bool,
     error: Option<String>,
     tab_scroll: ScrollHandle,
+    tab_switcher_anchor: AnchorSlot,
     tab_scroll_task: Option<gpui::Task<()>>,
     resize: Option<(Pixels, f32)>,
     pub(crate) git: Entity<crate::git_status::ProjectGit>,
@@ -886,12 +893,14 @@ impl Shell {
             sidebar_search,
             sidebar_slide: None,
             sidebar_fraction: if workspace.sidebar_visible { 1. } else { 0. },
+            sidebar_content_width: workspace.right_panel_width,
             fullscreen: false,
             tabs_frame,
             store,
             remote,
             remote_project_picker: None,
-            remote_refreshing: false,
+            remote_refreshing: HashSet::new(),
+            remote_refresh_cursor: 0,
             remote_marks: HashMap::new(),
             _remote_clock: remote_clock,
             sessions: HashMap::new(),
@@ -975,6 +984,8 @@ impl Shell {
             vorkspace_dialog: None,
             app_core: None,
             rail_sessions_expanded: false,
+            rail_list: gpui::ListState::new(0, gpui::ListAlignment::Top, px(96.)),
+            rail_list_ids: Default::default(),
             rail_search_open: false,
             vorkspace_anchor: AnchorSlot::default(),
             backgrounds: HashMap::new(),
@@ -997,6 +1008,7 @@ impl Shell {
             skip_tab_click: false,
             error: None,
             tab_scroll: ScrollHandle::new(),
+            tab_switcher_anchor: AnchorSlot::default(),
             tab_scroll_task: None,
             resize: None,
             git,
@@ -1734,6 +1746,7 @@ impl Shell {
         self.workspace.worktree_focus = self.worktree_focus.clone();
         self.workspace.normalize_title_order();
         self.sync_git(cx);
+        self.sync_inbox_scope(cx);
         self.update_chat_visibility(cx);
         self.update_usage_provider(cx);
         self.invalidate_chrome(cx);
@@ -1785,6 +1798,12 @@ impl Shell {
         }
     }
     pub(crate) fn focus_active(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if let Some(scope) = self.management_modal_focus(cx) {
+            if !scope.contains_focused(window, cx) {
+                window.focus(&scope, cx);
+            }
+            return;
+        }
         self.keep_visible_idle_agents(cx);
         if let Some(bots) = self.bots.clone()
             && bots.update(cx, |bots, cx| bots.focus_creation(window, cx))
@@ -1848,6 +1867,18 @@ impl Shell {
         self.focus.clone()
     }
     pub(crate) fn open(&mut self, id: i64, window: &mut Window, cx: &mut Context<Self>) {
+        if let Some(owner) = self.workspace.session_for_pane(id) {
+            if self.deleting.contains(&owner) {
+                return;
+            }
+            let Some(view) = self.ensure_session(owner, cx) else {
+                return;
+            };
+            let project = view.read(cx).summary.cwd.clone();
+            if !self.route_project(&project, cx) {
+                return;
+            }
+        }
         self.prepare_tab_views(id, window, cx);
         if self.workspace.app_panes.contains_key(&id) {
             self.open_app_pane(id, window, cx);
@@ -1912,16 +1943,20 @@ impl Shell {
             self.open_file_pane(id, window, cx);
             return;
         }
+        let Some(view) = self.ensure_session(id, cx) else {
+            return;
+        };
+        let project = view.read(cx).summary.cwd.clone();
+        if !self.route_project(&project, cx) {
+            return;
+        }
         self.leave_app_views(cx);
         self.leave_app_search(cx);
         self.close_preview(cx);
         self.dismiss_due_reminder(id, cx);
-        let Some(view) = self.ensure_session(id, cx) else {
-            return;
-        };
         self.history.record(id);
         self.workspace.open(id);
-        self.workspace.project = view.read(cx).summary.cwd.clone();
+        self.workspace.project = project;
         self.workspace
             .project_focus
             .insert(self.workspace.project.clone(), id);
@@ -1983,6 +2018,12 @@ impl Shell {
         self.open_title_tab(&tabs[next], window, cx);
     }
     fn focus_workspace(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if let Some(scope) = self.management_modal_focus(cx) {
+            if !scope.contains_focused(window, cx) {
+                window.focus(&scope, cx);
+            }
+            return;
+        }
         if let Some(settings) = &self.settings {
             window.focus(&settings.focus_handle(cx), cx);
             return;
@@ -2065,6 +2106,17 @@ impl Shell {
         {
             self.error = Some("This project is being deleted.".into());
             cx.notify();
+            return;
+        }
+        if !path.is_empty()
+            && self.workspace.is_project_available(&path)
+            && !self.workspace.projects.iter().any(|p| {
+                vorkspace_core::files::path_key(p) == vorkspace_core::files::path_key(&path)
+            })
+        {
+            self.workspace.add_project(&path);
+        }
+        if !self.route_project(&path, cx) {
             return;
         }
         // Programmatic reselection of the visible Bot's project keeps its
@@ -2200,7 +2252,14 @@ impl Shell {
         .detach();
     }
     fn create(&mut self, kind: Kind, cx: &mut Context<Self>) {
-        self.create_session(kind, false, cx);
+        if self.management_modal_focus(cx).is_some() {
+            return;
+        }
+        if self.workspace.project.is_empty() {
+            self.open_project(cx);
+        } else {
+            self.create_session(kind, false, cx);
+        }
     }
     fn create_session(&mut self, kind: Kind, only_if_empty: bool, cx: &mut Context<Self>) {
         let store = self.store.clone();
@@ -2208,7 +2267,23 @@ impl Shell {
         if cwd.is_empty() {
             return;
         }
-        let focus = self.worktree_focus.get(&cwd).cloned();
+        let selected = self.worktree_focus.get(&cwd).cloned();
+        let focus = if only_if_empty {
+            selected.clone()
+        } else {
+            let checkout = self.focused_checkout(cx);
+            let key = vorkspace_core::files::path_key(checkout);
+            (key != vorkspace_core::files::path_key(&cwd)).then(|| {
+                selected
+                    .as_ref()
+                    .filter(|focus| vorkspace_core::files::path_key(&focus.path) == key)
+                    .cloned()
+                    .unwrap_or_else(|| crate::git_tools::worktree_switcher::WorktreeFocus {
+                        path: checkout.into(),
+                        branch: None,
+                    })
+            })
+        };
         let blank_key = format!("{cwd}\0{}", focus.as_ref().map_or("", |f| f.path.as_str()));
         if only_if_empty && !self.pending_project_blanks.insert(blank_key.clone()) {
             return;
@@ -2288,10 +2363,9 @@ impl Shell {
                         // A pending blank belongs to the copy that requested it;
                         // navigation to another copy must never redirect that request.
                         if this.workspace.project != cwd
-                            || this.worktree_focus.get(&cwd).map(|f| &f.path)
-                                != focus.as_ref().map(|f| &f.path)
                             || if only_if_empty {
-                                this.workspace.active.is_some()
+                                this.worktree_focus.get(&cwd) != selected.as_ref()
+                                    || this.workspace.active.is_some()
                                     || this.bot_active(cx)
                                     || this.app_view_open()
                                     || this.settings.is_some()
@@ -2407,7 +2481,8 @@ impl Render for Shell {
         vorkspace_ui::traffic_lights::pin(window);
         self.keep_visible_idle_agents(cx);
         self.tick_resize_settle(window);
-        if let Some(id) = self.pending_composer_focus.take()
+        if self.management_modal_focus(cx).is_none()
+            && let Some(id) = self.pending_composer_focus.take()
             && self
                 .workspace
                 .active
@@ -2471,7 +2546,16 @@ impl Render for Shell {
         if self.settings.is_some() {
             self.sidebar_fraction = 0.;
         }
-        let sidebar_width = self.workspace.right_panel_width * self.sidebar_fraction;
+        let room = (window.viewport_size().width.as_f32() - self.classic_rail_width()).max(0.);
+        let width = self
+            .workspace
+            .right_panel_width
+            .min((room - 252.).max(room * 0.31));
+        if self.sidebar_content_width != width {
+            self.sidebar_content_width = width;
+            self.invalidate_chrome(cx);
+        }
+        let sidebar_width = self.docked_sidebar_width();
         if !self.window_observed {
             self.window_observed = true;
             crate::menu_bar::remember(window, cx);
@@ -2610,11 +2694,18 @@ impl Render for Shell {
         }
         self.sync_right_panel(cx);
         self.sync_notices(cx);
-        div()
+        let management_open = self.management_modal_focus(cx).is_some();
+        let background = self.background_modal(window, cx);
+        let (workspace_background, management_background) = if management_open {
+            (None, background)
+        } else {
+            (background, None)
+        };
+        let workspace = div()
             .id("vorkspace-workspace")
             .role(Role::Application)
             .aria_label("vorkspace Native")
-            .key_context("Workspace")
+            .when(!management_open, |d| d.key_context("Workspace"))
             .track_focus(&self.focus)
             .on_action(cx.listener(Self::open_image))
             .on_action(
@@ -2667,14 +2758,6 @@ impl Render for Shell {
                 }),
             )
             .on_action(
-                cx.listener(|this, _: &crate::Quit, window, cx| this.request_quit(window, cx)),
-            )
-            .on_action(
-                cx.listener(|this, _: &crate::Restart, window, cx| {
-                    this.request_restart(window, cx)
-                }),
-            )
-            .on_action(
                 cx.listener(|this, _: &GoToFile, window, cx| {
                     this.open_quick_open(false, window, cx)
                 }),
@@ -2702,21 +2785,6 @@ impl Render for Shell {
             .on_action(|_: &MinimizeWindow, window, _| window.minimize_window())
             .on_action(|_: &ZoomWindow, window, _| window.zoom_window())
             .on_action(|_: &ToggleFullScreen, window, _| window.toggle_fullscreen())
-            .on_action(
-                cx.listener(|this, _: &crate::image_lightbox::ZoomIn, window, cx| {
-                    this.scale_interface(10, window, cx)
-                }),
-            )
-            .on_action(
-                cx.listener(|this, _: &crate::image_lightbox::ZoomOut, window, cx| {
-                    this.scale_interface(-10, window, cx)
-                }),
-            )
-            .on_action(
-                cx.listener(|this, _: &crate::image_lightbox::ResetZoom, window, cx| {
-                    this.scale_interface(0, window, cx)
-                }),
-            )
             .on_action(cx.listener(|this, _: &OpenSettings, window, cx| {
                 this.open_settings(crate::settings::Section::General, window, cx)
             }))
@@ -2953,8 +3021,6 @@ impl Render for Shell {
             .on_action(cx.listener(|this, _: &FocusPaneDown, window, cx| {
                 this.focus_neighbor(Edge::Bottom, window, cx)
             }))
-            .on_action(|_: &FocusNext, window, cx| window.focus_next(cx))
-            .on_action(|_: &FocusPrevious, window, cx| window.focus_prev(cx))
             .on_mouse_move(cx.listener(|this, event: &MouseMoveEvent, _, cx| {
                 if let Some(bots) = &this.bots {
                     bots.update(cx, |m, cx| m.move_rail_drag(event, cx));
@@ -3021,8 +3087,7 @@ impl Render for Shell {
                     })
             }))
             .children(self.drag_ghost(cx))
-            .children(self.background_modal(window, cx))
-            .children(self.vorkspace_modal(window, cx))
+            .children(workspace_background)
             .children(
                 self.bots
                     .clone()
@@ -3038,7 +3103,63 @@ impl Render for Shell {
                 self.image_lightbox
                     .as_ref()
                     .map(|(view, _)| crate::image_lightbox::overlay(view)),
+            );
+        // Management is a sibling of the workspace so native menu actions
+        // and custom shortcuts cannot bubble into the obscured workspace.
+        div()
+            .relative()
+            .size_full()
+            .when(management_open, |d| {
+                d.key_context("VorkspaceModal").on_action(cx.listener(
+                    |this, _: &vorkspace_ui::actions::DismissMenu, window, cx| {
+                        if this.background_dialog.is_some() {
+                            this.close_background_dialog(window, cx);
+                        } else {
+                            this.close_vorkspace_dialog(window, cx);
+                        }
+                    },
+                ))
+            })
+            .on_action(
+                cx.listener(|this, _: &crate::Quit, window, cx| this.request_quit(window, cx)),
             )
+            .on_action(
+                cx.listener(|this, _: &crate::Restart, window, cx| {
+                    this.request_restart(window, cx)
+                }),
+            )
+            .on_action(
+                cx.listener(|this, _: &crate::image_lightbox::ZoomIn, window, cx| {
+                    this.scale_interface(10, window, cx)
+                }),
+            )
+            .on_action(
+                cx.listener(|this, _: &crate::image_lightbox::ZoomOut, window, cx| {
+                    this.scale_interface(-10, window, cx)
+                }),
+            )
+            .on_action(
+                cx.listener(|this, _: &crate::image_lightbox::ResetZoom, window, cx| {
+                    this.scale_interface(0, window, cx)
+                }),
+            )
+            .on_action(cx.listener(|this, _: &FocusNext, window, cx| {
+                if let Some(scope) = this.management_modal_focus(cx) {
+                    window.focus_tab_within(&scope, false, cx);
+                } else {
+                    window.focus_next(cx);
+                }
+            }))
+            .on_action(cx.listener(|this, _: &FocusPrevious, window, cx| {
+                if let Some(scope) = this.management_modal_focus(cx) {
+                    window.focus_tab_within(&scope, true, cx);
+                } else {
+                    window.focus_prev(cx);
+                }
+            }))
+            .child(workspace)
+            .children(management_background)
+            .children(self.vorkspace_modal(window, cx))
     }
 }
 

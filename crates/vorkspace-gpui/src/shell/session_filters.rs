@@ -1,6 +1,6 @@
 //! SessionFiltersMenu.tsx: persisted status, time and provider checkboxes.
 use super::*;
-use vorkspace_core::session_filters::{BotFilter, Status, TimeFilter};
+use vorkspace_core::session_filters::{BotFilter, TimeFilter};
 
 impl Shell {
     pub(super) fn effective_session_filters(
@@ -190,41 +190,6 @@ impl Shell {
         self.invalidate_chrome(cx);
         self.persist(cx);
         cx.notify();
-    }
-
-    /// The Bot that started a session, if one did.
-    pub(super) fn session_launcher(&self, id: i64, cx: &App) -> Option<String> {
-        self.bots.as_ref().and_then(|manager| {
-            manager
-                .read(cx)
-                .roster
-                .bots
-                .iter()
-                .find(|bot| bot.launches.iter().any(|l| l.session_id == id))
-                .map(|bot| bot.id.clone())
-        })
-    }
-
-    pub(super) fn filter_session(&self, id: i64, start: u64, cx: &App) -> bool {
-        let session = self.session_metadata(id, cx);
-        let filters = self.effective_session_filters(cx);
-        if !filters.bot.is_any()
-            && !filters
-                .bot
-                .matches(self.session_launcher(id, cx).as_deref())
-        {
-            return false;
-        }
-        filters.matches(
-            session.summary,
-            Status {
-                working: session.responding(),
-                needs_approval: session.needs_approval(),
-                done: self.unseen_finished.contains(&id),
-            },
-            start,
-            self.workspace.preferences.show_archived,
-        )
     }
 }
 

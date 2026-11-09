@@ -7,7 +7,7 @@ use crate::{
 use vorkspace_core::project_appearance::ProjectAppearance;
 
 pub(super) struct OpenBackground {
-    view: Entity<BackgroundDialog>,
+    pub(super) view: Entity<BackgroundDialog>,
     /// The vorkspace whose background this edits; its dialog reopens after.
     vorkspace: String,
     _events: Subscription,

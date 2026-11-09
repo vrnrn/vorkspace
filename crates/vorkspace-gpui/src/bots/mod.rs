@@ -522,6 +522,7 @@ impl Bots {
                         .is_some_and(|owner| owner.works_on(project))
             })
     }
+    #[cfg(test)]
     pub(crate) fn hidden_session(&self, id: i64) -> bool {
         self.is_bot_session(id)
             || self.roster.bots.iter().any(|m| {

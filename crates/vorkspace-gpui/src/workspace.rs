@@ -776,6 +776,7 @@ impl Workspace {
             .iter()
             .map(|p| vorkspace_core::files::path_key(p))
             .collect();
+        let legacy_vorkspace = state.vorkspaces.is_empty();
         state.ensure_vorkspaces();
         if state
             .project_archive
@@ -795,26 +796,31 @@ impl Workspace {
                     *known == review_owners.get(id).copied().unwrap_or(*id) && path == project
                 })
         });
-        if let Some((_, project)) = sessions.iter().find(|(id, path)| {
-            state
-                .project_archive
-                .get(&vorkspace_core::files::path_key(path))
-                != Some(&true)
-                && !state
-                    .deleted_projects
-                    .contains(&vorkspace_core::files::path_key(path))
-                && state
-                    .active
-                    .is_some_and(|pane| state.session_for_pane(pane) == Some(*id))
-        }) {
-            state.project = project.clone();
-            state
-                .project_focus
-                .insert(project.clone(), state.active.unwrap());
+        if let Some(active) = state.active {
+            if let Some((_, project)) = sessions
+                .iter()
+                .find(|(id, _)| state.session_for_pane(active) == Some(*id))
+            {
+                if state.is_project_available(project)
+                    && (legacy_vorkspace || state.vorkspace_has_project(project))
+                {
+                    state.project = project.clone();
+                    state.project_focus.insert(project.clone(), active);
+                } else {
+                    state.active = None;
+                }
+            } else if state.app_panes.get(&active).is_some_and(|pane| {
+                pane.content.project_scoped()
+                    && !pane.project.is_empty()
+                    && !state.vorkspace_has_project(&pane.project)
+            }) {
+                state.active = None;
+            }
         }
-        if !state.project.is_empty() {
+        if legacy_vorkspace && !state.project.is_empty() {
             state.add_project(&state.project.clone());
         }
+        state.reconcile_project_scope();
         state.restored_new_projects = state
             .projects
             .iter()

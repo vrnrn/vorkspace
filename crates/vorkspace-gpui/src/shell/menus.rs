@@ -117,6 +117,34 @@ impl Shell {
         match target {
             // Answered by terminal_menu_items above.
             MenuTarget::TerminalTab(_) => ("".into(), Vec::new(), 160., MenuStyle::Explorer),
+            MenuTarget::Tabs(tabs) => {
+                let selected = self.active_title_tab(cx);
+                let mut items: Vec<MenuItem> = tabs
+                    .iter()
+                    .enumerate()
+                    .map(|(ix, tab)| {
+                        let title: SharedString = match tab {
+                            TitleTab::Workspace(id) => self.tab_copy(*id, cx).headline.into(),
+                            TitleTab::Terminal { cwd, .. } => {
+                                format!("Terminal · {}", project_name(cwd)).into()
+                            }
+                            TitleTab::Bot { id, .. } => self
+                                .bots
+                                .as_ref()
+                                .and_then(|bots| bots.read(cx).roster.get(id))
+                                .map_or_else(|| "Bot".into(), |bot| bot.label().into()),
+                            TitleTab::Search => "Search".into(),
+                            TitleTab::App(_) => "App".into(),
+                        };
+                        MenuAction::new(format!("tab:{ix}"), title)
+                            .checked(selected.as_ref() == Some(tab))
+                            .into()
+                    })
+                    .collect();
+                items.push(MenuItem::Separator);
+                items.push(MenuAction::new("new", "New session").icon("plus").into());
+                ("Open tabs".into(), items, 300., MenuStyle::Switcher)
+            }
             MenuTarget::Tab(_) | MenuTarget::TitleTab(_) => {
                 let (tab, label) = match target {
                     MenuTarget::Tab(id) => {
@@ -244,10 +272,9 @@ impl Shell {
                     |this, _, picked: &ProjectPicked, window, cx| {
                         this.close_menu(cx);
                         match picked {
-                            ProjectPicked::Project(path) if *path != this.workspace.project => {
+                            ProjectPicked::Project(path) => {
                                 this.open_project_from_user(path.clone(), window, cx)
                             }
-                            ProjectPicked::Project(_) => {}
                             ProjectPicked::New => this.open_project(cx),
                             ProjectPicked::Remote => {
                                 this.open_remote_project(window, cx);
@@ -283,6 +310,11 @@ impl Shell {
                             None => worktree,
                         }
                         .into(),
+                    );
+                    items.push(
+                        MenuAction::new("project-settings", "Project actions…")
+                            .icon("ellipsis")
+                            .into(),
                     );
                 }
                 ("Switch project".into(), items, 286., MenuStyle::Switcher)
@@ -378,6 +410,18 @@ impl Shell {
                 self.run_title_tab_menu(TitleTab::Workspace(id), action, window, cx)
             }
             MenuTarget::TitleTab(tab) => self.run_title_tab_menu(tab, action, window, cx),
+            MenuTarget::Tabs(tabs) => {
+                if action == "new" {
+                    self.create(self.default_kind(), cx);
+                } else if let Some(tab) = action
+                    .strip_prefix("tab:")
+                    .and_then(|ix| ix.parse::<usize>().ok())
+                    .and_then(|ix| tabs.get(ix))
+                    .filter(|tab| self.visible_tabs(cx).contains(tab))
+                {
+                    self.open_title_tab(tab, window, cx);
+                }
+            }
             MenuTarget::Session(id) => self.run_session_menu(id, action, window, cx),
             MenuTarget::Header => {
                 // "Project settings" opens the project's menu beside its row.

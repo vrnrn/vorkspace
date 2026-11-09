@@ -142,7 +142,6 @@ impl Automations {
                 }
             }
             Choice::Conversation => editor.draft.reuse_session = value == "reuse",
-            Choice::Folder => editor.draft.session_folder_id = value,
             Choice::Grace => editor.draft.missed_run_grace_minutes = value.parse().unwrap_or(720),
             Choice::ModelSetting(key) => {
                 set_control_value(&mut editor.draft, key, value);
@@ -776,23 +775,6 @@ impl Automations {
                     .mt(px(8.))
                     .child("Skills, @file references, and built-in commands work here."),
             );
-        let mut folder_options = vec![(String::new(), "No folder".into())];
-        folder_options.extend(self.folders.iter().map(|f| (f.id.clone(), f.name.clone())));
-        if !draft.session_folder_id.is_empty()
-            && !folder_options
-                .iter()
-                .any(|(id, _)| id == &draft.session_folder_id)
-        {
-            folder_options.push((
-                draft.session_folder_id.clone(),
-                draft.session_folder_id.clone(),
-            ));
-        }
-        let folder_label = folder_options
-            .iter()
-            .find(|(id, _)| id == &draft.session_folder_id)
-            .map(|(_, label)| label.clone())
-            .unwrap_or_else(|| "No folder".into());
         let workspace = self.select_control(
             "automation-workspace",
             if draft.workspace_mode == "worktree" {
@@ -835,22 +817,11 @@ impl Automations {
                     "This repo, or a fresh worktree",
                     workspace,
                 ))
-                .child(settings_row(
-                    "Conversation",
-                    "New chat, or continue the last run",
-                    conversation,
-                ))
                 .child(
                     settings_row(
-                        "Session folder",
-                        "Where runs appear in the sidebar",
-                        self.select_control(
-                            "automation-folder",
-                            folder_label,
-                            Choice::Folder,
-                            folder_options,
-                            cx,
-                        ),
+                        "Conversation",
+                        "New chat, or continue the last run",
+                        conversation,
                     )
                     .border_b_0(),
                 ),

@@ -149,16 +149,38 @@ impl Shell {
         }));
     }
 
-    /// The project's sessions as the sidebar lists them, top to bottom.
-    /// Every session the rail can list: the vorkspace's projects, through
-    /// the session filter and title search, newest first. The rail shows a
-    /// window of these; selection and menus act on the same set.
     pub(super) fn sidebar_session_ids(&self, cx: &App) -> Vec<i64> {
-        let start = self
-            .workspace
-            .session_filters
-            .time
-            .start(vorkspace_core::time::now_ms());
+        self.filtered_rail_sessions(&self.session_launchers(cx), cx)
+    }
+
+    pub(super) fn session_launchers<'a>(
+        &self,
+        cx: &'a App,
+    ) -> HashMap<i64, &'a vorkspace_core::bot::Bot> {
+        let mut launches = HashMap::new();
+        if let Some(bots) = &self.bots {
+            for bot in &bots.read(cx).roster.bots {
+                for launch in &bot.launches {
+                    launches.entry(launch.session_id).or_insert(bot);
+                }
+            }
+        }
+        launches
+    }
+
+    /// Resolve scope and filters once before projecting the visible cards.
+    pub(super) fn filtered_rail_sessions(
+        &self,
+        launches: &HashMap<i64, &vorkspace_core::bot::Bot>,
+        cx: &App,
+    ) -> Vec<i64> {
+        let filters = self.effective_session_filters(cx);
+        let start = filters.time.start(vorkspace_core::time::now_ms());
+        let bots = self.bots.as_ref().map(|bots| bots.read(cx));
+        let bot_sessions: HashSet<i64> = bots
+            .into_iter()
+            .flat_map(|bots| bots.roster.hidden_sessions.iter().copied())
+            .collect();
         let projects: HashSet<String> = self
             .workspace
             .vorkspace_projects()
@@ -171,20 +193,35 @@ impl Shell {
             .copied()
             .filter(|&id| {
                 let s = self.session_metadata(id, cx);
+                let launcher = launches.get(&id);
                 (s.summary.has_messages || s.busy)
                     && projects.contains(&vorkspace_core::files::path_key(&s.summary.cwd))
-                    && !self
-                        .bots
-                        .as_ref()
-                        .is_some_and(|m| m.read(cx).hidden_session(id))
+                    && !bot_sessions.contains(&id)
+                    && launcher.is_none_or(|bot| bot.show_started_sessions_in_sidebar)
                     && !self.orchestration_worker(id)
-                    && self.filter_session(id, start, cx)
+                    && filters.bot.matches(launcher.map(|bot| bot.id.as_str()))
+                    && filters.matches(
+                        s.summary,
+                        vorkspace_core::session_filters::Status {
+                            working: s.responding(),
+                            needs_approval: s.needs_approval(),
+                            done: self.unseen_finished.contains(&id),
+                        },
+                        start,
+                        self.workspace.preferences.show_archived,
+                    )
                     && (self.query.is_empty()
                         || s.display_title().to_lowercase().contains(&self.query))
             })
             .collect();
-        ids.sort_by_key(|id| {
-            std::cmp::Reverse((self.session_metadata(*id, cx).summary.updated_at, *id))
+        ids.sort_by_cached_key(|id| {
+            let s = self.session_metadata(*id, cx);
+            std::cmp::Reverse((
+                s.responding() || s.needs_approval(),
+                s.summary.pinned,
+                s.summary.updated_at,
+                *id,
+            ))
         });
         ids
     }

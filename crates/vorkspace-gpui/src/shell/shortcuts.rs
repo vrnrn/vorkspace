@@ -66,6 +66,11 @@ pub(super) fn install(owner: WeakEntity<Shell>, window: &Window, cx: &mut App) -
         let Some(owner) = owner.upgrade() else {
             return;
         };
+        if owner.read(cx).management_modal_focus(cx).is_some() {
+            pending.borrow_mut().clear();
+            forwarding.chord_deadline.set(None);
+            return;
+        }
         let root = owner.read(cx).focus.clone();
         let native = forwarding.native.get();
         let now = Instant::now();

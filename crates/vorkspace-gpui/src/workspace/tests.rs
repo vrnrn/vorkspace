@@ -47,6 +47,24 @@ fn codebase_tabs_retain_independent_project_and_worktree_identity() {
 }
 
 #[test]
+fn restore_keeps_empty_vorkspace_even_with_an_unrelated_saved_chat() {
+    let mut state = Workspace::default();
+    state.add_project("/work/atlas");
+    state.ensure_vorkspaces();
+    let empty = state.create_vorkspace("Empty");
+    state.active_vorkspace = empty.clone();
+    state.project = "/work/atlas".into();
+    state.open(42);
+
+    let saved = serde_json::to_string(&state).unwrap();
+    let restored = Workspace::restore(Some(&saved), &[(42, "/work/atlas".into())], "");
+    assert_eq!(restored.active_vorkspace, empty);
+    assert!(restored.project.is_empty());
+    assert_eq!(restored.active, None);
+    assert!(restored.tabs.contains(&42));
+}
+
+#[test]
 fn archived_project_is_not_reopened_by_active_session_or_stale_metadata() {
     let saved = serde_json::json!({
             "projects": ["/work/old", "/work/other"], "project": "/work/old", "active": 42,

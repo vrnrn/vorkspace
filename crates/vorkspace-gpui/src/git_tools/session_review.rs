@@ -268,6 +268,7 @@ impl Render for SessionReview {
         let header = div()
             .min_w_0()
             .flex()
+            .flex_wrap()
             .items_center()
             .gap(px(10.))
             .px_3()
@@ -285,7 +286,7 @@ impl Render for SessionReview {
             )
             .child(
                 div()
-                    .min_w_0()
+                    .min_w(px(84.))
                     .flex_1()
                     .child(
                         div()
@@ -306,6 +307,8 @@ impl Render for SessionReview {
                 div()
                     .flex_shrink_0()
                     .flex()
+                    .flex_wrap()
+                    .max_w_full()
                     .items_center()
                     .gap(px(2.))
                     .child(
@@ -337,6 +340,7 @@ impl Render for SessionReview {
                             .id("session-review-open")
                             .role(Role::Button)
                             .aria_label("Review changes")
+                            .map(vorkspace_ui::theme::tab_reachable)
                             .h(px(28.))
                             .px(px(10.))
                             .flex()

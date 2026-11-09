@@ -111,6 +111,23 @@ impl Shell {
                         );
                     })),
             )
+            .when(!self.workspace.project.is_empty(), |d| {
+                d.child(
+                    icon_button("sidebar-project-actions", "Project actions", "ellipsis").on_click(
+                        cx.listener(|this, _, window, cx| {
+                            this.open_menu(
+                                MenuTarget::Project {
+                                    path: this.workspace.project.clone(),
+                                    rail: false,
+                                },
+                                Anchor::Slot(this.project_anchor.clone()),
+                                window,
+                                cx,
+                            );
+                        }),
+                    ),
+                )
+            })
             .into_any()
     }
 
@@ -118,10 +135,11 @@ impl Shell {
         let tab = self.workspace.sidebar_tab();
         let tabs = SidebarTab::normalize(&self.workspace.sidebar_tab_order);
         let todos_enabled = self.workspace.preferences.todos;
+        let compact = self.sidebar_content_width < 200.;
         let mut body = div()
             .id("classic-workspace-sidebar")
             .debug_selector(|| "sidebar-content".into())
-            .w(px(self.workspace.right_panel_width))
+            .w_full()
             .h_full()
             .flex()
             .flex_col()
@@ -193,7 +211,28 @@ impl Shell {
                                                 })
                                             })
                                             .child(glide.probe(index))
-                                            .child(item.label())
+                                            .child(if compact {
+                                                let mark = match item {
+                                                    SidebarTab::Files => "folder",
+                                                    SidebarTab::Changes => "git-compare",
+                                                    SidebarTab::Todos => "circle-check",
+                                                    SidebarTab::Graph => "history",
+                                                    SidebarTab::Sessions => "message-circle",
+                                                };
+                                                icon(mark, 14.).into_any_element()
+                                            } else {
+                                                item.label().into_any_element()
+                                            })
+                                            .when(compact, |d| {
+                                                d.tooltip(move |_, cx| {
+                                                    cx.new(|_| {
+                                                        crate::controls::Tooltip(
+                                                            item.label().into(),
+                                                        )
+                                                    })
+                                                    .into()
+                                                })
+                                            })
                                             // Keep the cached sidebar's hover fill current,
                                             // including clicks that arrive without a mouse move.
                                             .on_hover(move |_, _, cx| {

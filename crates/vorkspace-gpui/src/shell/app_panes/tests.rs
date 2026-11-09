@@ -17,6 +17,7 @@ fn codebase_navigation_keeps_the_selected_project_and_worktree(cx: &mut TestAppC
             )
             .unwrap();
             for project in [&first, &second] {
+                shell.workspace.add_project(project);
                 std::fs::create_dir(project).unwrap();
                 service.configure(project, true).unwrap();
                 // Exercise real navigation with unavailable roots: activation

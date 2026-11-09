@@ -825,6 +825,8 @@ impl Shell {
             div()
                 .id(id)
                 .role(Role::Button)
+                .aria_label(label)
+                .map(vorkspace_ui::theme::tab_reachable)
                 .cursor(CursorStyle::Arrow)
                 .px_3()
                 .py_1p5()
@@ -922,6 +924,7 @@ impl Shell {
                                                     Some(error) => div()
                                                             .id("link-error")
                                                         .role(Role::Alert)
+                                                        .aria_label(error.clone())
                                                         .text_size(px(11.))
                                                         .text_color(vorkspace_ui::theme::danger())
                                                         .child(error.clone()),
