@@ -825,45 +825,4 @@ impl Shell {
             })
             .into_any_element()
     }
-    /// The narrowest chat column the active tab would have, with or without
-    /// the sidebar: each pane's share of the card, less its review.
-    #[cfg(test)]
-    pub(super) fn narrowest_chat(&self, sidebar: bool, cx: &App) -> f32 {
-        // The card's inset and border.
-        let mut main = self.viewport_width - self.classic_rail_width();
-        if sidebar {
-            main -= self.workspace.right_panel_width;
-        }
-        if self.right_panel_shown(cx) {
-            main -= self.workspace.right_panel_width;
-        }
-        if let Some(dock) = self.workspace.docks.get(&self.workspace.project)
-            && dock.open
-            && !dock.side.vertical()
-        {
-            main -= dock.size;
-        }
-        let Some(tab) = self.workspace.active_tab() else {
-            return main;
-        };
-        self.workspace
-            .layout(tab)
-            .leaves()
-            .iter()
-            .map(|leaf| {
-                let width = leaf.rect.w * main;
-                let review = self
-                    .reviews
-                    .get(&leaf.id)
-                    .map(|r| r.read(cx).state.clone())
-                    .or_else(|| self.workspace.reviews.get(&leaf.id).cloned())
-                    .filter(|r| !r.tabs.is_empty());
-                match review {
-                    Some(r) if r.chat_hidden => width,
-                    Some(r) => width * (1. - r.ratio),
-                    None => width,
-                }
-            })
-            .fold(f32::INFINITY, f32::min)
-    }
 }

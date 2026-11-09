@@ -798,7 +798,11 @@ fn backgrounds_survive_tab_and_notes_switches_until_the_tab_closes(cx: &mut Test
     window
         .update(cx, |shell, _, cx| {
             let vorkspace = shell.workspace.active_vorkspace.clone();
-            shell.workspace.vorkspace_mut(&vorkspace).unwrap().background = Some(Background {
+            shell
+                .workspace
+                .vorkspace_mut(&vorkspace)
+                .unwrap()
+                .background = Some(Background {
                 path: concat!(env!("CARGO_MANIFEST_DIR"), "/assets/vorkspace.png").into(),
                 effect: Effect::Dither,
                 ..Default::default()

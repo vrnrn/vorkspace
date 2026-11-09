@@ -267,6 +267,8 @@ impl Shell {
                     },
                 ));
                 let focus = picker.read(cx).search_focus(cx);
+                // The project name opens the vorkspace's project picker itself;
+                // the worktree Explorer and Changes show stays one row below.
                 let branch = self
                     .worktree_focus
                     .get(&self.workspace.project)
@@ -280,39 +282,17 @@ impl Shell {
                     .icon("folder-tree")
                     .flyout(self.worktree_flyout(events, window, cx));
                 (
-                    format!("{} menu", self.project_label(&self.workspace.project)).into(),
+                    "Switch project".into(),
                     vec![
+                        MenuItem::Custom(picker.into(), focus),
+                        MenuItem::Separator,
                         match branch {
                             Some(branch) => worktree.value(branch),
                             None => worktree,
                         }
                         .into(),
-                        MenuItem::Separator,
-                        MenuAction::new("switch-project", "Switch project")
-                            .icon("folder")
-                            .flyout(Flyout {
-                                view: picker.into(),
-                                width: 286.,
-                                padding: 0.,
-                                height: None,
-                                max_height: Some(380.),
-                                focus: Some(focus),
-                                surface: None,
-                            })
-                            .into(),
-                        MenuAction::new("project-settings", "Project settings")
-                            .icon("sliders")
-                            .flyout(self.project_settings_flyout(events, window, cx))
-                            .into(),
-                        MenuAction::new("open-remote-project", "Open folder on a machine…")
-                            .icon("globe")
-                            .into(),
-                        MenuAction::new("settings", "Settings")
-                            .icon("settings")
-                            .shortcut(format!("{MOD},"))
-                            .into(),
                     ],
-                    240.,
+                    286.,
                     MenuStyle::Switcher,
                 )
             }
@@ -570,12 +550,7 @@ impl Shell {
                 } else if let Some(editor) = action.strip_prefix("external-editor:") {
                     self.open_in_external_editor(editor, &path, cx);
                 } else if action == "project-settings" {
-                    self.open_project_settings(
-                        path,
-                        super::project_settings::ProjectSection::Codebase,
-                        window,
-                        cx,
-                    );
+                    self.open_project_settings(path, window, cx);
                 } else if action.starts_with("mute:") {
                     self.run_project_notification_menu(&path, action, window, cx);
                 }

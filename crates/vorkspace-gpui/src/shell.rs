@@ -327,8 +327,6 @@ const CORNER_BUTTONS_WIDTH: f32 = 48. + 2. * CORNER_CONTROL_GAP;
 // TitleBar.tsx's labels, with their shortcuts.
 const TOGGLE_SIDEBAR_LABEL: &str = "Toggle Rail (⌘B)";
 const TOGGLE_EXPLORER_LABEL: &str = "Toggle Sidebar (⇧⌘B)";
-const BACK_LABEL: &str = "Back (⌘[)";
-const FORWARD_LABEL: &str = "Forward (⌘])";
 const TOGGLE_RIGHT_PANEL_LABEL: &str = "Toggle right sidebar (⌘⇧B)";
 const TOGGLE_RIGHT_PANEL_DOT_LABEL: &str = "Toggle right sidebar (⌘⇧B, uncommitted changes)";
 const MOD: &str = "⌘";
@@ -608,7 +606,6 @@ pub(crate) struct Shell {
     background_dialog: Option<project_settings::OpenBackground>,
     /// Project settings: one project's appearance, background, Codebase
     /// Memory and notifications, in the same dialog frame as a Bot's.
-    pub(super) project_dialog: Option<project_settings::ProjectDialog>,
     pub(super) vorkspace_dialog: Option<vorkspaces::VorkspaceDialog>,
     /// What every window shares; `None` only before the window joins it.
     app_core: Option<Entity<app_core::AppCore>>,
@@ -995,7 +992,6 @@ impl Shell {
             quit_prompted: false,
             menu: None,
             background_dialog: None,
-            project_dialog: None,
             vorkspace_dialog: None,
             app_core: None,
             rail_sessions_expanded: false,
@@ -3032,7 +3028,6 @@ impl Render for Shell {
             }))
             .children(self.drag_ghost(cx))
             .children(self.background_modal(window, cx))
-            .children(self.project_settings_modal(window, cx))
             .children(self.vorkspace_modal(window, cx))
             .children(
                 self.bots

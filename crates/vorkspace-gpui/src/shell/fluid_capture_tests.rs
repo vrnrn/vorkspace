@@ -574,12 +574,7 @@ fn fluid_capture() {
                         }
                     }
                     "project-codebase" | "project-notifications" => {
-                        use super::project_settings::ProjectSection;
-                        let section = match *name {
-                            "project-notifications" => ProjectSection::Notifications,
-                            _ => ProjectSection::Codebase,
-                        };
-                        shell.open_project_settings(PROJECT.into(), section, window, cx)
+                        shell.open_project_settings(PROJECT.into(), window, cx)
                     }
                     "typed" => {
                         let view = shell.sessions[&sessions[0].id].clone();

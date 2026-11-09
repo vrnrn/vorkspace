@@ -190,9 +190,10 @@ impl SidebarTab {
         let mut tabs = Vec::new();
         for tab in order
             .iter()
-            .chain(&[Self::Sessions, Self::Files, Self::Changes, Self::Todos])
+            .chain(&[Self::Files, Self::Changes, Self::Todos])
         {
-            if *tab != Self::Graph && !tabs.contains(tab) {
+            // Sessions live in the rail; the sidebar holds project tools.
+            if !matches!(tab, Self::Graph | Self::Sessions) && !tabs.contains(tab) {
                 tabs.push(*tab);
             }
         }
@@ -859,16 +860,18 @@ impl Workspace {
                     .get(&vorkspace_core::files::path_key(&self.project))
             })
             .copied()
+            .filter(|tab| *tab != SidebarTab::Sessions)
             .filter(|tab| *tab != SidebarTab::Todos || self.preferences.todos)
             .unwrap_or_else(|| {
                 self.sidebar_tab_order
                     .iter()
                     .find(|tab| {
                         **tab != SidebarTab::Graph
+                            && **tab != SidebarTab::Sessions
                             && (**tab != SidebarTab::Todos || self.preferences.todos)
                     })
                     .copied()
-                    .unwrap_or_default()
+                    .unwrap_or(SidebarTab::Files)
             })
     }
     pub fn migrate_project_rail(&mut self) -> Result<(), String> {

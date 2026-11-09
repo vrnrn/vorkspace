@@ -1,6 +1,6 @@
 //! SessionFiltersMenu.tsx: persisted status, time and provider checkboxes.
 use super::*;
-use vorkspace_core::session_filters::{Status, TimeFilter};
+use vorkspace_core::session_filters::{BotFilter, Status, TimeFilter};
 
 impl Shell {
     pub(super) fn filter_menu_items(&self, cx: &App) -> Vec<MenuItem> {
@@ -32,15 +32,19 @@ impl Shell {
                     .into(),
             );
         }
+        let projects: Vec<String> = self.workspace.vorkspace_projects();
+        let keys: std::collections::HashSet<String> = projects
+            .iter()
+            .map(|p| vorkspace_core::files::path_key(p))
+            .collect();
         let providers: Vec<_> = Kind::ALL
             .into_iter()
             .filter(|kind| {
                 self.order.iter().any(|id| {
                     let session = self.session_metadata(*id, cx);
-                    session.summary.cwd == self.workspace.project
+                    keys.contains(&vorkspace_core::files::path_key(&session.summary.cwd))
                         && session.summary.has_messages
                         && session.summary.provider == kind.id()
-                        && self.in_sidebar_worktree_scope(*id, cx)
                 })
             })
             .collect();
@@ -55,6 +59,55 @@ impl Shell {
                         .into(),
                 );
             }
+        }
+        if projects.len() > 1 {
+            items.push(MenuItem::Header("Project".into()));
+            for path in &projects {
+                let key = vorkspace_core::files::path_key(path);
+                items.push(
+                    MenuAction::new(format!("project:{key}"), self.project_label(path))
+                        .icon("folder")
+                        .checked(!filters.hidden_projects.contains(&key))
+                        .keep_open()
+                        .into(),
+                );
+            }
+        }
+        items.push(MenuItem::Header("Bot".into()));
+        let mut bots = vec![
+            (BotFilter::Any, "bot:any".to_string(), "Any".to_string()),
+            (
+                BotFilter::AnyBot,
+                "bot:some".into(),
+                "Started by a Bot".into(),
+            ),
+            (BotFilter::NoBot, "bot:none".into(), "Started by me".into()),
+        ];
+        if let Some(manager) = &self.bots {
+            let hidden = &manager.read(cx).vorkspace_hidden;
+            bots.extend(
+                manager
+                    .read(cx)
+                    .roster
+                    .bots
+                    .iter()
+                    .filter(|bot| !hidden.contains(&bot.id))
+                    .map(|bot| {
+                        (
+                            BotFilter::Bot(bot.id.clone()),
+                            format!("bot:id:{}", bot.id),
+                            format!("Started by {}", bot.label()),
+                        )
+                    }),
+            );
+        }
+        for (value, id, label) in bots {
+            items.push(
+                MenuAction::new(id, label)
+                    .checked(filters.bot == value)
+                    .keep_open()
+                    .into(),
+            );
         }
         if filters.active(self.workspace.preferences.show_archived) {
             items.push(MenuItem::Separator);
@@ -79,6 +132,17 @@ impl Shell {
             _ => {
                 if let Some(provider) = action.strip_prefix("provider:") {
                     filters.toggle_provider(provider);
+                } else if let Some(key) = action.strip_prefix("project:") {
+                    filters.toggle_project(key);
+                } else if let Some(bot) = action.strip_prefix("bot:") {
+                    filters.bot = match bot {
+                        "some" => BotFilter::AnyBot,
+                        "none" => BotFilter::NoBot,
+                        _ => match bot.strip_prefix("id:") {
+                            Some(id) => BotFilter::Bot(id.into()),
+                            None => BotFilter::Any,
+                        },
+                    };
                 } else if let Some(time) = action.strip_prefix("time:").and_then(|id| {
                     TimeFilter::OPTIONS
                         .iter()
@@ -100,9 +164,30 @@ impl Shell {
         cx.notify();
     }
 
+    /// The Bot that started a session, if one did.
+    pub(super) fn session_launcher(&self, id: i64, cx: &App) -> Option<String> {
+        self.bots.as_ref().and_then(|manager| {
+            manager
+                .read(cx)
+                .roster
+                .bots
+                .iter()
+                .find(|bot| bot.launches.iter().any(|l| l.session_id == id))
+                .map(|bot| bot.id.clone())
+        })
+    }
+
     pub(super) fn filter_session(&self, id: i64, start: u64, cx: &App) -> bool {
         let session = self.session_metadata(id, cx);
-        self.workspace.session_filters.matches(
+        let filters = &self.workspace.session_filters;
+        if !filters.bot.is_any()
+            && !filters
+                .bot
+                .matches(self.session_launcher(id, cx).as_deref())
+        {
+            return false;
+        }
+        filters.matches(
             session.summary,
             Status {
                 working: session.busy,

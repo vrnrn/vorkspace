@@ -169,30 +169,16 @@ impl Shell {
     /// Project tools have their own header.
     pub(super) fn corner_room(&self, cx: &gpui::App) -> f32 {
         // The open sidebar's header holds them instead (`classic_corner`).
-        if self.sidebar_fraction > 0. {
-            return 6.;
-        }
-        6. + self.diff_stat_room(cx) + 24. + 12.
+        let _ = cx;
+        6.
     }
     pub(super) fn classic_corner(
         &self,
         _window: &mut Window,
         cx: &mut Context<Self>,
     ) -> AnyElement {
-        // The open sidebar's header has its own search and the diff stat.
-        if self.sidebar_fraction > 0. {
-            return div().into_any_element();
-        }
-        div()
-            .h(px(TITLE_BAR_HEIGHT))
-            .flex_shrink_0()
-            .flex()
-            .items_center()
-            .pl_1p5()
-            .pr_3()
-            .children(self.project_diff_stat(cx))
-            .child(self.file_search_button(cx))
-            .into_any_element()
+        let _ = cx;
+        div().into_any_element()
     }
     pub(super) fn sidebar_uncached(&self) -> bool {
         self.sidebar_slide.is_some()

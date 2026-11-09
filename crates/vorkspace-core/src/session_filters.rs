@@ -70,11 +70,44 @@ pub struct Filters {
     pub hidden_providers: Vec<String>,
     pub time: TimeFilter,
     pub status: Status,
+    /// Path keys of projects whose sessions are hidden.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub hidden_projects: Vec<String>,
+    /// Bot involvement: any, sessions a Bot started, ones it did not, or one
+    /// Bot's. The caller knows which Bot started a session.
+    #[serde(skip_serializing_if = "BotFilter::is_any")]
+    pub bot: BotFilter,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum BotFilter {
+    #[default]
+    Any,
+    AnyBot,
+    NoBot,
+    Bot(String),
+}
+impl BotFilter {
+    pub fn is_any(&self) -> bool {
+        *self == Self::Any
+    }
+    /// Whether a session started by `launcher` (a Bot id, if any) passes.
+    pub fn matches(&self, launcher: Option<&str>) -> bool {
+        match self {
+            Self::Any => true,
+            Self::AnyBot => launcher.is_some(),
+            Self::NoBot => launcher.is_none(),
+            Self::Bot(id) => launcher == Some(id.as_str()),
+        }
+    }
 }
 impl Filters {
     pub fn active(&self, show_archived: bool) -> bool {
         show_archived
             || !self.hidden_providers.is_empty()
+            || !self.hidden_projects.is_empty()
+            || !self.bot.is_any()
             || self.time != TimeFilter::All
             || self.status.active()
     }
@@ -87,8 +120,18 @@ impl Filters {
     ) -> bool {
         (!session.archived || show_archived)
             && !self.hidden_providers.contains(&session.provider)
+            && !self
+                .hidden_projects
+                .contains(&crate::files::path_key(&session.cwd))
             && session.updated_at >= start
             && self.status.matches(state)
+    }
+    pub fn toggle_project(&mut self, key: &str) {
+        if self.hidden_projects.iter().any(|k| k == key) {
+            self.hidden_projects.retain(|k| k != key);
+        } else {
+            self.hidden_projects.push(key.into());
+        }
     }
     pub fn toggle_provider(&mut self, provider: &str) {
         if Kind::parse(provider).is_none() {

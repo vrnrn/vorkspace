@@ -26,7 +26,7 @@ impl Shell {
     pub(super) fn navigation_width(&self, window: &Window) -> f32 {
         let scale = window.scale_factor();
         let minimum = self.traffic_lights(window)
-            + 4. * Self::navigation_button_size(window)
+            + 2. * Self::navigation_button_size(window)
             + self.navigation_padding();
         let minimum = (minimum * scale).ceil() / scale;
         self.classic_rail_width().max(minimum)
@@ -85,28 +85,6 @@ impl Shell {
                     .on_click(cx.listener(|this, _, window, cx| this.toggle_sidebar(window, cx))),
             )
             .child(titlebar_drag_area().flex_1())
-            .child(
-                icon_button_enabled(
-                    "visit-back",
-                    BACK_LABEL,
-                    "chevron-left",
-                    !self.history.back.is_empty(),
-                )
-                .debug_selector(|| "visit-back".into())
-                .size(button_size)
-                .on_click(cx.listener(|this, _, window, cx| this.visit(-1, window, cx))),
-            )
-            .child(
-                icon_button_enabled(
-                    "visit-forward",
-                    FORWARD_LABEL,
-                    "chevron-right",
-                    !self.history.forward.is_empty(),
-                )
-                .debug_selector(|| "visit-forward".into())
-                .size(button_size)
-                .on_click(cx.listener(|this, _, window, cx| this.visit(1, window, cx))),
-            )
     }
     pub(super) fn titlebar(&mut self, window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
         // Same hierarchy as TitleBar.tsx's inset layout: window navigation and

@@ -12,6 +12,9 @@ use vorkspace_ui::radius;
 
 pub(crate) struct VorkspaceDialog {
     pub(crate) editing: String,
+    /// A project's own tab (Codebase, Notifications); none shows the
+    /// vorkspace itself.
+    pub(crate) project: Option<String>,
     name: Entity<input::Input>,
     focus: FocusHandle,
     confirm_delete: bool,
@@ -169,6 +172,7 @@ impl Shell {
         window.focus(&field.focus_handle(cx), cx);
         self.vorkspace_dialog = Some(VorkspaceDialog {
             editing: id,
+            project: None,
             name: field,
             focus,
             confirm_delete: false,
@@ -284,15 +288,20 @@ impl Shell {
             .iter()
             .map(|p| path_key(p))
             .collect();
+        let start = self
+            .workspace
+            .session_filters
+            .time
+            .start(vorkspace_core::time::now_ms());
         let mut sessions: Vec<RailSession> = self
             .order
             .iter()
             .filter_map(|&id| {
                 let meta = self.session_metadata(id, cx);
                 let summary = &meta.summary;
-                if summary.archived
-                    || !(summary.has_messages || meta.busy)
+                if !(summary.has_messages || meta.busy)
                     || !projects.contains(&path_key(&summary.cwd))
+                    || !self.filter_session(id, start, cx)
                 {
                     return None;
                 }
@@ -313,7 +322,11 @@ impl Shell {
             .iter()
             .take_while(|s| s.busy || s.needs_input)
             .count();
-        sessions.truncate(if self.rail_sessions_expanded {
+        let filtered = self
+            .workspace
+            .session_filters
+            .active(self.workspace.preferences.show_archived);
+        sessions.truncate(if self.rail_sessions_expanded || filtered {
             EXPANDED_SESSIONS
         } else if active > 0 {
             active.min(ACTIVE_SESSIONS)
@@ -346,8 +359,50 @@ impl Shell {
             .unwrap_or_default();
         let expanded = self.rail_sessions_expanded;
         let more = total > sessions.len() || expanded;
-        let heading = section_label("Sessions").mx_2().when(more, |d| {
-            d.child(
+        let filtering = self
+            .workspace
+            .session_filters
+            .active(self.workspace.preferences.show_archived);
+        let heading = section_label("Sessions").mx_2().child(
+            div()
+                .flex()
+                .items_center()
+                .gap_0p5()
+                .child(
+                    icon_button("rail-sessions-filter", "Filter sessions", "filter")
+                        .debug_selector(|| "rail-sessions-filter".into())
+                        .size(px(20.))
+                        .relative()
+                        .when(
+                            filtering || self.menu_open(&MenuTarget::SessionFilter),
+                            |d| d.bg(content(0.1)),
+                        )
+                        .child(self.filter_anchor.probe())
+                        .on_click(cx.listener(|this, _, window, cx| {
+                            if this.menu_open(&MenuTarget::SessionFilter) {
+                                this.close_menu(cx);
+                            } else {
+                                this.open_menu(
+                                    MenuTarget::SessionFilter,
+                                    Anchor::Slot(this.filter_anchor.clone()),
+                                    window,
+                                    cx,
+                                );
+                            }
+                        })),
+                )
+                .child(
+                    icon_button("rail-sessions-new", "New session", "plus")
+                        .debug_selector(|| "rail-sessions-new".into())
+                        .size(px(20.))
+                        .on_click(
+                            cx.listener(|this, _, _, cx| this.create(this.default_kind(), cx)),
+                        ),
+                ),
+        );
+        // Below the list, the disclosure reaches further back.
+        let disclosure = (more && !filtering).then(|| {
+            div().px_2().flex().justify_center().child(
                 icon_button(
                     "rail-sessions-more",
                     if expanded {
@@ -388,7 +443,11 @@ impl Shell {
                                 .py_1()
                                 .text_size(px(12.))
                                 .text_color(content(0.45))
-                                .child("No sessions yet · ⌘N starts one"),
+                                .child(if filtering {
+                                    "No sessions match the filter"
+                                } else {
+                                    "No sessions yet · ⌘N starts one"
+                                }),
                         )
                     })
                     .children(sessions.into_iter().map(|s| {
@@ -497,6 +556,7 @@ impl Shell {
                             }))
                     })),
             )
+            .children(disclosure)
             .into_any_element()
     }
 
@@ -519,41 +579,151 @@ impl Shell {
         let weak = cx.weak_entity();
         let only = self.workspace.vorkspaces.len() <= 1;
         let look = self.vorkspace_look(&def, cx);
-        let nav = self.workspace.vorkspaces.iter().map(|v| {
-            let id = v.id.clone();
-            let selected = v.id == editing;
+        let open_project = dialog.project.clone();
+        let project_page = open_project.as_ref().map(|path| {
             div()
-                .id(SharedString::from(format!("vorkspace-row-{}", v.id)))
-                .debug_selector({
-                    let id = v.id.clone();
-                    move || format!("vorkspace-row-{id}")
-                })
-                .role(Role::Tab)
-                .aria_selected(selected)
-                .aria_label(v.name.clone())
-                .map(vorkspace_ui::theme::tab_reachable)
-                .h(px(34.))
-                .px(px(8.))
                 .flex()
-                .items_center()
-                .gap_2()
-                .rounded(px(radius::CONTROL))
-                .text_size(px(13.))
-                .text_color(content(if selected { 1. } else { 0.7 }))
-                .cursor_pointer()
-                .when(selected, |d| d.bg(content(0.08)))
-                .when(!selected, |d| {
-                    d.hover(|s| s.bg(vorkspace_ui::fluid::hover(0.05)))
-                })
-                .child(vorkspace_mark(v, 18.))
-                .child(div().flex_1().min_w_0().truncate().child(v.name.clone()))
-                .when(v.id == self.workspace.active_vorkspace, |d| {
-                    d.child(icon("check-2", 12.).text_color(content(0.45)))
-                })
-                .on_click(cx.listener(move |this, _, window, cx| {
-                    this.open_vorkspace_dialog(Some(id.clone()), window, cx);
-                }))
+                .flex_col()
+                .child(
+                    div()
+                        .flex()
+                        .items_center()
+                        .gap_2()
+                        .mb_1()
+                        .child(self.project_mark(path, 18.))
+                        .child(
+                            div()
+                                .text_size(px(15.))
+                                .font_weight(FontWeight::SEMIBOLD)
+                                .child(self.project_label(path)),
+                        ),
+                )
+                .child(
+                    div()
+                        .text_size(px(12.))
+                        .text_color(content(0.45))
+                        .child(crate::panel_kit::home_relative(std::path::Path::new(path))),
+                )
+                .child(
+                    div()
+                        .mt_5()
+                        .mb_2()
+                        .text_size(px(12.))
+                        .font_weight(FontWeight::MEDIUM)
+                        .text_color(content(0.55))
+                        .child("Codebase"),
+                )
+                .child(self.project_codebase_section(path, cx))
+                .child(
+                    div()
+                        .mt_5()
+                        .mb_2()
+                        .text_size(px(12.))
+                        .font_weight(FontWeight::MEDIUM)
+                        .text_color(content(0.55))
+                        .child("Notifications"),
+                )
+                .child(self.project_notifications_section(path, cx))
+                .into_any_element()
         });
+        let mut nav: Vec<AnyElement> = Vec::new();
+        for v in &self.workspace.vorkspaces {
+            let id = v.id.clone();
+            let current = v.id == editing;
+            let selected = current && open_project.is_none();
+            nav.push(
+                div()
+                    .id(SharedString::from(format!("vorkspace-row-{}", v.id)))
+                    .debug_selector({
+                        let id = v.id.clone();
+                        move || format!("vorkspace-row-{id}")
+                    })
+                    .role(Role::Tab)
+                    .aria_selected(selected)
+                    .aria_label(v.name.clone())
+                    .map(vorkspace_ui::theme::tab_reachable)
+                    .h(px(34.))
+                    .px(px(8.))
+                    .flex()
+                    .items_center()
+                    .gap_2()
+                    .rounded(px(radius::CONTROL))
+                    .text_size(px(13.))
+                    .text_color(content(if selected { 1. } else { 0.7 }))
+                    .cursor_pointer()
+                    .when(selected, |d| d.bg(content(0.08)))
+                    .when(!selected, |d| {
+                        d.hover(|s| s.bg(vorkspace_ui::fluid::hover(0.05)))
+                    })
+                    .child(vorkspace_mark(v, 18.))
+                    .child(div().flex_1().min_w_0().truncate().child(v.name.clone()))
+                    .when(v.id == self.workspace.active_vorkspace, |d| {
+                        d.child(icon("check-2", 12.).text_color(content(0.45)))
+                    })
+                    .on_click(cx.listener(move |this, _, window, cx| {
+                        if this
+                            .vorkspace_dialog
+                            .as_ref()
+                            .is_some_and(|d| d.editing == id)
+                        {
+                            if let Some(d) = this.vorkspace_dialog.as_mut() {
+                                d.project = None;
+                            }
+                            cx.notify();
+                        } else {
+                            this.open_vorkspace_dialog(Some(id.clone()), window, cx);
+                        }
+                    }))
+                    .into_any_element(),
+            );
+            if !current {
+                continue;
+            }
+            // Each of the vorkspace's projects has its own settings tab.
+            for path in &v.projects {
+                let selected = open_project.as_deref() == Some(path.as_str());
+                let target = path.clone();
+                let key = path_key(path);
+                nav.push(
+                    div()
+                        .id(SharedString::from(format!("vorkspace-project-tab-{key}")))
+                        .debug_selector(move || format!("vorkspace-project-tab-{key}"))
+                        .role(Role::Tab)
+                        .aria_selected(selected)
+                        .aria_label(format!("{} settings", self.project_label(path)))
+                        .map(vorkspace_ui::theme::tab_reachable)
+                        .h(px(30.))
+                        .pl(px(20.))
+                        .pr(px(8.))
+                        .flex()
+                        .items_center()
+                        .gap_2()
+                        .rounded(px(radius::CONTROL))
+                        .text_size(px(12.5))
+                        .text_color(content(if selected { 1. } else { 0.65 }))
+                        .cursor_pointer()
+                        .when(selected, |d| d.bg(content(0.08)))
+                        .when(!selected, |d| {
+                            d.hover(|s| s.bg(vorkspace_ui::fluid::hover(0.05)))
+                        })
+                        .child(self.project_mark(path, 14.))
+                        .child(
+                            div()
+                                .flex_1()
+                                .min_w_0()
+                                .truncate()
+                                .child(self.project_label(path)),
+                        )
+                        .on_click(cx.listener(move |this, _, _, cx| {
+                            if let Some(d) = this.vorkspace_dialog.as_mut() {
+                                d.project = Some(target.clone());
+                            }
+                            cx.notify();
+                        }))
+                        .into_any_element(),
+                );
+            }
+        }
         let section = |label: &'static str| {
             div()
                 .mt_5()
@@ -735,7 +905,9 @@ impl Shell {
                     .px_5()
                     .pt_4()
                     .pb_4()
-                    .child(section("Name").mt_0())
+                    .children(project_page)
+                    .when(open_project.is_none(), |d| {
+                        d.child(section("Name").mt_0())
                     .child(crate::controls::page::field_frame().child(dialog.name.clone()))
                     .child(section("Look"))
                     .child(look)
@@ -780,7 +952,8 @@ impl Shell {
                             }),
                     )
                     .children(member_rows)
-                    .child(div().mt_2().flex().flex_wrap().gap_2().children(add_bots)),
+                    .child(div().mt_2().flex().flex_wrap().gap_2().children(add_bots))
+                    }),
             )
             .child(
                 div()
