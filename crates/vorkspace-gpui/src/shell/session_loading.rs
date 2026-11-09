@@ -17,7 +17,8 @@ impl Metadata<'_> {
         self.live.is_some_and(Conversation::needs_approval) || self.remote_waiting
     }
     pub(super) fn responding(&self) -> bool {
-        self.live.is_some_and(Conversation::responding)
+        self.live
+            .map_or(self.busy, |live| !live.is_stopping() && self.busy)
     }
     pub(super) fn has_saved_draft(&self) -> bool {
         self.live.map_or(self.draft, Conversation::has_saved_draft)

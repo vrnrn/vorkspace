@@ -820,7 +820,7 @@ impl Shell {
         }
         if metadata.needs_approval() {
             Some(Status::Approval)
-        } else if metadata.responding() || self.remote_marks.get(&id).is_some_and(|state| state.0) {
+        } else if metadata.responding() {
             Some(Status::Working)
         } else if !metadata.busy && self.unseen_finished.contains(&id) {
             Some(Status::Done)

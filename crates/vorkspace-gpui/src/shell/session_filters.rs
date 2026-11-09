@@ -306,4 +306,34 @@ mod tests {
             })
             .unwrap();
     }
+
+    #[gpui::test]
+    fn working_filter_preserves_running_remote_sessions_without_materializing_them(
+        cx: &mut TestAppContext,
+    ) {
+        let (window, _, _) = super::super::tests::window(cx);
+        window
+            .update(cx, |shell, _, cx| {
+                let project = shell.workspace.project.clone();
+                let mut remote_summary = locked(&shell.store)
+                    .unwrap()
+                    .create("codex", &project)
+                    .unwrap();
+                remote_summary.has_messages = true;
+                remote_summary.updated_at = vorkspace_core::time::now_ms();
+                let remote_id = remote_summary.id;
+                shell.session_summaries.insert(remote_id, remote_summary);
+                shell.order.push(remote_id);
+                shell.remote_marks.insert(remote_id, (true, false));
+                assert!(!shell.sessions.contains_key(&remote_id));
+
+                shell.change_session_filter("working", cx);
+                assert!(shell.sidebar_session_ids(cx).contains(&remote_id));
+                assert!(
+                    !shell.sessions.contains_key(&remote_id),
+                    "filtering running remote sessions must stay metadata-only"
+                );
+            })
+            .unwrap();
+    }
 }

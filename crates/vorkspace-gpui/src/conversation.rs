@@ -230,7 +230,7 @@ pub(crate) struct Conversation {
     native_recovery: Option<native_history::Recovery>,
     pub(crate) busy: bool,
     /// The UI is idle; serialize the next launch behind the worker's last save.
-    stopping: bool,
+    pub(crate) stopping: bool,
     notification_cancelled: bool,
     /// The store's saved-draft flag, until the conversation loads its own.
     pub(crate) draft_hint: bool,
@@ -372,6 +372,9 @@ impl Conversation {
     }
     pub(crate) fn needs_approval(&self) -> bool {
         !self.approvals.is_empty() || !self.questions.is_empty()
+    }
+    pub(crate) fn is_stopping(&self) -> bool {
+        self.stopping
     }
     pub(crate) fn responding(&self) -> bool {
         self.busy && !self.stopping
