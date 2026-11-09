@@ -1,4 +1,65 @@
 use super::*;
+
+#[gpui::test]
+fn a_reminder_survives_a_refused_open_until_its_project_is_reassigned(
+    cx: &mut gpui::TestAppContext,
+) {
+    let (window, reminder_session, current) = crate::shell::tests::window(cx);
+    let (vorkspace, project) = window
+        .update(cx, |shell, _, cx| {
+            let vorkspace = shell.workspace.active_vorkspace.clone();
+            let project = shell.session_summaries[&reminder_session].cwd.clone();
+            shell
+                .workspace
+                .remove_project_from_vorkspace(&vorkspace, &project);
+            shell.persist(cx);
+            shell.store_write("set reminder", cx, move |store| {
+                store.set_reminders(&[reminder_session], 1)
+            });
+            shell.poll_reminders(cx);
+            (vorkspace, project)
+        })
+        .unwrap();
+    let open_notice = |cx: &mut gpui::TestAppContext| {
+        window
+            .update(cx, |shell, _, cx| {
+                shell.notification_state.reminders.update(cx, |_, cx| {
+                    cx.emit(crate::notifications::reminders::Action::Open {
+                        session_id: reminder_session,
+                        due_at: 1,
+                    });
+                });
+            })
+            .unwrap();
+        cx.run_until_parked();
+    };
+    cx.run_until_parked();
+    open_notice(cx);
+    window
+        .update(cx, |shell, _, cx| {
+            assert_eq!(shell.workspace.active, Some(current));
+            assert_eq!(shell.reminders[0].session_id, reminder_session);
+            assert_eq!(locked(&shell.store).unwrap().reminders().unwrap().len(), 1);
+            shell
+                .workspace
+                .add_project_to_vorkspace(&vorkspace, &project);
+            shell.persist(cx);
+        })
+        .unwrap();
+    open_notice(cx);
+    window
+        .update(cx, |shell, _, _| {
+            assert_eq!(shell.workspace.active, Some(reminder_session));
+            assert!(
+                locked(&shell.store)
+                    .unwrap()
+                    .reminders()
+                    .unwrap()
+                    .is_empty()
+            );
+        })
+        .unwrap();
+}
 use gpui::{TestAppContext, WindowHandle};
 
 fn setup(cx: &mut TestAppContext) -> (WindowHandle<Shell>, i64, i64) {

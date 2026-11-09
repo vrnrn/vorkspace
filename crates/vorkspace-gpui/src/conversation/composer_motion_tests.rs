@@ -722,17 +722,21 @@ fn an_empty_session_offers_starters_that_fill_the_composer(cx: &mut TestAppConte
     });
     let window = window(cx, 1000.);
     let visual = &mut gpui::VisualTestContext::from_window(window.into(), cx);
-    window
-        .update(visual, |c, w, cx| {
-            c.input
-                .update(cx, |i, cx| i.replace_text_in_range(None, "", w, cx));
-        })
-        .unwrap();
     visual.run_until_parked();
     visual.refresh().unwrap();
     let starter = visual
         .debug_bounds("session-starter-1")
-        .expect("an empty session offers a first message");
+        .expect("a session without a sent message has starters");
+    visual.simulate_click(starter.center(), Default::default());
+    window
+        .update(visual, |c, _, cx| {
+            assert_eq!(c.input.read(cx).content.as_ref(), "First message");
+            c.input
+                .update(cx, |input, cx| input.set_text(String::new(), cx));
+        })
+        .unwrap();
+    visual.run_until_parked();
+    visual.refresh().unwrap();
     visual.simulate_click(starter.center(), Default::default());
     visual.run_until_parked();
     let text = window

@@ -107,7 +107,7 @@ impl Bots {
                         .rounded(px(radius::CONTROL))
                         .cursor_pointer()
                         .hover(|s| s.bg(vorkspace_ui::fluid::hover(0.08)))
-                        .child(icon("message-circle", 14.).text_color(content(0.55)))
+                        .child(icon("message-multiple", 14.).text_color(content(0.55)))
                         .child(
                             div()
                                 .min_w_0()

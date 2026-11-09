@@ -398,63 +398,98 @@ impl Shell {
     }
 
     pub(super) fn poll_reminders(&mut self, cx: &mut Context<Self>) {
-        if self.notification_state.reminder_error.is_some() {
+        if self.notification_state.reminder_error.is_some()
+            || self.reminder_poll_in_flight
+            || !self.holds_scheduler(cx)
+        {
             return;
         }
-        let now = vorkspace_core::time::now_ms();
-        let due: Vec<_> = self
-            .reminders
-            .iter_mut()
-            .filter_map(|reminder| {
-                if reminder.due_at > now || reminder.fired_at.is_some() {
-                    return None;
-                }
-                reminder.fired_at = Some(now);
-                Some((reminder.session_id, reminder.due_at))
-            })
+        self.reminder_poll_in_flight = true;
+        let before = self.reminders.clone();
+        let known: HashSet<_> = before
+            .iter()
+            .map(|r| r.session_id)
+            .filter(|id| self.session_summaries.contains_key(id))
             .collect();
-        if due.is_empty() {
-            return;
-        }
         let store = self.store.clone();
         let previous = self.group_writes.take();
         self.group_writes = Some(cx.spawn(async move |this, cx| {
             if let Some(previous) = previous {
                 previous.await;
             }
-            let work = cx
-                .background_executor()
-                .spawn(async move { locked(&store)?.take_due_reminders(now) });
+            if !this
+                .update(cx, |shell, _| {
+                    if shell.notification_state.reminder_error.is_some() {
+                        shell.reminder_poll_in_flight = false;
+                        return false;
+                    }
+                    true
+                })
+                .unwrap_or(false)
+            {
+                return;
+            }
+            let work = cx.background_executor().spawn(async move {
+                let mut store = locked(&store)?;
+                let now = vorkspace_core::time::now_ms();
+                let mut reminders = store.reminders()?;
+                let missing: HashSet<_> = reminders
+                    .iter()
+                    .filter(|r| r.due_at <= now && !known.contains(&r.session_id))
+                    .map(|r| r.session_id)
+                    .collect();
+                let summaries = if missing.is_empty() {
+                    Vec::new()
+                } else {
+                    store
+                        .sessions()?
+                        .into_iter()
+                        .filter(|s| missing.contains(&s.id))
+                        .collect()
+                };
+                let claimed = store.claim_due_reminders(&reminders, now)?;
+                let fired: HashSet<_> = claimed.iter().map(|r| r.session_id).collect();
+                for reminder in &mut reminders {
+                    if fired.contains(&reminder.session_id) {
+                        reminder.fired_at = Some(now);
+                    }
+                }
+                Ok::<_, String>((reminders, claimed, summaries))
+            });
             let result = work.await;
             let _ = this.update(cx, |this, cx| {
+                this.reminder_poll_in_flight = false;
                 match result {
-                    Ok(claimed) => {
-                        this.notification_state.reminder_error = None;
+                    Ok((mut reminders, mut claimed, summaries)) => {
+                        // Keep edits made here while the ordered store read was pending.
+                        // Rows absent in both local snapshots can still be due in the store.
+                        if this.reminders != before {
+                            let before: HashMap<_, _> =
+                                before.iter().map(|r| (r.session_id, r)).collect();
+                            let local: HashMap<_, _> =
+                                this.reminders.iter().map(|r| (r.session_id, r)).collect();
+                            let unchanged = |id| before.get(&id) == local.get(&id);
+                            reminders.retain(|r| unchanged(r.session_id));
+                            reminders.extend(
+                                this.reminders
+                                    .iter()
+                                    .filter(|r| !unchanged(r.session_id))
+                                    .cloned(),
+                            );
+                            claimed.retain(|r| unchanged(r.session_id));
+                        }
+                        if reminders == this.reminders && claimed.is_empty() {
+                            return;
+                        }
+                        this.reminders = reminders;
+                        for summary in summaries {
+                            this.session_summaries.entry(summary.id).or_insert(summary);
+                        }
                         for reminder in claimed {
-                            // A cancel/reschedule while the store operation was
-                            // pending must never deliver an obsolete occurrence.
-                            if this.reminders.iter().any(|current| {
-                                current.session_id == reminder.session_id
-                                    && current.due_at == reminder.due_at
-                            }) {
-                                this.deliver_reminder_notice(
-                                    reminder.session_id,
-                                    reminder.due_at,
-                                    cx,
-                                );
-                            }
+                            this.deliver_reminder_notice(reminder.session_id, reminder.due_at, cx);
                         }
                     }
                     Err(error) => {
-                        // Re-arm only the occurrences claimed by this request;
-                        // a newer schedule has its own independent fired state.
-                        for reminder in &mut this.reminders {
-                            if due.contains(&(reminder.session_id, reminder.due_at))
-                                && reminder.fired_at == Some(now)
-                            {
-                                reminder.fired_at = None;
-                            }
-                        }
                         this.notification_state.reminder_error =
                             Some(format!("Could not deliver reminders: {error}"));
                     }
@@ -463,7 +498,6 @@ impl Shell {
                 cx.notify();
             });
         }));
-        self.invalidate_chrome(cx);
     }
 
     fn report_session_delete_error(&mut self, id: i64, reason: &str) {

@@ -191,7 +191,9 @@ impl Shell {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let id = id.unwrap_or_else(|| self.workspace.active_vorkspace.clone());
+        let id = id
+            .filter(|id| self.workspace.vorkspaces.iter().any(|v| &v.id == id))
+            .unwrap_or_else(|| self.workspace.active_vorkspace.clone());
         let (name, letters) = self
             .workspace
             .vorkspaces
@@ -748,7 +750,7 @@ impl Shell {
                 s.project,
                 Kind::from_id(&s.provider).label()
             ))
-            .aria_keyshortcuts("Shift+F10")
+            .aria_keyshortcuts("F2 Shift+F10")
             .aria_selected(active)
             .h(px(RAIL_CARD_HEIGHT))
             .map(vorkspace_ui::theme::tab_reachable)
@@ -850,6 +852,12 @@ impl Shell {
                     this.open_session_actions(id, Anchor::Point(event.position), window, cx);
                 }),
             )
+            .on_action(cx.listener(
+                move |this, _: &super::session_groups::RenameSidebarItem, window, cx| {
+                    this.start_rename(super::session_groups::RenameTarget::Session(id), window, cx);
+                    cx.stop_propagation();
+                },
+            ))
             .on_key_down(
                 cx.listener(move |this, event: &gpui::KeyDownEvent, window, cx| {
                     let key = &event.keystroke;
@@ -885,7 +893,7 @@ impl Shell {
 
     pub(super) fn vorkspace_modal(
         &self,
-        window: &Window,
+        window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Option<AnyElement> {
         let dialog = self.vorkspace_dialog.as_ref()?;
@@ -949,11 +957,32 @@ impl Shell {
                 .child(self.project_notifications_section(path, cx))
                 .into_any_element()
         });
+        let nav_state = window.use_keyed_state("vorkspace-dialog-navigation", cx, |_, _| {
+            (
+                gpui::ScrollHandle::new(),
+                std::cell::RefCell::<Option<FocusHandle>>::default(),
+            )
+        });
+        let focused = window.focused(cx);
+        let (scroll, previous_focus) = nav_state.read(cx);
+        let focus_changed = previous_focus.replace(focused.clone()) != focused;
+        let scroll = scroll.clone();
+        let nav_focus = |key: SharedString, ix, window: &mut Window, cx: &mut App| {
+            let handle = window
+                .use_keyed_state(key, cx, |_, cx| cx.focus_handle().tab_stop(true))
+                .read(cx)
+                .clone();
+            if focus_changed && focused.as_ref() == Some(&handle) {
+                scroll.scroll_to_item(ix);
+            }
+            handle
+        };
         let mut nav: Vec<AnyElement> = Vec::new();
         for v in &self.workspace.vorkspaces {
             let id = v.id.clone();
             let current = v.id == editing;
             let selected = current && open_project.is_none();
+            let focus = nav_focus(format!("vorkspace-nav-{id}").into(), nav.len(), window, cx);
             nav.push(
                 div()
                     .id(SharedString::from(format!("vorkspace-row-{}", v.id)))
@@ -965,7 +994,9 @@ impl Shell {
                     .aria_selected(selected)
                     .aria_label(v.name.clone())
                     .map(vorkspace_ui::theme::tab_reachable)
+                    .track_focus(&focus)
                     .h(px(34.))
+                    .flex_shrink_0()
                     .px(px(8.))
                     .flex()
                     .items_center()
@@ -1012,6 +1043,12 @@ impl Shell {
                 let selected = open_project.as_deref() == Some(path.as_str());
                 let target = path.clone();
                 let key = path_key(path);
+                let focus = nav_focus(
+                    format!("vorkspace-nav-project-{}-{key}", v.id).into(),
+                    nav.len(),
+                    window,
+                    cx,
+                );
                 nav.push(
                     div()
                         .id(SharedString::from(format!("vorkspace-project-tab-{key}")))
@@ -1020,7 +1057,9 @@ impl Shell {
                         .aria_selected(selected)
                         .aria_label(format!("{} settings", self.project_label(path)))
                         .map(vorkspace_ui::theme::tab_reachable)
+                        .track_focus(&focus)
                         .h(px(30.))
+                        .flex_shrink_0()
                         .pl(px(20.))
                         .pr(px(8.))
                         .flex()
@@ -1225,11 +1264,11 @@ impl Shell {
                         "close",
                     )
                     .aria_label(format!("Remove {} from this vorkspace", bot.label()))
-                    .on_click(cx.listener(move |this, _, _, cx| {
+                    .on_click(cx.listener(move |this, _, window, cx| {
                         if let Some(v) = this.workspace.vorkspace_mut(&editing) {
                             v.bots.retain(|b| *b != id);
                         }
-                        this.reconcile_after_bot_move(cx);
+                        this.reconcile_after_bot_move(window, cx);
                     })),
                 )
         });
@@ -1241,9 +1280,9 @@ impl Shell {
                 bot.label(),
                 crate::avatar::bot_avatar(&bot, "idle", 14., true),
             )
-            .on_click(cx.listener(move |this, _, _, cx| {
+            .on_click(cx.listener(move |this, _, window, cx| {
                 this.workspace.move_bot_to_vorkspace(&editing, &id);
-                this.reconcile_after_bot_move(cx);
+                this.reconcile_after_bot_move(window, cx);
             }))
         });
         let confirm = dialog.confirm_delete;
@@ -1459,9 +1498,6 @@ impl Shell {
                             .flex()
                             .child(
                                 div()
-                                    .id("vorkspace-dialog-nav")
-                                    .role(Role::TabList)
-                                    .aria_label("Vorkspaces")
                                     .w(px(200.))
                                     .flex_shrink_0()
                                     .h_full()
@@ -1480,8 +1516,21 @@ impl Shell {
                                             .text_color(content(0.5))
                                             .child("Vorkspaces"),
                                     )
-                                    .children(nav)
-                                    .child(div().flex_1())
+                                    .child(
+                                        div()
+                                            .id("vorkspace-dialog-nav")
+                                            .debug_selector(|| "vorkspace-dialog-nav".into())
+                                            .role(Role::TabList)
+                                            .aria_label("Vorkspaces")
+                                            .flex_1()
+                                            .min_h_0()
+                                            .overflow_y_scroll()
+                                            .track_scroll(&scroll)
+                                            .flex()
+                                            .flex_col()
+                                            .gap_px()
+                                            .children(nav),
+                                    )
                                     .child(
                                         crate::controls::page::action(
                                             "vorkspace-new",
@@ -1622,7 +1671,19 @@ impl Shell {
             .into_any_element()
     }
 
-    fn reconcile_after_bot_move(&mut self, cx: &mut Context<Self>) {
+    fn reconcile_after_bot_move(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.sync_vorkspace_bot_visibility(cx) {
+            if let Some(active) = self.workspace.active {
+                self.open(active, window, cx);
+            } else {
+                self.ensure_project_session(window, cx);
+            }
+        }
+        self.persist(cx);
+        cx.notify();
+    }
+
+    pub(super) fn sync_vorkspace_bot_visibility(&mut self, cx: &mut Context<Self>) -> bool {
         let hidden = self.workspace.hidden_bots();
         if let Some(manager) = self.bots.clone() {
             manager.update(cx, |m, cx| {
@@ -1633,8 +1694,40 @@ impl Shell {
                 cx.notify();
             });
         }
-        self.persist(cx);
-        cx.notify();
+        let Some(active) = self.workspace.active else {
+            return false;
+        };
+        if !self
+            .workspace
+            .app_panes
+            .get(&active)
+            .is_some_and(|pane| match &pane.content {
+                crate::workspace::AppPane::Bot(id)
+                | crate::workspace::AppPane::BotDocument { bot: id, .. } => {
+                    self.workspace.bot_hidden_in_vorkspace(id)
+                }
+                _ => false,
+            })
+        {
+            return false;
+        }
+        let next = self
+            .workspace
+            .active_tab()
+            .and_then(|tab| self.available_tab_focus(tab, cx))
+            .or_else(|| {
+                self.visible_tabs(cx)
+                    .iter()
+                    .rev()
+                    .find_map(|tab| self.available_tab_focus(tab.session()?, cx))
+            });
+        self.workspace.active = None;
+        if let Some(next) = next {
+            self.workspace.open(next);
+        }
+        self.review_focused = false;
+        self.update_chat_visibility(cx);
+        true
     }
 }
 
@@ -1695,6 +1788,55 @@ mod tests {
                         .management_modal_focus(cx)
                         .unwrap()
                         .contains_focused(w, cx)
+                );
+            })
+            .unwrap();
+    }
+
+    #[gpui::test]
+    fn managing_many_folders_scrolls_the_focused_project_into_view(cx: &mut TestAppContext) {
+        cx.update(super::super::bind_keys);
+        let (window, _, _) = super::super::tests::window(cx);
+        window
+            .update(cx, |shell, w, cx| {
+                let editing = shell.workspace.active_vorkspace.clone();
+                for n in 0..40 {
+                    shell
+                        .workspace
+                        .add_project_to_vorkspace(&editing, &format!("/work/folder-{n}"));
+                }
+                shell.open_vorkspace_dialog(None, w, cx);
+            })
+            .unwrap();
+        let visual = &mut gpui::VisualTestContext::from_window(window.into(), cx);
+        visual.simulate_resize(gpui::size(px(700.), px(480.)));
+        visual.run_until_parked();
+        // Move from the name field backwards past the fixed New button.
+        visual.simulate_keystrokes("shift-tab shift-tab");
+        visual.run_until_parked();
+        let nav = visual.debug_bounds("vorkspace-dialog-nav").unwrap();
+        let last = visual
+            .debug_bounds("vorkspace-project-tab-/work/folder-39")
+            .unwrap();
+        let add = visual.debug_bounds("vorkspace-new").unwrap();
+        assert!(
+            last.top() >= nav.top() && last.bottom() <= nav.bottom(),
+            "{last:?} outside {nav:?}"
+        );
+        assert!(add.top() >= nav.bottom());
+        visual.simulate_event(gpui::KeyDownEvent {
+            keystroke: gpui::Keystroke::parse("enter").unwrap(),
+            is_held: false,
+            prefer_character_input: false,
+        });
+        visual.simulate_event(gpui::KeyUpEvent {
+            keystroke: gpui::Keystroke::parse("enter").unwrap(),
+        });
+        window
+            .update(visual, |shell, _, _| {
+                assert_eq!(
+                    shell.vorkspace_dialog.as_ref().unwrap().project.as_deref(),
+                    Some("/work/folder-39")
                 );
             })
             .unwrap();

@@ -1980,7 +1980,7 @@ impl Render for DiffView {
                                 div()
                                     .id("add-comment")
                                     .role(Role::Button)
-                                    .map(vorkspace_ui::theme::tab_reachable)
+                                    .map(|d| vorkspace_ui::theme::tab_reachable_on_fill(d, can_add))
                                     .aria_label("Add to chat")
                                     .h(px(28.))
                                     .flex()

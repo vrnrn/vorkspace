@@ -29,7 +29,7 @@ struct Saved {
 
 pub(crate) struct AppCore {
     store: Database,
-    generation: Arc<AtomicU64>,
+    writes: Arc<VorkspaceWrites>,
     pub(crate) vorkspaces: Vec<VorkspaceDef>,
     pub(crate) seen_bots: HashSet<String>,
     scheduler: Option<WeakEntity<Shell>>,
@@ -39,6 +39,31 @@ pub(crate) struct AppCore {
     windows: Vec<WeakEntity<Shell>>,
     /// The agent app bridge: one socket for the application.
     pub(crate) bridge: Option<vorkspace_core::bot::bridge::Server>,
+}
+
+#[derive(Default)]
+struct VorkspaceWrites {
+    pending: Mutex<Option<Arc<str>>>,
+}
+
+impl VorkspaceWrites {
+    fn flush(&self, store: &Database) -> Result<(), String> {
+        // Serialize writes through the store and pick the latest snapshot
+        // only after acquiring it, including during app shutdown.
+        let store = locked(store)?;
+        let snapshot = self.pending.lock().unwrap().clone();
+        if let Some(snapshot) = snapshot {
+            store.save_setting(STORE_KEY, &snapshot)?;
+            let mut pending = self.pending.lock().unwrap();
+            if pending
+                .as_ref()
+                .is_some_and(|current| Arc::ptr_eq(current, &snapshot))
+            {
+                *pending = None;
+            }
+        }
+        Ok(())
+    }
 }
 
 /// One core per data store: windows on the same store share it, and a
@@ -63,9 +88,22 @@ impl AppCore {
             .and_then(|s| s.setting(STORE_KEY).ok().flatten())
             .and_then(|json| serde_json::from_str(&json).ok())
             .unwrap_or_default();
+        let writes = Arc::new(VorkspaceWrites::default());
+        let quit_writes = writes.clone();
+        let quit_store = store.clone();
+        cx.on_app_quit(move |cx| {
+            let writes = quit_writes.clone();
+            let store = quit_store.clone();
+            cx.background_executor().spawn(async move {
+                if let Err(error) = writes.flush(&store) {
+                    eprintln!("Could not save vorkspaces on quit: {error}");
+                }
+            })
+        })
+        .detach();
         let core = cx.new(|_| AppCore {
             store: store.clone(),
-            generation: Arc::new(AtomicU64::new(0)),
+            writes,
             vorkspaces: saved.vorkspaces,
             seen_bots: saved.seen_bots,
             scheduler: None,
@@ -93,19 +131,26 @@ impl AppCore {
             vorkspaces: self.vorkspaces.clone(),
             seen_bots: self.seen_bots.clone(),
         })
-        .unwrap_or_default();
-        let revision = self.generation.fetch_add(1, Ordering::SeqCst) + 1;
-        let generation = self.generation.clone();
+        .expect("vorkspace definitions serialize to JSON");
+        *self.writes.pending.lock().unwrap() = Some(json.into());
+        let writes = self.writes.clone();
         let store = self.store.clone();
-        cx.background_executor()
-            .spawn(async move {
-                if let Ok(store) = locked(&store)
-                    && generation.load(Ordering::SeqCst) == revision
-                {
-                    let _ = store.save_setting(STORE_KEY, &json);
-                }
-            })
-            .detach();
+        let work = cx
+            .background_executor()
+            .spawn(async move { writes.flush(&store) });
+        cx.spawn(async move |core, cx| {
+            if let Err(error) = work.await {
+                let _ = core.update(cx, |core, cx| {
+                    for window in &core.windows {
+                        let _ = window.update(cx, |shell, cx| {
+                            shell.error = Some(format!("Could not save vorkspaces: {error}"));
+                            cx.notify();
+                        });
+                    }
+                });
+            }
+        })
+        .detach();
         cx.notify();
     }
 
@@ -146,13 +191,19 @@ impl AppCore {
     /// The window an agent call from `session` belongs to: the one with that
     /// session live, else the one whose Bots run it, else the oldest open.
     pub(crate) fn route(&self, session: i64, cx: &App) -> Option<Entity<Shell>> {
-        let alive = || self.windows.iter().filter_map(|w| w.upgrade());
+        self.session_owner(session, cx)
+            .or_else(|| self.windows.iter().find_map(|w| w.upgrade()))
+    }
+
+    pub(super) fn session_owner(&self, session: i64, cx: &App) -> Option<Entity<Shell>> {
         if let Some(holder) = self.sessions.get(&session).and_then(|w| w.upgrade())
             && holder.read(cx).sessions.contains_key(&session)
         {
             return Some(holder);
         }
-        alive()
+        self.windows
+            .iter()
+            .filter_map(|w| w.upgrade())
             .find(|shell| {
                 shell
                     .read(cx)
@@ -160,7 +211,6 @@ impl AppCore {
                     .as_ref()
                     .is_some_and(|m| m.read(cx).is_bot_session(session))
             })
-            .or_else(|| alive().next())
     }
 
     /// Starts the bridge once and hands each call to the window it belongs to.
@@ -298,9 +348,6 @@ impl Shell {
                 dialog.editing = self.workspace.active_vorkspace.clone();
                 dialog.project = None;
                 dialog.confirm_delete = false;
-                if let Some(name) = self.workspace.active_vorkspace().map(|v| v.name.clone()) {
-                    dialog.name.update(cx, |input, cx| input.set_text(name, cx));
-                }
             } else if let Some(project) = &dialog.project
                 && !self
                     .workspace
@@ -322,6 +369,14 @@ impl Shell {
                 .iter()
                 .find(|v| v.id == dialog.editing)
             {
+                let field = dialog.name.read(cx);
+                if (retargeted || !field.is_composing())
+                    && (retargeted || field.content.trim() != v.name)
+                {
+                    dialog
+                        .name
+                        .update(cx, |field, cx| field.set_text(v.name.clone(), cx));
+                }
                 let field = dialog.icon_letters.read(cx);
                 if (retargeted || !field.is_composing())
                     && (retargeted || field.content.as_ref() != v.icon_letters())
@@ -332,16 +387,7 @@ impl Shell {
                 }
             }
         }
-        let hidden = self.workspace.hidden_bots();
-        if let Some(manager) = self.bots.clone() {
-            manager.update(cx, |m, cx| {
-                if m.active.as_ref().is_some_and(|id| hidden.contains(id)) {
-                    m.close(cx);
-                }
-                m.vorkspace_hidden = hidden;
-                cx.notify();
-            });
-        }
+        self.sync_vorkspace_bot_visibility(cx);
         self.invalidate_chrome(cx);
         cx.notify();
     }
@@ -454,6 +500,143 @@ mod tests {
     }
 
     #[gpui::test]
+    fn scheduler_delivers_a_reminder_created_in_another_window(cx: &mut TestAppContext) {
+        let (a, b, _, _dir) = two_windows(cx);
+        assert!(
+            a.update(cx, |shell, _, cx| shell.holds_scheduler(cx))
+                .unwrap()
+        );
+        let id = b
+            .update(cx, |shell, _, cx| {
+                let session = locked(&shell.store)
+                    .unwrap()
+                    .create("codex", &shell.workspace.project)
+                    .unwrap();
+                let id = session.id;
+                shell.add(session, cx);
+                shell.store_write("set reminder", cx, move |store| {
+                    store.set_reminders(&[id], 1)
+                });
+                shell.poll_reminders(cx);
+                id
+            })
+            .unwrap();
+        cx.run_until_parked();
+        a.update(cx, |shell, _, cx| {
+            assert!(!shell.session_summaries.contains_key(&id));
+            assert!(shell.reminders.is_empty());
+            assert!(
+                locked(&shell.store).unwrap().reminders().unwrap()[0]
+                    .fired_at
+                    .is_none()
+            );
+            shell.poll_reminders(cx);
+        })
+        .unwrap();
+        cx.run_until_parked();
+        a.update(cx, |shell, _, cx| {
+            let durable = locked(&shell.store).unwrap().reminders().unwrap();
+            assert_eq!(durable, shell.reminders);
+            assert_eq!(durable[0].session_id, id);
+            assert!(durable[0].fired_at.is_some());
+            shell.sync_notices(cx);
+            assert!(!shell.notification_state.reminders.read(cx).is_empty());
+        })
+        .unwrap();
+        let later = vorkspace_core::time::now_ms() + 3_600_000;
+        b.update(cx, |shell, _, _| {
+            assert_ne!(shell.workspace.active, Some(id));
+            locked(&shell.store)
+                .unwrap()
+                .set_reminders(&[id], later)
+                .unwrap();
+        })
+        .unwrap();
+        a.update(cx, |shell, _, cx| {
+            shell.notification_state.reminders.update(cx, |_, cx| {
+                cx.emit(crate::notifications::reminders::Action::Open {
+                    session_id: id,
+                    due_at: 1,
+                });
+            });
+        })
+        .unwrap();
+        cx.run_until_parked();
+        b.update(cx, |shell, _, _| {
+            assert_eq!(shell.workspace.active, Some(id));
+            assert_eq!(
+                locked(&shell.store).unwrap().reminders().unwrap()[0].due_at,
+                later
+            );
+        })
+        .unwrap();
+        a.update(cx, |shell, _, _| assert!(shell.reminders.is_empty()))
+            .unwrap();
+    }
+
+    #[gpui::test]
+    fn quitting_saves_the_latest_vorkspace_definitions(cx: &mut TestAppContext) {
+        let (a, _, _, _dir) = two_windows(cx);
+        let store = a
+            .update(cx, |shell, _, cx| {
+                shell.workspace.create_vorkspace("Previous name");
+                shell.persist(cx);
+                let id = shell.workspace.create_vorkspace("Final name");
+                shell
+                    .workspace
+                    .vorkspace_mut(&id)
+                    .unwrap()
+                    .set_icon_letters("FN");
+                shell.persist(cx);
+                shell.store.clone()
+            })
+            .unwrap();
+        cx.quit();
+        let saved = locked(&store).unwrap().setting(STORE_KEY).unwrap().unwrap();
+        let saved: Saved = serde_json::from_str(&saved).unwrap();
+        assert!(
+            saved
+                .vorkspaces
+                .iter()
+                .any(|v| v.name == "Final name" && v.icon_letters() == "FN")
+        );
+    }
+
+    #[gpui::test]
+    fn closing_a_deleted_vorkspace_background_returns_to_manage(cx: &mut TestAppContext) {
+        let (a, b, _, _dir) = two_windows(cx);
+        let deleted = b
+            .update(cx, |shell, _, cx| {
+                let id = shell.workspace.create_vorkspace("Background");
+                shell.persist(cx);
+                id
+            })
+            .unwrap();
+        a.update(cx, |shell, window, cx| {
+            shell.open_vorkspace_background(deleted.clone(), window, cx);
+            assert!(shell.background_dialog.is_some());
+        })
+        .unwrap();
+        b.update(cx, |shell, _, cx| {
+            shell.workspace.delete_vorkspace(&deleted);
+            shell.persist(cx);
+        })
+        .unwrap();
+        a.update(cx, |shell, window, cx| {
+            shell.close_background_dialog(window, cx);
+            assert!(shell.background_dialog.is_none());
+            assert_eq!(
+                shell.vorkspace_dialog.as_ref().unwrap().editing,
+                shell.workspace.active_vorkspace
+            );
+        })
+        .unwrap();
+        let visual = &mut gpui::VisualTestContext::from_window(a.into(), cx);
+        visual.refresh().unwrap();
+        assert!(visual.debug_bounds("vorkspace-dialog").is_some());
+    }
+
+    #[gpui::test]
     fn a_session_is_live_in_one_window_at_a_time(cx: &mut TestAppContext) {
         let (a, b, id, _dir) = two_windows(cx);
         // Whichever window opened it first keeps it; the other only lists it.
@@ -549,12 +732,32 @@ mod tests {
         })
         .unwrap();
         cx.run_until_parked();
-        b.update(cx, |shell, _, _| {
+        b.update(cx, |shell, _, cx| {
             assert_ne!(shell.workspace.project, second_project);
-            assert_eq!(
-                shell.vorkspace_dialog.as_ref().map(|d| d.editing.as_str()),
-                Some(shell.workspace.active_vorkspace.as_str())
-            );
+            let dialog = shell.vorkspace_dialog.as_ref().unwrap();
+            let active = shell.workspace.active_vorkspace().unwrap();
+            assert_eq!(dialog.editing, active.id);
+            assert_eq!(dialog.name.read(cx).content.as_ref(), active.name);
+            dialog.name.update(cx, |field, cx| {
+                field.set_text("Renamed after deletion".into(), cx)
+            });
+            dialog
+                .icon_letters
+                .update(cx, |field, cx| field.set_text("RD".into(), cx));
+        })
+        .unwrap();
+        cx.run_until_parked();
+        a.update(cx, |shell, _, _| {
+            let active = shell.workspace.active_vorkspace().unwrap();
+            assert_eq!(active.name, "Renamed after deletion");
+            assert_eq!(active.icon_letters(), "RD");
+            let durable = locked(&shell.store)
+                .unwrap()
+                .setting(STORE_KEY)
+                .unwrap()
+                .unwrap();
+            let saved: Saved = serde_json::from_str(&durable).unwrap();
+            assert!(saved.vorkspaces.contains(active));
         })
         .unwrap();
     }

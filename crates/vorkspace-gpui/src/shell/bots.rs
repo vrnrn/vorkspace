@@ -31,7 +31,11 @@ impl Shell {
         leaves
             .iter()
             .find_map(|id| match &self.workspace.app_panes.get(id)?.content {
-                crate::workspace::AppPane::Bot(id) => Some(id.clone()),
+                crate::workspace::AppPane::Bot(id)
+                    if !self.workspace.bot_hidden_in_vorkspace(id) =>
+                {
+                    Some(id.clone())
+                }
                 _ => None,
             })
     }

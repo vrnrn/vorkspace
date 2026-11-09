@@ -792,7 +792,7 @@ impl Inbox {
     pub(crate) fn connector_item_page(
         &mut self,
         source: &str,
-        item: Item,
+        mut item: Item,
         cx: &mut Context<Self>,
     ) -> Entity<Self> {
         assert_eq!(source, item.provider, "item page provider must match item");
@@ -801,12 +801,24 @@ impl Inbox {
             page.update(cx, |page, _| page.release_pending = false);
             return page.clone();
         }
+        if let Some(current) = self
+            .snapshot
+            .items
+            .iter()
+            .find(|current| current.key() == item.key())
+        {
+            Self::refresh_pinned_summary(&mut item, current);
+        }
         let owner = cx.weak_entity();
         let page = cx.new(|cx| {
             let mut page = Self::new_inner(
                 self.store.clone(),
                 self.projects.clone(),
-                self.start_project.clone(),
+                if item.project_path.is_empty() {
+                    self.start_project.clone()
+                } else {
+                    PathBuf::from(&item.project_path)
+                },
                 false,
                 cx,
             );
@@ -859,6 +871,18 @@ impl Inbox {
         self.pinned_item.as_ref()
     }
 
+    fn refresh_pinned_summary(pinned: &mut Item, current: &Item) -> bool {
+        if current.key() != pinned.key() || current.updated_ms() < pinned.updated_ms() {
+            return false;
+        }
+        // Provider snapshots can prefer another clone of this repository.
+        // Keep this tab's checkout for relative links and its conversation target.
+        let project = std::mem::take(&mut pinned.project_path);
+        *pinned = current.clone();
+        pinned.project_path = project;
+        true
+    }
+
     fn item_in_project(item: &Item, project: &str) -> bool {
         (item.provider == "jira" && item.project_path.is_empty())
             || item.belongs_to_project(project)
@@ -891,6 +915,10 @@ impl Inbox {
             .iter()
             .find(|item| item.key() == key && Self::item_in_project(item, project))
             .cloned()
+            .map(|mut item| {
+                item.project_path = project.to_owned();
+                item
+            })
     }
 
     pub(crate) fn items_for_project(&self, project: &str, limit: usize) -> (Vec<Item>, bool) {
@@ -971,12 +999,12 @@ impl Inbox {
                         page.snapshot = snapshot.clone();
                         page.sessions = sessions.clone();
                         if let Some(pinned) = page.pinned_item.as_mut()
-                            && let Some(current) = snapshot.items.iter().find(|item| {
-                                item.key() == pinned.key()
-                                    && item.updated_ms() >= pinned.updated_ms()
-                            })
+                            && let Some(current) = snapshot
+                                .items
+                                .iter()
+                                .find(|item| item.key() == pinned.key())
                         {
-                            *pinned = current.clone();
+                            Self::refresh_pinned_summary(pinned, current);
                         }
                         if page.pinned_item.is_none()
                             && page.active
@@ -1014,13 +1042,7 @@ impl Inbox {
     }
     fn item(&self) -> Option<Item> {
         if let Some(pinned) = &self.pinned_item {
-            return self
-                .snapshot
-                .items
-                .iter()
-                .find(|item| item.key() == pinned.key() && item.updated_ms() >= pinned.updated_ms())
-                .cloned()
-                .or_else(|| Some(pinned.clone()));
+            return Some(pinned.clone());
         }
         self.snapshot
             .items
@@ -1301,12 +1323,8 @@ impl Inbox {
             *old = item.clone();
             changed = true;
         }
-        if let Some(pinned) = self.pinned_item.as_mut()
-            && pinned.key() == key
-            && pinned.updated_ms() <= item.updated_ms()
-        {
-            *pinned = item;
-            changed = true;
+        if let Some(pinned) = self.pinned_item.as_mut() {
+            changed |= Self::refresh_pinned_summary(pinned, &item);
         }
         if changed && self.owner.is_none() {
             self.publish_pages(cx);

@@ -366,6 +366,20 @@ pub fn tab_reachable(element: Stateful<Div>) -> Stateful<Div> {
         .tab_stop(true)
         .focus_visible(|style| style.bg(content(0.16)))
 }
+
+/// Keeps a solid action's foreground and fill legible while it has focus.
+pub fn tab_reachable_on_fill(element: Stateful<Div>, enabled: bool) -> Stateful<Div> {
+    element.aria_disabled(!enabled).when(enabled, |element| {
+        element.focusable().tab_stop(true).focus_visible(|style| {
+            style.shadow(vec![
+                gpui::BoxShadow::new(px(0.), px(0.), accent_color())
+                    .spread_radius(px(2.))
+                    .inset(),
+            ])
+        })
+    })
+}
+
 pub fn keyboard_reachable(button: Stateful<Div>, enabled: bool) -> Stateful<Div> {
     button
         .aria_disabled(!enabled)

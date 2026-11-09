@@ -248,6 +248,9 @@ impl Shell {
         if in_tab
             && self.workspace.tab_of(next).is_none()
             && let Some(active) = current
+            && self.pane_in_scope(next, cx)
+            && !self.deleting.contains(&next)
+            && self.ensure_session(next, cx).is_some()
         {
             let previous_tab = self.workspace.tab_of(active);
             self.workspace.swap_session(active, next);

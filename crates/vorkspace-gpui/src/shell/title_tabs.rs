@@ -294,6 +294,25 @@ impl Shell {
         self.workspace.active_tab().map(TitleTab::Workspace)
     }
 
+    pub(super) fn available_tab_focus(&self, tab: i64, cx: &App) -> Option<i64> {
+        let available = |id| {
+            self.workspace
+                .app_panes
+                .get(&id)
+                .is_none_or(|pane| self.app_pane_available(&pane.content, cx))
+        };
+        let focus = self.workspace.tab_focus(tab);
+        if available(focus) {
+            Some(focus)
+        } else {
+            self.workspace
+                .layout(tab)
+                .leaf_ids()
+                .into_iter()
+                .find(|&id| available(id))
+        }
+    }
+
     /// The active tab follows live focus; other tabs keep their last displayed
     /// pane instead of borrowing the currently selected tab's preview focus.
     pub(super) fn tab_review_focused(&self, tab: i64, cx: &App) -> bool {
@@ -359,7 +378,9 @@ impl Shell {
                 app_views::AppView::Todos => self.open_todos(window, cx),
             },
             TitleTab::Workspace(id) => {
-                let focus = self.workspace.tab_focus(*id);
+                let Some(focus) = self.available_tab_focus(*id, cx) else {
+                    return;
+                };
                 let review_focused = self.tab_review_focused(*id, cx);
                 self.open(focus, window, cx);
                 if review_focused

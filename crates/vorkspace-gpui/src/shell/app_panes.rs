@@ -182,7 +182,9 @@ impl Shell {
                 .iter()
                 .filter_map(
                     |id| match self.workspace.app_panes.get(id).map(|p| &p.content) {
-                        Some(AppPane::Bot(id)) => Some(id.clone()),
+                        Some(AppPane::Bot(id)) if !self.workspace.bot_hidden_in_vorkspace(id) => {
+                            Some(id.clone())
+                        }
                         _ => None,
                     },
                 )

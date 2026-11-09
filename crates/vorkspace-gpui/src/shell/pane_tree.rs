@@ -5,6 +5,32 @@ use vorkspace_ui::radius;
 const REVIEW_SIDE_BY_SIDE_MIN_WIDTH: f32 = 500.;
 
 impl Shell {
+    fn review_is_compact(&self, id: i64) -> bool {
+        self.split_bounds
+            .get(&id)
+            .and_then(AnchorSlot::get)
+            .map_or_else(|| self.pane_available_width(), |b| b.size.width.as_f32())
+            < REVIEW_SIDE_BY_SIDE_MIN_WIDTH
+    }
+
+    pub(super) fn review_covers_chat(&self, id: i64, cx: &App) -> bool {
+        self.reviews
+            .get(&id)
+            .map(|review| &review.read(cx).state)
+            .or_else(|| {
+                self.workspace
+                    .reviews
+                    .get(&id)
+                    .filter(|state| !state.tabs.is_empty())
+            })
+            .is_some_and(|state| {
+                state.chat_hidden
+                    || (self.workspace.active == Some(id)
+                        && self.review_focused
+                        && self.review_is_compact(id))
+            })
+    }
+
     /// The session pane's split header (SessionPane.tsx): grip, focus dot,
     /// title and a close button. The header moves the chat independently of
     /// its review; closing a lone chat leaves the review in the tab.
@@ -643,12 +669,7 @@ impl Shell {
                 .into_any_element();
         }
         let in_split = split.is_some();
-        let compact = self
-            .split_bounds
-            .get(&id)
-            .and_then(AnchorSlot::get)
-            .map_or_else(|| self.pane_available_width(), |b| b.size.width.as_f32())
-            < REVIEW_SIDE_BY_SIDE_MIN_WIDTH;
+        let compact = self.review_is_compact(id);
         let chat = self.sessions.get(&id).cloned();
         let now = vorkspace_ui::clock::Instant::now();
         let sliding = self

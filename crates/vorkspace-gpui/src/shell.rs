@@ -523,6 +523,7 @@ pub(crate) struct Shell {
     archiving: HashSet<i64>,
     groups: HashMap<String, vorkspace_core::session_groups::Groups>,
     reminders: Vec<vorkspace_core::store::Reminder>,
+    reminder_poll_in_flight: bool,
     renaming: Option<session_groups::Renaming>,
     link_dialog: Option<session_groups::LinkDialog>,
     deleting: HashSet<i64>,
@@ -841,8 +842,8 @@ impl Shell {
                 if this
                     .update(cx, |this, cx| {
                         // One window fires scheduled work for the whole app.
+                        this.poll_reminders(cx);
                         if this.holds_scheduler(cx) {
-                            this.poll_reminders(cx);
                             this.poll_automations(cx);
                         }
                         this.update_chat_visibility(cx);
@@ -918,6 +919,7 @@ impl Shell {
             archiving: HashSet::new(),
             groups: sidebar_metadata.groups,
             reminders: sidebar_metadata.reminders,
+            reminder_poll_in_flight: false,
             renaming: None,
             link_dialog: None,
             deleting: HashSet::new(),
@@ -1205,13 +1207,12 @@ impl Shell {
         this.update_chat_visibility(cx);
         this.update_usage_provider(cx);
         this.apply_preferences(cx);
-        if this.holds_scheduler(cx) {
-            this.poll_reminders(cx);
-        }
+        this.poll_reminders(cx);
         this.initialize_automations(cx);
         cx.spawn(async move |this, cx| {
             let _ = this.update_in(cx, |this, window, cx| {
                 if this.navigation_revision == 0 {
+                    this.sync_vorkspace_bot_visibility(cx);
                     // Sidebar worktree selection resets at launch. An active
                     // app pane restores from its layout.
                     let saved_app = this.workspace.active.filter(|id| {
@@ -2213,6 +2214,7 @@ impl Shell {
         }
     }
     fn open_project(&mut self, cx: &mut Context<Self>) {
+        let target = self.project_picker_target();
         let picker = cx.prompt_for_paths(PathPromptOptions {
             files: false,
             directories: true,
@@ -2224,20 +2226,7 @@ impl Shell {
                 if let Some(path) = paths.first() {
                     let path = path.to_string_lossy().into_owned();
                     let _ = this.update_in(cx, |this, window, cx| {
-                        // An opened folder joins the vorkspace it was opened from
-                        // (or the one being edited in the vorkspace dialog).
-                        let target = this
-                            .vorkspace_dialog
-                            .as_ref()
-                            .map(|d| d.editing.clone())
-                            .unwrap_or_else(|| this.workspace.active_vorkspace.clone());
-                        this.workspace.add_project_to_vorkspace(&target, &path);
-                        if target == this.workspace.active_vorkspace {
-                            this.open_project_from_user(path, window, cx);
-                        } else {
-                            this.persist(cx);
-                            cx.notify();
-                        }
+                        this.open_picked_project(&target, path, window, cx);
                     });
                 }
             }
@@ -2250,6 +2239,42 @@ impl Shell {
             }
         })
         .detach();
+    }
+
+    fn project_picker_target(&self) -> String {
+        self.vorkspace_dialog
+            .as_ref()
+            .map(|d| d.editing.clone())
+            .unwrap_or_else(|| self.workspace.active_vorkspace.clone())
+    }
+
+    fn open_picked_project(
+        &mut self,
+        target: &str,
+        path: String,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if !self.workspace.vorkspaces.iter().any(|v| v.id == target) {
+            self.error = Some("That vorkspace was removed. Open the folder again.".into());
+            cx.notify();
+            return;
+        }
+        if self
+            .deleting_projects
+            .contains(&vorkspace_core::files::path_key(&path))
+        {
+            self.error = Some("This project is being deleted.".into());
+            cx.notify();
+            return;
+        }
+        self.workspace.add_project_to_vorkspace(target, &path);
+        if target == self.workspace.active_vorkspace {
+            self.open_project_from_user(path, window, cx);
+        } else {
+            self.persist(cx);
+            cx.notify();
+        }
     }
     fn create(&mut self, kind: Kind, cx: &mut Context<Self>) {
         if self.management_modal_focus(cx).is_some() {

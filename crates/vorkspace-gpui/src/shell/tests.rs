@@ -2271,6 +2271,37 @@ fn many_blank_tabs_fit_without_creating_sidebar_conversations(cx: &mut TestAppCo
         .unwrap();
     cx.run_until_parked();
 }
+#[gpui::test]
+fn stepping_to_another_project_does_not_replace_a_split_leaf(cx: &mut TestAppContext) {
+    let (window, a, b) = window(cx);
+    window
+        .update(cx, |shell, w, cx| {
+            shell.workspace.close(a);
+            for (id, updated_at) in [(a, 10), (b, 20)] {
+                shell.sessions[&id].update(cx, |session, _| {
+                    session.summary.has_messages = true;
+                    session.summary.updated_at = updated_at;
+                });
+            }
+            let sibling = locked(&shell.store)
+                .unwrap()
+                .create("codex", &shell.workspace.project)
+                .unwrap();
+            let sibling_id = sibling.id;
+            shell.add(sibling, cx);
+            shell.workspace.split(sibling_id, SplitDir::Down);
+            shell.open(b, w, cx);
+            let layout = shell.workspace.layout(b);
+            assert!(layout.is_split());
+            assert_eq!(shell.sidebar_navigation_ids(cx), [b, a]);
+            shell.step_session(1, true, w, cx);
+            assert_eq!(shell.workspace.active, Some(a));
+            assert_eq!(shell.workspace.layout(b), layout);
+            assert_ne!(shell.workspace.tab_of(a), shell.workspace.tab_of(b));
+        })
+        .unwrap();
+}
+
 pub(super) fn same_project_window(cx: &mut TestAppContext) -> (WindowHandle<Shell>, i64, i64) {
     let (window, a, b) = window(cx);
     window

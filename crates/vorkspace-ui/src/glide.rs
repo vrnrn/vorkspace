@@ -113,10 +113,15 @@ impl State {
             self.springs = Some(Springs::at(target));
             return (None, true);
         };
-        springs.aim(target);
-        // A relayout (resize, scroll, a tab sliding aside) is not a move.
-        if reduce_motion || (!changed && ((springs.x.landed() && springs.y.landed()) || stalled)) {
+        let settled = springs.x.landed()
+            && springs.y.landed()
+            && springs.width.landed()
+            && springs.height.landed();
+        // Follow the geometry of a settled selection immediately on relayout.
+        if reduce_motion || (!changed && (settled || stalled)) {
             *springs = Springs::at(target);
+        } else {
+            springs.aim(target);
         }
         let moving = !springs.step(dt);
         let bounds = springs.bounds();
@@ -270,5 +275,29 @@ impl gpui::RenderOnce for GlideList {
             .child(glide.container())
             .child(glide.thumb(self.fill, self.radius))
             .children(items)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn settled_thumb_stays_attached_when_its_item_moves() {
+        let bounds = |x, y, width, height| {
+            Bounds::new(gpui::point(px(x), px(y)), gpui::size(px(width), px(height)))
+        };
+        let original = bounds(20., 30., 80., 24.);
+        let shifted = bounds(60., 58., 72., 30.);
+        let mut state = State {
+            measured: Rc::new(RefCell::new(Measured {
+                container: Some(bounds(0., 0., 180., 160.)),
+                items: HashMap::from([(1, shifted)]),
+            })),
+            springs: Some(Springs::at(original)),
+            selected: Some(1),
+            last: Instant::now(),
+        };
+        assert_eq!(state.advance(Some(1), false), (Some(shifted), false));
     }
 }

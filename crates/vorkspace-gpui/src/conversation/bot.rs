@@ -743,6 +743,11 @@ impl Conversation {
         cx.notify();
         Ok(())
     }
+    fn can_fill_starter(&self, cx: &App) -> bool {
+        let input = self.input.read(cx);
+        input.content.is_empty() && !input.is_composing()
+    }
+
     /// First messages for an empty conversation: a click fills the composer
     /// for editing rather than sending.
     pub(super) fn starters(
@@ -751,6 +756,7 @@ impl Conversation {
         starters: Vec<String>,
         cx: &mut Context<Self>,
     ) -> gpui::Div {
+        let can_fill = self.can_fill_starter(cx);
         div()
             .flex()
             .flex_wrap()
@@ -759,7 +765,7 @@ impl Conversation {
             .max_w(px(520.))
             .children(starters.into_iter().enumerate().map(|(ix, text)| {
                 let fill = text.clone();
-                vorkspace_ui::theme::keyboard_reachable(div().id((id, ix)), true)
+                vorkspace_ui::theme::keyboard_reachable(div().id((id, ix)), can_fill)
                     .debug_selector(move || format!("{id}-{ix}"))
                     .role(gpui::Role::Button)
                     .aria_label(text.clone())
@@ -770,13 +776,18 @@ impl Conversation {
                     .border_color(content(0.12))
                     .text_size(px(12.))
                     .text_color(content(0.75))
-                    .cursor_pointer()
-                    .hover(|s| {
-                        s.bg(vorkspace_ui::fluid::hover(0.06))
-                            .text_color(content(1.))
+                    .when(can_fill, |d| {
+                        d.cursor_pointer().hover(|s| {
+                            s.bg(vorkspace_ui::fluid::hover(0.06))
+                                .text_color(content(1.))
+                        })
                     })
+                    .when(!can_fill, |d| d.opacity(0.45))
                     .child(text)
                     .on_click(cx.listener(move |this, _, window, cx| {
+                        if !this.can_fill_starter(cx) {
+                            return;
+                        }
                         this.input
                             .update(cx, |input, cx| input.set_text(fill.clone(), cx));
                         window.focus(&this.input.focus_handle(cx), cx);

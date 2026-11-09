@@ -474,21 +474,25 @@ impl Shell {
         self.close_preview(cx);
         let picker =
             cx.new(|cx| RemoteProjectPicker::new(self.remote.clone(), self.store.clone(), cx));
-        let events = cx.subscribe_in(&picker, window, |this, _, event: &Picked, window, cx| {
-            this.close_remote_project(window, cx);
-            match event {
-                Picked::Open(key) => {
-                    this.workspace.add_project(key);
-                    this.select_project(key.clone(), window, cx);
+        let target = self.project_picker_target();
+        let events = cx.subscribe_in(
+            &picker,
+            window,
+            move |this, _, event: &Picked, window, cx| {
+                this.close_remote_project(window, cx);
+                match event {
+                    Picked::Open(key) => {
+                        this.open_picked_project(&target, key.clone(), window, cx);
+                    }
+                    Picked::Connections => {
+                        this.open_settings(crate::settings::Section::Connections, window, cx)
+                    }
+                    Picked::Cancel => {}
                 }
-                Picked::Connections => {
-                    this.open_settings(crate::settings::Section::Connections, window, cx)
-                }
-                Picked::Cancel => {}
-            }
-            this.invalidate_chrome(cx);
-            cx.notify();
-        });
+                this.invalidate_chrome(cx);
+                cx.notify();
+            },
+        );
         window.focus(&picker.focus_handle(cx), cx);
         self.remote_project_picker = Some(Open {
             picker,

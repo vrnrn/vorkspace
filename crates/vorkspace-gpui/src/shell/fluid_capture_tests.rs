@@ -1,10 +1,8 @@
 //! Opt-in captures of the fluidither layer: the shell with several projects and
 //! sessions, the tool-heavy chat fixture, and pointer hovers that show the
-//! dithered states. Disposable in-memory data only.
+//! dithered states. Each scene gets disposable fixture data.
 use super::*;
 use vorkspace_core::store::Store;
-
-const PROJECT: &str = "/tmp/vorkspace-fluid-capture";
 
 /// What each capture shows: a name, the session index to open (`None` opens
 /// Settings → Appearance), and a hover point in logical points for 1400×900.
@@ -94,8 +92,7 @@ const SHOTS: &[(&str, Option<usize>, (f32, f32))] = &[
 
 /// A small committed project with uncommitted edits, so Explorer and Changes
 /// have something to show.
-fn seed_project() {
-    let root = std::path::Path::new(PROJECT);
+fn seed_project(root: &std::path::Path) {
     let write = |path: &str, text: &str| {
         let path = root.join(path);
         std::fs::create_dir_all(path.parent().unwrap()).unwrap();
@@ -152,11 +149,12 @@ fn rows(pairs: &[(&str, &str)]) -> Vec<vorkspace_core::transcript::Row> {
 fn fluid_capture() {
     let output = std::path::PathBuf::from(std::env::var_os("VORKSPACE_FLUID_CAPTURE_DIR").unwrap());
     assert!(output.is_absolute() && output.is_dir());
-    std::fs::create_dir_all(PROJECT).unwrap();
-    seed_project();
-    let store = Arc::new(Mutex::new(
-        Store::open(std::path::Path::new(":memory:")).unwrap(),
-    ));
+    let scratch = tempfile::tempdir().unwrap();
+    let project_path = scratch.path().join("glide");
+    seed_project(&project_path);
+    let project = project_path.to_str().unwrap();
+    let fixture_db = scratch.path().join("fixtures.sqlite");
+    let store = Arc::new(Mutex::new(Store::open(&fixture_db).unwrap()));
     {
         // A populated board, so To-dos shows its columns in use.
         use vorkspace_core::todos::{TodoBoard, TodoStatus};
@@ -207,7 +205,7 @@ fn fluid_capture() {
                     id: id.into(),
                     title: title.into(),
                     body: body.into(),
-                    source_cwd: Some(PROJECT.into()),
+                    source_cwd: Some(project.into()),
                     ..Default::default()
                 })
                 .unwrap();
@@ -229,7 +227,7 @@ fn fluid_capture() {
             .iter()
             .enumerate()
             .map(|(index, title)| {
-                let mut session = store.create("codex", PROJECT).unwrap();
+                let mut session = store.create("codex", project).unwrap();
                 let rows = if index == 0 {
                     let mut rows = crate::fixtures::chat().rows;
                     rows.push(vorkspace_core::transcript::Row {
@@ -316,6 +314,8 @@ fn fluid_capture() {
             })
             .collect()
     };
+    // Close SQLite before cloning the fixture so its WAL is checkpointed.
+    drop(store);
     let mut cx = gpui::HeadlessAppContext::with_platform(
         Arc::new(gpui_apple::AppleTextSystem::new()),
         Arc::new(crate::assets::Assets),
@@ -349,8 +349,8 @@ fn fluid_capture() {
             // A first launch: no project, no session, nothing open.
             let first_run = name.starts_with("first-run");
             if !first_run {
-                state.add_project(PROJECT);
-                state.project = PROJECT.into();
+                state.add_project(project);
+                state.project = project.into();
                 if *name == "glide" {
                     // Two tabs, so the title strip's thumb has somewhere to go.
                     state.open(sessions[0].id);
@@ -358,7 +358,13 @@ fn fluid_capture() {
                 state.open(sessions[open.unwrap_or(0)].id);
             }
             let saved = serde_json::to_string(&state).unwrap();
-            let store = store.clone();
+            let scene_dir = scratch.path().join(format!("{theme}-{file}"));
+            std::fs::create_dir(&scene_dir).unwrap();
+            let scene_db = scene_dir.join("scene.sqlite");
+            if !first_run {
+                std::fs::copy(&fixture_db, &scene_db).unwrap();
+            }
+            let store = Arc::new(Mutex::new(Store::open(&scene_db).unwrap()));
             let summaries = if first_run {
                 Vec::new()
             } else {
@@ -367,7 +373,7 @@ fn fluid_capture() {
             let cwd: String = if first_run {
                 String::new()
             } else {
-                PROJECT.into()
+                project.into()
             };
             let window = cx
                 .open_window(
@@ -380,6 +386,14 @@ fn fluid_capture() {
                 )
                 .unwrap();
             cx.run_until_parked();
+            if first_run {
+                window
+                    .update(&mut cx, |shell, _, _| {
+                        assert!(shell.workspace.project.is_empty());
+                        assert!(shell.workspace.active.is_none());
+                    })
+                    .unwrap();
+            }
             if *name == "live" {
                 let id = sessions[2].id;
                 window
@@ -507,7 +521,7 @@ fn fluid_capture() {
                     ),
                     "vorkspace-menu" => {
                         let side = shell.workspace.create_vorkspace("Side projects");
-                        shell.workspace.add_project_to_vorkspace(&side, PROJECT);
+                        shell.workspace.add_project_to_vorkspace(&side, project);
                         shell.open_menu(
                             MenuTarget::Vorkspace,
                             Anchor::Slot(shell.vorkspace_anchor.clone()),
@@ -529,8 +543,8 @@ fn fluid_capture() {
                     "palette" => shell.open_quick_open(true, window, cx),
                     "diff" => shell.open_review(
                         crate::git_tools::review::ReviewTab::Changes {
-                            cwd: PROJECT.into(),
-                            path: Some(format!("{PROJECT}/src/spring.rs")),
+                            cwd: project.into(),
+                            path: Some(format!("{project}/src/spring.rs")),
                             staged: Some(false),
                         },
                         window,
@@ -538,8 +552,8 @@ fn fluid_capture() {
                     ),
                     "file" => shell.open_review(
                         crate::git_tools::review::ReviewTab::File {
-                            cwd: PROJECT.into(),
-                            path: format!("{PROJECT}/src/spring.rs"),
+                            cwd: project.into(),
+                            path: format!("{project}/src/spring.rs"),
                         },
                         window,
                         cx,
@@ -579,7 +593,7 @@ fn fluid_capture() {
                         }
                     }
                     "project-codebase" | "project-notifications" => {
-                        shell.open_project_settings(PROJECT.into(), window, cx)
+                        shell.open_project_settings(project.into(), window, cx)
                     }
                     "typed" => {
                         let view = shell.sessions[&sessions[0].id].clone();
@@ -616,7 +630,7 @@ fn fluid_capture() {
                     ),
                     "project-menu" => shell.open_menu(
                         MenuTarget::Project {
-                            path: PROJECT.into(),
+                            path: project.into(),
                             rail: true,
                         },
                         crate::popover::Anchor::Point(gpui::point(px(150.), px(600.))),
@@ -647,9 +661,9 @@ fn fluid_capture() {
                         let manager = shell.bot_manager();
                         manager.update(cx, |manager, cx| {
                             if new {
-                                manager.create(vec![PROJECT.into()], w, cx)
+                                manager.create(vec![project.into()], w, cx)
                             } else {
-                                manager.create_named(vec![PROJECT.into()], w, cx);
+                                manager.create_named(vec![project.into()], w, cx);
                                 match name.strip_prefix("bot-") {
                                     // The bot's own pane, not its settings.
                                     None => {

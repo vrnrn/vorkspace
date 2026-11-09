@@ -331,9 +331,12 @@ impl Shell {
             .into_iter()
             .chain(self.workspace.projects.iter().cloned())
             .find(|p| {
-                vorkspace_core::files::path_key(p) != key && self.workspace.is_project_available(p)
+                let candidate = vorkspace_core::files::path_key(p);
+                candidate != key
+                    && !self.deleting_projects.contains(&candidate)
+                    && self.workspace.vorkspace_for_project(p).is_some()
             })
-            .ok_or_else(|| "Add another project before removing your only one.".into())
+            .ok_or_else(|| "Add another project to a vorkspace before removing this one.".into())
     }
 
     /// Selects another project if `path` is selected, so the project being
@@ -348,7 +351,11 @@ impl Shell {
             == vorkspace_core::files::path_key(path)
         {
             let other = self.other_project(path)?;
+            let destination = vorkspace_core::files::path_key(&other);
             self.select_project(other, window, cx);
+            if vorkspace_core::files::path_key(&self.workspace.project) != destination {
+                return Err("Could not switch to another project. Try again.".into());
+            }
         }
         Ok(())
     }
@@ -362,11 +369,8 @@ impl Shell {
         ids: &[i64],
         window: &mut Window,
         cx: &mut Context<Self>,
-    ) {
-        if let Err(error) = self.leave_project(path, window, cx) {
-            self.error = Some(error);
-            return;
-        }
+    ) -> Result<(), String> {
+        self.leave_project(path, window, cx)?;
         let idle: Vec<_> = ids
             .iter()
             .copied()
@@ -384,6 +388,7 @@ impl Shell {
             }
         }
         self.worktree_focus.retain(|p, _| !within(p, path));
+        Ok(())
     }
 
     /// Archiving hides a project; its idle tabs stay, hidden with it, and
@@ -471,8 +476,13 @@ impl Shell {
             }
             let _ = this.update_in(cx, |this, window, cx| {
                 // Only now, once confirmed, leave the project and let go of it.
-                this.release_project(&path, &ids, window, cx);
-                this.begin_project_delete(path, ids, cx)
+                match this.release_project(&path, &ids, window, cx) {
+                    Ok(()) => this.begin_project_delete(path, ids, cx),
+                    Err(error) => {
+                        this.error = Some(error);
+                        cx.notify();
+                    }
+                }
             });
         })
         .detach();

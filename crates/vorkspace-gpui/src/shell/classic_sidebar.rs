@@ -113,19 +113,22 @@ impl Shell {
             )
             .when(!self.workspace.project.is_empty(), |d| {
                 d.child(
-                    icon_button("sidebar-project-actions", "Project actions", "ellipsis").on_click(
-                        cx.listener(|this, _, window, cx| {
-                            this.open_menu(
-                                MenuTarget::Project {
-                                    path: this.workspace.project.clone(),
-                                    rail: false,
-                                },
-                                Anchor::Slot(this.project_anchor.clone()),
-                                window,
-                                cx,
-                            );
-                        }),
-                    ),
+                    icon_button(
+                        "sidebar-project-actions",
+                        "Project actions",
+                        "more-horizontal",
+                    )
+                    .on_click(cx.listener(|this, _, window, cx| {
+                        this.open_menu(
+                            MenuTarget::Project {
+                                path: this.workspace.project.clone(),
+                                rail: false,
+                            },
+                            Anchor::Slot(this.project_anchor.clone()),
+                            window,
+                            cx,
+                        );
+                    })),
                 )
             })
             .into_any()

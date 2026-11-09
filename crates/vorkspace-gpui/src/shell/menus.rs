@@ -313,7 +313,7 @@ impl Shell {
                     );
                     items.push(
                         MenuAction::new("project-settings", "Project actions…")
-                            .icon("ellipsis")
+                            .icon("more-horizontal")
                             .into(),
                     );
                 }

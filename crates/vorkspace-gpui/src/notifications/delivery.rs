@@ -73,7 +73,7 @@ pub fn should_notify(
 pub enum Target {
     Session(i64),
     /// Preserve the due timestamp when clearing: stale clicks must never clear a
-    /// newer reminder. The host must clear with Some(due_at) before opening.
+    /// newer reminder. The host acknowledges this occurrence after opening it.
     Reminder {
         session_id: i64,
         due_at: u64,

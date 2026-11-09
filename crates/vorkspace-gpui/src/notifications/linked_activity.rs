@@ -331,7 +331,7 @@ impl Render for LinkedActivity {
                     div()
                         .id("linked-activity-agent")
                         .role(Role::Button)
-                        .map(vorkspace_ui::theme::tab_reachable)
+                        .map(|d| vorkspace_ui::theme::tab_reachable_on_fill(d, true))
                         .cursor_pointer()
                         .flex_1()
                         .rounded(px(radius::CONTROL))
