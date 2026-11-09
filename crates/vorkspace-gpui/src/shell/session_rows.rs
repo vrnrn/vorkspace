@@ -1,6 +1,5 @@
 //! Sidebar session rows, their hover previews and keyboard stepping.
 use super::*;
-use vorkspace_ui::radius;
 
 impl Shell {
     /// A session doing an orchestrator's task belongs to that run and is not listed alone.
@@ -136,50 +135,6 @@ impl Shell {
                 .await;
             let _ = this.update(cx, |this, cx| this.close_preview(cx));
         }));
-    }
-
-    pub(super) fn session_archive_button(
-        &self,
-        id: i64,
-        session: &session_loading::Metadata<'_>,
-        cx: &Context<Self>,
-    ) -> AnyElement {
-        div()
-            .id(("archive-session", id as usize))
-            .debug_selector(move || format!("archive-session-{id}"))
-            .role(Role::Button)
-            .aria_label(format!(
-                "{} {}",
-                if session.summary.archived {
-                    "Unarchive"
-                } else {
-                    "Archive"
-                },
-                session.display_title()
-            ))
-            .group("session-archive")
-            .size(px(20.))
-            .mr(px(-3.))
-            .flex_shrink_0()
-            .flex()
-            .items_center()
-            .justify_center()
-            .rounded(px(radius::CONTROL))
-            .opacity(if self.archiving.contains(&id) {
-                0.4
-            } else {
-                1.
-            })
-            .hover(|s| s.bg(vorkspace_ui::fluid::hover(0.1)))
-            .child(
-                icon("archive", 12.).group_hover("session-archive", |s| s.text_color(content(1.))),
-            )
-            .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
-            .on_click(cx.listener(move |this, _, _, cx| {
-                cx.stop_propagation();
-                this.toggle_archive(id, cx);
-            }))
-            .into_any()
     }
 
     /// The project's sessions as the sidebar lists them, top to bottom.

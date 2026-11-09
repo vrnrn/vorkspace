@@ -208,15 +208,6 @@ impl SidebarTab {
             Self::Todos => "To-dos",
         }
     }
-    pub fn icon(self) -> &'static str {
-        match self {
-            Self::Sessions => "message-multiple",
-            Self::Files => "folder",
-            Self::Changes => "git-compare",
-            Self::Graph => "git-branch",
-            Self::Todos => "check-circle",
-        }
-    }
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]

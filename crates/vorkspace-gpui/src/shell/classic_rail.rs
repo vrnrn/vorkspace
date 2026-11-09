@@ -323,19 +323,14 @@ impl Shell {
         rail: gpui::Stateful<gpui::Div>,
         cx: &mut Context<Self>,
     ) -> AnyElement {
-        use crate::workspace::SidebarTab;
-
-        let workspace_active =
-            !self.app_view_open() && self.app_search.is_none() && !self.bot_active(cx);
-        let tab = self.workspace.sidebar_tab();
-        let tabs = SidebarTab::normalize(&self.workspace.sidebar_tab_order);
         let hidden_bots = self.workspace.hidden_bots();
         let (_, vorkspace_name) = self
             .workspace
             .active_vorkspace()
             .map(|v| (v.id.clone(), v.name.clone()))
             .unwrap_or_default();
-        let pinned_bots: Vec<_> = if self.workspace.preferences.rail_bots_pinned {
+        // Every Bot in the vorkspace, as the expanded rail lists them.
+        let pinned_bots: Vec<_> = {
             self.bots
                 .as_ref()
                 .filter(|_| self.workspace.preferences.bots)
@@ -375,18 +370,12 @@ impl Shell {
                         .collect()
                 })
                 .unwrap_or_default()
-        } else {
-            Vec::new()
         };
-        let unread = self.unseen_finished.iter().any(|id| {
-            self.session_summaries
-                .get(id)
-                .is_some_and(|session| session.cwd == self.workspace.project)
-        });
-        let changes = self
-            .right_panel
-            .as_ref()
-            .is_some_and(|panel| panel.read(cx).git.read(cx).has_changes());
+        // The Sessions button marks finished replies or work in progress
+        // anywhere in the vorkspace.
+        let listed = self.sidebar_session_ids(cx);
+        let unread = listed.iter().any(|id| self.unseen_finished.contains(id));
+        let working = listed.iter().any(|id| self.session_metadata(*id, cx).busy);
         rail.child(
             div()
                 .id("classic-compact-actions")
@@ -428,99 +417,6 @@ impl Shell {
                                 window,
                                 cx,
                             );
-                        })),
-                )
-                .when(!pinned_bots.is_empty(), |d| {
-                    d.child(div().flex().flex_col().gap_1p5().children(pinned_bots))
-                        .child(div().h_px().w(px(24.)).bg(content(0.08)))
-                })
-                .child(
-                    div()
-                        .id("classic-compact-project-picker")
-                        .debug_selector(|| "classic-compact-project-picker".into())
-                        .role(Role::Button)
-                        .aria_label(format!(
-                            "Switch project, {}",
-                            self.project_label(&self.workspace.project)
-                        ))
-                        .aria_expanded(self.menu_open(&MenuTarget::Header))
-                        .focusable()
-                        .tab_stop(true)
-                        .size(px(32.))
-                        .rounded(px(radius::CONTROL))
-                        .flex()
-                        .items_center()
-                        .justify_center()
-                        .hover(|s| s.bg(vorkspace_ui::fluid::hover(0.08)))
-                        .child(self.project_mark(&self.workspace.project, 14.))
-                        .on_click(cx.listener(|this, event: &gpui::ClickEvent, window, cx| {
-                            this.open_menu(
-                                MenuTarget::Header,
-                                Anchor::Point(event.position()),
-                                window,
-                                cx,
-                            );
-                        })),
-                )
-                .child(
-                    div()
-                        .id("classic-compact-workspace-tabs")
-                        .role(Role::TabList)
-                        .aria_label("Workspace")
-                        .flex()
-                        .flex_col()
-                        .gap_1p5()
-                        .children(tabs.into_iter().map(|item| {
-                            let current = workspace_active
-                                && (tab == item
-                                    || (tab == SidebarTab::Graph && item == SidebarTab::Changes));
-                            let selected = current && self.workspace.sidebar_visible;
-                            let unread = item == SidebarTab::Sessions && unread;
-                            let dirty = item == SidebarTab::Changes && changes;
-                            let dot = unread || dirty;
-                            let selector =
-                                format!("classic-compact-tab-{}", item.label().to_lowercase());
-                            div()
-                                .id(SharedString::from(selector.clone()))
-                                .debug_selector(move || selector.clone())
-                                .role(Role::Tab)
-                                .aria_label(if unread {
-                                    format!("{}, new replies", item.label())
-                                } else if dirty {
-                                    "Changes, uncommitted changes".to_owned()
-                                } else {
-                                    item.label().to_owned()
-                                })
-                                .aria_selected(selected)
-                                .focusable()
-                                .tab_stop(true)
-                                .relative()
-                                .size(px(32.))
-                                .rounded(px(radius::CONTROL))
-                                .flex()
-                                .items_center()
-                                .justify_center()
-                                .when(selected, |d| d.bg(content(0.1)))
-                                .hover(|s| s.bg(vorkspace_ui::fluid::hover(0.08)))
-                                .child(icon(item.icon(), 18.).text_color(content(if selected {
-                                    0.9
-                                } else {
-                                    0.5
-                                })))
-                                .when(dot, |d| {
-                                    d.child(
-                                        div()
-                                            .absolute()
-                                            .right(px(3.))
-                                            .top(px(3.))
-                                            .size(px(5.))
-                                            .rounded_full()
-                                            .bg(accent_color()),
-                                    )
-                                })
-                                .on_click(cx.listener(move |this, _, window, cx| {
-                                    this.select_classic_sidebar(item, window, cx)
-                                }))
                         })),
                 )
                 .children(
@@ -587,6 +483,44 @@ impl Shell {
                                 },
                             ))
                         }),
+                )
+                // Then the vorkspace's Bots and its Sessions, in the expanded
+                // rail's order. Sessions opens the rail itself.
+                .when(!pinned_bots.is_empty(), |d| {
+                    d.child(div().h_px().w(px(24.)).bg(content(0.08)))
+                        .child(div().flex().flex_col().gap_1p5().children(pinned_bots))
+                })
+                .child(div().h_px().w(px(24.)).bg(content(0.08)))
+                .child(
+                    icon_button("classic-compact-sessions", "Sessions", "message-multiple")
+                        .debug_selector(|| "classic-compact-sessions".into())
+                        .aria_label(if unread {
+                            "Sessions, new replies"
+                        } else if working {
+                            "Sessions, working"
+                        } else {
+                            "Sessions"
+                        })
+                        .focusable()
+                        .tab_stop(true)
+                        .size(px(32.))
+                        .relative()
+                        .when(unread || working, |d| {
+                            d.child(
+                                div()
+                                    .absolute()
+                                    .right(px(3.))
+                                    .top(px(3.))
+                                    .size(px(5.))
+                                    .rounded_full()
+                                    .bg(accent_color()),
+                            )
+                        })
+                        .on_click(cx.listener(|this, _, _, cx| {
+                            if !this.workspace.project_rail_open {
+                                this.toggle_project_rail(cx);
+                            }
+                        })),
                 ),
         )
         .children(self.live_agents_preview(true, cx))

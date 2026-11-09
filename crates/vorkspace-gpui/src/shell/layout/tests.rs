@@ -438,7 +438,7 @@ fn collapsed_sidebar_stays_closed_when_hovering_the_rail(cx: &mut TestAppContext
     let rail = visual.debug_bounds("classic-project-rail").unwrap();
     let positions = [
         visual
-            .debug_bounds("classic-compact-tab-explorer")
+            .debug_bounds("classic-compact-sessions")
             .unwrap()
             .center(),
         visual.debug_bounds("toggle-sidebar").unwrap().center(),

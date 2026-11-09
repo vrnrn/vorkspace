@@ -70,6 +70,7 @@ const SHOTS: &[(&str, Option<usize>, (f32, f32))] = &[
     ("typed", Some(0), (1390., 890.)),
     ("project-menu", Some(0), (1390., 890.)),
     ("session-filter", Some(0), (1390., 890.)),
+    ("compact-rail", Some(0), (1390., 890.)),
     ("project-picker", Some(0), (1390., 890.)),
     ("session-menu", Some(0), (1390., 890.)),
     ("sidebar-options", Some(0), (1390., 890.)),
@@ -588,6 +589,7 @@ fn fluid_capture() {
                             })
                         });
                     }
+                    "compact-rail" => shell.toggle_project_rail(cx),
                     "session-filter" => shell.open_menu(
                         MenuTarget::SessionFilter,
                         Anchor::Slot(shell.filter_anchor.clone()),

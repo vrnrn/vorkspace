@@ -87,7 +87,6 @@ pub struct Preferences {
     pub provider_efforts: HashMap<String, String>,
     // Bots
     pub bots: bool,
-    pub rail_bots_pinned: bool,
     /// Experimental: Bots may spawn minions that share their memory.
     pub minions: bool,
     pub bot_menu_bar_icon: bool,
@@ -190,7 +189,6 @@ impl Default for Preferences {
             default_access: None,
             provider_efforts: HashMap::new(),
             bots: true,
-            rail_bots_pinned: false,
             minions: false,
             bot_menu_bar_icon: true,
             show_archived: false,

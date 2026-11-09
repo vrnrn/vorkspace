@@ -136,7 +136,7 @@ fn explorer_sidebar_survives_repeated_toggles(cx: &mut TestAppContext) {
     };
 
     for _ in 0..3 {
-        let trigger = visual.debug_bounds("classic-compact-tab-explorer").unwrap();
+        let trigger = visual.debug_bounds("toggle-explorer").unwrap();
         visual.simulate_mouse_move(trigger.center(), None, Default::default());
         visual.run_until_parked();
         vorkspace_ui::clock::settle_animations(window, visual);

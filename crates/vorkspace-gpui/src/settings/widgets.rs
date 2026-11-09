@@ -278,7 +278,6 @@ impl SettingsView {
                     | "mask-emails"
                     | "claude-hooks"
                     | "bots-enabled"
-                    | "rail-bots-pinned"
                     | "bot-menu-bar-icon"
                     | "show-archived"
             )

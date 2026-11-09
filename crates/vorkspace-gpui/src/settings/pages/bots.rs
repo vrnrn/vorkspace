@@ -21,20 +21,6 @@ impl SettingsView {
                 )],
             ),
             self.row(
-                Some("rail-bots-pinned"),
-                false,
-                "Pin Bots to the icon rail",
-                Some("Keep Bots above projects when navigation is collapsed.".into()),
-                vec![self.toggle(
-                    "rail-bots-pinned",
-                    "Pin Bots to the icon rail",
-                    p.rail_bots_pinned,
-                    !p.bots,
-                    cx,
-                    |this, on, cx| this.update(cx, |p| p.rail_bots_pinned = on),
-                )],
-            ),
-            self.row(
                 Some("bot-minions"),
                 false,
                 div().flex().items_center().gap_2().child("Minions").child(

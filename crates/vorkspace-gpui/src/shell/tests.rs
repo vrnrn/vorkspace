@@ -52,7 +52,7 @@ fn rounded_background(
 }
 
 #[gpui::test]
-fn hovering_archive_preserves_history_and_does_not_select_the_row(cx: &mut TestAppContext) {
+fn hovering_keeps_card_size_and_menu_archive_preserves_history(cx: &mut TestAppContext) {
     let (window, a, b) = window(cx);
     window
         .update(cx, |shell, _, cx| {
@@ -70,17 +70,20 @@ fn hovering_archive_preserves_history_and_does_not_select_the_row(cx: &mut TestA
     visual.simulate_mouse_move(row.center(), None, Default::default());
     visual.run_until_parked();
     visual.refresh().unwrap();
-    let archive = visual
-        .debug_bounds("archive-session-1")
-        .expect("hover reveals Archive");
-    visual.simulate_click(archive.center(), Default::default());
+    // Hover reveals nothing on the card, so passing over cards never moves them.
+    assert_eq!(visual.debug_bounds("rail-session-1").unwrap(), row);
+    window
+        .update(visual, |shell, window, cx| {
+            shell.run_menu(MenuTarget::Session(a), "archive", None, window, cx);
+        })
+        .unwrap();
     visual.run_until_parked();
     window
         .update(visual, |shell, window, cx| {
             assert_eq!(
                 shell.workspace.active,
                 Some(b),
-                "the archive click must not select its row"
+                "archiving from the menu must not select its row"
             );
             assert!(!shell.workspace.tabs.contains(&a));
             assert!(shell.sessions[&a].read(cx).summary.archived);
@@ -1399,47 +1402,47 @@ fn project_rail_toggle_holds_still_and_history_follows_the_rail(cx: &mut TestApp
     );
 }
 #[gpui::test]
-fn compact_rail_workspace_tabs_reopen_the_sidebar_without_changing_the_project(
-    cx: &mut TestAppContext,
-) {
-    use crate::workspace::SidebarTab;
+fn compact_rail_follows_the_full_rail_and_sessions_opens_it(cx: &mut TestAppContext) {
     let (window, _, active) = window(cx);
     vorkspace_ui::clock::use_test_clock(cx);
     window
-        .update(cx, |shell, window, cx| {
+        .update(cx, |shell, _, cx| {
             shell.toggle_project_rail(cx);
-            shell.toggle_sidebar(window, cx);
             assert!(!shell.workspace.project_rail_open);
-            assert!(!shell.workspace.sidebar_visible);
         })
         .unwrap();
     let visual = &mut gpui::VisualTestContext::from_window(window.into(), cx);
     visual.run_until_parked();
-    for (selector, expected) in [
-        ("classic-compact-tab-explorer", SidebarTab::Files),
-        ("classic-compact-tab-changes", SidebarTab::Changes),
-    ] {
-        let button = visual.debug_bounds(selector).unwrap();
-        visual.simulate_click(button.center(), Default::default());
-        visual.run_until_parked();
-        let rail = visual.debug_bounds("classic-project-rail").unwrap();
-        let sidebar = visual.debug_bounds("sidebar-frame").unwrap();
-        assert_eq!(rail.size.width, px(48.));
-        assert_eq!(sidebar.left(), rail.right());
-        assert_eq!(
-            sidebar.right(),
-            visual.debug_bounds("main-pane-frame").unwrap().left()
-        );
-        window
-            .update(visual, |shell, _, _| {
-                assert_eq!(shell.workspace.sidebar_tab(), expected);
-                assert!(shell.workspace.sidebar_visible);
-                assert!(!shell.workspace.project_rail_open);
-                assert_eq!(shell.workspace.project, "/work/vorkspace");
-                assert_eq!(shell.workspace.active, Some(active));
-            })
-            .unwrap();
-    }
+    // Same order as the full rail: vorkspace, navigation, then Sessions.
+    let vorkspace = visual.debug_bounds("classic-compact-vorkspace").unwrap();
+    let search = visual.debug_bounds("sidebar-navigation-Search").unwrap();
+    let sessions = visual.debug_bounds("classic-compact-sessions").unwrap();
+    assert!(vorkspace.bottom() <= search.top());
+    assert!(search.bottom() <= sessions.top());
+    // Project tools live in the sidebar; the icon rail has no tab buttons.
+    assert!(
+        visual
+            .debug_bounds("classic-compact-tab-explorer")
+            .is_none()
+    );
+    assert!(
+        visual
+            .debug_bounds("classic-compact-project-picker")
+            .is_none()
+    );
+    visual.simulate_click(sessions.center(), Default::default());
+    visual.run_until_parked();
+    window
+        .update(visual, |shell, _, _| {
+            assert!(
+                shell.workspace.project_rail_open,
+                "Sessions opens the full rail"
+            );
+            assert_eq!(shell.workspace.project, "/work/vorkspace");
+            assert_eq!(shell.workspace.active, Some(active));
+        })
+        .unwrap();
+    assert!(visual.debug_bounds("rail-sessions").is_some());
 }
 #[gpui::test]
 fn original_layout_keeps_project_rail_sidebar_and_workspace_independent(cx: &mut TestAppContext) {

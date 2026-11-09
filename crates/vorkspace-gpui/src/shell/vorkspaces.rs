@@ -540,11 +540,9 @@ impl Shell {
                             .get(&id)
                             .cloned()
                             .unwrap_or_default();
-                        let hovered = self.session_hover == Some(id);
-                        let status = if hovered {
-                            let meta = self.session_metadata(id, cx);
-                            self.session_archive_button(id, &meta, cx)
-                        } else if s.needs_input {
+                        // Status only: card actions live in the right-click menu,
+                        // so hovering never changes a card's size.
+                        let status = if s.needs_input {
                             div()
                                 .flex()
                                 .items_center()
