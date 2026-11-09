@@ -27,6 +27,8 @@ fn bot_header_updates_from_chat_status_and_preserves_composer_and_layout(cx: &mu
     cx.run_until_parked();
     let manager = window
         .update(cx, |shell, window, cx| {
+            // Measured against a full-width Bot pane.
+            shell.workspace.sidebar_visible = false;
             let manager = shell.bot_manager();
             manager.update(cx, |bots, cx| {
                 bots.roster.bots.push(Bot {

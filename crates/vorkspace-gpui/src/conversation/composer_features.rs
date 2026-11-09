@@ -5,26 +5,6 @@ pub(crate) struct StartOrchestration(pub vorkspace_core::orchestration::Plan);
 pub(crate) struct StopOrchestration;
 
 impl Conversation {
-    pub(crate) fn request_folder(&mut self, cx: &mut Context<Self>) {
-        if self.reject_user_entry(cx) {
-            return;
-        }
-
-        if self.settings.bot.is_none() {
-            self.completion
-                .update(cx, |completion, cx| completion.dismiss(cx));
-            cx.emit(ChooseFolder(self.composer_anchor.clone()));
-            cx.notify();
-        }
-    }
-    pub(crate) fn folder_chosen(&mut self, cx: &mut Context<Self>) {
-        self.folder_selected = true;
-        let text = self.input.read(cx).content.clone();
-        if text.trim().eq_ignore_ascii_case("/add-to-folder") {
-            self.input
-                .update(cx, |input, cx| input.set_text(format!("{text} "), cx));
-        }
-    }
     pub(crate) fn set_app_environment(
         &mut self,
         environment: std::collections::HashMap<String, String>,

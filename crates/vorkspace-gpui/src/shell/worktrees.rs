@@ -69,13 +69,6 @@ impl Shell {
             .map_or_else(|| self.session_working_copy(id, cx), String::as_str);
         path_key(scope) == path_key(self.working_copy())
     }
-    pub(super) fn in_sidebar_worktree_scope(&self, id: i64, cx: &App) -> bool {
-        self.worktree_focus
-            .get(&self.workspace.project)
-            .is_none_or(|focus| {
-                path_key(self.session_working_copy(id, cx)) == path_key(&focus.path)
-            })
-    }
     pub(super) fn record_worktree_session(&mut self, id: i64, cx: &App) {
         let project = self.workspace.project.clone();
         let session = self.workspace.session_for_pane(id).is_some();

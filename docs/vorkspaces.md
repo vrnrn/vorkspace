@@ -1,6 +1,6 @@
 # Vorkspaces
 
-A vorkspace is a named set of projects (folders or repositories) and Bots: the work a window is for. The switcher at the top of the left rail shows the active vorkspace; its menu switches vorkspaces, creates one, or opens **Manage vorkspaces…**.
+A vorkspace is a named set of projects (folders or repositories) and Bots: the work a window is for. The switcher at the top of the left rail shows the active vorkspace; its menu switches vorkspaces or opens **Manage vorkspaces**, where vorkspaces are created and deleted.
 
 ## Model
 
@@ -21,7 +21,7 @@ Everything that lists projects uses the active vorkspace's projects: the sidebar
 
 Switching remembers the current project, makes the target active and opens its last project (or its first) the same way an explicit project pick does: a visible Bot pane gives way to that project's session. A vorkspace with no folders shows the no-project state.
 
-The rail no longer lists projects. Its **Sessions** section lists the vorkspace's sessions across its projects: every working or approval-blocked session up to five, otherwise the three most recent. Its header holds a filter and a new-session button. The filter narrows by archived, status, time, provider, project and Bot involvement (any, started by a Bot, started by you, or by one Bot); while it is active the list shows up to twenty matches. Otherwise the chevron under the list shows up to twenty. Each card shows the title, status or age, the provider, the project, and the Bot that started it, when one did. Blank sessions are never listed, and archived ones only when the filter includes them. Listing a session never loads its saved history. A Bot's floating island now shows only its documents; the sessions it starts appear in the rail with its name.
+The rail no longer lists projects. Its **Sessions** section lists the vorkspace's sessions across its projects: five at a time, working and approval-blocked ones first, then the latest. The full-width chevron under the list shows every session; the list then takes the rail's remaining height and scrolls on its own while navigation and Bots stay put. The header holds title search, a filter and a new-session button. The filter narrows by archived, status, time, provider, project and Bot (any, one Bot by name, or no Bot); searching or filtering lists every match. Each card has the session's right-click menu (pin, rename, link, remind, archive, delete), F2 renames, Delete removes a multi-selection, hovering shows an archive button and, after a moment, a preview to the right, and dragging a card onto the workspace opens it in a split. Sessions done for an orchestrator's task are not listed on their own. Session folders are gone; nothing in the window shows or creates them. Each card shows the title, status or age, the provider, the project, and the Bot that started it, when one did. Blank sessions are never listed, and archived ones only when the filter includes them. Listing a session never loads its saved history. A Bot's floating island now shows only its documents; the sessions it starts appear in the rail with its name.
 
 **Manage vorkspaces…** opens a dialog with the vorkspace list on the left. For the selected vorkspace it edits the name, its **Look** (a color for its mark, and a chat background shown behind every session in it), its folders (remove, **Add folder…**, or add a folder known from another vorkspace) and its Bots (remove, or add one listed elsewhere). It can switch to that vorkspace or delete it, with a confirming second click.
 
@@ -31,7 +31,9 @@ Customization belongs to the vorkspace. Projects have none: each shows as a fold
 
 ## Sidebar toggle
 
-The project sidebar (Explorer, Changes, To-dos) is a persistent toggle: the button beside the rail toggle in the top bar, or ⇧⌘B. It stays as left over Bot panes, app pages and empty projects, and it is never collapsed automatically to make room for a split; a split is admitted only if it fits beside it. Only Settings hides it while open. Its header is just the project name, which opens the vorkspace's project picker, with a row below it for switching the worktree Explorer and Changes show. The top bar has no back or forward buttons; ⌘[ and ⌘] still step through visits.
+The project sidebar (Explorer, Changes, To-dos) is a persistent toggle: the folder button beside the rail toggle in the top bar, or ⇧⌘B. It stays as left over Bot panes, app pages and empty projects, and it is never collapsed automatically to make room for a split; a split is admitted only if it fits beside it. Only Settings hides it while open. Its header is just the project name, which opens the vorkspace's project picker, with a row below it for switching the worktree Explorer and Changes show. The top bar has no back or forward buttons; ⌘[ and ⌘] still step through visits.
+
+The rail's options menu no longer has an Activity switch. The expanded rail lists working sessions first, and the compact rail keeps its strip of working agents.
 
 ## One window per vorkspace
 

@@ -110,7 +110,6 @@ impl Shell {
                             this.session_summaries.insert(id, summary);
                         }
                         if this.workspace.project == project {
-                            this.refresh_sidebar_structure(cx);
                             this.invalidate_chrome(cx);
                         }
                     }

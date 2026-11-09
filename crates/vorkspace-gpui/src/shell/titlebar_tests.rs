@@ -47,8 +47,7 @@ fn assert_titlebar(
 ) {
     let scale = percent as f32 / 100.;
     let toggle = platform_bounds(window, visual, "toggle-sidebar");
-    let back = platform_bounds(window, visual, "visit-back");
-    let forward = platform_bounds(window, visual, "visit-forward");
+    let explorer = platform_bounds(window, visual, "toggle-explorer");
     let nav = platform_bounds(window, visual, "titlebar-navigation");
     // Hit areas snap to device pixels. At 90%, for example, a 21.6pt
     // nominal width becomes 21.5pt on the test platform's 2x display.
@@ -59,7 +58,7 @@ fn assert_titlebar(
     let native = !fullscreen;
     let safe = if native { 78. } else { 10. * scale };
     near(toggle.left(), safe);
-    for button in [toggle, back, forward] {
+    for button in [toggle, explorer] {
         near(button.size.width, 24. * scale);
         near(button.size.height, 24. * scale);
         near(button.center().y, 20. * scale);
@@ -67,11 +66,10 @@ fn assert_titlebar(
             assert!(button.left() >= px(66. + 12. - 0.02));
         }
     }
-    assert!(toggle.right() <= back.left() + px(0.02));
-    assert!(back.right() <= forward.left() + px(0.02));
+    assert!(toggle.right() <= explorer.left() + px(0.02));
     assert!(
-        forward.right() <= nav.right() + px(0.02),
-        "{percent}% fullscreen={fullscreen}: forward={forward:?} nav={nav:?}"
+        explorer.right() <= nav.right() + px(0.02),
+        "{percent}% fullscreen={fullscreen}: explorer={explorer:?} nav={nav:?}"
     );
     assert!(visual.debug_bounds("toggle-project-rail").is_none());
     // Every workspace destination shares the title strip.
@@ -226,7 +224,7 @@ fn inset_titlebar_uses_the_same_native_inset_and_navigation_budget(cx: &mut Test
                 let nav = visual.debug_bounds("titlebar-navigation").unwrap();
                 let toggle = visual.debug_bounds("toggle-sidebar").unwrap();
                 let tabs = visual.debug_bounds("title-tab-strip").unwrap();
-                let forward = visual.debug_bounds("visit-forward").unwrap();
+                let forward = visual.debug_bounds("toggle-explorer").unwrap();
                 let pixel = visual.update(|w, _| 1. / w.scale_factor());
                 assert!(tabs.left() >= nav.right() - px(pixel));
                 assert!(forward.right() <= nav.right() + px(0.02));
@@ -408,19 +406,20 @@ fn titlebar_zoom_paths_restore_and_keep_real_controls_live(cx: &mut TestAppConte
                 assert_eq!(shell.workspace.active, Some(a))
             })
             .unwrap();
-        let back = platform_bounds(window, visual, "visit-back");
         assert_titlebar(window, visual, percent, false);
-        visual.simulate_mouse_move(back.center(), None, Default::default());
-        visual.simulate_click(back.center(), Default::default());
+        // History has no titlebar buttons; ⌘[ and ⌘] step through visits.
+        window
+            .update(visual, |shell, w, cx| shell.visit(-1, w, cx))
+            .unwrap();
         settle(visual);
         window
             .update(visual, |shell, _, _| {
                 assert_eq!(shell.workspace.active, Some(b))
             })
             .unwrap();
-        let forward = platform_bounds(window, visual, "visit-forward");
-        visual.simulate_mouse_move(forward.center(), None, Default::default());
-        visual.simulate_click(forward.center(), Default::default());
+        window
+            .update(visual, |shell, w, cx| shell.visit(1, w, cx))
+            .unwrap();
         settle(visual);
         window
             .update(visual, |shell, w, cx| {

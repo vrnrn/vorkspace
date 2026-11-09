@@ -202,16 +202,6 @@ impl Conversation {
             self.save_message_draft(cx);
             return;
         }
-        if !self.folder_selected
-            && vorkspace_core::composer::consume_command(
-                &self.input.read(cx).content,
-                "add-to-folder",
-            )
-            .is_some()
-        {
-            self.request_folder(cx);
-            return;
-        }
         if self.attaching
             || (!self.input.read(cx).has_message_text() && self.attachments.is_empty())
         {
@@ -227,10 +217,6 @@ impl Conversation {
             .input
             .update(cx, |i, cx| i.take(cx))
             .unwrap_or_default();
-        let raw = vorkspace_core::composer::consume_command(&raw, "add-to-folder")
-            .map(str::to_owned)
-            .unwrap_or(raw);
-        self.folder_selected = false;
         let prompt = self.consume_mode_command(raw, cx);
         if prompt.trim().is_empty() && self.attachments.is_empty() {
             return;

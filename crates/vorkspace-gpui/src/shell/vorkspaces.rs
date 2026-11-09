@@ -21,12 +21,9 @@ pub(crate) struct VorkspaceDialog {
     _name: Subscription,
 }
 
-/// How many sessions the rail shows: every active one up to this many.
-const ACTIVE_SESSIONS: usize = 5;
-/// With nothing active, the most recent few.
-const RECENT_SESSIONS: usize = 3;
-/// Expanded, the list reaches this far back.
-const EXPANDED_SESSIONS: usize = 20;
+/// Collapsed, the rail shows this many sessions: working and
+/// approval-blocked ones first, then the latest.
+const RAIL_SESSIONS: usize = 5;
 
 /// A stable tint for a vorkspace's initial, from its id.
 fn vorkspace_hue(id: &str) -> f32 {
@@ -67,6 +64,7 @@ struct RailSession {
     project: String,
     busy: bool,
     needs_input: bool,
+    archived: bool,
     updated_at: u64,
 }
 
@@ -109,10 +107,8 @@ impl Shell {
             .collect();
         items.extend([
             MenuItem::Separator,
-            MenuAction::new("new", "New vorkspace…").icon("plus").into(),
-            MenuAction::new("manage", "Manage vorkspaces…")
-                .icon("settings")
-                .into(),
+            // No icon, so it lines up with the vorkspace names above.
+            MenuAction::new("manage", "Manage vorkspaces").into(),
         ]);
         ("Vorkspaces".into(), items, 240., MenuStyle::Group)
     }
@@ -126,11 +122,6 @@ impl Shell {
         if let Some(id) = action.strip_prefix("switch:") {
             let id = id.to_owned();
             self.switch_vorkspace(&id, window, cx);
-        } else if action == "new" {
-            let n = self.workspace.vorkspaces.len() + 1;
-            let id = self.workspace.create_vorkspace(&format!("Vorkspace {n}"));
-            self.switch_vorkspace(&id, window, cx);
-            self.open_vorkspace_dialog(Some(id), window, cx);
         } else if action == "manage" {
             self.open_vorkspace_dialog(None, window, cx);
         }
@@ -282,64 +273,62 @@ impl Shell {
     }
 
     fn rail_sessions(&self, cx: &App) -> (Vec<RailSession>, usize) {
-        let projects: HashSet<String> = self
-            .workspace
-            .vorkspace_projects()
-            .iter()
-            .map(|p| path_key(p))
-            .collect();
-        let start = self
-            .workspace
-            .session_filters
-            .time
-            .start(vorkspace_core::time::now_ms());
         let mut sessions: Vec<RailSession> = self
-            .order
-            .iter()
-            .filter_map(|&id| {
+            .sidebar_session_ids(cx)
+            .into_iter()
+            .map(|id| {
                 let meta = self.session_metadata(id, cx);
-                let summary = &meta.summary;
-                if !(summary.has_messages || meta.busy)
-                    || !projects.contains(&path_key(&summary.cwd))
-                    || !self.filter_session(id, start, cx)
-                {
-                    return None;
-                }
-                Some(RailSession {
+                RailSession {
                     id,
                     title: meta.display_title().to_string(),
-                    provider: summary.provider.clone(),
-                    project: self.project_label(&summary.cwd),
+                    provider: meta.summary.provider.clone(),
+                    project: self.project_label(&meta.summary.cwd),
                     busy: meta.busy,
                     needs_input: meta.needs_approval(),
-                    updated_at: summary.updated_at,
-                })
+                    archived: meta.summary.archived,
+                    updated_at: meta.summary.updated_at,
+                }
             })
             .collect();
         sessions.sort_by_key(|s| std::cmp::Reverse((s.busy || s.needs_input, s.updated_at)));
         let total = sessions.len();
-        let active = sessions
-            .iter()
-            .take_while(|s| s.busy || s.needs_input)
-            .count();
-        let filtered = self
-            .workspace
-            .session_filters
-            .active(self.workspace.preferences.show_archived);
-        sessions.truncate(if self.rail_sessions_expanded || filtered {
-            EXPANDED_SESSIONS
-        } else if active > 0 {
-            active.min(ACTIVE_SESSIONS)
-        } else {
-            RECENT_SESSIONS
-        });
+        let narrowed = !self.query.is_empty()
+            || self
+                .workspace
+                .session_filters
+                .active(self.workspace.preferences.show_archived);
+        // Expanded, searching or filtering, every match is listed.
+        if !(self.rail_sessions_expanded || narrowed) {
+            sessions.truncate(RAIL_SESSIONS);
+        }
         (sessions, total)
+    }
+
+    pub(super) fn close_rail_search(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.rail_search_open = false;
+        self.query.clear();
+        self.sidebar_search
+            .update(cx, |input, cx| input.set_text(String::new(), cx));
+        self.focus_active(window, cx);
+        self.invalidate_chrome(cx);
+        cx.notify();
+    }
+
+    /// The sessions the rail shows, in its order, for stepping and ranges.
+    pub(super) fn rail_session_ids(&self, cx: &App) -> Vec<i64> {
+        self.rail_sessions(cx).0.into_iter().map(|s| s.id).collect()
     }
 
     /// Sessions across the vorkspace's projects, borrowed from the Bot island:
     /// what is running first, else the latest few.
-    pub(super) fn rail_sessions_section(&self, cx: &mut Context<Self>) -> AnyElement {
+    pub(super) fn rail_sessions_section(&mut self, cx: &mut Context<Self>) -> AnyElement {
         let (sessions, total) = self.rail_sessions(cx);
+        // Each card anchors its hover preview, as the sidebar rows did.
+        let listed: HashSet<i64> = sessions.iter().map(|s| s.id).collect();
+        self.session_row_bounds.retain(|id, _| listed.contains(id));
+        for id in &listed {
+            self.session_row_bounds.entry(*id).or_default();
+        }
         let launcher: HashMap<i64, vorkspace_core::bot::Bot> = self
             .bots
             .as_ref()
@@ -363,11 +352,55 @@ impl Shell {
             .workspace
             .session_filters
             .active(self.workspace.preferences.show_archived);
+        let searching = self.rail_search_open || !self.query.is_empty();
+        let search = searching.then(|| {
+            div()
+                .mx_2()
+                .mb_1()
+                .h(px(28.))
+                .px_2()
+                .flex()
+                .items_center()
+                .gap_1p5()
+                .rounded(px(radius::CONTROL))
+                .bg(content(0.05))
+                .child(icon("search", 12.).text_color(content(0.5)))
+                .child(
+                    div()
+                        .debug_selector(|| "rail-sessions-search-field".into())
+                        .flex_1()
+                        .min_w_0()
+                        .child(self.sidebar_search.clone()),
+                )
+                .child(
+                    icon_button("rail-sessions-search-close", "Close search", "close")
+                        .size(px(18.))
+                        .on_click(
+                            cx.listener(|this, _, window, cx| this.close_rail_search(window, cx)),
+                        ),
+                )
+        });
         let heading = section_label("Sessions").mx_2().child(
             div()
                 .flex()
                 .items_center()
                 .gap_0p5()
+                .child(
+                    icon_button("rail-sessions-search", "Search sessions", "search")
+                        .debug_selector(|| "rail-sessions-search".into())
+                        .size(px(20.))
+                        .when(searching, |d| d.bg(content(0.1)))
+                        .on_click(cx.listener(|this, _, window, cx| {
+                            if this.rail_search_open {
+                                this.close_rail_search(window, cx);
+                            } else {
+                                this.rail_search_open = true;
+                                window.focus(&this.sidebar_search.focus_handle(cx), cx);
+                                this.invalidate_chrome(cx);
+                                cx.notify();
+                            }
+                        })),
+                )
                 .child(
                     icon_button("rail-sessions-filter", "Filter sessions", "filter")
                         .debug_selector(|| "rail-sessions-filter".into())
@@ -401,37 +434,78 @@ impl Shell {
                 ),
         );
         // Below the list, the disclosure reaches further back.
-        let disclosure = (more && !filtering).then(|| {
-            div().px_2().flex().justify_center().child(
-                icon_button(
-                    "rail-sessions-more",
-                    if expanded {
+        // A full-width disclosure under the list: all sessions, or back to five.
+        let disclosure = (more && !filtering && self.query.is_empty()).then(|| {
+            div().flex_shrink_0().px_2().pt_1().child(
+                div()
+                    .id("rail-sessions-more")
+                    .debug_selector(|| "rail-sessions-more".into())
+                    .role(Role::Button)
+                    .aria_label(if expanded {
                         "Show fewer sessions"
                     } else {
-                        "Show more sessions"
-                    },
-                    if expanded {
-                        "chevron-up"
-                    } else {
-                        "chevron-down"
-                    },
-                )
-                .debug_selector(|| "rail-sessions-more".into())
-                .size(px(20.))
-                .on_click(cx.listener(|this, _, _, cx| {
-                    this.rail_sessions_expanded = !this.rail_sessions_expanded;
-                    cx.notify();
-                })),
+                        "Show all sessions"
+                    })
+                    .aria_expanded(expanded)
+                    .map(vorkspace_ui::theme::tab_reachable)
+                    .w_full()
+                    .h(px(24.))
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .rounded(px(radius::CONTROL))
+                    .cursor_pointer()
+                    .hover(|s| s.bg(vorkspace_ui::fluid::hover(0.06)))
+                    .child(
+                        icon(
+                            if expanded {
+                                "chevron-up"
+                            } else {
+                                "chevron-down"
+                            },
+                            14.,
+                        )
+                        .text_color(content(0.5)),
+                    )
+                    .on_click(cx.listener(|this, _, _, cx| {
+                        this.rail_sessions_expanded = !this.rail_sessions_expanded;
+                        this.invalidate_chrome(cx);
+                        cx.notify();
+                    })),
             )
         });
         let now = vorkspace_core::time::now_ms();
         div()
             .id("rail-sessions")
             .debug_selector(|| "rail-sessions".into())
-            .flex_shrink_0()
+            // The session list owns selection keys: F2 renames, Delete removes.
+            .key_context("SessionSidebar")
+            .track_focus(&self.sidebar_focus)
+            .on_action(cx.listener(
+                |this, _: &super::session_groups::RenameSidebarItem, window, cx| {
+                    this.rename_sidebar_item(window, cx)
+                },
+            ))
+            .on_action(cx.listener(
+                |this, _: &super::session_groups::DeleteSidebarSelection, window, cx| {
+                    this.delete_sidebar_selection(window, cx)
+                },
+            ))
+            .flex_1()
+            .min_h_0()
+            .flex()
+            .flex_col()
             .child(heading)
+            .children(search)
             .child(
                 div()
+                    .id("rail-sessions-list")
+                    .debug_selector(|| "rail-sessions-list".into())
+                    // Sized by its cards, shrinking to scroll once the rail
+                    // runs out of room, so the chevron stays under the last.
+                    .flex_shrink(1.)
+                    .min_h_0()
+                    .overflow_y_scroll()
                     .px_2()
                     .flex()
                     .flex_col()
@@ -443,8 +517,8 @@ impl Shell {
                                 .py_1()
                                 .text_size(px(12.))
                                 .text_color(content(0.45))
-                                .child(if filtering {
-                                    "No sessions match the filter"
+                                .child(if filtering || !self.query.is_empty() {
+                                    "No sessions match"
                                 } else {
                                     "No sessions yet · ⌘N starts one"
                                 }),
@@ -452,8 +526,25 @@ impl Shell {
                     })
                     .children(sessions.into_iter().map(|s| {
                         let id = s.id;
-                        let active = self.workspace.active == Some(id);
-                        let status = if s.needs_input {
+                        if let Some(row) =
+                            self.rename_row(&super::session_groups::RenameTarget::Session(id), cx)
+                        {
+                            return row;
+                        }
+                        let active = self.selected_sessions.contains(&id)
+                            || (self.workspace.active == Some(id)
+                                && !self.bot_active(cx)
+                                && !self.app_view_open());
+                        let anchor = self
+                            .session_row_bounds
+                            .get(&id)
+                            .cloned()
+                            .unwrap_or_default();
+                        let hovered = self.session_hover == Some(id);
+                        let status = if hovered {
+                            let meta = self.session_metadata(id, cx);
+                            self.session_archive_button(id, &meta, cx)
+                        } else if s.needs_input {
                             div()
                                 .flex()
                                 .items_center()
@@ -473,6 +564,7 @@ impl Shell {
                         } else {
                             div()
                                 .text_color(content(0.45))
+                                .when(s.archived, |d| d.child("Archived · "))
                                 .child(vorkspace_core::time::relative(s.updated_at, now))
                                 .into_any_element()
                         };
@@ -515,6 +607,7 @@ impl Shell {
                                             .text_color(content(if active { 1. } else { 0.85 }))
                                             .child(s.title),
                                     )
+                                    .children(self.work_item_badge(id, true, cx))
                                     .child(div().flex_shrink_0().text_size(px(11.)).child(status)),
                             )
                             .child(
@@ -547,13 +640,50 @@ impl Shell {
                                         )
                                     }),
                             )
-                            .on_click(cx.listener(move |this, _, window, cx| {
-                                this.selected_sessions.clear();
-                                this.selection_anchor = Some(id);
-                                this.open(id, window, cx);
+                            .when(self.deleting.contains(&id), |d| d.opacity(0.5))
+                            .relative()
+                            .child(anchor.probe())
+                            .on_hover(cx.listener(move |this, hovered, window, cx| {
+                                this.hover_session(id, anchor.clone(), *hovered, true, window, cx);
                                 this.invalidate_chrome(cx);
-                                cx.notify();
                             }))
+                            .on_click(cx.listener(
+                                move |this, event: &gpui::ClickEvent, window, cx| {
+                                    if std::mem::take(&mut this.skip_session_click) {
+                                        return;
+                                    }
+                                    this.select_sidebar_session(id, event.modifiers(), window, cx)
+                                },
+                            ))
+                            // A card dragged onto a pane edge opens there.
+                            .on_mouse_down(
+                                MouseButton::Left,
+                                cx.listener(move |this, event: &MouseDownEvent, _, _| {
+                                    this.skip_session_click = false;
+                                    this.tab_drag = None;
+                                    this.pane_drag = Some(PaneDrag {
+                                        source: DragSource::Session(id),
+                                        start: event.position,
+                                        position: event.position,
+                                        active: false,
+                                        over: None,
+                                        insert: None,
+                                    });
+                                }),
+                            )
+                            .on_mouse_down(
+                                MouseButton::Right,
+                                cx.listener(move |this, event: &MouseDownEvent, window, cx| {
+                                    let anchor = Anchor::Point(event.position);
+                                    this.context_selection = !this.selected_sessions.contains(&id);
+                                    if this.context_selection {
+                                        this.selected_sessions.clear();
+                                        this.selected_sessions.insert(id);
+                                    }
+                                    this.open_menu(MenuTarget::Session(id), anchor, window, cx);
+                                }),
+                            )
+                            .into_any_element()
                     })),
             )
             .children(disclosure)

@@ -148,7 +148,6 @@ use response_menu::ResponseMenu;
 pub(crate) struct SessionChanged;
 /// A tool label changed; token/output changes do not wake session discovery.
 pub(crate) struct SessionActivityChanged;
-pub(crate) struct ChooseFolder(pub(crate) AnchorSlot);
 /// The review card asked to open the session's recorded changes.
 pub(crate) struct OpenSessionChanges(pub(crate) crate::git_tools::review::ReviewTab);
 /// A minion session's context and app environment.
@@ -194,7 +193,6 @@ pub(crate) struct Conversation {
     _draft_quit: Subscription,
     _input_focus: Option<[Subscription; 2]>,
     draft_has_value: bool,
-    folder_selected: bool,
     follow_ups: follow_up::FollowUps,
     attachments: Vec<std::path::PathBuf>,
     pending_attachments: Vec<std::path::PathBuf>,
@@ -378,10 +376,6 @@ impl Conversation {
     pub(crate) fn responding(&self) -> bool {
         self.busy && !self.stopping
     }
-    pub(crate) fn sidebar_details(&self) -> Option<(SharedString, Option<String>)> {
-        self.loaded
-            .then(|| (self.model_label(), self.branch.clone()))
-    }
     pub(crate) fn new(summary: Session, store: Database, cx: &mut Context<Self>) -> Self {
         #[cfg(test)]
         vorkspace_ui::clock::use_test_clock(cx);
@@ -405,11 +399,7 @@ impl Conversation {
         let completion_event = cx.subscribe(
             &completion,
             |this, _, event: &crate::composer::composer_completion::ModePicked, cx| {
-                if event.0 == "add-to-folder" {
-                    this.request_folder(cx);
-                } else {
-                    this.enable_mode(event.0, cx);
-                }
+                this.enable_mode(event.0, cx);
             },
         );
         let command_removal = cx.subscribe(&input, |this, _, event: &input::CommandRemoved, cx| {
@@ -420,20 +410,6 @@ impl Conversation {
             if this.ticket_context.edited(&content) && this.status == "Loading ticket context…" {
                 this.status = "Ready".into();
                 cx.notify();
-            }
-            let folder = vorkspace_core::composer::consume_command(&content, "add-to-folder");
-            if folder.is_none() {
-                this.folder_selected = false;
-            }
-            if !this.folder_selected
-                && folder == Some("")
-                && content.ends_with(' ')
-                && !input.read(cx).is_composing()
-            {
-                input.update(cx, |input, cx| {
-                    input.set_text(content.trim_end().into(), cx)
-                });
-                this.request_folder(cx);
             }
             let has_value = input.read(cx).has_message_text();
             if this.draft_has_value != has_value {
@@ -539,7 +515,6 @@ impl Conversation {
             _draft_quit: draft_quit,
             _input_focus: None,
             draft_has_value: false,
-            folder_selected: false,
             follow_ups: Default::default(),
             attachments: Vec::new(),
             pending_attachments: Vec::new(),
@@ -651,7 +626,6 @@ impl Conversation {
 
 impl EventEmitter<SessionChanged> for Conversation {}
 impl EventEmitter<SessionActivityChanged> for Conversation {}
-impl EventEmitter<ChooseFolder> for Conversation {}
 impl EventEmitter<OpenSessionChanges> for Conversation {}
 impl EventEmitter<Transfer> for Conversation {}
 impl EventEmitter<composer_features::StartOrchestration> for Conversation {}

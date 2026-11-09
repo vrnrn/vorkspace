@@ -70,7 +70,7 @@ fn sidebar_highlights_only_the_visible_bot_or_session(cx: &mut TestAppContext) {
         })
         .unwrap();
     let bot_row = format!("bot-rail-{id}");
-    let session_row = format!("sidebar-session-{session}");
+    let session_row = format!("rail-session-{session}");
     assert!(sidebar_highlight(window, session_row.clone(), cx));
     assert!(!sidebar_highlight(window, bot_row.clone(), cx));
     let click = |selector: &str, cx: &mut TestAppContext| {
@@ -169,7 +169,7 @@ fn sidebar_highlights_only_the_visible_bot_or_session(cx: &mut TestAppContext) {
         })
         .unwrap();
     assert!(sidebar_highlight(window, bot_row.clone(), cx));
-    for selector in [&session_row, &format!("sidebar-session-{other}")] {
+    for selector in [&session_row, &format!("rail-session-{other}")] {
         assert!(
             !sidebar_highlight(window, selector.clone(), cx),
             "over a Bot, session row {selector} stays listed but unhighlighted"
@@ -180,7 +180,7 @@ fn sidebar_highlights_only_the_visible_bot_or_session(cx: &mut TestAppContext) {
     assert!(!sidebar_highlight(window, bot_row.clone(), cx));
     assert!(!sidebar_highlight(
         window,
-        format!("sidebar-session-{other}"),
+        format!("rail-session-{other}"),
         cx
     ));
 }

@@ -77,7 +77,7 @@ impl Shell {
             .child(
                 // The explorer sidebar is its own persistent toggle: it stays
                 // as the user leaves it, whatever the main pane shows.
-                icon_button("toggle-explorer", TOGGLE_EXPLORER_LABEL, "explorer-panel")
+                icon_button("toggle-explorer", TOGGLE_EXPLORER_LABEL, "folder")
                     .debug_selector(|| "toggle-explorer".into())
                     .size(button_size)
                     .when(self.workspace.sidebar_visible, |b| b.bg(content(0.08)))

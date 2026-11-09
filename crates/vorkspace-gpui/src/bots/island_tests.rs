@@ -16,6 +16,13 @@ fn bot_island_collapses_to_face_and_button_and_opens_settings(cx: &mut TestAppCo
         crate::popover::bind(cx);
     });
     let s = setup(cx);
+    // The island needs the width the project sidebar would otherwise take.
+    s.window
+        .update(cx, |shell, _, cx| {
+            shell.workspace.sidebar_visible = false;
+            cx.notify();
+        })
+        .unwrap();
     let chat = s.manager.update(cx, |m, cx| {
         m.settings = None;
         let chat = m.chat().unwrap();

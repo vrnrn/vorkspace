@@ -67,8 +67,8 @@ fn the_workspace_tab_thumb_glides_to_the_new_tab_and_lands(cx: &mut TestAppConte
     let visual = &mut VisualTestContext::from_window(window.into(), cx);
     visual.run_until_parked();
     vorkspace_ui::clock::settle_animations(window, visual);
-    let sessions = visual.debug_bounds("classic-tab-sessions").unwrap();
-    let explorer = visual.debug_bounds("classic-tab-explorer").unwrap();
+    let sessions = visual.debug_bounds("classic-tab-explorer").unwrap();
+    let explorer = visual.debug_bounds("classic-tab-changes").unwrap();
     // At rest, exactly one thumb sits on the selected tab.
     let resting: Vec<_> = thumbs(window, visual)
         .into_iter()

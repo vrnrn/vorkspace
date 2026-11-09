@@ -594,11 +594,6 @@ impl Completion {
         } else {
             let mut choices = Vec::new();
             for (id, label, detail) in [
-                (
-                    "add-to-folder",
-                    "Add to folder",
-                    "Place this session in an existing or new sidebar folder",
-                ),
                 ("draft", "Draft", "Save it without starting the agent"),
                 (
                     "compact",

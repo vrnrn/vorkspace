@@ -69,6 +69,10 @@ const SHOTS: &[(&str, Option<usize>, (f32, f32))] = &[
     ("search", Some(0), (1390., 890.)),
     ("typed", Some(0), (1390., 890.)),
     ("project-menu", Some(0), (1390., 890.)),
+    ("session-filter", Some(0), (1390., 890.)),
+    ("project-picker", Some(0), (1390., 890.)),
+    ("session-menu", Some(0), (1390., 890.)),
+    ("sidebar-options", Some(0), (1390., 890.)),
     ("rest-narrow", Some(0), (850., 610.)),
     ("settings-narrow", None, (850., 610.)),
     ("project-appearance-narrow", Some(0), (850., 610.)),
@@ -584,6 +588,30 @@ fn fluid_capture() {
                             })
                         });
                     }
+                    "session-filter" => shell.open_menu(
+                        MenuTarget::SessionFilter,
+                        Anchor::Slot(shell.filter_anchor.clone()),
+                        window,
+                        cx,
+                    ),
+                    "project-picker" => shell.open_menu(
+                        MenuTarget::Header,
+                        Anchor::Slot(shell.project_anchor.clone()),
+                        window,
+                        cx,
+                    ),
+                    "session-menu" => shell.open_menu(
+                        MenuTarget::Session(sessions[0].id),
+                        crate::popover::Anchor::Point(gpui::point(px(150.), px(640.))),
+                        window,
+                        cx,
+                    ),
+                    "sidebar-options" => shell.open_menu(
+                        MenuTarget::SidebarOptions,
+                        crate::popover::Anchor::Point(gpui::point(px(150.), px(700.))),
+                        window,
+                        cx,
+                    ),
                     "project-menu" => shell.open_menu(
                         MenuTarget::Project {
                             path: PROJECT.into(),

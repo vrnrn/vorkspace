@@ -2,12 +2,8 @@
 //! folders and deletion, and the grouped list they shape.
 use super::*;
 use chrono::{Local, NaiveDateTime, TimeZone};
-use gpui::EventEmitter;
 use vorkspace_core::{
-    session_groups::{
-        Entry, Groups, build_list, format_reminder, navigation_ids, parse_github_work_item,
-        reminder_at, reminder_presets,
-    },
+    session_groups::{format_reminder, parse_github_work_item, reminder_at, reminder_presets},
     store::Reminder,
 };
 use vorkspace_ui::radius;
@@ -34,26 +30,6 @@ pub(super) fn bind(cx: &mut App) {
     ]);
 }
 
-/// tabGroups.ts's TAB_GROUP_COLORS; 0 is the default wash.
-const FOLDER_COLORS: [(f32, f32, f32); 9] = [
-    (210., 0.08, 0.58),
-    (211., 0.92, 0.62),
-    (12., 0.80, 0.58),
-    (45., 0.90, 0.55),
-    (142., 0.55, 0.50),
-    (330., 0.70, 0.62),
-    (280., 0.55, 0.62),
-    (175., 0.55, 0.48),
-    (25., 0.85, 0.58),
-];
-fn folder_color(ix: usize) -> Option<gpui::Hsla> {
-    FOLDER_COLORS
-        .get(ix)
-        .map(|&(h, s, l)| gpui::hsla(h / 360., s, l, 1.))
-}
-/// Sidebar.tsx's REMINDERS_COLOR, amber-500.
-const REMINDERS_COLOR: u32 = 0xf59e0b;
-
 fn local_ms(at: NaiveDateTime) -> Option<u64> {
     Local
         .from_local_datetime(&at)
@@ -67,36 +43,10 @@ fn local_time(ms: u64) -> Option<NaiveDateTime> {
 pub(super) fn local_reminder_label(ms: u64) -> String {
     local_time(ms).map(format_reminder).unwrap_or_default()
 }
-pub(super) fn reminder_caption(ms: u64) -> String {
-    let Some(at) = local_time(ms) else {
-        return String::new();
-    };
-    let now = Local::now().naive_local();
-    if at <= now {
-        "Now".into()
-    } else if at.date() == now.date() {
-        at.format("%-H:%M").to_string()
-    } else {
-        at.format("%a").to_string()
-    }
-}
-
-#[derive(Clone, PartialEq)]
-pub(super) enum ListDrop {
-    Folder(String),
-    Session(i64),
-}
-pub(super) struct FolderDrag {
-    id: String,
-    start: Point<Pixels>,
-    active: bool,
-    over: Option<String>,
-}
 
 #[derive(Clone, PartialEq)]
 pub(super) enum RenameTarget {
     Session(i64),
-    Folder(String),
     ProjectGroup(String),
 }
 pub(super) struct Renaming {
@@ -110,56 +60,6 @@ pub(super) struct LinkDialog {
     error: Option<SharedString>,
     editing: bool,
     _events: Vec<Subscription>,
-}
-
-/// FolderColorSwatches: the folder menu's palette row.
-pub(super) struct FolderSwatches {
-    focus: FocusHandle,
-    selected: usize,
-}
-pub(super) struct SwatchPicked(Option<usize>);
-impl EventEmitter<SwatchPicked> for FolderSwatches {}
-impl Render for FolderSwatches {
-    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        div()
-            .track_focus(&self.focus)
-            .px_2()
-            .py_1p5()
-            .flex()
-            .items_center()
-            .gap_1p5()
-            .children((0..FOLDER_COLORS.len()).map(|ix| {
-                let selected = ix == self.selected;
-                div()
-                    .id(("folder-swatch", ix))
-                    .debug_selector(move || format!("folder-color-{ix}"))
-                    .role(Role::Button)
-                    .map(vorkspace_ui::theme::tab_reachable)
-                    .aria_label(if ix == 0 {
-                        "Default color".to_string()
-                    } else {
-                        format!("Color {ix}")
-                    })
-                    .size(px(18.))
-                    .rounded_full()
-                    .border_2()
-                    .border_color(if selected { content(0.9) } else { content(0.) })
-                    .hover(|s| s.border_color(content(0.5)))
-                    .child(
-                        div()
-                            .size_full()
-                            .rounded_full()
-                            .border_2()
-                            .border_color(content(0.))
-                            .bg(folder_color(ix).unwrap()),
-                    )
-                    .on_click(cx.listener(move |this, _, _, cx| {
-                        this.selected = ix;
-                        cx.emit(SwatchPicked((ix > 0).then_some(ix)));
-                        cx.notify();
-                    }))
-            }))
-    }
 }
 
 impl Shell {
@@ -227,126 +127,6 @@ impl Shell {
         })
         .detach();
     }
-    pub(super) fn sidebar_drop_at(
-        &self,
-        position: Point<Pixels>,
-        source: i64,
-        cx: &App,
-    ) -> Option<ListDrop> {
-        if !self.workspace.sidebar_visible || self.reminders.iter().any(|r| r.session_id == source)
-        {
-            return None;
-        }
-        let groups = self.project_groups();
-        for folder in &groups.folders {
-            if self
-                .folder_bounds
-                .get(&folder.id)
-                .and_then(AnchorSlot::get)
-                .is_some_and(|b| b.contains(&position))
-            {
-                return Some(ListDrop::Folder(folder.id.clone()));
-            }
-        }
-        for id in self.sidebar_navigation_ids(cx) {
-            if id == source || self.reminders.iter().any(|r| r.session_id == id) {
-                continue;
-            }
-            if self
-                .session_row_bounds
-                .get(&id)
-                .and_then(AnchorSlot::get)
-                .is_some_and(|b| b.contains(&position))
-            {
-                return Some(match groups.folder_of(id) {
-                    Some(folder) => ListDrop::Folder(folder.id.clone()),
-                    None => ListDrop::Session(id),
-                });
-            }
-        }
-        None
-    }
-    pub(super) fn apply_sidebar_drop(
-        &mut self,
-        source: i64,
-        target: ListDrop,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        match target {
-            ListDrop::Folder(folder) => {
-                self.update_groups(cx, |g| g.add_to_folder(&folder, source))
-            }
-            ListDrop::Session(target) if source != target => {
-                let folder = format!("{:x}-{source}-{target}", vorkspace_core::time::now_ms());
-                self.update_groups(cx, |g| {
-                    g.create_folder(&[source, target], folder.clone());
-                });
-                self.start_rename(RenameTarget::Folder(folder), window, cx);
-            }
-            _ => {}
-        }
-    }
-    pub(super) fn move_folder_drag(&mut self, event: &MouseMoveEvent, cx: &mut Context<Self>) {
-        let Some(drag) = &mut self.folder_drag else {
-            return;
-        };
-        if event.pressed_button != Some(MouseButton::Left) {
-            self.folder_drag = None;
-            return;
-        }
-        let delta = event.position - drag.start;
-        if !drag.active && delta.x.as_f32().hypot(delta.y.as_f32()) < 5. {
-            return;
-        }
-        drag.active = true;
-        self.skip_folder_click = true;
-        drag.over = self.folder_bounds.iter().find_map(|(id, slot)| {
-            slot.get()
-                .filter(|b| b.contains(&event.position))
-                .map(|_| id.clone())
-        });
-        self.notify_sidebar(cx);
-    }
-    pub(super) fn finish_folder_drag(&mut self, cx: &mut Context<Self>) {
-        let Some(drag) = self.folder_drag.take() else {
-            return;
-        };
-        if !drag.active {
-            return;
-        }
-        if let Some(over) = drag.over {
-            self.update_groups(cx, |g| {
-                if let Some((from, to)) = g
-                    .folders
-                    .iter()
-                    .position(|f| f.id == drag.id)
-                    .zip(g.folders.iter().position(|f| f.id == over))
-                {
-                    let folder = g.folders.remove(from);
-                    g.folders.insert(to, folder);
-                }
-            });
-        }
-        self.notify_sidebar(cx);
-    }
-    pub(super) fn project_groups(&self) -> Groups {
-        self.groups
-            .get(&self.workspace.project)
-            .cloned()
-            .unwrap_or_default()
-    }
-    fn update_groups(&mut self, cx: &mut Context<Self>, change: impl FnOnce(&mut Groups)) {
-        let project = self.workspace.project.clone();
-        let groups = self.groups.entry(project.clone()).or_default();
-        change(groups);
-        let groups = groups.clone();
-        self.store_write("save folders", cx, move |store| {
-            store.save_groups(&project, &groups)
-        });
-        self.invalidate_chrome(cx);
-        cx.notify();
-    }
     pub(super) fn store_write(
         &mut self,
         what: &'static str,
@@ -371,36 +151,9 @@ impl Shell {
         }));
     }
 
-    /// The project's sidebar entries, reminders first.
-    pub(super) fn session_entries(&self, ids: &[i64], cx: &App) -> Vec<Entry> {
-        let reminders: Vec<_> = self
-            .reminders
-            .iter()
-            .map(|r| (r.session_id, r.due_at))
-            .collect();
-        build_list(
-            ids,
-            |id| self.session_metadata(id, cx).summary.pinned,
-            &self.project_groups(),
-            &reminders,
-        )
-    }
-    /// The sessions in the order the sidebar shows them, for stepping.
+    /// The sessions in the order the rail shows them, for stepping.
     pub(super) fn sidebar_navigation_ids(&self, cx: &App) -> Vec<i64> {
-        let ids = self.sidebar_session_ids(cx);
-        let groups = self.project_groups();
-        let entries: Vec<_> = self
-            .session_entries(&ids, cx)
-            .into_iter()
-            .filter(|entry| {
-                !self.query.is_empty()
-                    || match entry {
-                        Entry::Folder { id, .. } => groups.folder(id).is_none_or(|f| !f.collapsed),
-                        _ => true,
-                    }
-            })
-            .collect();
-        navigation_ids(&entries, !self.query.is_empty())
+        self.rail_session_ids(cx)
     }
 
     fn session_menu_ids(&self, id: i64, cx: &App) -> Vec<i64> {
@@ -469,7 +222,6 @@ impl Shell {
         let summary = self.session_metadata(id, cx).summary;
         let ids = self.session_menu_ids(id, cx);
         let multiple = ids.len() > 1;
-        let groups = self.project_groups();
         let all_pinned = ids
             .iter()
             .all(|id| self.session_metadata(*id, cx).summary.pinned);
@@ -516,47 +268,15 @@ impl Shell {
                 .into(),
             ]);
         }
-        items.extend([
-            MenuAction::new("reminder", "Remind me")
-                .icon("clock")
-                .submenu(
-                    reminder_presets(Local::now().naive_local())
-                        .into_iter()
-                        .map(|(id, label, enabled)| MenuAction::new(id, label).disabled(!enabled))
-                        .collect(),
-                )
-                .into(),
-            MenuItem::Separator,
-            MenuAction::new("folder-new", "New folder")
-                .icon("folder-add")
-                .into(),
-        ]);
-        if !groups.folders.is_empty() {
-            items.push(MenuItem::Separator);
-            items.extend(groups.folders.iter().map(|folder| {
-                MenuAction::new(
-                    format!("folder-add:{}", folder.id),
-                    format!("Add to {}", folder.name),
-                )
-                .icon("folder-01")
-                .checked(ids.iter().all(|id| folder.session_ids.contains(id)))
-                .into()
-            }));
-        }
-        if ids.iter().any(|id| groups.folder_of(*id).is_some()) {
-            items.push(
-                MenuAction::new(
-                    "folder-remove",
-                    if multiple {
-                        "Remove from folders"
-                    } else {
-                        "Remove from folder"
-                    },
-                )
-                .icon("minus-sign")
-                .into(),
-            );
-        }
+        items.extend([MenuAction::new("reminder", "Remind me")
+            .icon("clock")
+            .submenu(
+                reminder_presets(Local::now().naive_local())
+                    .into_iter()
+                    .map(|(id, label, enabled)| MenuAction::new(id, label).disabled(!enabled))
+                    .collect(),
+            )
+            .into()]);
         items.extend([
             MenuItem::Separator,
             MenuAction::new(
@@ -639,29 +359,9 @@ impl Shell {
                     due_at,
                     fired_at: None,
                 }));
-                let project = self.workspace.project.clone();
-                if let Some(groups) = self.groups.get_mut(&project) {
-                    groups.reminders_collapsed = false;
-                }
-                self.update_groups(cx, |_| {});
+                self.invalidate_chrome(cx);
                 self.store_write("set the reminder", cx, move |s| {
                     s.set_reminders(&ids, due_at)
-                });
-            }
-            "folder-new" => {
-                let folder = format!("{:x}", vorkspace_core::time::now_ms() ^ ((id as u64) << 40));
-                self.update_groups(cx, |groups| {
-                    groups.create_folder(&ids, folder.clone());
-                });
-                self.start_rename(RenameTarget::Folder(folder), window, cx);
-            }
-            "folder-remove" => self.update_groups(cx, |groups| groups.remove_sessions(&ids)),
-            add if add.starts_with("folder-add:") => {
-                let folder = add["folder-add:".len()..].to_string();
-                self.update_groups(cx, |groups| {
-                    for id in &ids {
-                        groups.add_to_folder(&folder, *id);
-                    }
                 });
             }
             "archive" => {
@@ -675,49 +375,6 @@ impl Shell {
                 }
             }
             "delete" => self.request_delete_sessions(ids, window, cx),
-            _ => {}
-        }
-    }
-    pub(super) fn folder_menu_items(
-        &self,
-        folder: &str,
-        events: &mut Vec<Subscription>,
-        cx: &mut Context<Self>,
-    ) -> Vec<MenuItem> {
-        let selected = self
-            .project_groups()
-            .folder(folder)
-            .and_then(|f| f.color_index)
-            .unwrap_or(0);
-        let swatches = cx.new(|cx| FolderSwatches {
-            focus: cx.focus_handle(),
-            selected,
-        });
-        let id = folder.to_string();
-        events.push(
-            cx.subscribe(&swatches, move |this, _, SwatchPicked(color), cx| {
-                let color = *color;
-                this.update_groups(cx, |groups| groups.set_color(&id, color));
-            }),
-        );
-        let focus = swatches.read(cx).focus.clone();
-        vec![
-            MenuItem::Custom(swatches.into(), focus),
-            MenuAction::new("rename", "Rename").shortcut("F2").into(),
-            MenuItem::Separator,
-            MenuAction::new("ungroup", "Ungroup").into(),
-        ]
-    }
-    pub(super) fn run_folder_menu(
-        &mut self,
-        folder: String,
-        action: &str,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        match action {
-            "rename" => self.start_rename(RenameTarget::Folder(folder), window, cx),
-            "ungroup" => self.update_groups(cx, |groups| groups.dissolve(&folder)),
             _ => {}
         }
     }
@@ -912,20 +569,6 @@ impl Shell {
         {
             self.renaming = None;
         }
-        let projects: Vec<String> = self
-            .groups
-            .iter()
-            .filter(|(_, g)| g.folder_of(id).is_some())
-            .map(|(p, _)| p.clone())
-            .collect();
-        for project in projects {
-            let groups = self.groups.get_mut(&project).unwrap();
-            groups.remove_sessions(&[id]);
-            let groups = groups.clone();
-            self.store_write("save folders", cx, move |s| {
-                s.save_groups(&project, &groups)
-            });
-        }
         self.persist(cx);
     }
 
@@ -944,11 +587,6 @@ impl Shell {
                 .as_ref()
                 .and_then(|r| r.groups.iter().find(|g| &g.id == id))
                 .map(|g| g.name.clone())
-                .unwrap_or_default(),
-            RenameTarget::Folder(folder) => self
-                .project_groups()
-                .folder(folder)
-                .map(|f| f.name.clone())
                 .unwrap_or_default(),
         };
         let input = cx.new(|cx| {
@@ -1022,9 +660,6 @@ impl Shell {
                         self.persist(cx);
                     }
                 }
-                RenameTarget::Folder(folder) => {
-                    self.update_groups(cx, |groups| groups.rename_folder(&folder, &name))
-                }
             }
         }
         if renaming.input.read(cx).focus_handle(cx).is_focused(window) {
@@ -1057,10 +692,7 @@ impl Shell {
                         .flex_shrink_0()
                         .flex()
                         .items_center()
-                        .justify_center()
-                        .when(matches!(target, RenameTarget::Folder(_)), |d| {
-                            d.child(icon("chevron-down", 14.))
-                        }),
+                        .justify_center(),
                 )
                 .child(
                     div()
@@ -1125,232 +757,6 @@ impl Shell {
                 }))
                 .into_any(),
         )
-    }
-
-    /// A virtualized group renders its header separately from its member cards.
-    pub(super) fn sidebar_group_header(&self, entry: &Entry, cx: &mut Context<Self>) -> AnyElement {
-        let searching = !self.query.is_empty();
-        let folders = self.project_groups();
-        let (key, name, glyph, color, collapsed, sessions): (
-            String,
-            String,
-            &'static str,
-            Option<gpui::Hsla>,
-            bool,
-            &Vec<i64>,
-        ) = match entry {
-            Entry::Reminders {
-                collapsed,
-                sessions,
-            } => (
-                "reminders".into(),
-                "Reminders".into(),
-                "clock",
-                Some(rgb(REMINDERS_COLOR).into()),
-                *collapsed,
-                sessions,
-            ),
-            Entry::Folder { id, sessions } => {
-                let Some(folder) = folders.folder(id) else {
-                    return div().into_any();
-                };
-                (
-                    format!("folder:{id}"),
-                    folder.name.clone(),
-                    "folder",
-                    folder
-                        .custom_color
-                        .as_deref()
-                        .and_then(|color| color.strip_prefix('#'))
-                        .and_then(|color| u32::from_str_radix(color, 16).ok())
-                        .map(|color| rgb(color).into())
-                        .or_else(|| folder.color_index.and_then(folder_color)),
-                    folder.collapsed,
-                    sessions,
-                )
-            }
-            Entry::Pinned { .. } | Entry::Session(_) => return div().into_any(),
-        };
-        let expanded = searching || !collapsed;
-        let folder_id = key.strip_prefix("folder:").map(str::to_string);
-        folder_id
-            .as_ref()
-            .and_then(|f| self.rename_row(&RenameTarget::Folder(f.clone()), cx))
-            .unwrap_or_else(|| self.group_row(&key, name, glyph, color, expanded, sessions, cx))
-    }
-    #[allow(clippy::too_many_arguments)]
-    fn group_row(
-        &self,
-        key: &str,
-        name: String,
-        glyph: &'static str,
-        color: Option<gpui::Hsla>,
-        expanded: bool,
-        sessions: &[i64],
-        cx: &mut Context<Self>,
-    ) -> AnyElement {
-        let approval = sessions
-            .iter()
-            .any(|id| self.session_metadata(*id, cx).needs_approval());
-        let done = sessions.iter().any(|id| self.unseen_finished.contains(id));
-        let group = SharedString::from(format!("group-row-{key}"));
-        let toggle_key = key.to_string();
-        let menu_key = key.to_string();
-        let drag_key = key.strip_prefix("folder:").map(str::to_string);
-        let bounds = drag_key
-            .as_ref()
-            .and_then(|id| self.folder_bounds.get(id))
-            .cloned();
-        let drop_target = drag_key.as_ref().is_some_and(|id| {
-            self.sidebar_drop == Some(ListDrop::Folder(id.clone()))
-                || self
-                    .folder_drag
-                    .as_ref()
-                    .is_some_and(|drag| drag.active && drag.over.as_ref() == Some(id))
-        });
-        let mark = |side| {
-            let glyph = icon(glyph, side);
-            match color {
-                Some(color) => glyph.text_color(color),
-                None => glyph,
-            }
-        };
-        div()
-            .id(SharedString::from(format!("session-group-{key}")))
-            .debug_selector({
-                let key = key.to_string();
-                move || format!("session-group-{key}")
-            })
-            .group(group.clone())
-            .role(Role::Button)
-            .aria_label(name.clone())
-            .aria_expanded(expanded)
-            .cursor(CursorStyle::Arrow)
-            .h(px(32.))
-            .px_2()
-            .rounded(px(radius::CONTROL))
-            .flex()
-            .items_center()
-            .gap_2()
-            .text_color(content(0.5))
-            .when(expanded, |d| d.bg(content(0.05)).text_color(content(0.8)))
-            .hover(|s| {
-                s.bg(vorkspace_ui::fluid::hover(0.1))
-                    .text_color(content(1.))
-            })
-            .when(drop_target, |d| d.bg(content(0.14)))
-            .when(
-                drag_key.as_ref().is_some_and(|id| {
-                    self.folder_drag
-                        .as_ref()
-                        .is_some_and(|drag| drag.active && &drag.id == id)
-                }),
-                |d| d.opacity(0.4),
-            )
-            .child(
-                div()
-                    .size(px(16.))
-                    .flex_shrink_0()
-                    .flex()
-                    .items_center()
-                    .justify_center()
-                    .opacity(0.7)
-                    .child(
-                        div()
-                            .when(expanded, |d| d.invisible())
-                            .group_hover(group.clone(), |s| s.invisible())
-                            .child(mark(16.)),
-                    )
-                    .child(
-                        div()
-                            .absolute()
-                            .invisible()
-                            .when(expanded, |d| d.visible())
-                            .group_hover(group.clone(), |s| s.visible())
-                            .child(icon(
-                                if expanded {
-                                    "chevron-down"
-                                } else {
-                                    "chevron-right"
-                                },
-                                16.,
-                            )),
-                    )
-                    .relative(),
-            )
-            .child(
-                div()
-                    .flex_1()
-                    .min_w_0()
-                    .truncate()
-                    .text_size(px(14.))
-                    .font_weight(FontWeight::MEDIUM)
-                    .child(name),
-            )
-            .child(
-                div()
-                    .flex_shrink_0()
-                    .flex()
-                    .items_center()
-                    .gap_1()
-                    .text_size(px(11.))
-                    .text_color(content(0.4))
-                    .when(!expanded && approval, |d| {
-                        d.child(
-                            icon("circle-alert", 12.).text_color(vorkspace_ui::theme::warning()),
-                        )
-                    })
-                    .when(!expanded && !approval && done, |d| {
-                        d.child(
-                            icon("check-circle-2", 12.).text_color(vorkspace_ui::theme::success()),
-                        )
-                    })
-                    .child(sessions.len().to_string()),
-            )
-            .children(bounds.map(|slot| slot.probe().into_any_element()))
-            .relative()
-            .when_some(drag_key, |d, id| {
-                d.on_mouse_down(
-                    MouseButton::Left,
-                    cx.listener(move |this, event: &MouseDownEvent, _, _| {
-                        this.skip_folder_click = false;
-                        this.folder_drag = Some(FolderDrag {
-                            id: id.clone(),
-                            start: event.position,
-                            active: false,
-                            over: None,
-                        });
-                    }),
-                )
-            })
-            .on_click(cx.listener(move |this, _, window, cx| {
-                if std::mem::take(&mut this.skip_folder_click) {
-                    return;
-                }
-                this.sidebar_target = toggle_key
-                    .strip_prefix("folder:")
-                    .map(|id| RenameTarget::Folder(id.into()));
-                window.focus(&this.sidebar_focus, cx);
-                if !this.query.is_empty() {
-                    return;
-                }
-                let key = toggle_key.clone();
-                this.update_groups(cx, |groups| match key.as_str() {
-                    "reminders" => groups.reminders_collapsed = !groups.reminders_collapsed,
-                    folder => groups.toggle_folder(folder.trim_start_matches("folder:")),
-                });
-            }))
-            .when(key.starts_with("folder:"), |d| {
-                d.on_mouse_down(
-                    MouseButton::Right,
-                    cx.listener(move |this, event: &MouseDownEvent, window, cx| {
-                        let folder = menu_key.trim_start_matches("folder:").to_string();
-                        let anchor = Anchor::Point(event.position);
-                        this.open_menu(MenuTarget::Folder(folder), anchor, window, cx);
-                    }),
-                )
-            })
-            .into_any()
     }
 
     fn open_link_dialog(&mut self, id: i64, window: &mut Window, cx: &mut Context<Self>) {

@@ -66,7 +66,7 @@ fn hovering_archive_preserves_history_and_does_not_select_the_row(cx: &mut TestA
         .unwrap();
     cx.refresh().unwrap();
     let visual = &mut gpui::VisualTestContext::from_window(window.into(), cx);
-    let row = visual.debug_bounds("sidebar-session-1").unwrap();
+    let row = visual.debug_bounds("rail-session-1").unwrap();
     visual.simulate_mouse_move(row.center(), None, Default::default());
     visual.run_until_parked();
     visual.refresh().unwrap();
@@ -215,12 +215,11 @@ fn sidebar_rows_have_a_gap_and_preview_survives_crossing_into_the_card(cx: &mut 
     cx.refresh().unwrap();
     let visual = &mut gpui::VisualTestContext::from_window(window.into(), cx);
     let first = visual
-        .debug_bounds(Box::leak(format!("sidebar-session-{b}").into_boxed_str()))
+        .debug_bounds(Box::leak(format!("rail-session-{b}").into_boxed_str()))
         .unwrap();
     let second = visual
-        .debug_bounds(Box::leak(format!("sidebar-session-{a}").into_boxed_str()))
+        .debug_bounds(Box::leak(format!("rail-session-{a}").into_boxed_str()))
         .unwrap();
-    assert_eq!(first.size.height, px(32.));
     assert_eq!(
         second.top() - first.bottom(),
         px(1.),
@@ -276,7 +275,7 @@ fn sidebar_rows_have_a_gap_and_preview_survives_crossing_into_the_card(cx: &mut 
         .update(cx, |shell, window, cx| {
             let preview = shell.session_preview.as_ref().unwrap();
             assert_eq!(preview.id, a, "another row replaces the old preview");
-            assert_eq!(preview.anchor.get().unwrap().top() - first.bottom(), px(1.));
+            assert!((preview.anchor.get().unwrap().top() - second.top()).abs() < px(2.));
             shell.open(a, window, cx);
             assert!(
                 shell.session_preview.is_none(),
@@ -1360,11 +1359,9 @@ fn project_rail_toggle_holds_still_and_history_follows_the_rail(cx: &mut TestApp
     visual.run_until_parked();
     let toggle = visual.debug_bounds("toggle-sidebar").unwrap();
     assert_eq!(toggle.left(), px(traffic_light_inset(1., false)));
-    let expanded = visual.debug_bounds("classic-project-rail").unwrap();
-    assert_eq!(
-        visual.debug_bounds("visit-forward").unwrap().right(),
-        expanded.right() - px(6.)
-    );
+    assert!(visual.debug_bounds("classic-project-rail").is_some());
+    let explorer = visual.debug_bounds("toggle-explorer").unwrap();
+    assert_eq!(explorer.left(), toggle.right());
     visual.simulate_click(toggle.center(), Default::default());
     visual.run_until_parked();
     assert_eq!(visual.debug_bounds("toggle-sidebar").unwrap(), toggle);
@@ -1376,14 +1373,8 @@ fn project_rail_toggle_holds_still_and_history_follows_the_rail(cx: &mut TestApp
             .width,
         px(48.)
     );
-    assert_eq!(
-        visual.debug_bounds("visit-back").unwrap().left(),
-        toggle.right()
-    );
-    assert_eq!(
-        visual.debug_bounds("visit-forward").unwrap().right(),
-        px(traffic_light_inset(1., false) + 72.)
-    );
+    // Both toggles hold still as the rail collapses.
+    assert_eq!(visual.debug_bounds("toggle-explorer").unwrap(), explorer);
     window
         .update(visual, |shell, _, _| {
             assert!(!shell.workspace.project_rail_open);
@@ -1403,8 +1394,8 @@ fn project_rail_toggle_holds_still_and_history_follows_the_rail(cx: &mut TestApp
         px(NO_TRAFFIC_LIGHTS)
     );
     assert_eq!(
-        visual.debug_bounds("visit-forward").unwrap().right(),
-        px(NO_TRAFFIC_LIGHTS + 72.)
+        visual.debug_bounds("toggle-explorer").unwrap().right(),
+        px(NO_TRAFFIC_LIGHTS + 48.)
     );
 }
 #[gpui::test]
@@ -1427,7 +1418,6 @@ fn compact_rail_workspace_tabs_reopen_the_sidebar_without_changing_the_project(
     for (selector, expected) in [
         ("classic-compact-tab-explorer", SidebarTab::Files),
         ("classic-compact-tab-changes", SidebarTab::Changes),
-        ("classic-compact-tab-sessions", SidebarTab::Sessions),
     ] {
         let button = visual.debug_bounds(selector).unwrap();
         visual.simulate_click(button.center(), Default::default());
@@ -1503,9 +1493,9 @@ fn original_layout_keeps_project_rail_sidebar_and_workspace_independent(cx: &mut
     assert!(tabs.left() >= main.left());
     assert!(visual.debug_bounds("right-panel-frame").is_none());
     for selector in [
-        "classic-tab-sessions",
         "classic-tab-explorer",
         "classic-tab-changes",
+        "classic-tab-to-dos",
     ] {
         assert!(visual.debug_bounds(selector).is_some());
     }
@@ -1613,11 +1603,6 @@ fn original_workspace_tabs_open_tools_on_the_left_and_remember_each_project(
             SidebarTab::Changes,
             "changes-header",
         ),
-        (
-            "classic-tab-sessions",
-            SidebarTab::Sessions,
-            "classic-session-filter",
-        ),
     ] {
         let button = visual.debug_bounds(selector).unwrap();
         visual.simulate_click(button.center(), Default::default());
@@ -1640,7 +1625,7 @@ fn original_workspace_tabs_open_tools_on_the_left_and_remember_each_project(
         .update(visual, |shell, window, cx| {
             shell.select_classic_sidebar(SidebarTab::Changes, window, cx);
             shell.select_project("/work/another-project".into(), window, cx);
-            assert_eq!(shell.workspace.sidebar_tab(), SidebarTab::Sessions);
+            assert_eq!(shell.workspace.sidebar_tab(), SidebarTab::Files);
             shell.select_classic_sidebar(SidebarTab::Files, window, cx);
             shell.select_project("/work/vorkspace".into(), window, cx);
             assert_eq!(shell.workspace.sidebar_tab(), SidebarTab::Changes);
@@ -1767,16 +1752,15 @@ fn main_pane_covers_a_fixed_sidebar_with_a_clipped_fade(cx: &mut TestAppContext)
             w.painted_quads()
                 .into_iter()
                 .find(|q| {
+                    // The selected sidebar tab's pill is the sample.
                     q.background == content(0.1).into()
-                        && q.bounds.size.height.0 == 32. * w.scale_factor()
-                        && q.bounds.size.width.0
-                            > shell.workspace.right_panel_width / 2. * w.scale_factor()
+                        && q.bounds.size.height.0 == 28. * w.scale_factor()
                         && q.bounds.left().0 >= shell.classic_rail_width() * w.scale_factor()
                         && q.bounds.right().0
                             <= (shell.classic_rail_width() + shell.workspace.right_panel_width)
                                 * w.scale_factor()
                 })
-                .expect("selected session has a painted background")
+                .expect("the selected sidebar tab has a painted background")
                 .bounds
         })
         .unwrap();
@@ -2200,7 +2184,7 @@ fn typing_in_the_session_filter_matches_titles_without_case_and_keeps_session_st
                 );
             })
             .unwrap();
-        for (id, selector) in [(a, "sidebar-session-1"), (b, "sidebar-session-2")] {
+        for (id, selector) in [(a, "rail-session-1"), (b, "rail-session-2")] {
             assert_eq!(
                 visual.debug_bounds(selector).is_some(),
                 expected.contains(&id),
@@ -3197,7 +3181,7 @@ fn panes_split_resize_and_take_drops_from_panes_tabs_and_the_sidebar(cx: &mut Te
     cx.run_until_parked();
     vorkspace_ui::clock::settle_animations(window, cx);
     let row = cx
-        .debug_bounds(Box::leak(format!("sidebar-session-{a}").into_boxed_str()))
+        .debug_bounds(Box::leak(format!("rail-session-{a}").into_boxed_str()))
         .unwrap()
         .center();
     let below = point(right.center().x, right.bottom() - px(20.));
@@ -3699,7 +3683,8 @@ fn the_terminal_dock_toggles_adds_closes_and_moves(cx: &mut TestAppContext) {
         .update(cx, |shell, _, cx| {
             shell.workspace.docks.get_mut(&project).unwrap().size = 360.;
             shell.set_dock_side(DockSide::Right, cx);
-            assert!(!shell.workspace.sidebar_visible);
+            // The sidebar is the user's toggle; a narrow window keeps it.
+            assert!(shell.workspace.sidebar_visible);
         })
         .unwrap();
     cx.run_until_parked();

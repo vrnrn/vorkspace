@@ -728,7 +728,8 @@ impl MenuStyle {
     fn padding(self) -> f32 {
         match self {
             Self::Group => 8.,
-            Self::Composer => 6.,
+            // Matches the embedded project picker's own list inset.
+            Self::Composer | Self::Switcher => 6.,
             _ => 4.,
         }
     }
@@ -1356,7 +1357,7 @@ impl Menu {
                     .gap(px(10.))
                     .min_h(px(32.))
                     .when(action.description.is_some(), |d| d.py_2()),
-                MenuStyle::Switcher => d.items_center().gap(px(10.)).h(px(32.)),
+                MenuStyle::Switcher => d.items_center().gap(px(10.)).h(px(36.)).px(px(10.)),
                 MenuStyle::Git | MenuStyle::Filter => d.items_center().gap_2().h(px(28.)),
                 MenuStyle::Settings => d.items_center().gap_2().h(px(36.)),
                 MenuStyle::Recent => d.items_center().gap_2().h(px(40.)),
@@ -1641,9 +1642,14 @@ impl Render for Menu {
             .iter()
             .enumerate()
             .map(|(ix, item)| match item {
-                MenuItem::Custom(view, _) => {
-                    div().flex_shrink_0().child(view.clone()).into_any_element()
-                }
+                // A picker in the project switcher runs to the card's edges,
+                // as it does standalone; its rows and the menu's then share
+                // one inset.
+                MenuItem::Custom(view, _) => div()
+                    .flex_shrink_0()
+                    .when(style == MenuStyle::Switcher, |d| d.mx(px(-style.padding())))
+                    .child(view.clone())
+                    .into_any_element(),
                 MenuItem::Header(text) => div()
                     .flex_shrink_0()
                     .px_2()
@@ -1847,8 +1853,8 @@ fn separator(ix: usize, style: MenuStyle) -> AnyElement {
         .h(px(1.))
         .map(|d| {
             if style == MenuStyle::Switcher {
-                // `mx-2 bg-stroke`.
-                d.mx_2().bg(content(0.07))
+                // Full-bleed, like the embedded picker's own dividers.
+                d.mx(px(-style.padding())).bg(content(0.07))
             } else if style == MenuStyle::Git {
                 // `mx-1 border-t border-content/10`.
                 d.mx_1().bg(content(0.1))

@@ -150,6 +150,29 @@ mod tests {
     use super::*;
 
     #[test]
+    fn bot_and_project_filters_narrow_and_count_as_active() {
+        assert!(BotFilter::Any.matches(None));
+        assert!(BotFilter::Any.matches(Some("luna")));
+        assert!(BotFilter::NoBot.matches(None));
+        assert!(!BotFilter::NoBot.matches(Some("luna")));
+        assert!(BotFilter::Bot("luna".into()).matches(Some("luna")));
+        assert!(!BotFilter::Bot("luna".into()).matches(Some("voky")));
+        assert!(!BotFilter::Bot("luna".into()).matches(None));
+        let mut filters = Filters::default();
+        assert!(!filters.active(false));
+        filters.bot = BotFilter::NoBot;
+        assert!(filters.active(false));
+        filters.bot = BotFilter::Any;
+        filters.toggle_project("/work/a");
+        assert!(filters.active(false));
+        filters.toggle_project("/work/a");
+        assert!(filters.hidden_projects.is_empty());
+        // Older saved filters without the new fields still load.
+        let old: Filters = serde_json::from_str(r#"{"hidden_providers":[],"time":"all"}"#).unwrap();
+        assert_eq!(old.bot, BotFilter::Any);
+    }
+
+    #[test]
     fn time_boundaries_use_local_midnight_and_rolling_days() {
         let now = Local
             .with_ymd_and_hms(2026, 10, 20, 15, 42, 0)

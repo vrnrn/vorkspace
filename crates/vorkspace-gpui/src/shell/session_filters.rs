@@ -74,15 +74,8 @@ impl Shell {
             }
         }
         items.push(MenuItem::Header("Bot".into()));
-        let mut bots = vec![
-            (BotFilter::Any, "bot:any".to_string(), "Any".to_string()),
-            (
-                BotFilter::AnyBot,
-                "bot:some".into(),
-                "Started by a Bot".into(),
-            ),
-            (BotFilter::NoBot, "bot:none".into(), "Started by me".into()),
-        ];
+        // Single choice: any session, one Bot's, or ones no Bot started.
+        let mut bots = vec![(BotFilter::Any, "bot:any".to_string(), "Any".to_string())];
         if let Some(manager) = &self.bots {
             let hidden = &manager.read(cx).vorkspace_hidden;
             bots.extend(
@@ -96,11 +89,12 @@ impl Shell {
                         (
                             BotFilter::Bot(bot.id.clone()),
                             format!("bot:id:{}", bot.id),
-                            format!("Started by {}", bot.label()),
+                            bot.label(),
                         )
                     }),
             );
         }
+        bots.push((BotFilter::NoBot, "bot:none".into(), "No Bot".into()));
         for (value, id, label) in bots {
             items.push(
                 MenuAction::new(id, label)
@@ -258,11 +252,9 @@ mod tests {
                 assert!(state.session_filters.status.working);
             })
             .unwrap();
-        let row = visual.debug_bounds("menu-action-clear").unwrap();
-        visual.simulate_click(row.center(), Default::default());
-        visual.run_until_parked();
         window
             .update(visual, |shell, _, cx| {
+                shell.change_session_filter("clear", cx);
                 assert_eq!(shell.sidebar_session_ids(cx).len(), 2);
                 shell.sessions[&a].update(cx, |s, _| s.busy = false);
                 shell.unseen_finished.insert(a);

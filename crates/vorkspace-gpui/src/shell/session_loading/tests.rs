@@ -61,7 +61,9 @@ fn whole_project_sidebar_keeps_seven_today_sessions_across_worktrees_lazy(cx: &m
                     .sidebar_session_ids(cx)
                     .into_iter()
                     .collect::<HashSet<_>>(),
-                feature
+                // The rail lists the whole vorkspace whichever worktree the
+                // Explorer shows.
+                &main | &feature
             );
             shell.worktree_focus.insert(
                 "/work/project".into(),
@@ -75,7 +77,7 @@ fn whole_project_sidebar_keeps_seven_today_sessions_across_worktrees_lazy(cx: &m
                     .sidebar_session_ids(cx)
                     .into_iter()
                     .collect::<HashSet<_>>(),
-                main
+                &main | &feature
             );
             shell.worktree_focus.clear();
             assert_eq!(shell.sidebar_session_ids(cx).len(), 7);

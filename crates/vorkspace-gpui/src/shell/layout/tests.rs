@@ -227,6 +227,8 @@ fn search_header_clears_navigation_and_keeps_its_query_across_rail_modes(cx: &mu
         window
             .update(visual, |shell, w, cx| {
                 shell.workspace.project_rail_open = mode == "expanded";
+                // Measured with no project sidebar drawn beside the rail.
+                shell.workspace.sidebar_visible = false;
                 if mode != "expanded" {
                     shell.workspace.preferences.collapsed_project_rail = mode.into();
                 }
@@ -318,8 +320,21 @@ fn hidden_workspace_panes_do_not_leave_a_resize_hitbox_over_global_surfaces(
             })
             .unwrap();
         visual.run_until_parked();
-        assert!(visual.debug_bounds("sidebar-frame").is_none(), "{surface}");
-        assert!(visual.debug_bounds("sidebar-resize").is_none(), "{surface}");
+        // The sidebar stays as the user left it; only Settings covers it.
+        let covered = surface == "Settings";
+        assert_eq!(
+            visual.debug_bounds("sidebar-frame").is_none(),
+            covered,
+            "{surface}"
+        );
+        assert_eq!(
+            visual.debug_bounds("sidebar-resize").is_none(),
+            covered,
+            "{surface}"
+        );
+        if !covered {
+            continue;
+        }
         let (old_sash, before) = window
             .update(visual, |shell, _, _| {
                 (
@@ -366,9 +381,9 @@ fn original_workspace_tabs_fit_sidebar_widths_and_keep_their_actions(cx: &mut Te
         visual.run_until_parked();
         let sidebar = visual.debug_bounds("sidebar-frame").unwrap();
         let selectors = [
-            "classic-tab-sessions",
             "classic-tab-explorer",
             "classic-tab-changes",
+            "classic-tab-to-dos",
         ];
         let tabs = selectors.map(|selector| visual.debug_bounds(selector).unwrap());
         assert_eq!(sidebar.size.width, px(width));
@@ -378,7 +393,7 @@ fn original_workspace_tabs_fit_sidebar_widths_and_keep_their_actions(cx: &mut Te
         assert!(tabs[2].right() <= sidebar.right());
         assert!(tabs.iter().all(|tab| tab.size.width > px(0.)));
         assert!(visual.debug_bounds("right-panel-frame").is_none());
-        for (index, expected) in [SidebarTab::Sessions, SidebarTab::Files, SidebarTab::Changes]
+        for (index, expected) in [SidebarTab::Files, SidebarTab::Changes, SidebarTab::Todos]
             .into_iter()
             .enumerate()
         {
@@ -390,6 +405,9 @@ fn original_workspace_tabs_fit_sidebar_widths_and_keep_their_actions(cx: &mut Te
                 })
                 .unwrap();
         }
+        // History sits under Changes.
+        visual.simulate_click(tabs[1].center(), Default::default());
+        visual.run_until_parked();
         let history = visual.debug_bounds("classic-source-history").unwrap();
         visual.simulate_click(history.center(), Default::default());
         visual.run_until_parked();
@@ -420,7 +438,7 @@ fn collapsed_sidebar_stays_closed_when_hovering_the_rail(cx: &mut TestAppContext
     let rail = visual.debug_bounds("classic-project-rail").unwrap();
     let positions = [
         visual
-            .debug_bounds("classic-compact-tab-sessions")
+            .debug_bounds("classic-compact-tab-explorer")
             .unwrap()
             .center(),
         visual.debug_bounds("toggle-sidebar").unwrap().center(),

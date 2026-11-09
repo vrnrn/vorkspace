@@ -44,8 +44,6 @@ impl AssetSource for Assets {
    "response-metrics"=>include_bytes!("../assets/hugeicons/response-metrics.svg"),
    "close"=>include_bytes!("../assets/close.svg"),
    "sidebar"=>include_bytes!("../assets/sidebar.svg"),
-   // A panel with a file column, for the persistent explorer sidebar toggle.
-   "explorer-panel"=>include_bytes!("../assets/explorer-panel.svg"),
    // The sidebar toggle mirrored, for the right panel.
    "sidebar-right"=>include_bytes!("../assets/sidebar-right.svg"),
    "search"=>include_bytes!("../assets/search.svg"),

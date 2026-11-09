@@ -39,12 +39,10 @@ mod project_delete;
 mod project_settings;
 mod quick_composer;
 mod quick_open;
-mod rails;
 mod remote_projects;
 mod remote_sessions;
 mod search;
 mod session_filters;
-mod session_folders;
 mod session_groups;
 mod session_loading;
 mod session_preview;
@@ -189,7 +187,6 @@ pub(crate) struct ActivateTab(pub isize);
 /// keybinding table: tabs, history, sessions, projects and the sidebar.
 pub(crate) fn bind_keys(cx: &mut App) {
     session_groups::bind(cx);
-    session_folders::bind(cx);
     let modifier = "cmd";
     // Scoped to the shell, so the focused composer, menus and pickers outrank
     // these: GPUI ranks an unscoped binding above every context.
@@ -287,7 +284,6 @@ pub(crate) enum MenuTarget {
     Tab(i64),
     TitleTab(TitleTab),
     Session(i64),
-    Folder(String),
     /// The sidebar project header's menu.
     Header,
     SessionFilter,
@@ -488,7 +484,6 @@ pub(crate) struct Shell {
     /// Sessions an /operator thread started, by the session that started them.
     started_by: HashMap<i64, i64>,
     /// The sidebar rails under orchestrators and /operator threads.
-    rails: rails::Rails,
     usage_footer: Entity<UsageFooter>,
     /// Resource pressure indicator and its running-work dialog.
     resources: Entity<ResourceMonitor>,
@@ -496,7 +491,6 @@ pub(crate) struct Shell {
     project_rail_frame: Entity<Chrome>,
     project_rail_drag: Option<(Pixels, f32)>,
     sidebar_search: Entity<input::Input>,
-    sidebar_list: sidebar_list::SidebarList,
     sidebar_slide: Option<PaneSlide>,
     sidebar_fraction: f32,
     /// useTrafficLightsVisible: fullscreen hides the native buttons, so the
@@ -535,13 +529,7 @@ pub(crate) struct Shell {
     context_selection: bool,
     sidebar_target: Option<session_groups::RenameTarget>,
     session_row_bounds: HashMap<i64, AnchorSlot>,
-    folder_bounds: HashMap<String, AnchorSlot>,
-    sidebar_drop: Option<session_groups::ListDrop>,
-    folder_drag: Option<session_groups::FolderDrag>,
-    skip_folder_click: bool,
     filter_anchor: AnchorSlot,
-    folder_picker: Option<session_folders::Open>,
-    pending_folder: Option<(i64, AnchorSlot)>,
     _session_clock: gpui::Task<()>,
     notes: Option<Entity<Notes>>,
     codebase_tabs: HashMap<i64, Entity<crate::codebase::Page>>,
@@ -610,6 +598,8 @@ pub(crate) struct Shell {
     /// What every window shares; `None` only before the window joins it.
     app_core: Option<Entity<app_core::AppCore>>,
     rail_sessions_expanded: bool,
+    /// The rail's title search field is showing.
+    rail_search_open: bool,
     vorkspace_anchor: AnchorSlot,
     backgrounds: HashMap<i64, Entity<crate::project_background::ProjectBackground>>,
     background_card: AnchorSlot,
@@ -627,8 +617,6 @@ pub(crate) struct Shell {
     new_tab_task: Option<gpui::Task<()>>,
     worktree_focus: HashMap<String, crate::git_tools::worktree_switcher::WorktreeFocus>,
     session_worktrees: HashMap<i64, Option<String>>,
-    session_details: HashMap<i64, vorkspace_core::store::SessionMetadata>,
-    sidebar_hidden_sessions: HashSet<i64>,
     worktree_returns: HashMap<(String, String), i64>,
     tab_drag: Option<TabDrag>,
     /// Tabs sliding between slots: neighbours making room for a drag and,
@@ -890,14 +878,12 @@ impl Shell {
             orchestrations: HashMap::new(),
             orchestration_summaries: sidebar_metadata.orchestrations,
             started_by: sidebar_metadata.started_by,
-            rails: Default::default(),
             usage_footer: cx.new(|cx| UsageFooter::new(active_kind, cx)),
             resources,
             sidebar_frame,
             project_rail_frame,
             project_rail_drag: None,
             sidebar_search,
-            sidebar_list: sidebar_list::SidebarList::new(cx),
             sidebar_slide: None,
             sidebar_fraction: if workspace.sidebar_visible { 1. } else { 0. },
             fullscreen: false,
@@ -933,13 +919,7 @@ impl Shell {
             context_selection: false,
             sidebar_target: None,
             session_row_bounds: HashMap::new(),
-            folder_bounds: HashMap::new(),
-            sidebar_drop: None,
-            folder_drag: None,
-            skip_folder_click: false,
             filter_anchor: AnchorSlot::default(),
-            folder_picker: None,
-            pending_folder: None,
             _session_clock: session_clock,
             notes: None,
             codebase_tabs: HashMap::new(),
@@ -995,6 +975,7 @@ impl Shell {
             vorkspace_dialog: None,
             app_core: None,
             rail_sessions_expanded: false,
+            rail_search_open: false,
             vorkspace_anchor: AnchorSlot::default(),
             backgrounds: HashMap::new(),
             background_card: AnchorSlot::default(),
@@ -1009,8 +990,6 @@ impl Shell {
             new_tab_task: None,
             worktree_focus,
             session_worktrees,
-            session_details: sidebar_metadata.details,
-            sidebar_hidden_sessions: sidebar_metadata.sidebar_hidden,
             worktree_returns: HashMap::new(),
             tab_drag: None,
             tab_shifts: HashMap::new(),
@@ -1384,7 +1363,6 @@ impl Shell {
                 }
             }));
         self.observe_orchestration(&view, id, cx);
-        self.observe_session_folders(&view, id, cx);
         self.sessions.insert(id, view);
         if !self.order.contains(&id) {
             self.order.push(id);
@@ -1576,7 +1554,6 @@ impl Shell {
     }
     fn notify_sidebar(&self, cx: &mut Context<Self>) {
         self.sync_live_agents(cx);
-        self.sidebar_list.invalidate_structure();
         self.sidebar_frame.update(cx, |_, cx| cx.notify());
         self.project_rail_frame.update(cx, |_, cx| cx.notify());
     }
@@ -2115,9 +2092,6 @@ impl Shell {
         }
         self.workspace.project = path.clone();
         self.workspace.active = None;
-        self.query.clear();
-        self.sidebar_search
-            .update(cx, |input, cx| input.set_text(String::new(), cx));
         self.workspace.collapsed.remove(&path);
         // Restore the last scoped tab before falling back to a session; an
         // explicit project click never lands back on the Bot it just left.
@@ -2886,7 +2860,6 @@ impl Render for Shell {
                     }
                     this.close_menu(cx);
                     this.tab_drag = None;
-                    this.folder_drag = None;
                     this.cancel_pane_drag(cx);
                     this.pane_sash = None;
                     this.invalidate_chrome(cx);
@@ -2966,7 +2939,6 @@ impl Render for Shell {
                 this.move_tab_drag(event, cx);
                 this.move_dock_drag(event, cx);
                 this.move_pane_drag(event, cx);
-                this.move_folder_drag(event, cx);
                 this.drag_sash(event, cx);
                 this.drag_dock(event, cx);
                 this.drag_review(event, cx);
@@ -2995,7 +2967,6 @@ impl Render for Shell {
                     this.finish_tab_drag(window, cx);
                     this.finish_dock_drag(cx);
                     this.finish_pane_drag(window, cx);
-                    this.finish_folder_drag(cx);
                     if let Some(m) = this.bots.clone() {
                         m.update(cx, |m, cx| m.finish_reorder(cx));
                     }
@@ -3039,7 +3010,6 @@ impl Render for Shell {
             .children(self.quick_open_modal(window, cx))
             .children(self.remote_project_modal(window, cx))
             .children(self.notice_modals(window, cx))
-            .children(self.folder_picker_popover(window, cx))
             .children(crate::accounts::get(cx))
             .children(
                 self.image_lightbox
@@ -3110,7 +3080,12 @@ mod app_menu_tests {
             // Native menus enter through App, outside any borrowed window.
             visual.cx.update(|cx| cx.dispatch_action(command.as_ref()));
             visual.run_until_parked();
-            assert!(visual.debug_bounds("sidebar-resize").is_none(), "{label}");
+            // The sidebar is the user's toggle; only Settings covers it.
+            assert_eq!(
+                visual.debug_bounds("sidebar-resize").is_none(),
+                label == "Appearance…",
+                "{label}"
+            );
             let state = window
                 .read_with(visual, |shell, cx| {
                     (
@@ -3127,7 +3102,7 @@ mod app_menu_tests {
                 if label == "Appearance…" {
                     header.is_some()
                 } else {
-                    visual.debug_bounds("sidebar-content").is_none()
+                    visual.debug_bounds("sidebar-content").is_some()
                 },
                 "{label}: state={state:?}, settings={settings:?}, nav={nav:?}, header={header:?}"
             );

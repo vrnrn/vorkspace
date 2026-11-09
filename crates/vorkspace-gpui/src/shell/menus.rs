@@ -194,12 +194,6 @@ impl Shell {
                 228.,
                 MenuStyle::Explorer,
             ),
-            MenuTarget::Folder(folder) => (
-                "Folder actions".into(),
-                self.folder_menu_items(folder, events, cx),
-                228.,
-                MenuStyle::Explorer,
-            ),
             MenuTarget::TerminalDock => {
                 let side = self
                     .workspace
@@ -427,7 +421,6 @@ impl Shell {
             }
             MenuTarget::TitleTab(tab) => self.run_title_tab_menu(tab, action, window, cx),
             MenuTarget::Session(id) => self.run_session_menu(id, action, window, cx),
-            MenuTarget::Folder(folder) => self.run_folder_menu(folder, action, window, cx),
             MenuTarget::Header => {
                 // "Project settings" opens the project's menu beside its row.
                 if action == "settings" {

@@ -43,9 +43,7 @@ impl Shell {
         self.set_sidebar_visible(true, cx);
         self.ensure_right_panel(window, cx);
         self.sync_right_panel(cx);
-        if tab == SidebarTab::Sessions {
-            window.focus(&self.sidebar_focus, cx);
-        } else if tab == SidebarTab::Todos {
+        if tab == SidebarTab::Todos {
             if let Some(board) = &self.project_todos {
                 window.focus(&board.focus_handle(cx), cx);
             }
@@ -67,7 +65,8 @@ impl Shell {
             .flex()
             .items_center()
             .gap_1()
-            .px_3()
+            // The name's hover fill lines up with the tab pills below it.
+            .px_2()
             .border_b_1()
             .border_color(crate::panel_kit::stroke())
             .child(
@@ -84,6 +83,7 @@ impl Shell {
                     .items_center()
                     .gap_1()
                     .h(px(28.))
+                    .px_2()
                     .rounded(px(radius::CONTROL))
                     .hover(|s| s.bg(vorkspace_ui::fluid::hover(0.08)))
                     .text_size(px(13.))
@@ -116,25 +116,12 @@ impl Shell {
     }
 
     pub(super) fn classic_sidebar(&mut self, cx: &mut Context<Self>) -> AnyElement {
-        self.refresh_sidebar_structure(cx);
         let tab = self.workspace.sidebar_tab();
         let tabs = SidebarTab::normalize(&self.workspace.sidebar_tab_order);
         let todos_enabled = self.workspace.preferences.todos;
         let mut body = div()
             .id("classic-workspace-sidebar")
             .debug_selector(|| "sidebar-content".into())
-            .key_context("SessionSidebar")
-            .track_focus(&self.sidebar_focus)
-            .on_action(
-                cx.listener(|this, _: &session_groups::RenameSidebarItem, window, cx| {
-                    this.rename_sidebar_item(window, cx)
-                }),
-            )
-            .on_action(cx.listener(
-                |this, _: &session_groups::DeleteSidebarSelection, window, cx| {
-                    this.delete_sidebar_selection(window, cx)
-                },
-            ))
             .w(px(self.workspace.right_panel_width))
             .h_full()
             .flex()
@@ -232,26 +219,7 @@ impl Shell {
                         )
                     }),
             );
-        if tab == SidebarTab::Sessions {
-            body = body
-                .child(
-                    div()
-                        .id("classic-session-filter")
-                        .debug_selector(|| "classic-session-filter".into())
-                        .h(px(36.))
-                        .flex_shrink_0()
-                        .flex()
-                        .items_center()
-                        .gap_1()
-                        .px_2()
-                        .border_b_1()
-                        .border_color(crate::panel_kit::stroke())
-                        .child(icon("search", 12.).text_color(content(0.5)))
-                        .child(div().flex_1().min_w_0().child(self.sidebar_search.clone()))
-                        .child(self.sidebar_filter_button(cx)),
-                )
-                .child(self.virtual_sidebar(cx));
-        } else if self.workspace.project.is_empty() {
+        if self.workspace.project.is_empty() {
             // Files, changes and a project board all belong to a project;
             // without one, each tab offers the same way in.
             body = body.child(
@@ -328,8 +296,9 @@ impl Shell {
         let preview = self.session_preview.as_ref()?;
         let id = preview.id;
         Some(
+            // Sessions are listed in the rail at the window's left edge.
             popover("session-preview", Anchor::Slot(preview.anchor.clone()))
-                .side(Side::Left)
+                .side(Side::Right)
                 .gap(8.)
                 .width(260.)
                 .max_height(440.)

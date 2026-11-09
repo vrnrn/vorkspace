@@ -364,12 +364,7 @@ fn project_rail_migration_and_native_edits_survive_stale_source_restart() {
 fn sidebar_tools_keep_per_project_selection_and_normalize_main_tab_order() {
     assert_eq!(
         SidebarTab::normalize(&[SidebarTab::Changes, SidebarTab::Graph, SidebarTab::Changes]),
-        [
-            SidebarTab::Changes,
-            SidebarTab::Sessions,
-            SidebarTab::Files,
-            SidebarTab::Todos
-        ]
+        [SidebarTab::Changes, SidebarTab::Files, SidebarTab::Todos]
     );
     let saved = serde_json::json!({
         "project":"/work",
@@ -384,21 +379,16 @@ fn sidebar_tools_keep_per_project_selection_and_normalize_main_tab_order() {
     assert_eq!(state.project_rail_width, 360.);
     assert_eq!(
         state.sidebar_tab_order,
-        [
-            SidebarTab::Changes,
-            SidebarTab::Sessions,
-            SidebarTab::Files,
-            SidebarTab::Todos
-        ]
+        [SidebarTab::Changes, SidebarTab::Files, SidebarTab::Todos]
     );
     state.project = "/other".into();
     assert_eq!(state.sidebar_tab(), SidebarTab::Files);
     state
         .sidebar_tabs
-        .insert("/other".into(), SidebarTab::Sessions);
+        .insert("/other".into(), SidebarTab::Graph);
     state.project_rail_width = 225.;
     let reopened = Workspace::restore(Some(&serde_json::to_string(&state).unwrap()), &[], "/other");
-    assert_eq!(reopened.sidebar_tab(), SidebarTab::Sessions);
+    assert_eq!(reopened.sidebar_tab(), SidebarTab::Graph);
     assert_eq!(reopened.project_rail_width, 225.);
     state.project = "/new".into();
     assert_eq!(state.sidebar_tab(), SidebarTab::Changes);

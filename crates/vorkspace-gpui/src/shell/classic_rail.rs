@@ -192,15 +192,18 @@ impl Shell {
         rail = rail
             .child(switcher)
             .child(
+                // Navigation and Bots hold their place; the session list
+                // takes the remaining height and scrolls on its own.
                 div()
                     .id("classic-project-rail-scroll")
                     .debug_selector(|| "classic-project-rail-scroll".into())
                     .flex_1()
                     .min_h_0()
-                    .overflow_y_scroll()
+                    .flex()
+                    .flex_col()
                     .pb_2()
-                    .child(navigation)
-                    .children(bots)
+                    .child(div().flex_shrink_0().child(navigation))
+                    .children(bots.map(|b| div().flex_shrink_0().child(b)))
                     .child(sessions),
             )
             .when(

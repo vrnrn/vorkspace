@@ -516,19 +516,9 @@ impl Shell {
             drag.insert = insert;
             self.tabs_frame.update(cx, |_, cx| cx.notify());
         }
-        let drop = matches!(source, DragSource::Session(_))
-            .then(|| self.sidebar_drop_at(event.position, source.session(), cx))
-            .flatten();
-        if self.sidebar_drop != drop {
-            self.sidebar_drop = drop;
-            self.notify_sidebar(cx);
-        }
         cx.notify();
     }
     pub(super) fn cancel_pane_drag(&mut self, cx: &mut Context<Self>) {
-        if self.sidebar_drop.take().is_some() {
-            self.notify_sidebar(cx);
-        }
         if let Some(drag) = self.pane_drag.take() {
             if drag.insert.is_some() {
                 self.tabs_frame.update(cx, |_, cx| cx.notify());
@@ -543,10 +533,6 @@ impl Shell {
         self.tabs_frame.update(cx, |_, cx| cx.notify());
         cx.notify();
         if !drag.active {
-            return;
-        }
-        if let Some(target) = self.sidebar_drop.take() {
-            self.apply_sidebar_drop(drag.source.session(), target, window, cx);
             return;
         }
         if let Some((target, edge)) = drag.over
