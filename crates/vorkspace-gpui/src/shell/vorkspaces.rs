@@ -961,8 +961,10 @@ impl Shell {
             .cloned()
             .collect();
         let chip = |id: SharedString, label: String, lead: AnyElement| {
+            let debug_id = id.clone();
             div()
                 .id(id)
+                .debug_selector(move || debug_id.to_string())
                 .role(Role::Button)
                 .aria_label(format!("Add {label}"))
                 .map(vorkspace_ui::theme::tab_reachable)
@@ -993,10 +995,21 @@ impl Shell {
                 self.project_label(&path),
                 self.project_mark(&path, 14.),
             )
-            .on_click(cx.listener(move |this, _, _, cx| {
+            .on_click(cx.listener(move |this, _, window, cx| {
+                let first = editing == this.workspace.active_vorkspace
+                    && (this.workspace.project.is_empty()
+                        || !this
+                            .workspace
+                            .vorkspace_projects()
+                            .iter()
+                            .any(|p| path_key(p) == path_key(&this.workspace.project)));
                 this.workspace.add_project_to_vorkspace(&editing, &add);
-                this.persist(cx);
-                cx.notify();
+                if first {
+                    this.open_project_from_user(add.clone(), window, cx);
+                } else {
+                    this.persist(cx);
+                    cx.notify();
+                }
             }))
         });
         let bots = self.vorkspace_bots(cx);
@@ -1396,5 +1409,48 @@ impl Shell {
         }
         self.persist(cx);
         cx.notify();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use gpui::TestAppContext;
+
+    #[gpui::test]
+    fn adding_first_folder_chip_to_active_empty_vorkspace_enters_that_project(
+        cx: &mut TestAppContext,
+    ) {
+        let (window, _, _) = super::super::tests::window(cx);
+        let second_project = "/work/second".to_string();
+        window
+            .update(cx, |shell, window, cx| {
+                shell.workspace.add_project(&second_project);
+                let empty_id = shell.workspace.create_vorkspace("Empty");
+                shell.switch_vorkspace(&empty_id, window, cx);
+                assert_eq!(shell.workspace.active_vorkspace, empty_id);
+                assert!(shell.workspace.project.is_empty());
+                assert!(shell.workspace.vorkspace_projects().is_empty());
+
+                shell.open_vorkspace_dialog(Some(empty_id.clone()), window, cx);
+            })
+            .unwrap();
+
+        let visual = &mut gpui::VisualTestContext::from_window(window.into(), cx);
+        visual.run_until_parked();
+        let chip_id: &'static str =
+            format!("vorkspace-add-project-{}", path_key(&second_project)).leak();
+        let chip_bounds = visual
+            .debug_bounds(chip_id)
+            .expect("add project chip rendered");
+        visual.simulate_click(chip_bounds.center(), Default::default());
+        visual.run_until_parked();
+
+        window
+            .update(visual, |shell, _, _| {
+                assert_eq!(shell.workspace.project, second_project);
+                assert_eq!(shell.workspace.vorkspace_projects(), [second_project]);
+            })
+            .unwrap();
     }
 }
