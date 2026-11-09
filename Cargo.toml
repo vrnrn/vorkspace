@@ -71,6 +71,7 @@ opt-level = 1
 [profile.verify]
 inherits = "dev"
 debug = 0
+incremental = false
 
 [profile.verify.package."*"]
 opt-level = 1

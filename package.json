@@ -12,7 +12,7 @@
     "benchmark:native": "node scripts/benchmarks/benchmark-native.mjs",
     "worktree:seed": "bash scripts/desktop/seed-worktree.sh",
     "check": "npm run test:tooling && npm run test:voice && npm run test:host && cargo fmt --all --check && cargo clippy --locked --workspace --all-targets --profile verify -- -D warnings && npm run test:rust",
-    "check:fast": "npm run test:tooling && npm run test:voice && cargo fmt --all --check && cargo clippy --locked --workspace --all-targets --profile verify -- -D warnings && cargo nextest run --locked --cargo-profile verify -p vorkspace-core",
+    "check:fast": "npm run test:tooling && npm run test:voice && cargo fmt --all --check && cargo clippy --locked --workspace --all-targets --profile verify -- -D warnings && cargo nextest run --locked --cargo-profile verify -p vorkspace-core && npm run target:prune",
     "test": "npm run test:tooling && npm run test:voice && npm run test:host && npm run test:rust",
     "test:rust": "cargo nextest run --locked --cargo-profile verify --workspace && cargo test --quiet --manifest-path vendor/block/Cargo.toml --target-dir target/block && npm run target:prune",
     "target:prune": "node scripts/desktop/prune-target.mjs",
