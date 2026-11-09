@@ -2485,7 +2485,11 @@ impl Window {
         }
         let stops = &self.rendered_frame.tab_stops;
         let step = |from: Option<&FocusId>| {
-            if reverse { stops.prev(from) } else { stops.next(from) }
+            if reverse {
+                stops.prev(from)
+            } else {
+                stops.next(from)
+            }
         };
         let Some(first) = step(self.focus.as_ref()) else {
             return;
@@ -2540,7 +2544,6 @@ impl Window {
     pub fn set_exclusive_zone(&self, zone: Pixels) {
         self.platform_window.set_exclusive_zone(zone);
     }
-
 
     /// Start an interactive window resize operation if this window is resizable.
     pub fn start_window_resize(&self, edge: ResizeEdge) {
@@ -4409,7 +4412,11 @@ impl Window {
     pub fn transact<T, U>(&mut self, f: impl FnOnce(&mut Self) -> Result<T, U>) -> Result<T, U> {
         self.invalidator.debug_assert_prepaint();
         let index = self.prepaint_index();
+        let a11y_checkpoint = self.a11y.prepaint_checkpoint();
         let result = f(self);
+        if let Some(checkpoint) = a11y_checkpoint {
+            self.a11y.finish_prepaint(checkpoint, result.is_ok());
+        }
         if result.is_err() {
             self.next_frame.hitboxes.truncate(index.hitboxes_index);
             self.next_frame
