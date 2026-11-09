@@ -231,8 +231,8 @@ fn peer_delivery_is_durable_replies_once_and_accepts_the_next_message(cx: &mut T
             projects: vec![s.project.clone()],
             ..Default::default()
         });
-        m.ensure_chat("peer-beta", cx);
         m.save(cx);
+        m.ensure_chat("peer-beta", cx);
         m.chats[&s.id].update(cx, |v, _| v.busy = true);
     });
     cx.run_until_parked();

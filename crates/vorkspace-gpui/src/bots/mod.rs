@@ -56,6 +56,46 @@ use vorkspace_core::{
 };
 use vorkspace_runtime::runtime::{Database, locked};
 use vorkspace_ui::theme::*;
+fn load_backing_chat(
+    db: &vorkspace_core::store::Store,
+    root: &std::path::Path,
+    bot: &Bot,
+    session: i64,
+) -> Result<roster::PreparedChat, String> {
+    // Team work belongs exclusively to the Bot outbox. A migrated project
+    // session may still have a legacy user follow-up queue.
+    if bot.is_minion() {
+        let mut queue = db.follow_ups(session)?;
+        if !queue.paused {
+            queue.paused = true;
+            queue.revision += 1;
+            db.accept_follow_ups(session, &queue)?;
+        }
+    }
+    let mut summary = db.bot_session(session)?
+        .ok_or("This Bot's saved conversation is unavailable. Reset its conversation explicitly to start a new one.")?;
+    let settings = db.agent_settings(session)?.unwrap_or_default();
+    let mut warning = None;
+    if !bot.is_minion() && settings.worktree_cwd.is_none() {
+        let home = bot::home::ensure(root, bot, Some(std::path::Path::new(&summary.cwd)))?;
+        db.move_bot_home(&summary, &home.to_string_lossy())?;
+        summary.cwd = home.to_string_lossy().into_owned();
+        warning = bot::home::write_session(root, bot, &summary, &settings.account).err();
+    }
+    let delivered = bot
+        .outbox
+        .iter()
+        .filter(|q| {
+            db.setting(&format!("bot-delivered:{}:{}", summary.id, q.id))
+                .ok()
+                .flatten()
+                .is_some()
+        })
+        .map(|q| q.id.clone())
+        .collect();
+    Ok((summary, None, delivered, warning))
+}
+
 pub(crate) struct Changed;
 pub(crate) struct TabOpened(pub String);
 #[derive(Clone, Debug)]
@@ -713,6 +753,7 @@ impl Bots {
                 .cloned()
                 .collect();
             for id in deleted {
+                self.release_chat(&id, cx);
                 if let Some(view) = self.chats.remove(&id) {
                     let session = view.read(cx).summary.id;
                     self.conversation_views.borrow_mut().remove(&session);
@@ -808,6 +849,12 @@ impl Bots {
         .detach();
         self.changed(cx);
     }
+    fn release_chat(&self, id: &str, cx: &mut Context<Self>) {
+        let owner = cx.weak_entity();
+        self.shared_roster
+            .update(cx, |shared, _| shared.release_chat(id, &owner));
+    }
+
     fn ensure_chat(&mut self, id: &str, cx: &mut Context<Self>) {
         if self.awaiting_creation.contains(id) {
             return;
@@ -818,77 +865,46 @@ impl Bots {
         let Some(bot) = self.presentation_bot(id) else {
             return;
         };
+        let owner = cx.weak_entity();
+        if !self
+            .shared_roster
+            .update(cx, |shared, _| shared.claim_chat(id, owner))
+        {
+            return;
+        }
         self.loading_chats.insert(id.into());
-        let store = self.store.clone();
-        let prefs = self.prefs.clone();
-        let id = id.to_string();
-        let root = self.root.clone();
-        let work = cx.background_executor().spawn(async move {
-            let db = locked(&store)?;
-            if let Some(missing) = &bot.unavailable_session {
-                return Err(format!("This Bot's saved conversation ({missing}) is unavailable. Its identity and history have been preserved."));
-            }
-            if let Some(session) = bot.session_id {
-                // Team work belongs exclusively to the Bot outbox. A migrated
-                // project session may have a legacy user follow-up queue.
-                if bot.is_minion() {
-                    let mut queue = db.follow_ups(session)?;
-                    if !queue.paused {
-                        queue.paused = true;
-                        queue.revision += 1;
-                        db.accept_follow_ups(session, &queue)?;
-                    }
+        let id = id.to_owned();
+        let prepared = if bot.session_id.is_none() && bot.unavailable_session.is_none() {
+            let prefs = self.prefs.clone();
+            let id = id.clone();
+            let reply = self
+                .shared_roster
+                .update(cx, |shared, cx| shared.prepare_chat(id, prefs, cx));
+            cx.background_executor().spawn(async move {
+                reply
+                    .recv()
+                    .await
+                    .unwrap_or_else(|_| Err("Bot conversation preparation was interrupted".into()))
+            })
+        } else {
+            let store = self.store.clone();
+            let root = self.root.clone();
+            cx.background_executor().spawn(async move {
+                if let Some(missing) = &bot.unavailable_session {
+                    return Err(format!("This Bot's saved conversation ({missing}) is unavailable. Its identity and history have been preserved."));
                 }
-                let mut summary = db.bot_session(session)?
-                    .ok_or("This Bot's saved conversation is unavailable. Reset its conversation explicitly to start a new one.")?;
-                let settings = db.agent_settings(session)?.unwrap_or_default();
-                // Existing Minions may share a live project-session view.
-                // Keep their working directory; new members get their own home.
-                let mut warning = None;
-                if !bot.is_minion() && settings.worktree_cwd.is_none() {
-                    let home = bot::home::ensure(&root, &bot, Some(std::path::Path::new(&summary.cwd)))?;
-                    db.move_bot_home(&summary, &home.to_string_lossy())?;
-                    summary.cwd = home.to_string_lossy().into_owned();
-                    warning = bot::home::write_session(&root, &bot, &summary, &settings.account).err();
-                }
-                let delivered = bot
-                    .outbox
-                    .iter()
-                    .filter(|q| {
-                        db.setting(&format!("bot-delivered:{}:{}", summary.id, q.id))
-                            .ok()
-                            .flatten()
-                            .is_some()
-                    })
-                    .map(|q| q.id.clone())
-                    .collect::<Vec<_>>();
-                return Ok::<_, String>((summary, None, delivered, warning));
-            }
-            let home = bot::home::ensure(&root, &bot, None)?;
-            let provider = match &bot.initial_configuration {
-                Some(config) => Kind::parse(&config.provider).ok_or("This Bot's configured provider is unavailable.")?,
-                None => prefs.default_provider.as_deref().and_then(Kind::parse).unwrap_or(Kind::Codex),
-            };
-            let mut summary = db.create(provider.id(), &home.to_string_lossy())?;
-            summary.title = bot.label();
-            db.title(summary.id, &summary.title)?;
-            let settings = bot.initial_configuration.as_ref().map(|config| config.settings.clone()).unwrap_or_else(|| Settings {
-                access: AccessMode::Auto,
-                model: prefs.default_models.get(provider.id()).cloned(),
-                ..Default::default()
-            });
-            db.configure_agent(summary.id, provider.id(), &settings)?;
-            // A failed convenience document must not orphan a created session.
-            let warning = bot::home::write_session(&root, &bot, &summary, &settings.account).err();
-            Ok((summary, Some(settings), Vec::new(), warning))
-        });
+                let db = locked(&store)?;
+                load_backing_chat(&db, &root, &bot, bot.session_id.expect("existing Bot session"))
+            })
+        };
         cx.spawn(async move |this, cx| {
-            let result = work.await;
+            let result = prepared.await;
             let _ = this.update(cx, |this, cx| {
                 this.loading_chats.remove(&id);
                 let (summary, settings, delivered, warning) = match result {
                     Ok(value) => value,
                     Err(e) => {
+                        this.release_chat(&id, cx);
                         this.error = Some(e);
                         this.changed(cx);
                         return;
@@ -901,6 +917,7 @@ impl Bots {
                     this.roster.hidden_sessions.push(summary.id);
                 }
                 let Some(bot) = this.roster.get_mut(&id) else {
+                    this.release_chat(&id, cx);
                     return;
                 };
                 bot.session_id = Some(summary.id);

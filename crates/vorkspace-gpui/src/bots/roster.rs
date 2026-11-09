@@ -1,8 +1,17 @@
 //! Committed Bot state and ordered writes for every window on a store.
-use gpui::{App, AppContext as _, Context, Entity, EventEmitter, Task};
-use std::path::PathBuf;
-use vorkspace_core::{bot::Roster, store::Store};
+use super::Bots;
+use gpui::{App, AppContext as _, Context, Entity, EventEmitter, Task, WeakEntity};
+use std::{collections::HashMap, path::PathBuf};
+use vorkspace_core::{
+    agent::{AccessMode, Settings},
+    bot::{Roster, home},
+    provider::Kind,
+    store::{Session, Store},
+};
 use vorkspace_runtime::runtime::{Database, locked};
+use vorkspace_ui::preferences::Preferences;
+
+pub(super) type PreparedChat = (Session, Option<Settings>, Vec<String>, Option<String>);
 
 pub(crate) struct MembershipChanged {
     pub(crate) ids: Vec<String>,
@@ -14,6 +23,7 @@ pub(crate) struct SharedRoster {
     pub(super) root: PathBuf,
     pub(super) snapshot: Result<Roster, String>,
     pub(super) revision: u64,
+    chat_owners: HashMap<String, WeakEntity<Bots>>,
     writes: Option<Task<()>>,
 }
 
@@ -33,6 +43,7 @@ impl SharedRoster {
             root,
             snapshot,
             revision: 0,
+            chat_owners: HashMap::new(),
             writes: None,
         });
         let quit = shared.downgrade();
@@ -59,6 +70,28 @@ impl SharedRoster {
         self.snapshot.as_ref().ok()
     }
 
+    pub(super) fn chat_owner(&self, id: &str) -> Option<&WeakEntity<Bots>> {
+        self.chat_owners
+            .get(id)
+            .filter(|owner| owner.upgrade().is_some())
+    }
+
+    pub(super) fn claim_chat(&mut self, id: &str, owner: WeakEntity<Bots>) -> bool {
+        if let Some(holder) = self.chat_owner(id) {
+            return holder == &owner;
+        }
+        self.chat_owners
+            .retain(|_, owner| owner.upgrade().is_some());
+        self.chat_owners.insert(id.into(), owner);
+        true
+    }
+
+    pub(super) fn release_chat(&mut self, id: &str, owner: &WeakEntity<Bots>) {
+        if self.chat_owners.get(id) == Some(owner) {
+            self.chat_owners.remove(id);
+        }
+    }
+
     fn ids(roster: &Roster) -> Vec<String> {
         roster
             .bots
@@ -77,6 +110,91 @@ impl SharedRoster {
         finalize: impl FnOnce(&Store) -> Result<T, String> + Send + 'static,
         cx: &mut Context<Self>,
     ) -> async_channel::Receiver<Result<T, String>> {
+        self.write(vorkspace, cx, move |db| {
+            let snapshot = roster.save_snapshot(db)?;
+            Ok((Some(snapshot), finalize(db)))
+        })
+    }
+
+    /// Resolve a backing identity under the same writer that publishes the
+    /// roster. A window may disappear while this job is queued or in flight.
+    pub(super) fn prepare_chat(
+        &mut self,
+        id: String,
+        prefs: Preferences,
+        cx: &mut Context<Self>,
+    ) -> async_channel::Receiver<Result<PreparedChat, String>> {
+        let root = self.root.clone();
+        self.write(None, cx, move |db| {
+            let mut roster = Roster::load(db)?;
+            let bot = roster.get(&id).ok_or("Bot is no longer available")?;
+            if let Some(missing) = &bot.unavailable_session {
+                return Err(format!(
+                    "This Bot's saved conversation ({missing}) is unavailable."
+                ));
+            }
+            if let Some(session) = bot.session_id {
+                let chat = super::load_backing_chat(db, &root, bot, session)?;
+                return Ok((None, Ok(chat)));
+            }
+            let bot = bot.clone();
+            let home = home::ensure(&root, &bot, None)?;
+            let provider = match &bot.initial_configuration {
+                Some(config) => Kind::parse(&config.provider)
+                    .ok_or("This Bot's configured provider is unavailable.")?,
+                None => prefs
+                    .default_provider
+                    .as_deref()
+                    .and_then(Kind::parse)
+                    .unwrap_or(Kind::Codex),
+            };
+            let settings = bot
+                .initial_configuration
+                .as_ref()
+                .map(|config| config.settings.clone())
+                .unwrap_or_else(|| Settings {
+                    access: AccessMode::Auto,
+                    model: prefs.default_models.get(provider.id()).cloned(),
+                    ..Default::default()
+                });
+            let mut summary = db.create(provider.id(), &home.to_string_lossy())?;
+            summary.title = bot.label();
+            let committed = (|| {
+                db.title(summary.id, &summary.title)?;
+                db.configure_agent(summary.id, provider.id(), &settings)?;
+                let entry = roster.get_mut(&id).expect("loaded Bot");
+                entry.session_id = Some(summary.id);
+                entry.initial_configuration = None;
+                roster.hidden_sessions.push(summary.id);
+                roster.save_snapshot(db)
+            })();
+            let snapshot = match committed {
+                Ok(snapshot) => snapshot,
+                Err(error) => {
+                    if let Err(cleanup) = db.delete(summary.id) {
+                        return Err(format!(
+                            "{error}. Could not clean up the backing conversation: {cleanup}"
+                        ));
+                    }
+                    return Err(error);
+                }
+            };
+            let warning = home::write_session(&root, &bot, &summary, &settings.account).err();
+            Ok((
+                Some(snapshot),
+                Ok((summary, Some(settings), Vec::new(), warning)),
+            ))
+        })
+    }
+
+    fn write<T: Send + 'static>(
+        &mut self,
+        vorkspace: Option<String>,
+        cx: &mut Context<Self>,
+        work: impl FnOnce(&mut Store) -> Result<(Option<Roster>, Result<T, String>), String>
+        + Send
+        + 'static,
+    ) -> async_channel::Receiver<Result<T, String>> {
         let store = self.store.clone();
         let previous = self.writes.take();
         let (send, receive) = async_channel::bounded(1);
@@ -84,17 +202,19 @@ impl SharedRoster {
             if let Some(previous) = previous {
                 previous.await;
             }
-            let work = cx.background_executor().spawn(async move {
-                let db = locked(&store)?;
-                let snapshot = roster.save_snapshot(&db)?;
-                let result = finalize(&db);
-                Ok::<_, String>((snapshot, result))
-            });
+            let work = cx
+                .background_executor()
+                .spawn(async move { work(&mut *locked(&store)?) });
             let result = match work.await {
-                Ok((snapshot, result)) => {
+                Ok((Some(snapshot), result)) => {
                     let _ = shared.update(cx, |shared, cx| {
                         let ids = Self::ids(&snapshot);
                         let changed = shared.member_ids().as_ref() != Some(&ids);
+                        if let Ok(previous) = &shared.snapshot {
+                            shared.chat_owners.retain(|id, _| {
+                                previous.get(id).is_none() || snapshot.get(id).is_some()
+                            });
+                        }
                         shared.snapshot = Ok(snapshot);
                         shared.revision += 1;
                         if changed {
@@ -104,6 +224,7 @@ impl SharedRoster {
                     });
                     result
                 }
+                Ok((None, result)) => result,
                 Err(error) => Err(error),
             };
             let _ = send.try_send(result);

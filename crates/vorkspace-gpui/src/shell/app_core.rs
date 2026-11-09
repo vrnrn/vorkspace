@@ -546,10 +546,23 @@ mod tests {
         i64,
         tempfile::TempDir,
     ) {
+        two_windows_with(cx, |_, _| {})
+    }
+
+    fn two_windows_with(
+        cx: &mut TestAppContext,
+        seed: impl FnOnce(&Store, &str),
+    ) -> (
+        WindowHandle<Shell>,
+        WindowHandle<Shell>,
+        i64,
+        tempfile::TempDir,
+    ) {
         let dir = tempfile::tempdir().unwrap();
         let project = dir.path().join("project").to_string_lossy().into_owned();
         std::fs::create_dir_all(&project).unwrap();
         let store = Store::open(&dir.path().join("native.sqlite")).unwrap();
+        seed(&store, &project);
         let session = store.create("codex", &project).unwrap();
         let id = session.id;
         let store: Database = Arc::new(Mutex::new(store));
@@ -679,6 +692,73 @@ mod tests {
             let durable =
                 vorkspace_core::bot::Roster::load(&locked(&shell.store).unwrap()).unwrap();
             assert!(durable.get(&id).is_some());
+        })
+        .unwrap();
+    }
+
+    #[gpui::test]
+    fn two_windows_prepare_one_backing_conversation_even_if_the_first_closes(
+        cx: &mut TestAppContext,
+    ) {
+        let id = "shared-new-bot";
+        let (a, b, _, _dir) = two_windows_with(cx, |store, project| {
+            let mut roster = vorkspace_core::bot::Roster::default();
+            roster.bots.push(vorkspace_core::bot::Bot {
+                id: id.into(),
+                name: "Shared".into(),
+                projects: vec![project.into()],
+                ..Default::default()
+            });
+            roster.save(store).unwrap();
+        });
+        for window in [a, b] {
+            window
+                .update(cx, |shell, _, cx| {
+                    assert!(
+                        shell
+                            .bot_manager()
+                            .update(cx, |bots, cx| {
+                                assert!(bots.roster.get(id).unwrap().session_id.is_none());
+                                bots.chat_for_action(id, cx)
+                            })
+                            .is_none()
+                    );
+                })
+                .unwrap();
+        }
+        cx.update_window(a.into(), |_, w, _| w.remove_window())
+            .unwrap();
+        cx.run_until_parked();
+        b.update(cx, |shell, _, cx| {
+            shell.bot_manager().update(cx, |bots, cx| {
+                bots.chat_for_action(id, cx);
+            });
+        })
+        .unwrap();
+        cx.run_until_parked();
+        b.update(cx, |shell, _, cx| {
+            let db = locked(&shell.store).unwrap();
+            let durable = vorkspace_core::bot::Roster::load(&db).unwrap();
+            let backing = durable.get(id).unwrap().session_id.unwrap();
+            assert_eq!(durable.hidden_sessions, [backing]);
+            let home = db.bot_session(backing).unwrap().unwrap().cwd;
+            assert_eq!(
+                db.sessions()
+                    .unwrap()
+                    .iter()
+                    .filter(|s| s.cwd == home)
+                    .count(),
+                1
+            );
+            assert_eq!(
+                shell.bot_manager().update(cx, |bots, cx| bots
+                    .chat_for_action(id, cx)
+                    .unwrap()
+                    .read(cx)
+                    .summary
+                    .id),
+                backing
+            );
         })
         .unwrap();
     }
