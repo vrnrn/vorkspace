@@ -6,7 +6,7 @@ A vorkspace is a named set of projects (folders or repositories) and Bots: the w
 
 `workspace::vorkspaces` owns the definitions, stored with the window's saved workspace state:
 
-- `vorkspaces`: each has an id, a name, an ordered list of project paths, a list of Bot ids, an optional color and an optional chat background.
+- `vorkspaces`: each has an id, a name, an ordered list of project paths, a list of Bot ids, and optional icon letters, color and chat background.
 - `active_vorkspace`: the vorkspace this window shows.
 - `vorkspace_project`: the project each vorkspace last showed, so switching back returns there.
 - `seen_bots`: Bots already placed once.
@@ -27,7 +27,7 @@ The rail no longer lists projects. Its **Sessions** section lists the vorkspace'
 
 ## Customization
 
-Customization belongs to the vorkspace. Projects have none: each shows as a folder icon in the color its path hashes to, under its folder name, and any older per-project name, logo, colors or background is dropped on load. Each of the vorkspace's projects has its own tab under the vorkspace in **Manage vorkspaces…**, holding its Codebase Memory and Notifications settings; a project's **Project settings…** menu item opens that tab. The vorkspace's chat background is drawn behind every session while that vorkspace is active.
+Customization belongs to the vorkspace. Under **Look**, **Icon letters** accepts up to two letters. Clearing the field restores the automatic initial from the vorkspace name. Projects show a folder icon in the color its path hashes to, under its folder name; older per-project names, logos, colors and backgrounds are dropped on load. Each project has its own tab in **Manage vorkspaces…**, holding its Codebase Memory and Notifications settings; **Project settings…** opens that tab. The vorkspace's chat background is drawn behind every session while that vorkspace is active.
 
 ## Sidebar toggle
 

@@ -7,6 +7,7 @@
 use super::*;
 use crate::popover::{MenuAction, MenuItem};
 use gpui::Div;
+use unicode_segmentation::UnicodeSegmentation;
 use vorkspace_core::files::path_key;
 use vorkspace_ui::radius;
 
@@ -16,9 +17,10 @@ pub(crate) struct VorkspaceDialog {
     /// vorkspace itself.
     pub(crate) project: Option<String>,
     pub(super) name: Entity<input::Input>,
+    pub(super) icon_letters: Entity<input::Input>,
     pub(super) focus: FocusHandle,
     pub(super) confirm_delete: bool,
-    _name: Subscription,
+    _fields: [Subscription; 2],
 }
 
 /// Collapsed, the rail shows this many sessions: working and
@@ -36,15 +38,11 @@ fn vorkspace_hue(id: &str) -> f32 {
 }
 
 pub(crate) fn vorkspace_mark(def: &crate::workspace::VorkspaceDef, side: f32) -> Div {
-    let (id, name) = (def.id.as_str(), def.name.as_str());
-    let initial = name
-        .chars()
-        .find(|c| c.is_alphanumeric())
-        .map(|c| c.to_uppercase().to_string())
-        .unwrap_or_else(|| "V".into());
+    let label = def.icon_text();
+    let multiple = label.graphemes(true).nth(1).is_some();
     let background: gpui::Hsla = match def.color {
         Some(color) => gpui::rgb(color).into(),
-        None => gpui::hsla(vorkspace_hue(id), 0.55, 0.5, 1.),
+        None => gpui::hsla(vorkspace_hue(&def.id), 0.55, 0.5, 1.),
     };
     let rgb: gpui::Rgba = background.into();
     let linear = |channel: f32| {
@@ -63,14 +61,14 @@ pub(crate) fn vorkspace_mark(def: &crate::workspace::VorkspaceDef, side: f32) ->
         .flex()
         .items_center()
         .justify_center()
-        .text_size(px(side * 0.55))
+        .text_size(px(side * if multiple { 0.42 } else { 0.55 }))
         .font_weight(FontWeight::SEMIBOLD)
         .text_color(if luminance > 0.179 {
             gpui::black()
         } else {
             gpui::white()
         })
-        .child(initial)
+        .child(label)
 }
 
 struct RailSession {
@@ -194,41 +192,84 @@ impl Shell {
         cx: &mut Context<Self>,
     ) {
         let id = id.unwrap_or_else(|| self.workspace.active_vorkspace.clone());
-        let name = self
+        let (name, letters) = self
             .workspace
             .vorkspaces
             .iter()
             .find(|v| v.id == id)
-            .map(|v| v.name.clone())
+            .map(|v| (v.name.clone(), v.icon_letters().to_owned()))
             .unwrap_or_default();
-        let field = cx.new(|cx| {
+        let name = cx.new(|cx| {
             let mut field =
                 input::Input::field("Vorkspace name", "Vorkspace name", content(0.35), cx);
             field.set_text(name, cx);
             field
         });
-        let editing = id.clone();
-        let sub = cx.subscribe(&field, move |this, field, _: &input::Changed, cx| {
+        let name_sub = cx.subscribe(&name, |this, field, _: &input::Changed, cx| {
+            let Some(editing) = this
+                .vorkspace_dialog
+                .as_ref()
+                .filter(|d| d.name == field)
+                .map(|d| &d.editing)
+            else {
+                return;
+            };
             let name = field.read(cx).content.trim().to_owned();
             if name.is_empty() {
                 return;
             }
-            if let Some(v) = this.workspace.vorkspace_mut(&editing) {
+            if let Some(v) = this.workspace.vorkspace_mut(editing)
+                && v.name != name
+            {
                 v.name = name;
+                this.persist(cx);
+                cx.notify();
+            }
+        });
+        let icon_letters = cx.new(|cx| {
+            let mut field = input::Input::field("Icon letters", "Auto", content(0.45), cx);
+            field.set_centered(true);
+            field.set_text(letters, cx);
+            field
+        });
+        let icon_sub = cx.subscribe(&icon_letters, |this, field, _: &input::Changed, cx| {
+            let input = field.read(cx);
+            if input.is_composing() {
+                return;
+            }
+            let Some(editing) = this
+                .vorkspace_dialog
+                .as_ref()
+                .filter(|d| d.icon_letters == field)
+                .map(|d| &d.editing)
+            else {
+                return;
+            };
+            let text = input.content.clone();
+            let Some(v) = this.workspace.vorkspace_mut(editing) else {
+                return;
+            };
+            let changed = v.set_icon_letters(&text);
+            if text.as_ref() != v.icon_letters() {
+                let canonical = v.icon_letters().to_owned();
+                field.update(cx, |field, cx| field.set_text(canonical, cx));
+            }
+            if changed {
                 this.persist(cx);
                 cx.notify();
             }
         });
         let focus = cx.focus_handle();
         self.navigation_revision += 1;
-        window.focus(&field.focus_handle(cx), cx);
+        window.focus(&name.focus_handle(cx), cx);
         self.vorkspace_dialog = Some(VorkspaceDialog {
             editing: id,
             project: None,
-            name: field,
+            name,
+            icon_letters,
             focus,
             confirm_delete: false,
-            _name: sub,
+            _fields: [name_sub, icon_sub],
         });
         cx.notify();
     }
@@ -389,8 +430,15 @@ impl Shell {
         self.rail_sessions(&self.session_launchers(cx), cx).0
     }
 
-    /// Sessions across the vorkspace's projects, borrowed from the Bot island:
-    /// what is running first, else the latest few.
+    pub(super) fn rail_sessions_min_height(&self) -> f32 {
+        if self.rail_search_open || !self.query.is_empty() {
+            126.
+        } else {
+            94.
+        }
+    }
+
+    /// Sessions across the vorkspace's projects: running first, then the latest.
     pub(super) fn rail_sessions_section(&mut self, cx: &mut Context<Self>) -> AnyElement {
         let launches = self.session_launchers(cx);
         let (sessions, total) = self.rail_sessions(&launches, cx);
@@ -570,7 +618,7 @@ impl Shell {
                 },
             ))
             .flex_1()
-            .min_h(px(if searching { 126. } else { 94. }))
+            .min_h(px(self.rail_sessions_min_height()))
             .flex()
             .flex_col()
             .child(heading)
@@ -853,7 +901,7 @@ impl Shell {
         let height = 560f32.min(size.height.as_f32() - 32.);
         let weak = cx.weak_entity();
         let only = self.workspace.vorkspaces.len() <= 1;
-        let look = self.vorkspace_look(&def, cx);
+        let look = self.vorkspace_look(&def, &dialog.icon_letters, cx);
         let open_project = dialog.project.clone();
         let project_page = open_project.as_ref().map(|path| {
             div()
@@ -1397,6 +1445,7 @@ impl Shell {
                             .debug_selector(|| "vorkspace-dialog".into())
                             .role(Role::Dialog)
                             .aria_label("Vorkspaces")
+                            .text_color(content(1.))
                             .track_focus(&dialog.focus)
                             .on_key_down(cx.listener(
                                 |this, event: &gpui::KeyDownEvent, window, cx| {
@@ -1461,11 +1510,11 @@ impl Shell {
         )
     }
 
-    /// The vorkspace's own customization: its color and the chat background
-    /// every session in it shows. Projects carry none of their own.
+    /// The vorkspace's mark and the chat background its sessions show.
     fn vorkspace_look(
         &self,
         def: &crate::workspace::VorkspaceDef,
+        letters: &Entity<input::Input>,
         cx: &mut Context<Self>,
     ) -> AnyElement {
         let swatches = vorkspace_core::project_appearance::COLORS
@@ -1504,6 +1553,39 @@ impl Shell {
             .flex()
             .flex_col()
             .gap_3()
+            .child(
+                div()
+                    .flex()
+                    .flex_col()
+                    .gap_1()
+                    .child(
+                        div()
+                            .text_size(px(12.))
+                            .text_color(content(0.75))
+                            .child("Icon letters"),
+                    )
+                    .child(
+                        div()
+                            .flex()
+                            .items_center()
+                            .gap_2()
+                            .child(vorkspace_mark(def, 26.))
+                            .child(
+                                crate::controls::page::field_frame()
+                                    .w(px(64.))
+                                    .flex_shrink_0()
+                                    .child(letters.clone()),
+                            )
+                            .child(
+                                div()
+                                    .flex_1()
+                                    .min_w_0()
+                                    .text_size(px(12.))
+                                    .text_color(content(0.55))
+                                    .child("Up to two letters. Clear to use the name’s initial."),
+                            ),
+                    ),
+            )
             .child(div().flex().flex_wrap().gap_1().children(swatches))
             .child(
                 div()

@@ -289,12 +289,12 @@ impl Shell {
         }
         self.sync_inbox_scope(cx);
         if let Some(dialog) = self.vorkspace_dialog.as_mut() {
-            if !self
+            let retargeted = !self
                 .workspace
                 .vorkspaces
                 .iter()
-                .any(|v| v.id == dialog.editing)
-            {
+                .any(|v| v.id == dialog.editing);
+            if retargeted {
                 dialog.editing = self.workspace.active_vorkspace.clone();
                 dialog.project = None;
                 dialog.confirm_delete = false;
@@ -315,6 +315,21 @@ impl Shell {
                     })
             {
                 dialog.project = None;
+            }
+            if let Some(v) = self
+                .workspace
+                .vorkspaces
+                .iter()
+                .find(|v| v.id == dialog.editing)
+            {
+                let field = dialog.icon_letters.read(cx);
+                if (retargeted || !field.is_composing())
+                    && (retargeted || field.content.as_ref() != v.icon_letters())
+                {
+                    dialog.icon_letters.update(cx, |field, cx| {
+                        field.set_text(v.icon_letters().to_owned(), cx)
+                    });
+                }
             }
         }
         let hidden = self.workspace.hidden_bots();

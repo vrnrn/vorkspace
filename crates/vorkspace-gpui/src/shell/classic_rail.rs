@@ -3,6 +3,17 @@ use super::*;
 use vorkspace_ui::radius;
 
 const COMPACT_WIDTH: f32 = 48.;
+const AFTER_SESSIONS: f32 = 8.;
+
+fn scrollable_status(id: &'static str) -> gpui::Stateful<gpui::Div> {
+    div()
+        .id(id)
+        .min_h_0()
+        .flex_shrink_1()
+        .flex()
+        .flex_col()
+        .overflow_y_scroll()
+}
 
 // The divider reserves one column; center footer hit areas in the remaining
 // content width, without the expanded sidebar's horizontal padding.
@@ -13,13 +24,20 @@ fn compact_footer(
 ) -> gpui::Div {
     div()
         .w_full()
+        .min_h_0()
         .flex()
         .flex_col()
         .items_center()
         .gap_1()
         .py_2()
-        .child(resources)
-        .children(usage)
+        .child(
+            scrollable_status("compact-rail-footer-status")
+                .w_full()
+                .items_center()
+                .gap_1()
+                .child(div().flex_shrink_0().child(resources))
+                .children(usage.map(|usage| div().w_full().flex_shrink_0().child(usage))),
+        )
         .child(settings)
 }
 
@@ -29,6 +47,7 @@ fn compact_settings_button() -> gpui::Stateful<gpui::Div> {
         .focusable()
         .tab_stop(true)
         .size(px(32.))
+        .flex_shrink_0()
 }
 
 impl Shell {
@@ -196,11 +215,13 @@ impl Shell {
                     .id("classic-project-rail-scroll")
                     .debug_selector(|| "classic-project-rail-scroll".into())
                     .flex_1()
-                    .min_h_0()
+                    // Keep the Sessions header and one full row reachable as
+                    // account rows and status notices come and go.
+                    .min_h(px(self.rail_sessions_min_height() + AFTER_SESSIONS))
                     .overflow_hidden()
                     .flex()
                     .flex_col()
-                    .pb_2()
+                    .pb(px(AFTER_SESSIONS))
                     .child(
                         div()
                             .id("rail-navigation-scroll")
@@ -213,25 +234,28 @@ impl Shell {
                     .child(sessions),
             )
             .child(
-                div()
-                    .id("rail-footer-status")
-                    .max_h(px(72.))
-                    .flex_shrink_0()
-                    .overflow_y_scroll()
+                scrollable_status("rail-footer-status")
+                    .debug_selector(|| "rail-footer-status".into())
                     .when(
                         self.notification_state.installed.read(cx).is_visible(),
                         |d| {
                             d.child(
                                 div()
+                                    .flex_shrink_0()
                                     .mx_2()
                                     .mb_2()
                                     .child(self.notification_state.installed.clone()),
                             )
                         },
                     )
-                    .child(div().mx_2().child(self.resources.clone()))
+                    .child(div().flex_shrink_0().mx_2().child(self.resources.clone()))
                     .when(self.workspace.sidebar_subscriptions_visible, |d| {
-                        d.child(div().px_2().child(self.usage_footer.clone()))
+                        d.child(
+                            div()
+                                .flex_shrink_0()
+                                .px_2()
+                                .child(self.usage_footer.clone()),
+                        )
                     }),
             )
             .child(self.classic_rail_footer(cx))
@@ -396,7 +420,7 @@ impl Shell {
             div()
                 .id("classic-compact-actions")
                 .flex_1()
-                .min_h_0()
+                .min_h(px(44.))
                 .overflow_y_scroll()
                 .px_2()
                 .py_1p5()

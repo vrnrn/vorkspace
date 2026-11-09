@@ -1304,10 +1304,9 @@ impl Render for UsageFooter {
             .child(
                 div()
                     .id("subscriptions-list")
-                    .when(self.compact, |d| d.flex().flex_col().gap_1())
-                    .max_h(px(220.))
-                    .min_h_0()
-                    .overflow_y_scroll()
+                    .flex()
+                    .flex_col()
+                    .when(self.compact, |d| d.gap_1())
                     .children(rows),
             )
             .when(self.open, |d| {

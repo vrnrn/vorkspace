@@ -6,6 +6,7 @@
 //! they are listed.
 use super::Workspace;
 use serde::{Deserialize, Serialize};
+use unicode_segmentation::UnicodeSegmentation;
 use vorkspace_core::files::path_key;
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
@@ -18,9 +19,80 @@ pub(crate) struct VorkspaceDef {
     /// The vorkspace's color; unset, it is the hue its id hashes to.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub color: Option<u32>,
+    #[serde(
+        default,
+        deserialize_with = "read_icon_letters",
+        skip_serializing_if = "Option::is_none"
+    )]
+    icon_letters: Option<String>,
     /// The chat background every session in this vorkspace shows.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub background: Option<vorkspace_core::project_appearance::Background>,
+}
+
+impl VorkspaceDef {
+    pub(crate) fn icon_letters(&self) -> &str {
+        self.icon_letters.as_deref().unwrap_or_default()
+    }
+
+    pub(crate) fn set_icon_letters(&mut self, text: &str) -> bool {
+        let next = normalize_icon_letters(text);
+        if self.icon_letters == next {
+            return false;
+        }
+        self.icon_letters = next;
+        true
+    }
+
+    pub(crate) fn icon_text(&self) -> String {
+        self.icon_letters.clone().unwrap_or_else(|| {
+            self.name
+                .chars()
+                .find(|c| c.is_alphanumeric())
+                .map_or_else(|| "V".into(), |c| c.to_uppercase().to_string())
+        })
+    }
+}
+
+fn normalize_icon_letters(text: &str) -> Option<String> {
+    let letters: String = text
+        .graphemes(true)
+        // Preserve accents, but bound the bytes a combining sequence can store.
+        .filter(|g| g.len() <= 32 && g.chars().next().is_some_and(char::is_alphabetic))
+        .take(2)
+        .collect();
+    (!letters.is_empty()).then_some(letters)
+}
+
+fn read_icon_letters<'de, D: serde::Deserializer<'de>>(
+    deserializer: D,
+) -> Result<Option<String>, D::Error> {
+    Ok(Option::<String>::deserialize(deserializer)?
+        .as_deref()
+        .and_then(normalize_icon_letters))
+}
+
+#[test]
+fn workspace_icon_letters_survive_rename_and_restore() {
+    let mut def: VorkspaceDef = serde_json::from_value(serde_json::json!({
+        "id": "test-vorkspace",
+        "name": "Main"
+    }))
+    .unwrap();
+    assert_eq!(def.icon_text(), "M");
+    assert!(def.set_icon_letters("1a\u{301}WZ"));
+    let saved = serde_json::to_string(&def).unwrap();
+    let mut restored: VorkspaceDef = serde_json::from_str(&saved).unwrap();
+    restored.name = "Side projects".into();
+    assert_eq!(restored.icon_text(), "a\u{301}W");
+    assert!(restored.set_icon_letters(""));
+    assert_eq!(restored.icon_text(), "S");
+    assert!(
+        serde_json::to_value(&restored)
+            .unwrap()
+            .get("icon_letters")
+            .is_none()
+    );
 }
 
 pub(crate) const FIRST_VORKSPACE_NAME: &str = "Main";

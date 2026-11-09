@@ -10,7 +10,7 @@ Opening a conversation from another vorkspace through Search or the Back shortcu
 
 **Manage vorkspaces…** also has a tab for each project in the vorkspace, with its code-index and notification settings. It lets you rename a vorkspace, pick its color and a chat background picture shown behind all its sessions, add or remove its folders and Bots, switch to it, or delete it. You always keep at least one.
 
-Projects themselves are no longer customized: each is a folder icon with its own automatic color and its folder name. Colors and backgrounds belong to the vorkspace instead.
+Under **Look**, type up to two **Icon letters** to tell your vorkspaces apart at a glance. Leave the field blank to use the first letter of the vorkspace name. Each project shows its folder name and a folder icon with an automatic color.
 
 The sidebar with Explorer, Changes and To-dos has its own folder button in the top bar, next to the rail button (or press ⇧⌘B). It stays open or closed the way you left it, whatever you are looking at.
 
