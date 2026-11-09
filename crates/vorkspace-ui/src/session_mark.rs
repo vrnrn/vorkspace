@@ -6,7 +6,8 @@ use std::f32::consts::TAU;
 use std::time::Duration;
 
 /// The spinner repaints at about 30fps so its fades stay smooth.
-const TICK_MS: u64 = 33;
+/// The spinner's frame step: the dot grid changes no faster than this.
+pub const TICK_MS: u64 = 33;
 /// One wave across the grid, as TerminalSpinner's `vorkspace-spinner-wave`.
 const CYCLE_SECS: f32 = 1.2;
 /// Slate, peach and pink, top row to bottom.
@@ -48,11 +49,6 @@ fn dots(color: Option<u32>, elapsed_ms: Option<u64>) -> gpui::Div {
                     .child(div().size(px(2.5 * scale)).rounded_full().bg(color))
             }))
         }))
-}
-
-/// The grid, still and solid in `color`: a mark for a channel.
-pub fn color_dots(color: u32) -> gpui::Div {
-    dots(Some(color), None)
 }
 
 /// A project's mark: the working grid in its colour, still while idle and

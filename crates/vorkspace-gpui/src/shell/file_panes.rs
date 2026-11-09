@@ -83,7 +83,11 @@ impl Shell {
         let Some(session) = self.ensure_session(owner, cx) else {
             return;
         };
-        self.workspace.project = session.read(cx).summary.cwd.clone();
+        let project = session.read(cx).summary.cwd.clone();
+        if !self.route_project(&project, cx) {
+            return;
+        }
+        self.workspace.project = project;
         if let Some(bots) = &self.bots {
             bots.update(cx, |m, cx| m.close(cx));
         }

@@ -419,7 +419,9 @@ impl LiveAgents {
             .cursor(CursorStyle::Arrow)
             .rounded(px(radius::CONTROL))
             .when(agent.selected, |d| d.bg(content(0.1)))
-            .when(!agent.selected, |d| d.hover(|s| s.bg(content(0.08))))
+            .when(!agent.selected, |d| {
+                d.hover(|s| s.bg(vorkspace_ui::fluid::hover(0.08)))
+            })
             .on_click(move |_, window, cx| {
                 let _ = owner.update(cx, |shell, cx| {
                     shell.selected_sessions.clear();
@@ -430,12 +432,8 @@ impl LiveAgents {
                 });
             });
         let ink = match agent.status {
-            Status::Approval => {
-                vorkspace_ui::theme::status(vorkspace_ui::theme::StatusColor::Warning, 1.)
-            }
-            Status::Done => {
-                vorkspace_ui::theme::status(vorkspace_ui::theme::StatusColor::Success, 1.)
-            }
+            Status::Approval => vorkspace_ui::theme::warning(),
+            Status::Done => vorkspace_ui::theme::success(),
             Status::Working => content(0.5),
         };
         let status = div()
@@ -616,7 +614,7 @@ impl Render for LiveAgents {
                     .flex()
                     .items_center()
                     .justify_center()
-                    .hover(|s| s.bg(content(0.08)))
+                    .hover(|s| s.bg(vorkspace_ui::fluid::hover(0.08)))
                     .child(vorkspace_ui::session_mark::spinner_dots(self.frame_ms()))
                     .on_click(move |_, _, cx| {
                         let _ = owner.update(cx, |shell, cx| {
@@ -752,7 +750,10 @@ impl Render for LiveAgents {
             .py_1p5()
             .text_size(px(11.))
             .text_color(content(0.5))
-            .hover(|s| s.bg(content(0.08)).text_color(content(1.)))
+            .hover(|s| {
+                s.bg(vorkspace_ui::fluid::hover(0.08))
+                    .text_color(content(1.))
+            })
             .child(
                 icon(
                     if expanded {
@@ -819,7 +820,7 @@ impl Shell {
         }
         if metadata.needs_approval() {
             Some(Status::Approval)
-        } else if metadata.responding() || self.remote_marks.get(&id).is_some_and(|state| state.0) {
+        } else if metadata.responding() {
             Some(Status::Working)
         } else if !metadata.busy && self.unseen_finished.contains(&id) {
             Some(Status::Done)

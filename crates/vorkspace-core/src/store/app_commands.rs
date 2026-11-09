@@ -79,21 +79,14 @@ impl Store {
             return Err("Session is outside the assigned project".into());
         }
         let roster = crate::bot::Roster::load(self)?;
-        let channels = crate::bot::channels::Channels::load(self)?;
         let protected = roster.hidden_sessions.contains(&target)
             || roster.of_session(target).is_some()
             || roster
                 .bots
                 .iter()
-                .any(|bot| bot.habit_sessions.contains(&target))
-            || channels
-                .channels
-                .iter()
-                .any(|channel| channel.member_sessions.values().any(|id| *id == target));
+                .any(|bot| bot.habit_sessions.contains(&target));
         if protected {
-            return Err(
-                "Bot, habit, channel and hidden sessions are protected from app commands".into(),
-            );
+            return Err("Bot, habit and hidden sessions are protected from app commands".into());
         }
         if self.shared.is_some() {
             let legacy_launch = if let Some(parent) = self.shared_app_launch_caller(target)? {

@@ -70,18 +70,7 @@ fn sidebar_highlights_only_the_visible_bot_or_session(cx: &mut TestAppContext) {
         })
         .unwrap();
     let bot_row = format!("bot-rail-{id}");
-    let session_row = format!("sidebar-session-{session}");
-    let project_row = window
-        .update(cx, |shell, _, _| {
-            let project = shell
-                .workspace
-                .projects
-                .iter()
-                .position(|project| project == "/work/vorkspace")
-                .unwrap();
-            format!("classic-project-{project}")
-        })
-        .unwrap();
+    let session_row = format!("rail-session-{session}");
     assert!(sidebar_highlight(window, session_row.clone(), cx));
     assert!(!sidebar_highlight(window, bot_row.clone(), cx));
     let click = |selector: &str, cx: &mut TestAppContext| {
@@ -96,12 +85,9 @@ fn sidebar_highlights_only_the_visible_bot_or_session(cx: &mut TestAppContext) {
     };
     click(&bot_row, cx);
     assert!(sidebar_highlight(window, bot_row.clone(), cx));
-    assert!(
-        gpui::VisualTestContext::from_window(window.into(), cx)
-            .debug_bounds(Box::leak(session_row.clone().into_boxed_str()))
-            .is_none(),
-        "the original Bot view hides the parked session pane"
-    );
+    // The sidebar is a persistent toggle: it stays open over a Bot, and the
+    // parked session's row is no longer the highlighted one.
+    assert!(!sidebar_highlight(window, session_row.clone(), cx));
     window
         .update(cx, |shell, _, _| {
             assert_eq!(shell.workspace.active, bot.session());
@@ -113,18 +99,27 @@ fn sidebar_highlights_only_the_visible_bot_or_session(cx: &mut TestAppContext) {
             );
         })
         .unwrap();
-    click(&project_row, cx);
+    // The sidebar header's project picker opens a project explicitly.
+    window
+        .update(cx, |shell, w, cx| {
+            shell.open_project_from_user("/work/vorkspace".into(), w, cx)
+        })
+        .unwrap();
+    cx.run_until_parked();
     window
         .update(cx, |shell, _, cx| {
-            assert!(shell.bot_active(cx));
-            assert_eq!(shell.workspace.project, "/work/vorkspace");
-            assert_eq!(shell.workspace.active, bot.session());
-            assert_eq!(
-                shell.active_title_tab(cx),
-                Some(bot.clone()),
-                "a project restores its last workspace tab, including Bots"
+            assert!(
+                !shell.bot_active(cx),
+                "a project click opens the project, never the Bot it left"
             );
+            assert_eq!(shell.workspace.project, "/work/vorkspace");
+            assert_eq!(shell.workspace.active, Some(session));
         })
+        .unwrap();
+    // The Bot remains one click away on its own row.
+    click(&bot_row, cx);
+    window
+        .update(cx, |shell, _, cx| assert!(shell.bot_active(cx)))
         .unwrap();
     let session_tab = format!("title-tab-{session}");
     click(&session_tab, cx);
@@ -174,12 +169,10 @@ fn sidebar_highlights_only_the_visible_bot_or_session(cx: &mut TestAppContext) {
         })
         .unwrap();
     assert!(sidebar_highlight(window, bot_row.clone(), cx));
-    for selector in [&session_row, &format!("sidebar-session-{other}")] {
+    for selector in [&session_row, &format!("rail-session-{other}")] {
         assert!(
-            gpui::VisualTestContext::from_window(window.into(), cx)
-                .debug_bounds(Box::leak(selector.clone().into_boxed_str()))
-                .is_none(),
-            "the Bot surface hides session row {selector}"
+            !sidebar_highlight(window, selector.clone(), cx),
+            "over a Bot, session row {selector} stays listed but unhighlighted"
         );
     }
     click(&session_tab, cx);
@@ -187,7 +180,7 @@ fn sidebar_highlights_only_the_visible_bot_or_session(cx: &mut TestAppContext) {
     assert!(!sidebar_highlight(window, bot_row.clone(), cx));
     assert!(!sidebar_highlight(
         window,
-        format!("sidebar-session-{other}"),
+        format!("rail-session-{other}"),
         cx
     ));
 }

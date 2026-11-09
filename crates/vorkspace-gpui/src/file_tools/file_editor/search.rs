@@ -29,7 +29,7 @@ impl FileEditor {
             .rounded(px(radius::CONTROL))
             .border_1()
             .border_color(if bad {
-                rgb(0xf87171).opacity(0.55).into()
+                vorkspace_ui::theme::danger().opacity(0.55)
             } else {
                 content(0.1)
             })
@@ -41,7 +41,7 @@ impl FileEditor {
                     .text_right()
                     .text_size(px(11.))
                     .text_color(if bad {
-                        rgb(0xf87171).into()
+                        vorkspace_ui::theme::danger()
                     } else {
                         content(0.45)
                     })
@@ -51,6 +51,7 @@ impl FileEditor {
             div()
                 .id(id)
                 .role(Role::Button)
+                .map(vorkspace_ui::theme::tab_reachable)
                 .aria_label(title)
                 .aria_toggled(if on {
                     gpui::Toggled::True
@@ -66,7 +67,7 @@ impl FileEditor {
                 .font_weight(gpui::FontWeight::SEMIBOLD)
                 .text_color(content(if on { 1. } else { 0.6 }))
                 .when(on, |d| d.bg(accent_color().opacity(0.25)))
-                .hover(|s| s.bg(content(0.1)))
+                .hover(|s| s.bg(vorkspace_ui::fluid::hover(0.1)))
                 .child(label)
         };
         div()
@@ -111,7 +112,7 @@ impl FileEditor {
                             .gap_1()
                             .child(query)
                             .child(
-                                toggle("match-case", "Aa", "Match Case", self.match_case).on_click(
+                                toggle("match-case", "Aa", "Match case", self.match_case).on_click(
                                     cx.listener(|this, _, _, cx| {
                                         this.match_case = !this.match_case;
                                         this.find_matches(cx);
@@ -119,14 +120,14 @@ impl FileEditor {
                                 ),
                             )
                             .child(
-                                toggle("whole-word", "ab", "Match Whole Word", self.whole_word)
+                                toggle("whole-word", "ab", "Match whole word", self.whole_word)
                                     .on_click(cx.listener(|this, _, _, cx| {
                                         this.whole_word = !this.whole_word;
                                         this.find_matches(cx);
                                     })),
                             )
                             .child(
-                                toggle("use-regex", ".*", "Use Regular Expression", self.regex)
+                                toggle("use-regex", ".*", "Use regular expression", self.regex)
                                     .on_click(cx.listener(|this, _, _, cx| {
                                         this.regex = !this.regex;
                                         this.find_matches(cx);
@@ -158,13 +159,14 @@ impl FileEditor {
                                     div()
                                         .id("replace-next")
                                         .role(Role::Button)
+                                        .map(vorkspace_ui::theme::tab_reachable)
                                         .aria_label("Replace")
                                         .px_2()
                                         .py_1()
                                         .rounded(px(radius::CONTROL))
                                         .text_size(px(11.))
                                         .text_color(content(0.6))
-                                        .hover(|s| s.bg(content(0.1)))
+                                        .hover(|s| s.bg(vorkspace_ui::fluid::hover(0.1)))
                                         .child("Replace")
                                         .on_click(cx.listener(|this, _, _, cx| {
                                             this.replace_matches(false, cx)
@@ -174,13 +176,14 @@ impl FileEditor {
                                     div()
                                         .id("replace-all")
                                         .role(Role::Button)
-                                        .aria_label("Replace All")
+                                        .map(vorkspace_ui::theme::tab_reachable)
+                                        .aria_label("Replace all")
                                         .px_2()
                                         .py_1()
                                         .rounded(px(radius::CONTROL))
                                         .text_size(px(11.))
                                         .text_color(content(0.6))
-                                        .hover(|s| s.bg(content(0.1)))
+                                        .hover(|s| s.bg(vorkspace_ui::fluid::hover(0.1)))
                                         .child("All")
                                         .on_click(cx.listener(|this, _, _, cx| {
                                             this.replace_matches(true, cx)
@@ -198,7 +201,7 @@ impl FileEditor {
                     .child(
                         icon_action(
                             "find-prev",
-                            "Previous Match",
+                            "Previous match",
                             "chevron-up",
                             !self.matches.is_empty(),
                         )
@@ -207,7 +210,7 @@ impl FileEditor {
                     .child(
                         icon_action(
                             "find-next",
-                            "Next Match",
+                            "Next match",
                             "chevron-down",
                             !self.matches.is_empty(),
                         )

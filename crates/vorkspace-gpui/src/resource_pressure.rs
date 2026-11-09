@@ -525,6 +525,7 @@ impl ResourceMonitor {
                             div()
                                 .id(("stop-session", id as u64))
                                 .role(Role::Button)
+                                .map(vorkspace_ui::theme::tab_reachable)
                                 .aria_label(format!("Stop session {title}"))
                                 .h(px(28.))
                                 .flex_shrink_0()
@@ -569,6 +570,7 @@ impl ResourceMonitor {
                 div()
                     .id(("resource-processes", id as u64))
                     .role(Role::Button)
+                    .map(vorkspace_ui::theme::tab_reachable)
                     .aria_expanded(expanded)
                     .ml(px(34.))
                     .mt(px(2.))
@@ -647,7 +649,7 @@ impl ResourceMonitor {
                     .child(
                         div()
                             .truncate()
-                            .font_family(vorkspace_ui::fonts::FIXED_FONT)
+                            .font_family(vorkspace_ui::fonts::MONO)
                             .text_size(px(11.))
                             .text_color(content(0.65))
                             .child(process.command.clone()),
@@ -668,6 +670,7 @@ impl ResourceMonitor {
                 div()
                     .id(("stop-process", pid as u64))
                     .role(Role::Button)
+                    .map(vorkspace_ui::theme::tab_reachable)
                     .aria_label(format!(
                         "{} for {title} (PID {pid})",
                         if agent {
@@ -719,6 +722,7 @@ impl Render for ResourceMonitor {
                         .id("resource-pressure-chip")
                         .debug_selector(|| "resource-pressure-chip".into())
                         .role(Role::Button)
+                        .map(vorkspace_ui::theme::tab_reachable)
                         .aria_label("High resource usage")
                         .aria_description(format!("{} · Review running work", self.reasons()))
                         .aria_expanded(open)
@@ -749,7 +753,10 @@ impl Render for ResourceMonitor {
                                 d.text_color(content(0.55))
                             }
                         })
-                        .hover(|s| s.bg(content(0.08)).text_color(content(1.)))
+                        .hover(|s| {
+                            s.bg(vorkspace_ui::fluid::hover(0.08))
+                                .text_color(content(1.))
+                        })
                         .child(
                             icon("circle-alert", 14.).text_color(status(StatusColor::Warning, 1.)),
                         )

@@ -1,8 +1,8 @@
 //! SessionReview.tsx: the latest turn's recorded workspace changes, under its
 //! reply, with Undo, Keep and Review. The checkpoint runs off the UI thread.
-use crate::panel_kit::{DIFF_ADD, DIFF_DEL, format_integer, tabular};
+use crate::panel_kit::{format_integer, tabular};
 use gpui::{
-    Context, EventEmitter, FontWeight, Role, SharedString, Task, Window, div, prelude::*, px, rgb,
+    Context, EventEmitter, FontWeight, Role, SharedString, Task, Window, div, prelude::*, px,
 };
 use vorkspace_core::checkpoint::{CheckpointFile, CheckpointStatus};
 use vorkspace_ui::radius;
@@ -179,8 +179,10 @@ fn text_button(id: &'static str, label: &'static str, enabled: bool) -> gpui::St
         .text_color(content(0.5))
         .when(!enabled, |d| d.opacity(0.35))
         .when(enabled, |d| {
-            d.cursor_pointer()
-                .hover(|s| s.bg(content(0.08)).text_color(content(1.)))
+            d.cursor_pointer().hover(|s| {
+                s.bg(vorkspace_ui::fluid::hover(0.08))
+                    .text_color(content(1.))
+            })
         })
         .child(label)
 }
@@ -195,14 +197,15 @@ fn counts(additions: i64, deletions: i64, gap: f32) -> gpui::Div {
         .text_size(px(11.))
         .font_weight(FontWeight::SEMIBOLD)
         .font_features(tabular())
+        .font_family(vorkspace_ui::fonts::MONO)
         .child(
             div()
-                .text_color(rgb(DIFF_ADD))
+                .text_color(vorkspace_ui::theme::diff_foreground(true))
                 .child(format!("+{}", format_integer(additions))),
         )
         .child(
             div()
-                .text_color(rgb(DIFF_DEL))
+                .text_color(vorkspace_ui::theme::diff_foreground(false))
                 .child(format!("-{}", format_integer(deletions))),
         )
 }
@@ -265,6 +268,7 @@ impl Render for SessionReview {
         let header = div()
             .min_w_0()
             .flex()
+            .flex_wrap()
             .items_center()
             .gap(px(10.))
             .px_3()
@@ -282,7 +286,7 @@ impl Render for SessionReview {
             )
             .child(
                 div()
-                    .min_w_0()
+                    .min_w(px(84.))
                     .flex_1()
                     .child(
                         div()
@@ -303,6 +307,8 @@ impl Render for SessionReview {
                 div()
                     .flex_shrink_0()
                     .flex()
+                    .flex_wrap()
+                    .max_w_full()
                     .items_center()
                     .gap(px(2.))
                     .child(
@@ -334,6 +340,7 @@ impl Render for SessionReview {
                             .id("session-review-open")
                             .role(Role::Button)
                             .aria_label("Review changes")
+                            .map(vorkspace_ui::theme::tab_reachable)
                             .h(px(28.))
                             .px(px(10.))
                             .flex()
@@ -344,7 +351,7 @@ impl Render for SessionReview {
                             .font_weight(FontWeight::MEDIUM)
                             .text_color(content(0.75))
                             .cursor_pointer()
-                            .hover(|s| s.bg(content(0.12)).text_color(content(1.)))
+                            .hover(|s| s.bg(vorkspace_ui::fluid::hover(0.12)).text_color(content(1.)))
                             .child("Review")
                             .on_click(cx.listener(|_, _, _, cx| {
                                 cx.emit(SessionReviewEvent::Open { path: None })
@@ -363,6 +370,7 @@ impl Render for SessionReview {
             div()
                 .id(("session-review-file", ix))
                 .role(Role::Button)
+                .map(vorkspace_ui::theme::tab_reachable)
                 .aria_label(SharedString::from(file.relative.clone()))
                 .group(group.clone())
                 .h(px(32.))
@@ -374,7 +382,10 @@ impl Render for SessionReview {
                 .px_3()
                 .cursor_pointer()
                 .text_color(content(0.65))
-                .hover(|s| s.bg(content(0.05)).text_color(content(1.)))
+                .hover(|s| {
+                    s.bg(vorkspace_ui::fluid::hover(0.05))
+                        .text_color(content(1.))
+                })
                 .child(file_type_icon(&name, false, false, 15.))
                 .child(
                     div()
@@ -420,6 +431,7 @@ impl Render for SessionReview {
                     div()
                         .id("session-review-more")
                         .role(Role::Button)
+                        .map(vorkspace_ui::theme::tab_reachable)
                         .aria_expanded(expanded)
                         .group("session-review-more")
                         .h(px(32.))
@@ -433,7 +445,10 @@ impl Render for SessionReview {
                         .cursor_pointer()
                         .text_size(px(11.))
                         .text_color(content(0.45))
-                        .hover(|s| s.bg(content(0.05)).text_color(content(0.7)))
+                        .hover(|s| {
+                            s.bg(vorkspace_ui::fluid::hover(0.05))
+                                .text_color(content(0.7))
+                        })
                         .child(
                             icon(
                                 if expanded {

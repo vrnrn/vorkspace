@@ -1176,26 +1176,42 @@ impl Store {
         }
         Ok(())
     }
-    /// Marks due, undelivered reminders delivered and returns them, once.
-    pub fn take_due_reminders(&mut self, now: u64) -> Result<Vec<Reminder>, String> {
-        let due: Vec<_> = self
-            .reminders()?
-            .into_iter()
+    /// Marks the due occurrences still matching this snapshot as delivered.
+    pub fn claim_due_reminders(
+        &mut self,
+        snapshot: &[Reminder],
+        now: u64,
+    ) -> Result<Vec<Reminder>, String> {
+        let due: Vec<_> = snapshot
+            .iter()
             .filter(|r| r.due_at <= now && r.fired_at.is_none())
+            .cloned()
             .collect();
+        if due.is_empty() {
+            return Ok(Vec::new());
+        }
         if self.shared.is_some() {
             return self.shared_fire_reminders(&due, now);
         }
         let tx = self.conn.transaction().map_err(|e| e.to_string())?;
-        for reminder in &due {
-            tx.execute(
-                "UPDATE native_reminders SET fired_at=?2 WHERE session_id=?1",
-                params![reminder.session_id, now.min(i64::MAX as u64) as i64],
-            )
-            .map_err(|e| e.to_string())?;
+        let mut claimed = Vec::new();
+        for reminder in due {
+            let changed = tx
+                .execute(
+                    "UPDATE native_reminders SET fired_at=?2 WHERE session_id=?1 AND fired_at IS NULL AND due_at=?3",
+                    params![
+                        reminder.session_id,
+                        now.min(i64::MAX as u64) as i64,
+                        reminder.due_at.min(i64::MAX as u64) as i64
+                    ],
+                )
+                .map_err(|e| e.to_string())?;
+            if changed == 1 {
+                claimed.push(reminder);
+            }
         }
         tx.commit().map_err(|e| e.to_string())?;
-        Ok(due)
+        Ok(claimed)
     }
     /// Deletes the conversation, its settings and reminder for good.
     pub fn delete(&mut self, id: i64) -> Result<(), String> {

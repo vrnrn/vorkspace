@@ -22,6 +22,7 @@ typedef enum BackgroundTag {
   BackgroundTag_LinearGradient = 1,
   BackgroundTag_PatternSlash = 2,
   BackgroundTag_Checkerboard = 3,
+  BackgroundTag_Dither = 4,
 } BackgroundTag;
 
 /**

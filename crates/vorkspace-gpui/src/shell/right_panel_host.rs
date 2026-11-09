@@ -12,12 +12,12 @@ impl Shell {
     }
     pub(super) fn sync_right_panel(&mut self, cx: &mut Context<Self>) {
         let opening = self.right_slide.as_ref().is_some_and(PaneSlide::opening);
-        let classic_tools = self.workspace.classic_layout
-            && self.workspace.sidebar_visible
-            && self.workspace.sidebar_tab() != crate::workspace::SidebarTab::Sessions;
+        let classic_tools = self.workspace.classic_layout && self.workspace.sidebar_visible;
         let shown = (classic_tools
-            || (!self.workspace.classic_layout && self.workspace.right_panel_open && !opening))
-            && self.has_session_panes()
+            || (!self.workspace.classic_layout
+                && self.workspace.right_panel_open
+                && !opening
+                && self.has_session_panes()))
             && self.settings.is_none();
         let tab = if self.workspace.classic_layout {
             self.classic_tool_tab()
@@ -47,15 +47,16 @@ impl Shell {
         cx: &mut Context<Self>,
     ) {
         if self.workspace.classic_layout {
-            let tab = if open {
-                self.right_panel
+            if open {
+                let tab = self
+                    .right_panel
                     .as_ref()
                     .map(|p| Self::classic_tab_for_tool(p.read(cx).tab()))
-                    .unwrap_or(crate::workspace::SidebarTab::Files)
-            } else {
-                crate::workspace::SidebarTab::Sessions
-            };
-            self.select_classic_sidebar(tab, window, cx);
+                    .unwrap_or(crate::workspace::SidebarTab::Files);
+                self.select_classic_sidebar(tab, window, cx);
+            } else if self.workspace.sidebar_visible {
+                self.toggle_sidebar(window, cx);
+            }
             return;
         }
         if !self.has_session_panes()
@@ -84,7 +85,6 @@ impl Shell {
         if open && let Some(panel) = self.right_panel.clone() {
             panel.update(cx, |p, cx| p.focus_pane(window, cx));
         }
-        self.fit_sidebar(cx);
         self.persist(cx);
         cx.notify();
     }

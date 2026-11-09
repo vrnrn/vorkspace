@@ -177,6 +177,57 @@ pub fn fuzzy(query: &str, text: &str) -> Option<(i64, Vec<Range<usize>>)> {
     ranges.dedup();
     Some((score, ranges))
 }
+/// What an empty query offers: the latest started conversations, the files
+/// opened most recently, and the open projects, grouped like results so the
+/// same keyboard navigation opens them.
+pub fn recents(
+    rows: &[Session],
+    files: &[ProjectFile],
+    recent: &[String],
+    projects: &[String],
+    scope: Scope,
+) -> Vec<Hit> {
+    let conversations = rows
+        .iter()
+        .filter(|s| s.has_messages && !s.archived)
+        .map(|s| Hit {
+            id: format!("conversation:{}", s.id),
+            target: Target::Conversation(s.id),
+            title: crate::session::display_title(&s.title, &s.provider).into(),
+            meta: project_name(&s.cwd),
+            provider: s.provider.clone(),
+            highlights: vec![],
+            score: 0,
+            updated_at: s.updated_at,
+        });
+    let opened = recent.iter().enumerate().filter_map(|(ix, path)| {
+        let file = files.iter().find(|f| &f.path == path)?;
+        Some(Hit {
+            id: format!("file:{}", file.path),
+            target: Target::File {
+                path: file.path.clone(),
+                location: None,
+            },
+            title: file.name.clone(),
+            meta: file.relative.clone(),
+            provider: String::new(),
+            highlights: vec![],
+            score: -(ix as i64),
+            updated_at: 0,
+        })
+    });
+    let projects = projects.iter().map(|path| Hit {
+        id: format!("project:{path}"),
+        target: Target::Project(path.clone()),
+        title: project_name(path),
+        meta: pretty_path(path),
+        provider: String::new(),
+        highlights: vec![],
+        score: 0,
+        updated_at: 0,
+    });
+    grouped(conversations.chain(opened).chain(projects), scope)
+}
 pub fn titles(rows: &[Session], query: &str) -> Vec<Hit> {
     if query.trim().is_empty() {
         return vec![];

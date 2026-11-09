@@ -2,7 +2,35 @@
 use super::*;
 use vorkspace_ui::radius;
 
+const REVIEW_SIDE_BY_SIDE_MIN_WIDTH: f32 = 500.;
+
 impl Shell {
+    fn review_is_compact(&self, id: i64) -> bool {
+        self.split_bounds
+            .get(&id)
+            .and_then(AnchorSlot::get)
+            .map_or_else(|| self.pane_available_width(), |b| b.size.width.as_f32())
+            < REVIEW_SIDE_BY_SIDE_MIN_WIDTH
+    }
+
+    pub(super) fn review_covers_chat(&self, id: i64, cx: &App) -> bool {
+        self.reviews
+            .get(&id)
+            .map(|review| &review.read(cx).state)
+            .or_else(|| {
+                self.workspace
+                    .reviews
+                    .get(&id)
+                    .filter(|state| !state.tabs.is_empty())
+            })
+            .is_some_and(|state| {
+                state.chat_hidden
+                    || (self.workspace.active == Some(id)
+                        && self.review_focused
+                        && self.review_is_compact(id))
+            })
+    }
+
     /// The session pane's split header (SessionPane.tsx): grip, focus dot,
     /// title and a close button. The header moves the chat independently of
     /// its review; closing a lone chat leaves the review in the tab.
@@ -62,7 +90,10 @@ impl Shell {
                     .justify_center()
                     .rounded(px(radius::CONTROL))
                     .text_color(content(0.35))
-                    .hover(|s| s.bg(content(0.05)).text_color(content(0.7)))
+                    .hover(|s| {
+                        s.bg(vorkspace_ui::fluid::hover(0.05))
+                            .text_color(content(0.7))
+                    })
                     .child(icon("grip-vertical", 14.)),
             )
             .child(
@@ -85,6 +116,7 @@ impl Shell {
                 div()
                     .id(("close-chat-pane", id as usize))
                     .role(Role::Button)
+                    .map(vorkspace_ui::theme::tab_reachable)
                     .aria_label("Close pane")
                     .group("close-chat-pane")
                     .size(px(20.))
@@ -94,7 +126,7 @@ impl Shell {
                     .justify_center()
                     .rounded(px(radius::SMALL))
                     .cursor(CursorStyle::Arrow)
-                    .hover(|s| s.bg(content(0.1)))
+                    .hover(|s| s.bg(vorkspace_ui::fluid::hover(0.1)))
                     .child(
                         icon("x", 12.)
                             .text_color(content(0.5))
@@ -164,7 +196,7 @@ impl Shell {
         });
         let view_width = view_width.max(1.);
         let view_height = view_height.max(1.);
-        let width = view_width.max(layout.width_for_minimum(MIN_CHAT_WIDTH));
+        let width = view_width.max(layout.width_for_minimum(MIN_CHAT_WIDTH.min(view_width)));
         let stack = layout.max_session_stack(|id| self.workspace.counts_toward_pane_limit(id));
         let height = if stack > MAX_SESSION_STACK {
             view_height.max(
@@ -187,16 +219,14 @@ impl Shell {
                 let right = left + pane.rect.w * width;
                 let top = pane.rect.y * height;
                 let bottom = top + pane.rect.h * height;
-                if left + x < 0. {
+                if right - left > view_width || left + x < 0. {
                     x = -left;
-                }
-                if right + x > view_width {
+                } else if right + x > view_width {
                     x = view_width - right;
                 }
-                if top + y < 0. {
+                if bottom - top > view_height || top + y < 0. {
                     y = -top;
-                }
-                if bottom + y > view_height {
+                } else if bottom + y > view_height {
                     y = view_height - bottom;
                 }
                 self.pane_scroll.set_offset(gpui::point(
@@ -557,7 +587,11 @@ impl Shell {
                     .into_any_element(),
             );
         }
-        let wash = div().absolute().bg(accent_color()).opacity(0.15);
+        // Where the pane will land: a sparse accent dither, so the content
+        // underneath still reads through the hint.
+        let wash = div()
+            .absolute()
+            .bg(vorkspace_ui::fluid::hint_in(accent_color(), 0.15));
         let line = div().absolute().bg(accent_color());
         let (wash, line) = match edge {
             Edge::Left => (
@@ -635,6 +669,7 @@ impl Shell {
                 .into_any_element();
         }
         let in_split = split.is_some();
+        let compact = self.review_is_compact(id);
         let chat = self.sessions.get(&id).cloned();
         let now = vorkspace_ui::clock::Instant::now();
         let sliding = self
@@ -649,7 +684,7 @@ impl Shell {
         // Keeping the removed review here would retain its collapsing header
         // and change the layout again on the following redraw.
         let sliding = match sliding {
-            Some((_, true, _, _)) => {
+            Some((_, done, _, _)) if done || compact => {
                 self.review_slide = None;
                 None
             }
@@ -660,7 +695,7 @@ impl Shell {
             .map(|(_, _, _, review)| review.clone())
             .or_else(|| self.review_for(id, cx));
         if let Some(chat) = &chat {
-            let beside = in_split || review.is_some();
+            let beside = in_split || (review.is_some() && !compact);
             chat.update(cx, |session, cx| session.set_beside_pane(beside, cx));
         }
         let Some(review) = review else {
@@ -675,6 +710,82 @@ impl Shell {
                 .into_any_element();
         };
         let state = review.read(cx).state.clone();
+        let bounds = self.split_bounds.entry(id).or_default().clone();
+        if compact && !state.chat_hidden {
+            let show_review = self.workspace.active == Some(id) && self.review_focused;
+            review.update(cx, |r, cx| {
+                r.set_visible(show_review, cx);
+                r.set_deferred(false, cx);
+            });
+            let switcher = div()
+                .id("compact-review-switcher")
+                .debug_selector(|| "compact-review-switcher".into())
+                .role(Role::TabList)
+                .aria_label("Session panes")
+                .flex()
+                .items_center()
+                .flex_shrink_0()
+                .gap_1()
+                .px_2()
+                .h(px(34.))
+                .border_b_1()
+                .border_color(crate::panel_kit::stroke())
+                .children(
+                    [("Chat", false), ("Review", true)].map(|(label, to_review)| {
+                        div()
+                            .id((label, id as usize))
+                            .debug_selector(move || format!("compact-review-{label}"))
+                            .role(Role::Tab)
+                            .map(vorkspace_ui::theme::tab_reachable)
+                            .aria_label(label)
+                            .aria_selected(show_review == to_review)
+                            .px_3()
+                            .py_1()
+                            .rounded(px(radius::CONTROL))
+                            .text_size(px(12.))
+                            .when(show_review == to_review, |d| d.bg(content(0.1)))
+                            .hover(|d| d.bg(vorkspace_ui::fluid::hover(0.12)))
+                            .child(label)
+                            .on_click(cx.listener(move |this, _, window, cx| {
+                                this.focus_pane(id, window, cx);
+                                this.review_focused = to_review;
+                                if to_review && let Some(review) = this.review_for(id, cx) {
+                                    review.update(cx, |r, cx| r.focus_active(window, cx));
+                                } else {
+                                    this.focus_active(window, cx);
+                                }
+                                cx.notify();
+                            }))
+                    }),
+                );
+            return div()
+                .size_full()
+                .relative()
+                .flex()
+                .flex_col()
+                .child(bounds.layout_probe())
+                .when_some(split.filter(|p| *p > 0.), |d, p| {
+                    d.child(self.split_header(id, p, true, cx))
+                })
+                .child(switcher)
+                .child(
+                    div()
+                        .flex_1()
+                        .min_h_0()
+                        .min_w_0()
+                        .flex()
+                        .flex_col()
+                        .overflow_hidden()
+                        .child(if show_review {
+                            review
+                                .cached(StyleRefinement::default().size_full())
+                                .into_any_element()
+                        } else {
+                            self.chat_with_background(id, chat, cx).into_any_element()
+                        }),
+                )
+                .into_any_element();
+        }
         let (ratio, deferred) = match sliding {
             Some((width, _, opening, _)) => {
                 window.request_animation_frame();
@@ -698,7 +809,6 @@ impl Shell {
         };
         let header_shown = split.unwrap_or(header);
         let ratio = if chat_hidden { 1. } else { ratio.clamp(0., 1.) };
-        let bounds = self.split_bounds.entry(id).or_default().clone();
         let full_width = bounds
             .get()
             .map_or(600., |b| b.size.width.as_f32() * state.ratio);
@@ -816,45 +926,5 @@ impl Shell {
                 )
             })
             .into_any_element()
-    }
-    /// The narrowest chat column the active tab would have, with or without
-    /// the sidebar: each pane's share of the card, less its review.
-    pub(super) fn narrowest_chat(&self, sidebar: bool, cx: &App) -> f32 {
-        // The card's inset and border.
-        let mut main = self.viewport_width - self.classic_rail_width();
-        if sidebar {
-            main -= self.workspace.right_panel_width;
-        }
-        if self.right_panel_shown(cx) {
-            main -= self.workspace.right_panel_width;
-        }
-        if let Some(dock) = self.workspace.docks.get(&self.workspace.project)
-            && dock.open
-            && !dock.side.vertical()
-        {
-            main -= dock.size;
-        }
-        let Some(tab) = self.workspace.active_tab() else {
-            return main;
-        };
-        self.workspace
-            .layout(tab)
-            .leaves()
-            .iter()
-            .map(|leaf| {
-                let width = leaf.rect.w * main;
-                let review = self
-                    .reviews
-                    .get(&leaf.id)
-                    .map(|r| r.read(cx).state.clone())
-                    .or_else(|| self.workspace.reviews.get(&leaf.id).cloned())
-                    .filter(|r| !r.tabs.is_empty());
-                match review {
-                    Some(r) if r.chat_hidden => width,
-                    Some(r) => width * (1. - r.ratio),
-                    None => width,
-                }
-            })
-            .fold(f32::INFINITY, f32::min)
     }
 }

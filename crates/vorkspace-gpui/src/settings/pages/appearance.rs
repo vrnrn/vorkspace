@@ -330,12 +330,14 @@ impl SettingsView {
             .then(|| value.as_deref().and_then(parse_hex))
             .flatten();
         let weak = cx.weak_entity();
-        let dot = |selected: bool, color: gpui::Hsla| {
-            div()
-                .size(px(14.))
-                .rounded_full()
-                .bg(color)
-                .when(selected, |d| d.border_2().border_color(content(0.8)))
+        // The choice is a ring around the swatch with a gap, as macOS draws
+        // it: a border on the swatch itself vanished on the ink swatch.
+        let dot = |_selected: bool, color: gpui::Hsla| div().size(px(12.)).rounded_full().bg(color);
+        let ring = |selected: bool| {
+            move |d: gpui::Stateful<gpui::Div>| {
+                d.border_2()
+                    .border_color(if selected { content(0.7) } else { content(0.) })
+            }
         };
         let colors: Vec<(gpui::Hsla, &'static str, Option<String>)> =
             std::iter::once((content(1.), "Default", None))
@@ -365,6 +367,7 @@ impl SettingsView {
                                     .id(("accent-color", ix))
                                     .debug_selector(move || format!("accent-color-{ix}"))
                                     .role(Role::Button)
+                                    .map(vorkspace_ui::theme::tab_reachable)
                                     .aria_label(label)
                                     .aria_selected(preset == Some(ix))
                                     .size(px(20.))
@@ -373,6 +376,7 @@ impl SettingsView {
                                     .justify_center()
                                     .rounded_full()
                                     .cursor_pointer()
+                                    .map(ring(preset == Some(ix)))
                                     .child(dot(preset == Some(ix), color))
                                     .on_click(cx.listener(move |this, _, _, cx| {
                                         this.accent_custom_open = false;
@@ -385,6 +389,7 @@ impl SettingsView {
                         div()
                             .id("accent-custom")
                             .role(Role::Button)
+                            .map(vorkspace_ui::theme::tab_reachable)
                             .aria_label("Custom color")
                             .aria_expanded(self.accent_custom_open)
                             .size(px(20.))
@@ -393,14 +398,12 @@ impl SettingsView {
                             .justify_center()
                             .rounded_full()
                             .cursor_pointer()
+                            .map(ring(custom.is_some() || self.accent_custom_open))
                             .child(
                                 div()
-                                    .size(px(14.))
+                                    .size(px(12.))
                                     .rounded_full()
                                     .overflow_hidden()
-                                    .when(custom.is_some() || self.accent_custom_open, |d| {
-                                        d.border_2().border_color(content(0.8))
-                                    })
                                     .map(|d| match custom {
                                         Some(c) => d.bg(rgb(c)),
                                         None => d.bg(linear_gradient(
@@ -515,6 +518,7 @@ impl SettingsView {
                             div()
                                 .id("choose-chat-background")
                                 .role(Role::Button)
+                                .map(vorkspace_ui::theme::tab_reachable)
                                 .aria_label("Choose an image")
                                 .h(px(144.))
                                 .w_full()
@@ -525,7 +529,10 @@ impl SettingsView {
                                 .gap_2()
                                 .text_color(content(0.4))
                                 .cursor_pointer()
-                                .hover(|s| s.bg(content(0.05)).text_color(content(0.7)))
+                                .hover(|s| {
+                                    s.bg(vorkspace_ui::fluid::hover(0.05))
+                                        .text_color(content(0.7))
+                                })
                                 .child(icon("image-add", 20.).text_color(content(0.4)))
                                 .child(div().text_size(px(12.)).child("Choose an image"))
                                 .on_click(cx.listener(|_, _, _, cx| {

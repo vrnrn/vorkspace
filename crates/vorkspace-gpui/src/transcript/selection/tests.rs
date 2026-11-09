@@ -146,6 +146,7 @@ fn resizing_a_long_paragraph_keeps_the_reading_glyph_at_the_same_height(cx: &mut
         )
         .unwrap()
     });
+    gpui::VisualTestContext::from_window(window.into(), cx).activate_accessibility();
     let view = window
         .update(cx, |fixture, _, _| fixture.transcript.clone())
         .unwrap();
@@ -221,6 +222,16 @@ fn resizing_a_long_paragraph_keeps_the_reading_glyph_at_the_same_height(cx: &mut
             cx.refresh().unwrap();
         }
         cx.run_until_parked();
+        window
+            .update(cx, |_, window, _| {
+                assert!(
+                    window
+                        .debug_a11y_tree_json()
+                        .is_some_and(|tree| tree.contains("word150 café")),
+                    "the final transcript remains exposed to assistive tools after reflow"
+                );
+            })
+            .unwrap();
         view.read_with(cx, |view, _| {
             let state = view.selection.0.borrow();
             let new_y = anchor_y(&state, &anchor).unwrap() - view.viewport.top();

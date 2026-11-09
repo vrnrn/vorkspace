@@ -710,3 +710,111 @@ fn narrow_layout_and_opening_history_do_not_slide(cx: &mut TestAppContext) {
         })
         .unwrap();
 }
+
+#[gpui::test]
+fn an_empty_session_offers_starters_that_fill_the_composer(cx: &mut TestAppContext) {
+    vorkspace_ui::theme::configure(&Default::default(), false, true);
+    cx.update(|cx| {
+        cx.set_global(vorkspace_ui::preferences::Preferences::default());
+        vorkspace_ui::clock::use_test_clock(cx);
+        input::bind(cx);
+        crate::popover::bind(cx);
+    });
+    let window = window(cx, 1000.);
+    let visual = &mut gpui::VisualTestContext::from_window(window.into(), cx);
+    visual.run_until_parked();
+    visual.refresh().unwrap();
+    let starter = visual
+        .debug_bounds("session-starter-1")
+        .expect("a session without a sent message has starters");
+    visual.simulate_click(starter.center(), Default::default());
+    window
+        .update(visual, |c, _, cx| {
+            assert_eq!(c.input.read(cx).content.as_ref(), "First message");
+            c.input
+                .update(cx, |input, cx| input.set_text(String::new(), cx));
+        })
+        .unwrap();
+    visual.run_until_parked();
+    visual.refresh().unwrap();
+    visual.simulate_click(starter.center(), Default::default());
+    visual.run_until_parked();
+    let text = window
+        .update(visual, |c, _, cx| c.input.read(cx).content.to_string())
+        .unwrap();
+    assert_eq!(text, "Find and fix a failing test");
+}
+
+#[gpui::test]
+fn a_session_without_a_project_asks_plainly_and_offers_no_project_starters(
+    cx: &mut TestAppContext,
+) {
+    vorkspace_ui::theme::configure(&Default::default(), false, true);
+    cx.update(|cx| {
+        cx.set_global(vorkspace_ui::preferences::Preferences::default());
+        vorkspace_ui::clock::use_test_clock(cx);
+        input::bind(cx);
+        crate::popover::bind(cx);
+    });
+    let store = Store::open(Path::new(":memory:")).unwrap();
+    let summary = store.create("codex", "").unwrap();
+    let store = Arc::new(Mutex::new(store));
+    let window = cx.update(|cx| {
+        cx.open_window(
+            WindowOptions {
+                window_bounds: Some(WindowBounds::Windowed(Bounds::new(
+                    point(px(0.), px(0.)),
+                    size(px(1000.), px(700.)),
+                ))),
+                ..Default::default()
+            },
+            |_, cx| cx.new(|cx| Conversation::new(summary, store, cx)),
+        )
+        .unwrap()
+    });
+    window
+        .update(cx, |c, _, cx| {
+            c.loaded = true;
+            cx.notify();
+        })
+        .unwrap();
+    let visual = &mut gpui::VisualTestContext::from_window(window.into(), cx);
+    visual.run_until_parked();
+    visual.refresh().unwrap();
+    assert!(visual.debug_bounds("session-starter-0").is_none());
+    assert!(visual.debug_bounds("composer-workspace").is_none());
+}
+
+#[gpui::test]
+fn a_short_empty_session_keeps_only_its_question_and_composer(cx: &mut TestAppContext) {
+    vorkspace_ui::theme::configure(&Default::default(), false, true);
+    cx.update(|cx| {
+        cx.set_global(vorkspace_ui::preferences::Preferences::default());
+        vorkspace_ui::clock::use_test_clock(cx);
+        input::bind(cx);
+        crate::popover::bind(cx);
+    });
+    let window = window(cx, 1000.);
+    let visual = &mut gpui::VisualTestContext::from_window(window.into(), cx);
+    window
+        .update(visual, |c, w, cx| {
+            c.input
+                .update(cx, |i, cx| i.replace_text_in_range(None, "", w, cx));
+        })
+        .unwrap();
+    visual.run_until_parked();
+    visual.refresh().unwrap();
+    assert!(visual.debug_bounds("session-starter-0").is_some());
+    visual.simulate_resize(size(px(1000.), px(420.)));
+    visual.run_until_parked();
+    visual.refresh().unwrap();
+    visual.run_until_parked();
+    visual.refresh().unwrap();
+    assert!(visual.debug_bounds("session-starter-0").is_none());
+    visual.simulate_resize(size(px(1000.), px(700.)));
+    visual.run_until_parked();
+    visual.refresh().unwrap();
+    visual.run_until_parked();
+    visual.refresh().unwrap();
+    assert!(visual.debug_bounds("session-starter-0").is_some());
+}

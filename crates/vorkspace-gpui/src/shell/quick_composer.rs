@@ -13,6 +13,9 @@ impl Shell {
         }
     }
     pub(super) fn toggle_quick_composer(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.management_modal_focus(cx).is_some() {
+            return;
+        }
         if let Some(handle) = self.quick.window.take()
             && handle
                 .update(cx, |_, window, _| window.remove_window())
@@ -34,15 +37,16 @@ impl Shell {
                 .unwrap_or_default(),
             prompt: String::new(),
             foreground: false,
+            browsed_folder: false,
         };
+        let projects = self.workspace.vorkspace_projects();
         let mut choice = self
             .quick
             .last
             .clone()
-            .filter(|v| self.workspace.projects.contains(&v.cwd))
+            .filter(|v| self.workspace.vorkspace_has_project(&v.cwd))
             .unwrap_or(initial);
         choice.access = crate::conversation::default_access(cx);
-        let projects = self.workspace.projects.clone();
         let store = self.store.clone();
         let bounds = gpui::Bounds::centered(None, gpui::size(px(680.), px(230.)), cx);
         let handle = cx.open_window(
@@ -68,10 +72,28 @@ impl Shell {
         match handle {
             Ok(handle) => {
                 let view = handle.update(cx, |_, _, cx| cx.entity()).unwrap();
+                let vorkspace = self.workspace.active_vorkspace.clone();
                 self.quick.events = Some(cx.subscribe_in(
                     &view,
                     window,
-                    move |this, _, launch: &crate::composer::quick_composer::Launch, window, cx| {
+                    move |this, view, launch: &crate::composer::quick_composer::Launch, window, cx| {
+                        if this.workspace.active_vorkspace != vorkspace {
+                            view.update(cx, |view, cx| view.show_error("The active vorkspace changed. Reopen Quick Composer to choose a project there.", cx));
+                            return;
+                        }
+                        if this.deleting_projects.contains(&vorkspace_core::files::path_key(&launch.cwd)) {
+                            view.update(cx, |view, cx| view.show_error("This project is being deleted.", cx));
+                            return;
+                        }
+                        if !this.workspace.vorkspace_has_project(&launch.cwd) {
+                            if launch.browsed_folder {
+                                this.workspace.add_project_to_vorkspace(&vorkspace, &launch.cwd);
+                                this.persist(cx);
+                            } else {
+                                view.update(cx, |view, cx| view.show_error("Choose a project in the current vorkspace.", cx));
+                                return;
+                            }
+                        }
                         this.quick.last = Some(launch.clone());
                         let _ = handle.update(cx, |_, window, _| window.remove_window());
                         this.quick.window = None;
@@ -89,6 +111,11 @@ impl Shell {
         _window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        if !self.workspace.vorkspace_has_project(&launch.cwd) {
+            self.error = Some("Choose a project in the current vorkspace.".into());
+            cx.notify();
+            return;
+        }
         let key = vorkspace_core::files::path_key(&launch.cwd);
         if self.deleting_projects.contains(&key) {
             self.error = Some("This project is being deleted.".into());
@@ -101,6 +128,7 @@ impl Shell {
             .or_default() += 1;
         let store = self.store.clone();
         let choice = launch.clone();
+        let navigation_revision = self.navigation_revision;
         crate::conversation::remember_access(choice.access, cx);
         let effort = crate::conversation::preferred_effort(choice.kind.id(), cx);
         let account = crate::accounts::get(cx)
@@ -131,10 +159,12 @@ impl Shell {
                             .update(cx, |v, cx| v.quick_submit(launch.prompt, settings, cx));
                         this.order.retain(|i| *i != id);
                         this.order.insert(0, id);
-                        if launch.foreground {
-                            this.workspace.project = launch.cwd;
+                        if launch.foreground
+                            && this.navigation_revision == navigation_revision
+                            && this.workspace.vorkspace_has_project(&launch.cwd)
+                        {
                             this.close_settings(window, cx);
-                            this.activate_session(id, window, cx);
+                            this.open(id, window, cx);
                             window.activate_window();
                         }
                         this.invalidate_chrome(cx);

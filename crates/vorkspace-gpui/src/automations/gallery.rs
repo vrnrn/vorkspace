@@ -19,7 +19,7 @@ fn gallery_card(
         .items_start()
         .gap(px(8.))
         .cursor_pointer()
-        .hover(|s| s.bg(content(0.05)))
+        .hover(|s| s.bg(vorkspace_ui::fluid::hover(0.05)))
         .child(
             div()
                 .size(px(page::CONTROL_HEIGHT))
@@ -53,10 +53,10 @@ impl Automations {
     pub(super) fn render_gallery(&self, narrow: bool, cx: &mut Context<Self>) -> AnyElement {
         let categories = [
             ("popular", "Popular"),
-            ("review", "Code Review"),
+            ("review", "Code review"),
             ("security", "Security"),
-            ("incidents", "Incidents & Triage"),
-            ("research", "Data & Research"),
+            ("incidents", "Incidents & triage"),
+            ("research", "Data & research"),
             ("environment", "Environment"),
         ];
         let scratch = gallery_card(
@@ -115,8 +115,10 @@ impl Automations {
         // become too cramped wraps and fills its own line.
         let grid = div().mx(px(-6.)).flex().flex_wrap().children(
             std::iter::once(scratch).chain(cards).map(|card| {
+                // Columns never grow, so an odd last card keeps its column's
+                // width instead of stretching across the row.
                 div()
-                    .flex_grow(1.)
+                    .flex_grow(if narrow { 1. } else { 0. })
                     .flex_basis(gpui::relative(if narrow { 1. } else { 0.5 }))
                     .max_w_full()
                     .when(!narrow, |d| d.min_w(px(264.)))

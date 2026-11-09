@@ -1,6 +1,6 @@
 use super::*;
 use serde_json::{Value, json};
-use vorkspace_core::bot::{channels, peers};
+use vorkspace_core::bot::peers;
 
 impl Bots {
     /// A saved queue owns work independently of which Bot is visible. Loading
@@ -34,15 +34,12 @@ impl Bots {
         self.chats
             .values()
             .chain(self.running.values().map(|r| &r.view))
-            .chain(self.channels.views.values())
             .find(|view| view.read(cx).summary.id == session)
             .cloned()
     }
-    /// Both routes consume the same autonomous budget. Creating/reusing a
-    /// channel or changing routes cannot turn a peer-triggered turn into a user turn.
+    /// Peer-triggered turns keep their autonomous budget; they never become user turns.
     pub(super) fn collaboration_hop(&self, session: i64, cx: &App) -> u8 {
-        let peer = self
-            .inflight
+        self.inflight
             .iter()
             .filter(|(bot, _)| {
                 self.chats
@@ -51,27 +48,7 @@ impl Bots {
             })
             .filter_map(|(_, m)| m.peer.as_ref().map(|p| p.hop))
             .max()
-            .unwrap_or(0);
-        let channel = self
-            .channels
-            .views
-            .iter()
-            .filter(|(_, v)| v.read(cx).summary.id == session)
-            .flat_map(|((channel, bot), _)| {
-                self.channels
-                    .state
-                    .get(channel)
-                    .into_iter()
-                    .flat_map(move |c| {
-                        c.deliveries
-                            .iter()
-                            .filter(move |d| d.bot == *bot && d.state == "running")
-                            .map(|d| d.hop)
-                    })
-            })
-            .max()
-            .unwrap_or(0);
-        peer.max(channel)
+            .unwrap_or(0)
     }
     #[allow(clippy::too_many_arguments)]
     fn queue_peer(
@@ -148,7 +125,7 @@ impl Bots {
         let Some(peer) = sent
             .peer
             .as_ref()
-            .filter(|p| p.expect_reply && p.hop < channels::MAX_HOPS)
+            .filter(|p| p.expect_reply && p.hop < peers::MAX_HOPS)
         else {
             return Ok(());
         };

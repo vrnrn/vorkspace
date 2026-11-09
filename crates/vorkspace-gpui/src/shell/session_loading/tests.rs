@@ -61,7 +61,9 @@ fn whole_project_sidebar_keeps_seven_today_sessions_across_worktrees_lazy(cx: &m
                     .sidebar_session_ids(cx)
                     .into_iter()
                     .collect::<HashSet<_>>(),
-                feature
+                // The rail lists the whole vorkspace whichever worktree the
+                // Explorer shows.
+                &main | &feature
             );
             shell.worktree_focus.insert(
                 "/work/project".into(),
@@ -75,7 +77,7 @@ fn whole_project_sidebar_keeps_seven_today_sessions_across_worktrees_lazy(cx: &m
                     .sidebar_session_ids(cx)
                     .into_iter()
                     .collect::<HashSet<_>>(),
-                main
+                &main | &feature
             );
             shell.worktree_focus.clear();
             assert_eq!(shell.sidebar_session_ids(cx).len(), 7);
@@ -241,6 +243,34 @@ fn inactive_history_cache_has_a_count_bound_and_reopens_evicted_history(cx: &mut
                 chat.transcript.read(cx).source_rows()[0].text,
                 "Saved answer 0"
             );
+        })
+        .unwrap();
+}
+
+#[gpui::test]
+fn session_metadata_responding_preserves_remote_running_and_stopping_state(
+    cx: &mut TestAppContext,
+) {
+    let (window, a, _) = super::super::tests::window(cx);
+    window
+        .update(cx, |shell, _, cx| {
+            assert!(!shell.session_metadata(a, cx).responding());
+            shell.sessions[&a].update(cx, |s, _| s.busy = true);
+            assert!(shell.session_metadata(a, cx).responding());
+            shell.sessions[&a].update(cx, |s, _| s.stopping = true);
+            assert!(!shell.session_metadata(a, cx).responding());
+
+            let remote_summary = locked(&shell.store)
+                .unwrap()
+                .create("codex", "/work/project")
+                .unwrap();
+            let remote_id = remote_summary.id;
+            shell.session_summaries.insert(remote_id, remote_summary);
+            assert!(!shell.session_metadata(remote_id, cx).responding());
+            shell.remote_marks.insert(remote_id, (true, false));
+            assert!(shell.session_metadata(remote_id, cx).responding());
+            shell.remote_marks.insert(remote_id, (false, false));
+            assert!(!shell.session_metadata(remote_id, cx).responding());
         })
         .unwrap();
 }

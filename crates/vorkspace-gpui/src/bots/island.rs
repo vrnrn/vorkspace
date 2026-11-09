@@ -28,7 +28,7 @@ impl Bots {
         let id = bot.id.clone();
         icon_button(
             "bot-island-toggle",
-            "Show sessions and documents",
+            "Show launched sessions and documents",
             "bot-island",
         )
         .debug_selector(|| "bot-island-toggle".into())
@@ -61,9 +61,9 @@ impl Bots {
             .unwrap_or("Ready");
         let mut body = div()
             .id(match expanded {
-                None => "bot-island-overview",
                 Some(Section::Sessions) => "bot-island-sessions",
                 Some(Section::Documents) => "bot-island-documents",
+                None => "bot-island-overview",
             })
             .debug_selector(|| "bot-island-content".into())
             .flex_shrink_1()
@@ -72,21 +72,77 @@ impl Bots {
             .px_2()
             .pb_2()
             .when(expanded.is_some(), |d| d.flex_1());
-        if expanded != Some(Section::Documents) {
-            let (sessions, more) = self.session_list(bot, expanded.is_some(), cx);
+        if expanded != Some(Section::Documents) && !bot.launches.is_empty() {
+            let limit = if expanded == Some(Section::Sessions) {
+                usize::MAX
+            } else {
+                3
+            };
             body = body
-                .child(section("Sessions", bot.launches.len()))
-                .child(sessions);
-            if expanded.is_none() && more {
+                .child(section("Launched sessions", bot.launches.len()))
+                .children(bot.launches.iter().rev().take(limit).map(|launch| {
+                    let session = launch.session_id;
+                    let bot = bot.id.clone();
+                    let title = if launch.title.is_empty() {
+                        format!("Session {session}")
+                    } else {
+                        launch.title.clone()
+                    };
+                    let state = if launch.completed {
+                        "Finished"
+                    } else {
+                        "In progress"
+                    };
+                    div()
+                        .id(("bot-island-session", session as usize))
+                        .role(Role::Button)
+                        .aria_label(format!("Open session {title}"))
+                        .aria_description(state)
+                        .map(vorkspace_ui::theme::tab_reachable)
+                        .flex()
+                        .items_center()
+                        .gap_2()
+                        .px_2()
+                        .py_2()
+                        .rounded(px(radius::CONTROL))
+                        .cursor_pointer()
+                        .hover(|s| s.bg(vorkspace_ui::fluid::hover(0.08)))
+                        .child(icon("message-multiple", 14.).text_color(content(0.55)))
+                        .child(
+                            div()
+                                .min_w_0()
+                                .flex_1()
+                                .truncate()
+                                .text_size(px(12.))
+                                .child(title),
+                        )
+                        .on_click(cx.listener(move |this, _, _, cx| {
+                            this.set_workspace_context(Some(&bot), cx);
+                            this.open_session_workspace_pane(session, cx);
+                            cx.stop_propagation();
+                        }))
+                }));
+            if expanded.is_none() && bot.launches.len() > 3 {
                 body = body.child(self.island_more(bot, Section::Sessions, false, cx));
             }
         }
-        if expanded != Some(Section::Sessions) {
+        if expanded == Some(Section::Sessions) {
+            // The expanded view keeps its own scroll position.
+        } else if bot.documents.is_empty() {
+            body = body.child(
+                div()
+                    .id("bot-island-fresh")
+                    .debug_selector(|| "bot-island-fresh".into())
+                    .px_2()
+                    .pb_1()
+                    .text_size(px(12.))
+                    .line_height(px(18.))
+                    .text_color(content(0.45))
+                    .child("Documents it writes appear here."),
+            );
+        } else {
             body = body
-                .child(
-                    section("Documents", bot.documents.len())
-                        .when(expanded.is_none(), |d| d.mt_3()),
-                )
+                .child(section("Documents", bot.documents.len()))
                 .child(self.document_list(bot, expanded.is_some(), cx));
             if expanded.is_none() && bot.documents.len() > 3 {
                 body = body.child(self.island_more(bot, Section::Documents, false, cx));
@@ -142,19 +198,13 @@ impl Bots {
                     )
                     .when(overlay, |d| {
                         d.child(
-                            icon_button(
-                                "bot-island-close",
-                                "Close sessions and documents",
-                                "close",
-                            )
-                            .debug_selector(|| "bot-island-close".into())
-                            .on_click(cx.listener(
-                                move |this, _, _, cx| {
+                            icon_button("bot-island-close", "Close Bot panel", "close")
+                                .debug_selector(|| "bot-island-close".into())
+                                .on_click(cx.listener(move |this, _, _, cx| {
                                     this.open_islands.remove(&close_id);
                                     cx.notify();
                                     cx.stop_propagation();
-                                },
-                            )),
+                                })),
                         )
                     }),
             )
@@ -180,7 +230,9 @@ impl Bots {
     ) -> AnyElement {
         let id = bot.id.clone();
         let (control, label) = match (section, expanded) {
-            (Section::Sessions, false) => ("bot-island-more-sessions", "View all sessions"),
+            (Section::Sessions, false) => {
+                ("bot-island-more-sessions", "View all launched sessions")
+            }
             (Section::Documents, false) => ("bot-island-more-documents", "View all documents"),
             (_, true) => ("bot-island-show-less", "Show less"),
         };

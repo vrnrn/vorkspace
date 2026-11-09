@@ -60,6 +60,12 @@ pub struct Bot {
     pub seed: Option<u32>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub grid: Option<u8>,
+    /// The body's printed pattern (see `BOT_PATTERNS`); unset reads as dither.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pattern: Option<String>,
+    /// Where the pattern sits (see `BOT_PRINTS`); unset reads as ground.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub print: Option<String>,
     pub projects: Vec<String>,
     pub show_started_sessions_in_sidebar: bool,
     pub use_sidebar_folders: bool,
@@ -110,6 +116,8 @@ impl Default for Bot {
             textured: true,
             seed: None,
             grid: None,
+            pattern: None,
+            print: None,
             projects: Vec::new(),
             show_started_sessions_in_sidebar: false,
             use_sidebar_folders: false,

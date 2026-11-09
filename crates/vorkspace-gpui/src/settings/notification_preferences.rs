@@ -971,7 +971,7 @@ impl SettingsView {
                                     .role(Role::Alert)
                                     .mt_3()
                                     .text_size(px(12.))
-                                    .text_color(gpui::rgb(0xff6467))
+                                    .text_color(vorkspace_ui::theme::danger())
                                     .child(custom.error.clone().unwrap_or_default()),
                             )
                         })
@@ -1101,6 +1101,7 @@ impl SettingsView {
                             div()
                                 .id(("mute-calendar-day", cell))
                                 .role(Role::Button)
+                                .map(vorkspace_ui::theme::tab_reachable)
                                 .aria_label(date.to_string())
                                 .aria_selected(selected)
                                 .size(px(32.))
@@ -1115,7 +1116,8 @@ impl SettingsView {
                                     d.bg(content(0.1)).border_1().border_color(content(0.2))
                                 })
                                 .when(!disabled, |d| {
-                                    d.cursor_pointer().hover(|s| s.bg(content(0.05)))
+                                    d.cursor_pointer()
+                                        .hover(|s| s.bg(vorkspace_ui::fluid::hover(0.05)))
                                 })
                                 .child(date.day().to_string())
                                 .on_click(cx.listener(move |this, _, _, cx| {

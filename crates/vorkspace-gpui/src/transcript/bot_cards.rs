@@ -9,6 +9,7 @@ fn line_card(id: impl Into<ElementId>) -> Stateful<Div> {
     div()
         .id(id)
         .role(Role::Button)
+        .map(vorkspace_ui::theme::tab_reachable)
         .flex()
         .max_w(px(384.))
         .min_w_0()
@@ -18,7 +19,10 @@ fn line_card(id: impl Into<ElementId>) -> Stateful<Div> {
         .border_1()
         .border_color(content(0.1))
         .line_height(px(20.))
-        .hover(|s| s.border_color(content(0.2)).bg(content(0.05)))
+        .hover(|s| {
+            s.border_color(content(0.2))
+                .bg(vorkspace_ui::fluid::hover(0.05))
+        })
 }
 /// ArtifactCard: the document's icon and title, opening it in the reader.
 fn artifact(value: &Value, cx: &mut Context<crate::transcript::TranscriptView>) -> AnyElement {
@@ -57,29 +61,27 @@ fn artifact(value: &Value, cx: &mut Context<crate::transcript::TranscriptView>) 
 pub(crate) fn launch(
     id: i64,
     view: Option<&crate::transcript::LaunchView>,
-    spin: f32,
     cx: &mut Context<crate::transcript::TranscriptView>,
 ) -> AnyElement {
     let title = view.map_or("Agent session".to_string(), |v| v.title.clone());
     let (label, glyph, color) = match view.map(|v| v.state) {
         Some("working") => ("Working", "loader-03", content(0.55)),
-        Some("input") => ("Needs input", "clock", rgb(0xfbbf24).into()),
+        Some("input") => ("Needs input", "clock", vorkspace_ui::theme::warning()),
         Some("draft") => ("Draft", "circle-dashed-hi", content(0.45)),
-        Some("failed") => ("Failed", "alert-circle", rgb(0xf87171).into()),
+        Some("failed") => ("Failed", "alert-circle", vorkspace_ui::theme::danger()),
         Some("stopped") => ("Stopped", "circle-x", content(0.45)),
         Some("unavailable") => ("Unavailable", "chatting", content(0.45)),
         Some(_) => ("Done", "check-circle", {
-            let mut c: gpui::Hsla = rgb(0x34d399).into();
+            let mut c: gpui::Hsla = vorkspace_ui::theme::success();
             c.a = 0.9;
             c
         }),
         None => ("", "chatting", content(0.45)),
     };
-    let mark = icon(glyph, 16.).text_color(color);
     let mark = if glyph == "loader-03" {
-        mark.with_transformation(gpui::Transformation::rotate(gpui::percentage(spin.fract())))
+        crate::panel_kit::spinner(("bot-launch-cells", id as usize), "", 16.)
     } else {
-        mark
+        icon(glyph, 16.).text_color(color).into_any_element()
     };
     let project = view
         .map(|v| {
@@ -162,7 +164,7 @@ pub(crate) fn render(
                     harness: value["harness"].as_str().unwrap_or_default().into(),
                     cwd: value["cwd"].as_str().unwrap_or_default().into(),
                 });
-            return launch(id, view.as_ref(), 0., cx);
+            return launch(id, view.as_ref(), cx);
         }
         _ => {}
     }

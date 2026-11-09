@@ -6,7 +6,7 @@ use super::{
 use crate::markdown;
 use gpui::{
     AnyElement, Context, Pixels, Role, SharedString, Transformation, div, percentage, prelude::*,
-    px, rgb,
+    px,
 };
 use std::{
     collections::{HashMap, HashSet},
@@ -108,11 +108,14 @@ fn task_list(list: &TaskList, start: usize) -> AnyElement {
                         .take(100)
                         .enumerate()
                         .map(|(index, task)| {
-                            let (glyph, color) = match task.status {
-                                TaskStatus::Completed => ("check", rgb(0x6ee7b7).into()),
-                                TaskStatus::InProgress => ("circle-dashed", rgb(0x7dd3fc).into()),
-                                TaskStatus::Cancelled => ("minus", content(0.35)),
-                                TaskStatus::Pending => ("context-ring", content(0.35)),
+                            use vorkspace_ui::fluid::Step;
+                            let (step, color): (Step, gpui::Hsla) = match task.status {
+                                TaskStatus::Completed => {
+                                    (Step::Done, status(StatusColor::Success, 1.))
+                                }
+                                TaskStatus::InProgress => (Step::Active, accent_color()),
+                                TaskStatus::Cancelled => (Step::Skipped, content(0.35)),
+                                TaskStatus::Pending => (Step::Waiting, content(0.35)),
                             };
                             div()
                                 .id(("task-item", index))
@@ -123,12 +126,7 @@ fn task_list(list: &TaskList, start: usize) -> AnyElement {
                                 .gap_2p5()
                                 .px_2p5()
                                 .py_1p5()
-                                .child(
-                                    icon(glyph, 14.)
-                                        .mt(px(2.))
-                                        .text_color(color)
-                                        .flex_shrink_0(),
-                                )
+                                .child(vorkspace_ui::fluid::step_mark(step, color, 14.).mt(px(2.)))
                                 .child(
                                     div()
                                         .min_w_0()
@@ -455,7 +453,8 @@ fn agent(
         .text_size(px(14.))
         .line_height(px(20.))
         .when(has_detail, |d| {
-            d.cursor_pointer().hover(|s| s.bg(content(0.08)))
+            d.cursor_pointer()
+                .hover(|s| s.bg(vorkspace_ui::fluid::hover(0.08)))
         })
         .when(has_detail && open, |d| d.bg(content(0.08)))
         .child(super::mascot::subagent_mascot(
@@ -476,13 +475,13 @@ fn agent(
                         .min_w_0()
                         .truncate()
                         .text_color(if failed {
-                            rgb(0xf87171).into()
+                            vorkspace_ui::theme::danger()
                         } else {
                             content(0.75)
                         })
                         .group_hover("subagent-row", |s| {
                             s.text_color(if failed {
-                                rgb(0xf87171).into()
+                                vorkspace_ui::theme::danger()
                             } else {
                                 content(1.)
                             })
@@ -548,7 +547,7 @@ fn agent(
                     .text_size(px(12.))
                     .line_height(px(20.))
                     .text_color({
-                        let mut color: gpui::Hsla = rgb(0xf87171).into();
+                        let mut color: gpui::Hsla = vorkspace_ui::theme::danger();
                         color.a = 0.8;
                         color
                     })
@@ -919,6 +918,7 @@ fn agent_step(
             div()
                 .id("toggle")
                 .role(Role::Button)
+                .map(vorkspace_ui::theme::tab_reachable)
                 .aria_expanded(open)
                 .aria_label(format!(
                     "{} {}: {summary}",
@@ -1025,17 +1025,12 @@ fn markdown_text(
 struct AgentBrief(String);
 impl gpui::Render for AgentBrief {
     fn render(&mut self, _: &mut gpui::Window, _: &mut Context<Self>) -> impl IntoElement {
-        div()
+        // Was a fixed #292929, dark text on dark in light themes.
+        vorkspace_ui::fluid::tip()
             .max_w(px(480.))
-            .px_2()
             .py_1p5()
-            .rounded(px(radius::CONTROL))
-            .bg(rgb(0x292929))
-            .border_1()
-            .border_color(content(0.12))
             .text_size(px(12.))
             .line_height(px(18.))
-            .text_color(content(0.85))
             .child(self.0.clone())
     }
 }

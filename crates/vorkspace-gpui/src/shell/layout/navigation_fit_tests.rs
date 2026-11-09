@@ -24,7 +24,7 @@ fn the_open_rail_holds_navigation_at_low_zoom(cx: &mut TestAppContext) {
             .unwrap();
         vorkspace_ui::clock::settle_animations(window, visual);
         let rail = visual.debug_bounds("classic-project-rail").unwrap();
-        let forward = visual.debug_bounds("visit-forward").unwrap();
+        let forward = visual.debug_bounds("toggle-explorer").unwrap();
         let pane = visual.debug_bounds("main-pane-frame").unwrap();
         let header = visual.debug_bounds("app-search-header").unwrap();
         assert!(
@@ -129,18 +129,20 @@ fn the_sidebar_tabs_keep_rounded_highlights_above_their_divider(cx: &mut TestApp
     use crate::shell::tests::rounded_highlight;
     assert!(rounded_highlight(
         window,
-        "classic-tab-sessions",
+        "classic-tab-explorer",
         0.1,
         visual
     ));
     let bar = visual.debug_bounds("classic-workspace-tabs").unwrap();
-    let sessions = visual.debug_bounds("classic-tab-sessions").unwrap();
+    let sessions = visual.debug_bounds("classic-tab-explorer").unwrap();
     assert!(sessions.top() > bar.top());
     assert!(sessions.bottom() < bar.bottom());
     let changes = visual.debug_bounds("classic-tab-changes").unwrap();
     visual.simulate_click(changes.center(), Default::default());
     visual.simulate_mouse_move(gpui::point(px(5.), px(5.)), None, Default::default());
     visual.run_until_parked();
+    // The thumb glides from Sessions to Changes; once settled it sits on Changes.
+    vorkspace_ui::clock::settle_animations(window, visual);
     assert!(rounded_highlight(
         window,
         "classic-tab-changes",
@@ -149,7 +151,7 @@ fn the_sidebar_tabs_keep_rounded_highlights_above_their_divider(cx: &mut TestApp
     ));
     assert!(!rounded_highlight(
         window,
-        "classic-tab-sessions",
+        "classic-tab-explorer",
         0.1,
         visual
     ));

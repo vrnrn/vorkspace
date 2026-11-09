@@ -758,6 +758,7 @@ impl TranscriptView {
             div()
                 .id(id)
                 .role(Role::Button)
+                .map(vorkspace_ui::theme::tab_reachable)
                 .aria_label(label)
                 .flex()
                 .items_center()
@@ -766,7 +767,7 @@ impl TranscriptView {
                 .px_2p5()
                 .rounded(px(radius::CONTAINER))
                 .text_size(px(13.))
-                .hover(|s| s.bg(content(0.05)))
+                .hover(|s| s.bg(vorkspace_ui::fluid::hover(0.05)))
                 .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
                 .child(icon(glyph, 14.))
                 .child(label)
@@ -834,7 +835,7 @@ impl TranscriptView {
                             .px_2p5()
                             .py_1()
                             .text_size(px(11.))
-                            .text_color(rgb(0xf87171))
+                            .text_color(vorkspace_ui::theme::danger())
                             .child(format!("Could not save note: {error}")),
                     )
                 },

@@ -303,7 +303,7 @@ impl gpui::Render for ColorPicker {
                             .border_1()
                             .border_color(content(0.1))
                             .bg(content(0.05))
-                            .font_family(vorkspace_ui::fonts::FIXED_FONT)
+                            .font_family(vorkspace_ui::fonts::MONO)
                             .child(self.hex.clone()),
                     ),
             )

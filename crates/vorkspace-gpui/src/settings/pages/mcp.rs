@@ -1,8 +1,4 @@
-use crate::settings::{
-    SettingsView,
-    management::Target,
-    widgets::{note, secondary_button},
-};
+use crate::settings::{SettingsView, management::Target, widgets::secondary_button};
 use gpui::{AnyElement, Context, SharedString, div, prelude::*, px};
 use vorkspace_ui::radius;
 use vorkspace_ui::theme::*;
@@ -101,6 +97,7 @@ impl SettingsView {
         page.push(
             div()
                 .mt_6()
+                .flex()
                 .child(self.segmented(
                     "mcp-filter",
                     "Filter MCP servers by provider",
@@ -121,13 +118,13 @@ impl SettingsView {
                     .role(gpui::Role::Alert)
                     .mt_3()
                     .text_size(px(12.))
-                    .text_color(gpui::rgb(0xf87171))
+                    .text_color(vorkspace_ui::theme::danger())
                     .child(error.clone())
                     .into_any_element(),
             );
         }
         if self.discovery_loading {
-            page.push(note("Checking servers…"));
+            page.push(super::super::widgets::page_hint("Checking servers…"));
             return page;
         }
         let servers = self
@@ -138,7 +135,15 @@ impl SettingsView {
             .cloned()
             .collect::<Vec<_>>();
         if servers.is_empty() {
-            page.push(note("No MCP servers configured for this provider."));
+            page.push(
+                super::super::widgets::empty_card(
+                    "globe",
+                    "No MCP servers",
+                    "Add one with + above, or in this provider's config.",
+                )
+                .mt_4()
+                .into_any_element(),
+            );
         } else {
             page.push(
                 div()
@@ -173,9 +178,18 @@ impl SettingsView {
                                     .flex_1()
                                     .child(
                                         div()
-                                            .text_size(px(13.))
-                                            .font_weight(gpui::FontWeight::MEDIUM)
-                                            .child(server.name.clone()),
+                                            .flex()
+                                            .items_center()
+                                            .gap_2()
+                                            .child(
+                                                div()
+                                                    .min_w_0()
+                                                    .truncate()
+                                                    .text_size(px(13.))
+                                                    .font_weight(gpui::FontWeight::MEDIUM)
+                                                    .child(server.name.clone()),
+                                            )
+                                            .child(status_badge(&server.status)),
                                     )
                                     .child(
                                         div()
@@ -183,7 +197,7 @@ impl SettingsView {
                                             .text_size(px(12.))
                                             .text_color(content(0.45))
                                             .child(format!(
-                                                "{} · {} · {} · {}",
+                                                "{} · {} · {}",
                                                 if server.provider == "claude_desktop" {
                                                     "Claude Desktop"
                                                 } else {
@@ -194,7 +208,6 @@ impl SettingsView {
                                                 },
                                                 server.scope,
                                                 server.transport,
-                                                server.status
                                             )),
                                     )
                                     .child(
@@ -202,7 +215,7 @@ impl SettingsView {
                                             .truncate()
                                             .text_size(px(11.))
                                             .text_color(content(0.35))
-                                            .child(server.path.display().to_string()),
+                                            .child(crate::panel_kit::home_relative(&server.path)),
                                     ),
                             );
                         if server.provider != "claude_desktop"
@@ -295,7 +308,9 @@ impl SettingsView {
                     .into_any_element(),
             );
         }
-        page.push(note("Live connection status is available for Claude Code."));
+        page.push(super::super::widgets::page_hint(
+            "Live connection status is available for Claude Code.",
+        ));
         page
     }
     pub(crate) fn refresh_mcp_health(&mut self, cx: &mut Context<Self>) {
@@ -405,4 +420,17 @@ impl SettingsView {
         })
         .detach();
     }
+}
+
+/// A server's state as a status badge, toned by what it asks of you.
+fn status_badge(status: &str) -> gpui::Div {
+    use vorkspace_ui::theme::{StatusColor, status as tone};
+    let color = match status {
+        "Connected" => tone(StatusColor::Success, 1.),
+        "Needs authentication" => tone(StatusColor::Warning, 1.),
+        "Failed" => tone(StatusColor::Danger, 1.),
+        "Disabled" => content(0.25),
+        _ => content(0.45),
+    };
+    vorkspace_ui::fluid::badge(status.to_owned(), color)
 }

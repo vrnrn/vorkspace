@@ -144,7 +144,6 @@ impl TranscriptView {
         let first =
             ix == 0 || !matches!(self.rows[ix - 1].body, Body::Launch(_) | Body::BotCard(_));
         let view = self.launches.get(&id).cloned();
-        let spin = self.started_at.elapsed().as_secs_f32();
         div()
             .w_full()
             .flex()
@@ -157,7 +156,7 @@ impl TranscriptView {
                     .px_4()
                     .pt(px(if first { 4. } else { 0. }))
                     .pb(px(if card_after { 8. } else { 12. }))
-                    .child(bot_cards::launch(id, view.as_ref(), spin, cx)),
+                    .child(bot_cards::launch(id, view.as_ref(), cx)),
             )
             .into_any_element()
     }
@@ -338,11 +337,12 @@ impl TranscriptView {
                                         .debug_selector(move || retry_selector.clone())
                                         .flex_shrink_0()
                                         .role(Role::Button)
+                                        .map(vorkspace_ui::theme::tab_reachable)
                                         .rounded(px(radius::SMALL))
                                         .px_1()
                                         .py(px(2.))
                                         .text_color(content(0.7))
-                                        .hover(|s| s.bg(content(0.08)))
+                                        .hover(|s| s.bg(vorkspace_ui::fluid::hover(0.08)))
                                         .child("Retry")
                                         .on_click(cx.listener(move |_, _, _, cx| {
                                             cx.emit(BotResponseAction::Queue {
@@ -359,11 +359,12 @@ impl TranscriptView {
                                         .debug_selector(move || discard_selector.clone())
                                         .flex_shrink_0()
                                         .role(Role::Button)
+                                        .map(vorkspace_ui::theme::tab_reachable)
                                         .rounded(px(radius::SMALL))
                                         .px_1()
                                         .py(px(2.))
                                         .text_color(content(0.7))
-                                        .hover(|s| s.bg(content(0.08)))
+                                        .hover(|s| s.bg(vorkspace_ui::fluid::hover(0.08)))
                                         .child("Discard")
                                         .on_click(cx.listener(move |_, _, _, cx| {
                                             cx.emit(BotResponseAction::Queue {

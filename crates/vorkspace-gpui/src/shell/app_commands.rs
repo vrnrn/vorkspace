@@ -1,7 +1,7 @@
 //! Operator uses the existing authenticated, per-session local app bridge.
 use super::*;
 use serde_json::{Value, json};
-use vorkspace_core::bot::bridge::{Call, Server};
+use vorkspace_core::bot::bridge::Call;
 
 enum Effect {
     None,
@@ -18,7 +18,7 @@ impl Shell {
         }) || self
             .bots
             .as_ref()
-            .is_some_and(|bots| bots.read(cx).app_project_allowed(caller, project, cx))
+            .is_some_and(|bots| bots.read(cx).app_project_allowed(caller, project))
     }
     pub(super) fn app_caller_allowed(&self, caller: i64, project: &str, cx: &App) -> bool {
         self.sessions.get(&caller).is_some_and(|view| {
@@ -31,7 +31,7 @@ impl Shell {
         }) || self
             .bots
             .as_ref()
-            .is_some_and(|bots| bots.read(cx).app_project_allowed(caller, project, cx))
+            .is_some_and(|bots| bots.read(cx).app_project_allowed(caller, project))
     }
     fn check_app_placement(
         &self,
@@ -151,7 +151,6 @@ impl Shell {
             self.workspace.place(id, target, edge);
             self.fit_active_pane_width();
             self.begin_pane_motion(before);
-            self.fit_sidebar(cx);
             self.activate_session(id, window, cx);
         } else if reveal {
             self.open(id, window, cx);
@@ -201,7 +200,10 @@ impl Shell {
                 .as_ref()
                 .is_some_and(|bots| bots.read(cx).protected_app_target(id, cx))
         {
-            return Err("Bot, habit, channel, hidden and orchestration sessions are protected from app commands".into());
+            return Err(
+                "Bot, habit, hidden and orchestration sessions are protected from app commands"
+                    .into(),
+            );
         }
         Ok(())
     }
@@ -478,32 +480,6 @@ impl Shell {
         cx.notify();
         Ok(value)
     }
-    pub(super) fn init_app_bridge(&mut self, cx: &mut Context<Self>) {
-        // GPUI's deterministic executor cannot be woken by an OS socket thread.
-        // Command tests exercise the same dispatcher directly without a listener.
-        if cx.is_test() {
-            return;
-        }
-        match Server::start() {
-            Ok((server, calls)) => {
-                self.app_bridge = Some(server);
-                cx.spawn(async move |this, cx| {
-                    while let Ok(call) = calls.recv().await {
-                        if this
-                            .update_in(cx, |this, window, cx| {
-                                this.handle_app_call(call, window, cx)
-                            })
-                            .is_err()
-                        {
-                            break;
-                        }
-                    }
-                })
-                .detach();
-            }
-            Err(error) => self.error = Some(format!("Operator app access: {error}")),
-        }
-    }
     fn finish_app_call(&mut self, call: Call, result: Result<Value, String>) {
         let saved = if vorkspace_core::bot::api::is_read_only(&call.action) {
             Ok(())
@@ -555,7 +531,12 @@ impl Shell {
         })
         .detach();
     }
-    fn handle_app_call(&mut self, call: Call, window: &mut Window, cx: &mut Context<Self>) {
+    pub(super) fn handle_app_call(
+        &mut self,
+        call: Call,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         let caller = self.sessions.get(&call.session).map(|v| v.read(cx));
         let Some(caller) = caller.filter(|v| v.settings.operator) else {
             let _ = call

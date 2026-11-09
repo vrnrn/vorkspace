@@ -77,14 +77,14 @@ npm run check
 
 The editor and formatter bundles are committed under `crates/vorkspace-gpui/assets/`; the Vox audio bundle lives under `crates/vorkspace-core/assets/`. Their maintained sources live in `embedded/editor` and `embedded/vox`. These files are embedded, so Cargo can compile without installing JavaScript dependencies. `npm run assets` installs the separate editor generator dependencies and rebuilds these bundles. Root npm dependencies are build/test tools only.
 
-The GPUI fork and a patched `block` crate live in `vendor/` and are edited directly. `cargo clippy` with `-D warnings` doesn't cover them, so check that a rebuild stays free of warnings after changing one. `npm run test:rust` runs the `block` tests separately because that crate sits outside the workspace.
+The GPUI fork and a patched `block` crate live in `vendor/` and are edited directly. `vorkspace_ui::fluid` uses the fork's `gpui::dither` and `gpui::vertical_dither` APIs, which draw a 4×4 Bayer pattern in the Metal quad shader. `cargo clippy` with `-D warnings` doesn't cover these vendored crates, so check that a rebuild stays free of warnings after changing one. `npm run test:rust` runs the `block` tests separately because that crate sits outside the workspace.
 
 ## Build output and disk
 
 Cargo keeps every build's output and never deletes superseded files, so a busy checkout grows by gigabytes a day unless something prunes it. The repository bounds it in four ways:
 
-- **Light debug info.** The `dev` profile, used by plain `cargo build`, `cargo test` and editor tooling, keeps file-and-line tables for workspace crates and no debug info for dependencies. `native-dev` and `verify` carry none; `verify` also skips incremental caches because checks compile every target at once.
-- **Pruning after builds.** `scripts/desktop/prune-target.mjs` keeps the two newest linked binaries and incremental caches per crate in each profile and removes the rest; libraries stay. `npm run dev` runs it after each successful build, `npm run check:fast` and `npm run test:rust` after their tests, and `npm run target:prune` on demand.
+- **Light debug info.** The `dev` profile, used by plain `cargo build`, `cargo test` and editor tooling, keeps file-and-line tables for workspace crates and no debug info for dependencies. `native-dev` handles the interactive development app with incremental compilation enabled; `verify` disables incremental compilation so check and test runs do not leave duplicate incremental caches behind. Both carry no debug info.
+- **Pruning after builds.** `scripts/desktop/prune-target.mjs` keeps the two newest linked binaries and incremental caches per crate in each profile (including target-triple and sub-target directories) and removes the rest along with stale `.rcgu.o` debug objects; libraries stay. `npm run dev` runs it after each successful build, `npm run check:fast` and `npm run test:rust` after their checks, and `npm run target:prune` on demand.
 - **One output directory per checkout.** Do not point a task at its own `CARGO_TARGET_DIR`; that duplicates every dependency.
 - **Warm worktrees.** Seed new worktrees as described below rather than building them cold.
 

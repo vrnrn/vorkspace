@@ -1,13 +1,47 @@
 //! SessionFiltersMenu.tsx: persisted status, time and provider checkboxes.
 use super::*;
-use vorkspace_core::session_filters::{Status, TimeFilter};
+use vorkspace_core::session_filters::{BotFilter, TimeFilter};
 
 impl Shell {
+    pub(super) fn effective_session_filters(
+        &self,
+        cx: &App,
+    ) -> vorkspace_core::session_filters::Filters {
+        let mut filters = self.workspace.session_filters.clone();
+        let projects = self.workspace.vorkspace_projects();
+        if projects.len() <= 1 {
+            filters.hidden_projects.clear();
+        } else {
+            let keys: std::collections::HashSet<String> = projects
+                .iter()
+                .map(|p| vorkspace_core::files::path_key(p))
+                .collect();
+            filters.hidden_projects.retain(|k| keys.contains(k));
+        }
+        if let BotFilter::Bot(ref bot_id) = filters.bot {
+            let visible = self.bots.as_ref().is_some_and(|manager| {
+                let m = manager.read(cx);
+                !m.vorkspace_hidden.contains(bot_id)
+                    && m.roster.bots.iter().any(|b| &b.id == bot_id)
+            });
+            if !visible {
+                filters.bot = BotFilter::Any;
+            }
+        }
+        filters
+    }
+
+    pub(super) fn session_filters_active(&self, cx: &App) -> bool {
+        self.effective_session_filters(cx)
+            .active(self.workspace.preferences.show_archived)
+    }
+
     pub(super) fn filter_menu_items(&self, cx: &App) -> Vec<MenuItem> {
-        let filters = &self.workspace.session_filters;
+        let filters = self.effective_session_filters(cx);
         let mut items = vec![
             MenuAction::new("archived", "Archived")
                 .checked(self.workspace.preferences.show_archived)
+                .keep_open()
                 .into(),
             MenuItem::Header("Status".into()),
         ];
@@ -32,15 +66,19 @@ impl Shell {
                     .into(),
             );
         }
+        let projects: Vec<String> = self.workspace.vorkspace_projects();
+        let keys: std::collections::HashSet<String> = projects
+            .iter()
+            .map(|p| vorkspace_core::files::path_key(p))
+            .collect();
         let providers: Vec<_> = Kind::ALL
             .into_iter()
             .filter(|kind| {
                 self.order.iter().any(|id| {
                     let session = self.session_metadata(*id, cx);
-                    session.summary.cwd == self.workspace.project
+                    keys.contains(&vorkspace_core::files::path_key(&session.summary.cwd))
                         && session.summary.has_messages
                         && session.summary.provider == kind.id()
-                        && self.in_sidebar_worktree_scope(*id, cx)
                 })
             })
             .collect();
@@ -56,7 +94,50 @@ impl Shell {
                 );
             }
         }
-        if filters.active(self.workspace.preferences.show_archived) {
+        if projects.len() > 1 {
+            items.push(MenuItem::Header("Project".into()));
+            for path in &projects {
+                let key = vorkspace_core::files::path_key(path);
+                items.push(
+                    MenuAction::new(format!("project:{key}"), self.project_label(path))
+                        .icon("folder")
+                        .checked(!filters.hidden_projects.contains(&key))
+                        .keep_open()
+                        .into(),
+                );
+            }
+        }
+        items.push(MenuItem::Header("Bot".into()));
+        // Single choice: any session, one Bot's, or ones no Bot started.
+        let mut bots = vec![(BotFilter::Any, "bot:any".to_string(), "Any".to_string())];
+        if let Some(manager) = &self.bots {
+            let hidden = &manager.read(cx).vorkspace_hidden;
+            bots.extend(
+                manager
+                    .read(cx)
+                    .roster
+                    .bots
+                    .iter()
+                    .filter(|bot| !hidden.contains(&bot.id))
+                    .map(|bot| {
+                        (
+                            BotFilter::Bot(bot.id.clone()),
+                            format!("bot:id:{}", bot.id),
+                            bot.label(),
+                        )
+                    }),
+            );
+        }
+        bots.push((BotFilter::NoBot, "bot:none".into(), "No Bot".into()));
+        for (value, id, label) in bots {
+            items.push(
+                MenuAction::new(id, label)
+                    .checked(filters.bot == value)
+                    .keep_open()
+                    .into(),
+            );
+        }
+        if self.session_filters_active(cx) {
             items.push(MenuItem::Separator);
             items.push(MenuAction::new("clear", "Clear filters").keep_open().into());
         }
@@ -79,6 +160,17 @@ impl Shell {
             _ => {
                 if let Some(provider) = action.strip_prefix("provider:") {
                     filters.toggle_provider(provider);
+                } else if let Some(key) = action.strip_prefix("project:") {
+                    filters.toggle_project(key);
+                } else if let Some(bot) = action.strip_prefix("bot:") {
+                    filters.bot = match bot {
+                        "some" => BotFilter::AnyBot,
+                        "none" => BotFilter::NoBot,
+                        _ => match bot.strip_prefix("id:") {
+                            Some(id) => BotFilter::Bot(id.into()),
+                            None => BotFilter::Any,
+                        },
+                    };
                 } else if let Some(time) = action.strip_prefix("time:").and_then(|id| {
                     TimeFilter::OPTIONS
                         .iter()
@@ -98,20 +190,6 @@ impl Shell {
         self.invalidate_chrome(cx);
         self.persist(cx);
         cx.notify();
-    }
-
-    pub(super) fn filter_session(&self, id: i64, start: u64, cx: &App) -> bool {
-        let session = self.session_metadata(id, cx);
-        self.workspace.session_filters.matches(
-            session.summary,
-            Status {
-                working: session.busy,
-                needs_approval: session.needs_approval(),
-                done: self.unseen_finished.contains(&id),
-            },
-            start,
-            self.workspace.preferences.show_archived,
-        )
     }
 }
 
@@ -173,11 +251,9 @@ mod tests {
                 assert!(state.session_filters.status.working);
             })
             .unwrap();
-        let row = visual.debug_bounds("menu-action-clear").unwrap();
-        visual.simulate_click(row.center(), Default::default());
-        visual.run_until_parked();
         window
             .update(visual, |shell, _, cx| {
+                shell.change_session_filter("clear", cx);
                 assert_eq!(shell.sidebar_session_ids(cx).len(), 2);
                 shell.sessions[&a].update(cx, |s, _| s.busy = false);
                 shell.unseen_finished.insert(a);
@@ -192,6 +268,36 @@ mod tests {
                 assert_eq!(shell.sidebar_session_ids(cx), [a]);
                 shell.sessions[&a].update(cx, |s, _| s.summary.updated_at = 1);
                 assert!(shell.sidebar_session_ids(cx).is_empty());
+            })
+            .unwrap();
+    }
+
+    #[gpui::test]
+    fn working_filter_preserves_running_remote_sessions_without_materializing_them(
+        cx: &mut TestAppContext,
+    ) {
+        let (window, _, _) = super::super::tests::window(cx);
+        window
+            .update(cx, |shell, _, cx| {
+                let project = shell.workspace.project.clone();
+                let mut remote_summary = locked(&shell.store)
+                    .unwrap()
+                    .create("codex", &project)
+                    .unwrap();
+                remote_summary.has_messages = true;
+                remote_summary.updated_at = vorkspace_core::time::now_ms();
+                let remote_id = remote_summary.id;
+                shell.session_summaries.insert(remote_id, remote_summary);
+                shell.order.push(remote_id);
+                shell.remote_marks.insert(remote_id, (true, false));
+                assert!(!shell.sessions.contains_key(&remote_id));
+
+                shell.change_session_filter("working", cx);
+                assert!(shell.sidebar_session_ids(cx).contains(&remote_id));
+                assert!(
+                    !shell.sessions.contains_key(&remote_id),
+                    "filtering running remote sessions must stay metadata-only"
+                );
             })
             .unwrap();
     }

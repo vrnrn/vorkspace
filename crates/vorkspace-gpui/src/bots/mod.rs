@@ -3,12 +3,10 @@
 pub(crate) use crate::avatar;
 use vorkspace_ui::radius;
 pub(crate) mod cards;
-mod channels;
 mod creation;
 mod document_pane;
 mod effects;
 mod files;
-mod filters;
 mod habit_panel;
 #[cfg(test)]
 mod header_tests;
@@ -91,7 +89,6 @@ pub(crate) struct Bots {
     pub(crate) team_histories: TeamHistories,
     pub(crate) conversation_views: BotConversations,
     retired_teams: HashSet<String>,
-    channels: channels::ChannelUi,
     parent_window: Option<gpui::AnyWindowHandle>,
     owner: std::rc::Rc<dyn host_api::BotsHost>,
     store: Database,
@@ -99,6 +96,9 @@ pub(crate) struct Bots {
     prefs: vorkspace_ui::preferences::Preferences,
     pub(crate) roster: Roster,
     pub(crate) roster_loaded: bool,
+    /// Bots placed in another vorkspace, hidden from this window's rail.
+    /// A Bot created a moment ago is not here, so it shows at once.
+    pub(crate) vorkspace_hidden: HashSet<String>,
     pub(crate) active: Option<String>,
     chats: HashMap<String, Entity<Conversation>>,
     bridge: Option<bot::bridge::Server>,
@@ -162,7 +162,6 @@ pub(crate) struct Bots {
     /// instead of being steered into it.
     held: HashSet<String>,
     card_refresh: HashMap<String, u64>,
-    session_filters: filters::Filters,
 }
 impl EventEmitter<Changed> for Bots {}
 impl EventEmitter<TabOpened> for Bots {}
@@ -191,23 +190,8 @@ impl Bots {
                 );
             }
         }
-        for channel in &self.channels.state.channels {
-            if channel.user_read_only(&self.roster) {
-                for (id, session) in &channel.member_sessions {
-                    if let Some(actor) = self.roster.get(id) {
-                        histories.insert(
-                            *session,
-                            TeamHistory {
-                                actor: actor.clone(),
-                                parent: self.roster.parent_of(id).cloned(),
-                            },
-                        );
-                    }
-                }
-            }
-        }
         *self.team_histories.borrow_mut() = histories;
-        for view in self.chats.values().chain(self.channels.views.values()) {
+        for view in self.chats.values() {
             self.conversation_views
                 .borrow_mut()
                 .insert(view.read(cx).summary.id, view.downgrade());
@@ -242,7 +226,6 @@ impl Bots {
     ) -> Option<Entity<Conversation>> {
         self.chats
             .values()
-            .chain(self.channels.views.values())
             .find(|view| view.read(cx).summary.id == id)
             .cloned()
     }
@@ -253,7 +236,6 @@ impl Bots {
         self.chats
             .values()
             .chain(self.running.values().map(|r| &r.view))
-            .chain(self.channels.views.values())
             .map(|v| {
                 let s = &v.read(cx).summary;
                 (
@@ -267,34 +249,10 @@ impl Bots {
             .collect()
     }
     pub(crate) fn stop_session(&mut self, id: i64, cx: &mut Context<Self>) {
-        let channel = self
-            .channels
-            .views
-            .iter()
-            .find(|(_, v)| v.read(cx).summary.id == id)
-            .map(|(key, _)| key.clone());
-        if let Some((channel, bot)) = channel {
-            let running = self
-                .channels
-                .state
-                .get(&channel)
-                .and_then(|c| {
-                    c.deliveries
-                        .iter()
-                        .find(|d| d.bot == bot && d.state == "running")
-                })
-                .map(|d| d.id.clone());
-            if let Some(delivery) = running {
-                self.stop_channel_delivery(&channel, &delivery, cx);
-                return;
-            }
-        }
-
         if let Some(view) = self
             .chats
             .values()
             .chain(self.running.values().map(|r| &r.view))
-            .chain(self.channels.views.values())
             .find(|v| v.read(cx).summary.id == id)
         {
             view.update(cx, |v, cx| v.stop_if_busy(cx));
@@ -422,30 +380,9 @@ impl Bots {
             .flat_map(|m| m.outbox.iter().map(|q| q.id.clone()))
             .collect();
         let held = roster.held_messages.clone();
-        let session_filters = locked(&store)
-            .ok()
-            .and_then(|s| s.setting("bot-session-filters").ok().flatten())
-            .and_then(|s| serde_json::from_str(&s).ok())
-            .unwrap_or_default();
         let manager = cx.entity();
         let habit_panel = cx.new(|cx| habit_panel::HabitPanel::new(manager, cx));
-        let mut channel_state =
-            locked(&store).and_then(|db| vorkspace_core::bot::channels::Channels::load(&db));
-        if let Ok(state) = &mut channel_state {
-            state.recover();
-        }
-        let channel_error = channel_state.as_ref().err().cloned();
         let mut this = Self {
-            channels: channels::ChannelUi {
-                state: channel_state.unwrap_or_default(),
-                read_through: locked(&store)
-                    .ok()
-                    .and_then(|db| db.setting(channels::READ_KEY).ok().flatten())
-                    .and_then(|raw| serde_json::from_str(&raw).ok())
-                    .unwrap_or_default(),
-                load_error: channel_error.clone(),
-                ..Default::default()
-            },
             parent_window: None,
             owner,
             store,
@@ -453,6 +390,7 @@ impl Bots {
             prefs,
             roster,
             roster_loaded: roster_error.is_none(),
+            vorkspace_hidden: HashSet::new(),
             active: None,
             chats: HashMap::new(),
             bridge,
@@ -463,7 +401,7 @@ impl Bots {
             loading_chats: HashSet::new(),
             awaiting_creation: HashSet::new(),
             work: work::Cache::default(),
-            error: roster_error.or(channel_error),
+            error: roster_error,
             notice_region,
             habit_panel,
             open_islands: HashSet::new(),
@@ -514,7 +452,6 @@ impl Bots {
             dispatch_claims: HashSet::new(),
             held,
             card_refresh: HashMap::new(),
-            session_filters,
         };
         if let Some(rx) = rx {
             this._bridge_task = Some(cx.spawn(async move |this, cx| {
@@ -565,28 +502,16 @@ impl Bots {
     pub(crate) fn protected_app_target(&self, id: i64, cx: &App) -> bool {
         // Sidebar visibility is a display choice. Only internal identities
         // (and their active owners) are protected from ordinary app controls.
-        self.is_bot_session(id)
-            || self.running.contains_key(&id)
-            || self
-                .channels
-                .views
-                .values()
-                .any(|view| view.read(cx).summary.id == id)
+        let _ = cx;
+        self.is_bot_session(id) || self.running.contains_key(&id)
     }
-    pub(crate) fn app_project_allowed(&self, caller: i64, project: &str, cx: &App) -> bool {
+    pub(crate) fn app_project_allowed(&self, caller: i64, project: &str) -> bool {
         self.roster
             .of_session(caller)
             .or_else(|| {
                 self.running
                     .get(&caller)
                     .and_then(|run| self.roster.get(&run.bot))
-            })
-            .or_else(|| {
-                self.channels
-                    .views
-                    .iter()
-                    .find(|(_, view)| view.read(cx).summary.id == caller)
-                    .and_then(|((_, bot), _)| self.roster.get(bot))
             })
             .is_some_and(|actor| {
                 self.roster.is_active(&actor.id)
@@ -597,6 +522,7 @@ impl Bots {
                         .is_some_and(|owner| owner.works_on(project))
             })
     }
+    #[cfg(test)]
     pub(crate) fn hidden_session(&self, id: i64) -> bool {
         self.is_bot_session(id)
             || self.roster.bots.iter().any(|m| {
@@ -616,9 +542,6 @@ impl Bots {
             self.active = None;
             self.creation = None;
             self.picker = None;
-        }
-        if !self.prefs.channels {
-            self.close_classic_channels(cx);
         }
         cx.notify();
     }
@@ -680,7 +603,6 @@ impl Bots {
             .chats
             .values()
             .chain(self.running.values().map(|run| &run.view))
-            .chain(self.channels.views.values())
         {
             if view.read(cx).summary.provider == kind.id()
                 && view.read(cx).settings.account.id == id
@@ -997,10 +919,6 @@ impl Bots {
                         }
                         status = next;
                         this.dispatch(&source, cx);
-                        if this.channels.inspecting.as_ref().is_some_and(|key| key.1 == source && !this.channels.views.contains_key(key)) || this.channels.state.channels.iter().any(|c| {
-                            !this.channels.views.contains_key(&(c.id.clone(), source.clone()))
-                                && c.deliveries.iter().any(|d| d.bot == source && d.state == "queued")
-                        }) { this.channel_tick(cx); }
                     }));
                 let source = id.clone();
                 this.observations.push(cx.subscribe(
@@ -1064,7 +982,6 @@ impl Bots {
                 }
                 this.save(cx);
                 this.dispatch(&id, cx);
-                this.channel_tick(cx);
             });
         })
         .detach();
@@ -1552,11 +1469,7 @@ impl Bots {
         self.save_open_file(cx);
         self.route = None;
         self.habit_panel.update(cx, |panel, cx| panel.reset(cx));
-        self.fields.retain(|k, _| {
-            k.starts_with("file:")
-                || k.starts_with("channel-")
-                || k.starts_with("bot-session-search-")
-        });
+        self.fields.retain(|k, _| k.starts_with("file:"));
         self.files = None;
         self.memory_editor = None;
         self.memory_topics.clear();
@@ -1591,14 +1504,13 @@ impl Bots {
             window.focus(&self.settings_focus, cx);
         }
     }
-    /// Focus this Bot's chat or modal even when a Channels pane is also open.
+    /// Focus this Bot's chat or modal.
     pub(crate) fn focus_bot_pane(&self, id: &str, window: &mut Window, cx: &mut Context<Self>) {
         if self.active.as_deref() == Some(id) {
             self.focus_active(window, cx);
         }
     }
     pub(crate) fn close(&mut self, cx: &mut Context<Self>) {
-        self.close_classic_channels(cx);
         self.park_workspace_context(cx);
     }
     fn park_workspace_context(&mut self, cx: &mut Context<Self>) {
@@ -1609,6 +1521,25 @@ impl Bots {
             self.picker = None;
             self.save(cx);
         }
+        cx.notify();
+    }
+    /// Opens the current Bot's look editor in its settings, for captures.
+    #[cfg(test)]
+    pub(crate) fn open_look_for_capture(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if let Some(id) = self.active.clone() {
+            self.settings = Some(SettingsSection::General);
+            self.open_settings_look(&id, window, cx);
+        }
+    }
+    /// Shows one settings section, for captures of each page.
+    #[cfg(test)]
+    pub(crate) fn show_settings_section(&mut self, section: &str, cx: &mut Context<Self>) {
+        self.settings = Some(match section {
+            "soul" => SettingsSection::Soul,
+            "memory" => SettingsSection::Memory,
+            "habits" => SettingsSection::Habits,
+            _ => SettingsSection::General,
+        });
         cx.notify();
     }
     pub(crate) fn dismiss_settings(&mut self, window: &mut Window, cx: &mut Context<Self>) -> bool {
@@ -1692,6 +1623,7 @@ impl Bots {
             .iter()
             .filter(|m| !m.is_minion())
             .filter(|m| project.as_ref().is_none_or(|p| m.works_on(p)))
+            .filter(|m| !self.vorkspace_hidden.contains(&m.id))
             .cloned()
             .collect();
         self.rail_ids = roster.iter().map(|m| m.id.clone()).collect();
@@ -1718,8 +1650,7 @@ impl Bots {
             .child(heading)
             .when(!has, |d| {
                 d.child(
-                    div()
-                        .id("new-bot-row")
+                    vorkspace_ui::theme::keyboard_reachable(div().id("new-bot-row"), true)
                         .debug_selector(|| "new-bot".into())
                         .role(Role::Button)
                         .aria_label("New bot")
@@ -1732,7 +1663,10 @@ impl Bots {
                         .text_size(px(14.))
                         .text_color(content(0.5))
                         .relative()
-                        .hover(|s| s.bg(content(0.08)).text_color(content(1.)))
+                        .hover(|s| {
+                            s.bg(vorkspace_ui::fluid::hover(0.08))
+                                .text_color(content(1.))
+                        })
                         .child(icon("plus", 16.))
                         .child("New bot")
                         .on_click(cx.listener(move |this, _, w, cx| {
@@ -1799,7 +1733,7 @@ impl Bots {
                     .gap_2()
                     .opacity(if active { 1. } else { 0.65 })
                     .when(active, |d| d.bg(content(0.1)))
-                    .hover(|s| s.bg(content(0.08)).opacity(1.))
+                    .hover(|s| s.bg(vorkspace_ui::fluid::hover(0.08)).opacity(1.))
                     .child(avatar::bot_avatar(&bot, state, 16., false))
                     .child(
                         div()
@@ -1881,20 +1815,13 @@ impl Bots {
             }))
             // BotRailSection owns its menu and background dialog; the Bot
             // view paints them instead while it is open.
-            .when(self.current().is_none() && !self.channels.open, |d| {
+            .when(self.current().is_none(), |d| {
                 d.children(self.options_surface(cx))
             })
             .into_any_element()
     }
 }
 impl Bots {
-    pub(crate) fn render_channels_pane(
-        &mut self,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) -> gpui::AnyElement {
-        self.channels_view(window, cx)
-    }
     pub(crate) fn render_bot_pane(
         &mut self,
         id: &str,
@@ -2038,9 +1965,6 @@ impl Bots {
 
 impl gpui::Render for Bots {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        if self.channels.open {
-            return self.channels_view(window, cx);
-        }
         let Some(id) = self.active.clone() else {
             return div().into_any_element();
         };

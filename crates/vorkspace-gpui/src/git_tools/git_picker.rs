@@ -451,7 +451,7 @@ impl gpui::Render for GitPicker {
                         .debug_selector(|| "git-picker-error".into())
                         .p(px(10.))
                         .text_size(px(11.))
-                        .text_color(gpui::rgb(0xf87171))
+                        .text_color(vorkspace_ui::theme::danger())
                         .child(error),
                 )
             })

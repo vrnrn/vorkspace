@@ -9,7 +9,7 @@ mod tests;
 type DirectSubmission = (String, String, Vec<PathBuf>, std::ops::Range<usize>, bool);
 #[derive(Default)]
 pub(super) struct ChatState {
-    /// Standalone Bot chats opt into identity decoration. Channels keep None;
+    /// Standalone Bot chats opt into identity decoration; others keep None.
     /// Some(false) retains the header but freezes it beneath a host modal.
     pub(super) header_animation: Option<bool>,
     pub(super) header: Option<Entity<crate::bot_header::ChatHeader>>,
@@ -336,9 +336,6 @@ impl Conversation {
             && self.settings.usage_limit.is_none()
             && !self.account_switching
     }
-    pub(crate) fn bot_configuration_ready(&self) -> bool {
-        self.history_ready() && self.loaded && !self.account_switching
-    }
     pub(crate) fn bot_settled(&self) -> bool {
         !self.busy && !self.stopping
     }
@@ -348,62 +345,6 @@ impl Conversation {
         let mut settings = self.settings.clone();
         settings.model = self.model.clone();
         settings
-    }
-    /// Channel history belongs to its own session; execution choices belong to
-    /// the member Bot. Refresh them only at the boundary of a new idle turn.
-    pub(crate) fn inherit_bot_configuration(
-        &mut self,
-        provider: Kind,
-        settings: &Settings,
-        cx: &mut Context<Self>,
-    ) -> bool {
-        if !self.bot_configuration_ready() || self.busy || self.stopping {
-            return false;
-        }
-        if (self.summary.provider != provider.id() || self.model != settings.model)
-            && !self.apply_model_pick(&ModelPicked(provider, settings.model.clone()), cx)
-        {
-            return false;
-        }
-        let account_changed = self.settings.account != settings.account;
-        if account_changed {
-            // Provider resume IDs are account-owned. Keep the local history and
-            // carry a recap into a fresh provider thread under the new account.
-            if self.summary.provider_id.is_some() {
-                if let Err(error) = locked(&self.store).and_then(|store| {
-                    store.reset_provider_id_if(self.summary.id, self.summary.provider_id.as_deref())
-                }) {
-                    self.status = error;
-                    cx.notify();
-                    return false;
-                }
-                self.summary.provider_id = None;
-                self.settings.handoff = Some(vorkspace_core::agent::Handoff {
-                    from: self.summary.provider.clone(),
-                    brief: vorkspace_core::response::handoff(self.bot_rows(cx)),
-                });
-            }
-            self.settings.usage_limit = None;
-            self.status = "Ready".into();
-            self.catalog.clear();
-            self.resolved_model = None;
-        }
-        self.settings.account = settings.account.clone();
-        self.settings.access = settings.access;
-        self.settings.model = settings.model.clone();
-        self.settings.effort = settings.effort.clone();
-        self.settings.fast = settings.fast;
-        self.settings.service_tier = settings.service_tier.clone();
-        self.settings.thinking = settings.thinking;
-        self.settings.model_settings = settings.model_settings.clone();
-        self.settings.plan = settings.plan;
-        self.settings.operator = settings.operator;
-        self.settings.orchestrator = settings.orchestrator;
-        if account_changed {
-            self.attach_account(cx);
-        }
-        self.save_settings(cx);
-        self.bot_ready()
     }
     pub(crate) fn bot_dispatch(&mut self, message: &Message, cx: &mut Context<Self>) -> bool {
         self.bot_dispatch_with_mode(message, None, cx)
@@ -642,9 +583,6 @@ impl Conversation {
     pub(crate) fn bot_model(&self) -> Option<String> {
         self.model.clone()
     }
-    pub(crate) fn branch_name(&self) -> Option<&str> {
-        self.branch.as_deref()
-    }
     pub(crate) fn bot_model_label(&self) -> SharedString {
         self.model_label()
     }
@@ -805,6 +743,58 @@ impl Conversation {
         cx.notify();
         Ok(())
     }
+    fn can_fill_starter(&self, cx: &App) -> bool {
+        let input = self.input.read(cx);
+        input.content.is_empty() && !input.is_composing()
+    }
+
+    /// First messages for an empty conversation: a click fills the composer
+    /// for editing rather than sending.
+    pub(super) fn starters(
+        &self,
+        id: &'static str,
+        starters: Vec<String>,
+        cx: &mut Context<Self>,
+    ) -> gpui::Div {
+        let can_fill = self.can_fill_starter(cx);
+        div()
+            .flex()
+            .flex_wrap()
+            .justify_center()
+            .gap_2()
+            .max_w(px(520.))
+            .children(starters.into_iter().enumerate().map(|(ix, text)| {
+                let fill = text.clone();
+                vorkspace_ui::theme::keyboard_reachable(div().id((id, ix)), can_fill)
+                    .debug_selector(move || format!("{id}-{ix}"))
+                    .role(gpui::Role::Button)
+                    .aria_label(text.clone())
+                    .px_3()
+                    .py(px(6.))
+                    .rounded_full()
+                    .border_1()
+                    .border_color(content(0.12))
+                    .text_size(px(12.))
+                    .text_color(content(0.75))
+                    .when(can_fill, |d| {
+                        d.cursor_pointer().hover(|s| {
+                            s.bg(vorkspace_ui::fluid::hover(0.06))
+                                .text_color(content(1.))
+                        })
+                    })
+                    .when(!can_fill, |d| d.opacity(0.45))
+                    .child(text)
+                    .on_click(cx.listener(move |this, _, window, cx| {
+                        if !this.can_fill_starter(cx) {
+                            return;
+                        }
+                        this.input
+                            .update(cx, |input, cx| input.set_text(fill.clone(), cx));
+                        window.focus(&this.input.focus_handle(cx), cx);
+                        cx.notify();
+                    }))
+            }))
+    }
     pub(super) fn render_bot(&mut self, window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
         let command = if self.follow_ups.draft_selected {
             Some(input::Command::Draft)
@@ -822,8 +812,66 @@ impl Conversation {
         let bot = self.settings.bot.as_ref().unwrap().bot.clone();
         // The fixed Bot header owns identity; the empty state only offers help.
         let body = if !self.summary.has_messages {
-            let greeting = div().flex().flex_col().items_center().justify_center().px_6().py_12()
-                .child(div().mt_3().max_w(px(384.)).text_center().text_size(px(13.)).line_height(px(21.)).text_color(content(0.5)).child(if bot.projects.is_empty(){"Add the projects I should work on in my settings, or just ask me something.".into()}else{format!("I can see every session, note and folder in {}. Ask what’s going on, or hand me work.",bot.projects.iter().map(|p|std::path::Path::new(p).file_name().unwrap_or_default().to_string_lossy()).collect::<Vec<_>>().join(", "))}));
+            let project = bot
+                .projects
+                .first()
+                .map(|p| {
+                    std::path::Path::new(p)
+                        .file_name()
+                        .unwrap_or_default()
+                        .to_string_lossy()
+                        .into_owned()
+                })
+                .unwrap_or_default();
+            let line = if bot.projects.is_empty() {
+                "Add the projects I should work on in my settings, or just ask me something."
+                    .to_owned()
+            } else {
+                format!(
+                    "I can see every session, note and folder in {}. Ask what’s going on, or hand me work.",
+                    bot.projects
+                        .iter()
+                        .map(|p| std::path::Path::new(p)
+                            .file_name()
+                            .unwrap_or_default()
+                            .to_string_lossy()
+                            .into_owned())
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                )
+            };
+            // A first message is the hardest; offer three that show what a
+            // Bot is for. A click fills the composer, so it can be edited.
+            let starters: Vec<String> = if project.is_empty() {
+                vec![
+                    "What can you help me with?".into(),
+                    "Set up a morning digest habit".into(),
+                ]
+            } else {
+                vec![
+                    format!("What changed in {project} today?"),
+                    "Summarize the sessions still running".into(),
+                    "Plan my next task".into(),
+                ]
+            };
+            let greeting = div()
+                .flex()
+                .flex_col()
+                .items_center()
+                .justify_center()
+                .px_6()
+                .py_12()
+                .child(
+                    div()
+                        .mt_3()
+                        .max_w(px(384.))
+                        .text_center()
+                        .text_size(px(13.))
+                        .line_height(px(21.))
+                        .text_color(content(0.5))
+                        .child(line),
+                )
+                .child(self.starters("bot-starter", starters, cx).mt_5());
             div()
                 .flex_1()
                 .flex()
@@ -1095,7 +1143,7 @@ impl Conversation {
                     MenuAction::new(format!("tier:{id}"), name.clone())
                         .checked(self.selected_tier() == Some(id.as_str()))
                 }));
-                group(&mut items, "Service Tier", tiers);
+                group(&mut items, "Service tier", tiers);
             }
             if items
                 .iter()
@@ -1139,7 +1187,7 @@ impl Conversation {
                 let (glyph, label, value) = if model.efforts.is_empty() {
                     (
                         "zap",
-                        "Service Tier",
+                        "Service tier",
                         self.selected_tier()
                             .and_then(|id| model.tiers.iter().find(|(t, _)| t == id))
                             .map_or("Standard".into(), |(_, name)| name.clone()),

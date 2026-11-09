@@ -66,7 +66,7 @@ fn composer_labels_use_the_saved_model_effort_and_the_catalog_default(cx: &mut T
             view.settings.effort = Some("xhigh".into());
             view.catalog.clear();
             assert_eq!(view.model_label(), "GPT-6.1-Sol");
-            assert_eq!(view.trigger_effort_label().as_deref(), Some("Extra High"));
+            assert_eq!(view.trigger_effort_label().as_deref(), Some("Extra high"));
             view.catalog.push(Model {
                 alias_target: None,
                 id: "gpt-6.1-sol".into(),
@@ -80,7 +80,7 @@ fn composer_labels_use_the_saved_model_effort_and_the_catalog_default(cx: &mut T
                 controls: Vec::new(),
             });
             assert_eq!(view.model_label(), "GPT-6.1 Sol");
-            assert_eq!(view.trigger_effort_label().as_deref(), Some("Extra High"));
+            assert_eq!(view.trigger_effort_label().as_deref(), Some("Extra high"));
             view.model = None;
             view.settings.effort = None;
             assert_eq!(view.model_label(), "GPT-6.1 Sol");

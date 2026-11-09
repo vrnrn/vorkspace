@@ -10,15 +10,14 @@ impl Shell {
         self.bots.as_ref().unwrap().clone()
     }
     pub(super) fn bot_active(&self, _cx: &App) -> bool {
+        self.workspace.active.is_some_and(|id| self.is_bot_pane(id))
+    }
+    /// A Bot pane: the surface a project click leaves behind.
+    pub(crate) fn is_bot_pane(&self, id: i64) -> bool {
         self.workspace
-            .active
-            .and_then(|id| self.workspace.app_panes.get(&id))
-            .is_some_and(|pane| {
-                matches!(
-                    pane.content,
-                    crate::workspace::AppPane::Bot(_) | crate::workspace::AppPane::Channels
-                )
-            })
+            .app_panes
+            .get(&id)
+            .is_some_and(|pane| matches!(pane.content, crate::workspace::AppPane::Bot(_)))
     }
     pub(super) fn workspace_bot_context(&self) -> Option<String> {
         if !self.workspace.preferences.bots {
@@ -32,7 +31,11 @@ impl Shell {
         leaves
             .iter()
             .find_map(|id| match &self.workspace.app_panes.get(id)?.content {
-                crate::workspace::AppPane::Bot(id) => Some(id.clone()),
+                crate::workspace::AppPane::Bot(id)
+                    if !self.workspace.bot_hidden_in_vorkspace(id) =>
+                {
+                    Some(id.clone())
+                }
                 _ => None,
             })
     }
@@ -41,18 +44,13 @@ impl Shell {
             .iter()
             .map(|&id| {
                 let metadata = self.session_metadata(id, cx);
-                let live = self.sessions.get(&id).map(|v| v.read(cx));
                 BotSession {
                     id,
                     title: metadata.summary.title.clone(),
                     cwd: metadata.summary.cwd.clone(),
                     busy: metadata.busy,
                     has_messages: metadata.summary.has_messages,
-                    archived: metadata.summary.archived,
-                    updated_at: metadata.summary.updated_at,
                     needs_input: metadata.needs_approval(),
-                    branch: live.and_then(|v| v.branch_name()).map(str::to_owned),
-                    model: live.map(|v| v.bot_model_label()).unwrap_or_default(),
                 }
             })
             .collect()
@@ -214,14 +212,6 @@ impl BotsHost for gpui::WeakEntity<Shell> {
             shell.app_notes_action(caller, projects, action, input, true, cx)
         })
     }
-    fn open_channels(&self, window: &mut Window, cx: &mut App) {
-        let _ = self.update(cx, |shell, cx| shell.open_classic_channels(window, cx));
-    }
-    fn close_channels(&self, window: &mut Window, cx: &mut App) {
-        let _ = self.update(cx, |shell, cx| {
-            shell.close_app_resource(crate::workspace::AppPane::Channels, window, cx);
-        });
-    }
     fn project_appearance(&self, project: &str, cx: &App) -> Option<ProjectAppearance> {
         self.upgrade().and_then(|shell| {
             let appearance = &shell.read(cx).workspace.project_appearance;
@@ -233,7 +223,7 @@ impl BotsHost for gpui::WeakEntity<Shell> {
             .map(|shell| {
                 let workspace = &shell.read(cx).workspace;
                 (
-                    workspace.projects.clone(),
+                    workspace.vorkspace_projects(),
                     workspace.project_appearance.clone(),
                 )
             })

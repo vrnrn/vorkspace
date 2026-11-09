@@ -309,6 +309,8 @@ pub(crate) struct Popover {
     consume_outside_press: bool,
     modal_classic: Option<bool>,
     animate: bool,
+    /// A tooltip: solid ink with paper text instead of the glass card.
+    tip: bool,
     /// Without a fixed width, the card hugs its content between these.
     fit: (Option<f32>, Option<f32>),
     children: Vec<AnyElement>,
@@ -326,6 +328,7 @@ pub(crate) fn popover(id: impl Into<ElementId>, anchor: Anchor) -> Popover {
         consume_outside_press: true,
         modal_classic: None,
         animate: true,
+        tip: false,
         fit: (None, None),
         children: Vec::new(),
     }
@@ -335,6 +338,12 @@ impl Popover {
     /// link menus let that press select text or open another link's menu.
     pub(crate) fn allow_outside_press(mut self) -> Self {
         self.consume_outside_press = false;
+        self
+    }
+    /// Draws the card as a tooltip, fluidither's inverted tip: solid ink,
+    /// tip corners, no glass or rule. Its content uses `fluid::tip_text`.
+    pub(crate) fn tip(mut self) -> Self {
+        self.tip = true;
         self
     }
     pub(crate) fn without_animation(mut self) -> Self {
@@ -431,7 +440,9 @@ impl RenderOnce for Popover {
 impl Popover {
     fn render_at(self, enter: f32, viewport: gpui::Size<Pixels>) -> impl IntoElement {
         let (viewport_width, viewport_height) = (viewport.width, viewport.height);
-        let radius = if self.modal_classic.is_some() {
+        let radius = if self.tip {
+            vorkspace_ui::fluid::TIP_RADIUS
+        } else if self.modal_classic.is_some() {
             radius::MODAL
         } else {
             radius::SURFACE
@@ -480,7 +491,13 @@ impl Popover {
                     .blur_radius(px(10.))
                     .spread_radius(px(-6.)),
             ])
-            .child(glass(tint, radius))
+            .map(|d| {
+                if self.tip {
+                    d.bg(vorkspace_ui::fluid::tip_fill())
+                } else {
+                    d.child(glass(tint, radius))
+                }
+            })
             .child(
                 div()
                     .debug_selector(|| "popover-inner-container".into())
@@ -495,14 +512,16 @@ impl Popover {
                     .p(px(self.padding))
                     .children(self.children),
             )
-            .child(
-                div()
-                    .absolute()
-                    .inset_0()
-                    .rounded(px(radius))
-                    .border_1()
-                    .border_color(content(border)),
-            );
+            .when(!self.tip, |d| {
+                d.child(
+                    div()
+                        .absolute()
+                        .inset_0()
+                        .rounded(px(radius))
+                        .border_1()
+                        .border_color(content(border)),
+                )
+            });
         deferred(Placed {
             anchor: self.anchor,
             options: self.options,
@@ -709,7 +728,8 @@ impl MenuStyle {
     fn padding(self) -> f32 {
         match self {
             Self::Group => 8.,
-            Self::Composer => 6.,
+            // Matches the embedded project picker's own list inset.
+            Self::Composer | Self::Switcher => 6.,
             _ => 4.,
         }
     }
@@ -1114,6 +1134,22 @@ impl Menu {
             _ => None,
         })
     }
+    /// A menu whose only row opens a flyout opens it straight away: one row
+    /// that leads somewhere else is a click with nothing to decide.
+    pub(crate) fn open_lone_flyout(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let rows: Vec<usize> = self
+            .items
+            .iter()
+            .enumerate()
+            .filter(|(_, item)| matches!(item, MenuItem::Action(_)))
+            .map(|(ix, _)| ix)
+            .collect();
+        if let [ix] = rows[..]
+            && self.action(ix).is_some_and(|a| a.flyout.is_some())
+        {
+            self.open_submenu(ix, None, window, cx);
+        }
+    }
     fn open_submenu(
         &mut self,
         ix: usize,
@@ -1321,7 +1357,7 @@ impl Menu {
                     .gap(px(10.))
                     .min_h(px(32.))
                     .when(action.description.is_some(), |d| d.py_2()),
-                MenuStyle::Switcher => d.items_center().gap(px(10.)).h(px(32.)),
+                MenuStyle::Switcher => d.items_center().gap(px(10.)).h(px(36.)).px(px(10.)),
                 MenuStyle::Git | MenuStyle::Filter => d.items_center().gap_2().h(px(28.)),
                 MenuStyle::Settings => d.items_center().gap_2().h(px(36.)),
                 MenuStyle::Recent => d.items_center().gap_2().h(px(40.)),
@@ -1331,7 +1367,9 @@ impl Menu {
                 d.h(px(height)).gap(px(8.))
             })
             .when(filled && !action.disabled, |d| d.bg(fill))
-            .when(!filled && !action.disabled, |d| d.hover(|s| s.bg(hover)))
+            .when(!filled && !action.disabled, |d| {
+                d.hover(|s| s.bg(vorkspace_ui::fluid::wash(hover)))
+            })
             .when(!in_submenu, |d| d.child(self.rows[ix].probe()))
             .when(reorderable, |d| {
                 let grip_selector = action.id.clone();
@@ -1349,7 +1387,10 @@ impl Menu {
                         .justify_center()
                         .rounded(px(radius::SMALL))
                         .text_color(content(0.5))
-                        .hover(|s| s.bg(content(0.08)).text_color(content(1.)))
+                        .hover(|s| {
+                            s.bg(vorkspace_ui::fluid::hover(0.08))
+                                .text_color(content(1.))
+                        })
                         .child(icon("grip-vertical", 12.))
                         .on_mouse_down(gpui::MouseButton::Left, |_, window, cx| {
                             window.prevent_default();
@@ -1365,7 +1406,7 @@ impl Menu {
                 })
                 .drag_over::<MenuDrag>(move |s, drag, _, _| {
                     if drag.menu == menu_id {
-                        s.bg(content(0.15))
+                        s.bg(vorkspace_ui::fluid::pressed(0.15))
                     } else {
                         s
                     }
@@ -1444,22 +1485,31 @@ impl Menu {
                     };
                     d.child(icon("chevron-right", 14.).text_color(chevron))
                 } else if action.switch {
+                    // The row is the control; this is the same switch the
+                    // settings pages draw, without its own focus or click.
+                    let on = action.checked;
                     d.child(
                         div()
                             .relative()
                             .w(px(36.))
                             .h(px(20.))
                             .flex_shrink_0()
-                            .rounded_full()
-                            .bg(content(if action.checked { 0.35 } else { 0.15 }))
+                            .rounded(px(vorkspace_ui::fluid::SWITCH_RADIUS))
+                            .map(|d| {
+                                if on {
+                                    d.bg(vorkspace_ui::theme::accent_color())
+                                } else {
+                                    d.bg(vorkspace_ui::fluid::switch_off())
+                                }
+                            })
                             .child(
                                 div()
                                     .absolute()
                                     .top(px(2.))
-                                    .left(px(if action.checked { 18. } else { 2. }))
+                                    .left(px(if on { 18. } else { 2. }))
                                     .size(px(16.))
-                                    .rounded_full()
-                                    .bg(content(1.)),
+                                    .rounded(px(3.))
+                                    .bg(vorkspace_ui::fluid::knob(on)),
                             ),
                     )
                 } else if action.checked && style == MenuStyle::Recent {
@@ -1478,13 +1528,7 @@ impl Menu {
                         .when(rich, |i| i.mt(px(2.))),
                     )
                 } else if let Some(shortcut) = action.shortcut.clone() {
-                    d.child(
-                        div()
-                            .flex_shrink_0()
-                            .text_size(px(11.))
-                            .text_color(content(0.4))
-                            .child(shortcut),
-                    )
+                    d.child(vorkspace_ui::fluid::kbd(shortcut))
                 } else {
                     d
                 }
@@ -1571,11 +1615,17 @@ impl Menu {
                             .px(px(6.))
                             .py(px(2.))
                             .rounded_full()
-                            .bg(gpui::hsla(0.82, 1., 0.83, 0.1))
+                            // The row's own tone, already paired for the
+                            // theme; neutral ink when the row has none.
+                            .bg(action.icon_color.unwrap_or(content(1.)).opacity(0.12))
                             .text_size(px(9.))
                             .line_height(px(9.))
                             .font_weight(gpui::FontWeight::MEDIUM)
-                            .text_color(gpui::hsla(0.81, 1., 0.9, 0.55))
+                            .text_color({
+                                let mut ink = action.icon_color.unwrap_or(content(0.6));
+                                ink.a = 1.;
+                                ink
+                            })
                             .child(badge.clone()),
                     )
                     .into_any(),
@@ -1592,19 +1642,25 @@ impl Render for Menu {
             .iter()
             .enumerate()
             .map(|(ix, item)| match item {
-                MenuItem::Custom(view, _) => {
-                    div().flex_shrink_0().child(view.clone()).into_any_element()
-                }
+                // A picker in the project switcher runs to the card's edges,
+                // as it does standalone; its rows and the menu's then share
+                // one inset.
+                MenuItem::Custom(view, _) => div()
+                    .flex_shrink_0()
+                    .when(style == MenuStyle::Switcher, |d| d.mx(px(-style.padding())))
+                    .child(view.clone())
+                    .into_any_element(),
                 MenuItem::Header(text) => div()
                     .flex_shrink_0()
                     .px_2()
                     .pt(px(2.))
                     .pb_1()
-                    .text_size(px(10.))
+                    // Sentence case, as every other label in the app.
+                    .text_size(px(11.))
                     .line_height(px(15.))
                     .font_weight(gpui::FontWeight::MEDIUM)
-                    .text_color(content(0.4))
-                    .child(text.to_uppercase())
+                    .text_color(content(0.45))
+                    .child(text.clone())
                     .into_any(),
                 MenuItem::Note(text) => div()
                     .flex_shrink_0()
@@ -1797,8 +1853,8 @@ fn separator(ix: usize, style: MenuStyle) -> AnyElement {
         .h(px(1.))
         .map(|d| {
             if style == MenuStyle::Switcher {
-                // `mx-2 bg-stroke`.
-                d.mx_2().bg(content(0.07))
+                // Full-bleed, like the embedded picker's own dividers.
+                d.mx(px(-style.padding())).bg(content(0.07))
             } else if style == MenuStyle::Git {
                 // `mx-1 border-t border-content/10`.
                 d.mx_1().bg(content(0.1))

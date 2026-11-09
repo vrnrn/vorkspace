@@ -156,7 +156,7 @@ impl ImageLightbox {
                 .min_w(px(32.))
                 .rounded(px(radius::CONTROL))
                 .text_color(white(if enabled { 0.9 } else { 0.3 }))
-                .hover(|s| s.bg(white(0.12)))
+                .hover(|s| s.bg(vorkspace_ui::fluid::wash(white(0.12))))
                 .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
         };
         div()

@@ -591,7 +591,9 @@ impl ModelList {
             .items_center()
             .justify_center()
             .when(selected, |d| d.bg(content(0.12)))
-            .when(!selected, |d| d.hover(|s| s.bg(content(0.08))))
+            .when(!selected, |d| {
+                d.hover(|s| s.bg(vorkspace_ui::fluid::hover(0.08)))
+            })
             .child(match tab {
                 ModelTab::Favorites => icon(if selected { "star-filled" } else { "star" }, 16.)
                     .text_color(content(if selected { 1. } else { 0.45 }))
@@ -658,7 +660,7 @@ impl Render for ModelList {
                     .text_color(content(if entry.enabled { 1. } else { 0.3 }))
                     .when(highlighted, |d| d.bg(content(0.1)))
                     .when(!highlighted && entry.enabled, |d| {
-                        d.hover(|s| s.bg(content(0.05)))
+                        d.hover(|s| s.bg(vorkspace_ui::fluid::hover(0.05)))
                     })
                     .child(
                         div()
@@ -796,6 +798,7 @@ impl Render for ModelList {
                                             div()
                                                 .id("retry-models")
                                                 .role(Role::Button)
+                                                .map(vorkspace_ui::theme::tab_reachable)
                                                 .aria_label("Retry model discovery")
                                                 .py_2()
                                                 .child("Retry")
@@ -834,7 +837,7 @@ pub(crate) struct ProjectPicker {
 impl EventEmitter<ProjectPicked> for ProjectPicker {}
 impl ProjectPicker {
     pub(crate) fn new(projects: &[String], current: &str, cx: &mut Context<Self>) -> Self {
-        let search = search_field("Search projects", "Search projects...", 0.35, cx);
+        let search = search_field("Search projects", "Search projects…", 0.35, cx);
         let changed = cx.subscribe(&search, |this, _, _: &input::Changed, cx| {
             this.active = 0;
             cx.notify();
@@ -942,7 +945,10 @@ impl Render for ProjectPicker {
                     .text_color(content(if active { 1. } else { 0.75 }))
                     .when(active, |d| d.bg(content(0.1)))
                     .when(!active, |d| {
-                        d.hover(|s| s.bg(content(0.05)).text_color(content(1.)))
+                        d.hover(|s| {
+                            s.bg(vorkspace_ui::fluid::hover(0.05))
+                                .text_color(content(1.))
+                        })
                     })
                     .child(
                         div()
@@ -985,7 +991,7 @@ impl Render for ProjectPicker {
                             .flex_1()
                             .max_w(px(112.))
                             .truncate()
-                            .font_family("Menlo")
+                            .font_family(vorkspace_ui::fonts::MONO)
                             .text_size(px(11.))
                             .text_color(content(0.4))
                             .child(pretty_parent(&path)),
@@ -1075,6 +1081,7 @@ impl Render for ProjectPicker {
                         div()
                             .id("project-new")
                             .role(Role::Button)
+                            .map(vorkspace_ui::theme::tab_reachable)
                             .aria_label("New project")
                             .group("project-new")
                             .cursor(CursorStyle::Arrow)
@@ -1086,7 +1093,10 @@ impl Render for ProjectPicker {
                             .items_center()
                             .text_size(px(13.))
                             .text_color(content(0.75))
-                            .hover(|s| s.bg(content(0.08)).text_color(content(1.)))
+                            .hover(|s| {
+                                s.bg(vorkspace_ui::fluid::hover(0.08))
+                                    .text_color(content(1.))
+                            })
                             .child(
                                 icon("plus", 16.)
                                     .text_color(content(0.75))
@@ -1100,6 +1110,7 @@ impl Render for ProjectPicker {
                             div()
                                 .id("project-remote")
                                 .role(Role::Button)
+                                .map(vorkspace_ui::theme::tab_reachable)
                                 .aria_label("Open folder on a machine")
                                 .cursor(CursorStyle::Arrow)
                                 .h(px(36.))
@@ -1110,7 +1121,10 @@ impl Render for ProjectPicker {
                                 .items_center()
                                 .text_size(px(13.))
                                 .text_color(content(0.75))
-                                .hover(|s| s.bg(content(0.08)).text_color(content(1.)))
+                                .hover(|s| {
+                                    s.bg(vorkspace_ui::fluid::hover(0.08))
+                                        .text_color(content(1.))
+                                })
                                 .child(icon("globe", 16.).text_color(content(0.75)))
                                 .child("Open folder on a machine…")
                                 .on_click(

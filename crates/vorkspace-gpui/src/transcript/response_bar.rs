@@ -99,6 +99,7 @@ impl TranscriptView {
         Some(
             popover(("response-tooltip", turn), Anchor::Slot(anchor.clone()))
                 .side(Side::Top)
+                .tip()
                 .max_width(if action == "metrics" { 300. } else { 240. })
                 .padding(8.)
                 .child(
@@ -108,13 +109,13 @@ impl TranscriptView {
                         .flex_col()
                         .text_size(px(12.))
                         .line_height(px(16.))
-                        .text_color(content(1.))
+                        .text_color(vorkspace_ui::fluid::tip_text(1.))
                         .child(headline)
                         .when_some(detail, |d, detail| {
                             d.child(
                                 div()
                                     .text_size(px(11.))
-                                    .text_color(content(0.5))
+                                    .text_color(vorkspace_ui::fluid::tip_text(0.6))
                                     .child(detail),
                             )
                         }),
@@ -146,7 +147,7 @@ impl TranscriptView {
         let metrics = info.metrics.filter(|m| m.reported());
         // Reserve the full icon strip before the sibling clock is laid out.
         // Intrinsic flex measurement otherwise reports only its widest button.
-        let strip_width = if output.is_empty() { 14. } else { 44. }
+        let strip_width = if output.is_empty() { 0. } else { 44. }
             + if self.side_question { 0. } else { 52. }
             + if metrics.is_some() { 29. } else { 0. };
         let mut actions = div()
@@ -231,8 +232,6 @@ impl TranscriptView {
                     }
                 })),
             );
-        } else {
-            actions = actions.child(icon("check", 14.).text_color(content(0.4)));
         }
         for (action, label, glyph, kind) in [
             (

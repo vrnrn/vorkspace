@@ -674,7 +674,7 @@ impl Notes {
         self.document = self.draft(cx).map(|note| {
             cx.new(|cx| {
                 Document::note(
-                    &note.body,
+                    without_title_heading(&note.body, &note.title),
                     note.source_cwd.as_deref().unwrap_or(&self.cwd),
                     &self.store,
                     cx,
@@ -993,12 +993,13 @@ impl Notes {
                     div()
                         .id("note-no-project")
                         .role(Role::Button)
+                        .map(vorkspace_ui::theme::tab_reachable)
                         .aria_label("No project")
                         .px_2()
                         .py_1p5()
                         .rounded(px(radius::CONTAINER))
                         .text_size(px(12.))
-                        .hover(|style| style.bg(content(0.08)))
+                        .hover(|style| style.bg(vorkspace_ui::fluid::hover(0.08)))
                         .child("No project")
                         .on_click(cx.listener(|this, _, _, cx| this.move_project("~".into(), cx))),
                 )
@@ -1017,7 +1018,7 @@ impl Notes {
                                 .py_1p5()
                                 .rounded(px(radius::CONTAINER))
                                 .text_size(px(12.))
-                                .hover(|style| style.bg(content(0.08)))
+                                .hover(|style| style.bg(vorkspace_ui::fluid::hover(0.08)))
                                 .child(name)
                                 .child(
                                     div()
@@ -1125,12 +1126,7 @@ impl Notes {
                     )
             }))
             .when(note.tags.len() < notes::MAX_TAGS, |d| {
-                d.child(
-                    page::field_frame()
-                        .min_w(px(80.))
-                        .flex_1()
-                        .child(self.tag.clone()),
-                )
+                d.child(page::field_frame().w(px(180.)).child(self.tag.clone()))
             });
         let actions = div()
             .flex()
@@ -1151,30 +1147,6 @@ impl Notes {
                     }))
                     .child("Add to chat"),
             )
-            .child(
-                page::secondary("delete-note", "Delete note", true, !can_delete)
-                    .child(icon("trash", page::ICON_SIZE))
-                    .child(if self.confirm_delete {
-                        "Confirm delete"
-                    } else {
-                        "Delete"
-                    })
-                    .on_click(cx.listener(move |this, _, _, cx| {
-                        if can_delete {
-                            this.delete(cx);
-                        }
-                    })),
-            )
-            .when(self.confirm_delete, |d| {
-                d.child(
-                    page::action("cancel-delete-note", "Cancel deletion", true)
-                        .child("Cancel")
-                        .on_click(cx.listener(|this, _, _, cx| {
-                            this.confirm_delete = false;
-                            cx.notify();
-                        })),
-                )
-            })
             .when_some(source, |d, source| {
                 d.child(
                     page::action("note-source-session", "Open source conversation", true)
@@ -1204,6 +1176,46 @@ impl Notes {
                             cx.write_to_clipboard(ClipboardItem::new_string(note.body));
                         }
                     })),
+            )
+            // Deleting is rare and destructive, so it waits at the far end as
+            // a quiet icon and only grows into words once it asks to confirm.
+            .child(
+                div()
+                    .ml_auto()
+                    .flex()
+                    .items_center()
+                    .gap_2()
+                    .when(self.confirm_delete, |d| {
+                        d.child(
+                            page::action("cancel-delete-note", "Cancel deletion", true)
+                                .child("Cancel")
+                                .on_click(cx.listener(|this, _, _, cx| {
+                                    this.confirm_delete = false;
+                                    cx.notify();
+                                })),
+                        )
+                        .child(
+                            page::secondary("delete-note", "Delete note", true, !can_delete)
+                                .child(icon("trash", page::ICON_SIZE))
+                                .child("Confirm delete")
+                                .on_click(cx.listener(move |this, _, _, cx| {
+                                    if can_delete {
+                                        this.delete(cx);
+                                    }
+                                })),
+                        )
+                    })
+                    .when(!self.confirm_delete, |d| {
+                        d.child(
+                            page::icon_action("delete-note", "Delete note", can_delete)
+                                .child(icon("trash", page::ICON_SIZE))
+                                .on_click(cx.listener(move |this, _, _, cx| {
+                                    if can_delete {
+                                        this.delete(cx);
+                                    }
+                                })),
+                        )
+                    }),
             );
         let actions = if recording_ready {
             self.recording.update(cx, |page, cx| {
@@ -1493,98 +1505,125 @@ impl gpui::Render for Notes {
                             "No notes yet. Save a turn from the transcript, or create one here."
                         }))
                     })
-                    .children(visible.iter().enumerate().map(|(ix, note)| {
-                        let id = note.id.clone();
-                        let active = self.selected.as_ref() == Some(&id);
-                        let preview = note.preview();
-                        page::row(("saved-note", ix), note.title.clone(), active)
-                            .aria_selected(active)
-                            .mb(px(2.))
-                            .child(
-                                page::meta()
-                                    .flex()
-                                    .items_center()
-                                    .gap_2()
-                                    .child(div().flex_1().truncate().when_some(
-                                        note.project_name(),
-                                        |d, name| {
-                                            d.child(
-                                                div()
-                                                    .flex()
-                                                    .items_center()
-                                                    .gap_1p5()
-                                                    .child(self.project_mark(
-                                                        note.source_cwd.as_deref().unwrap_or(""),
-                                                        12.,
-                                                    ))
-                                                    .child(name),
-                                            )
-                                        },
-                                    ))
-                                    .child(relative_time(note.updated_at)),
-                            )
-                            .child(
-                                page::label()
-                                    .mt_1()
-                                    .flex()
-                                    .items_center()
-                                    .gap_2()
-                                    .truncate()
-                                    .font_weight(FontWeight::SEMIBOLD)
-                                    .when(self.recordings.contains_key(&note.id), |d| {
-                                        d.child(icon("mic", page::ICON_SIZE))
-                                    })
-                                    .child(if note.title.is_empty() {
-                                        "Untitled".into()
-                                    } else {
-                                        note.title.clone()
-                                    }),
-                            )
-                            .when(!preview.is_empty(), |d| {
-                                d.child(page::meta().mt_1().truncate().child(preview))
-                            })
-                            .when(!note.tags.is_empty(), |d| {
-                                d.child(
-                                    div()
-                                        .mt_1p5()
+                    .children(
+                        {
+                            // One shared project tells the reader nothing per row.
+                            let one_project = visible
+                                .windows(2)
+                                .all(|w| w[0].source_cwd == w[1].source_cwd);
+                            visible
+                                .iter()
+                                .enumerate()
+                                .map(move |(ix, note)| (ix, note, one_project))
+                        }
+                        .map(|(ix, note, one_project)| {
+                            let id = note.id.clone();
+                            let active = self.selected.as_ref() == Some(&id);
+                            let preview = note.preview();
+                            page::row(("saved-note", ix), note.title.clone(), active)
+                                .aria_selected(active)
+                                .mb(px(2.))
+                                .when(!one_project, |d| {
+                                    d.child(
+                                        page::meta()
+                                            .flex()
+                                            .items_center()
+                                            .gap_2()
+                                            .child(div().flex_1().truncate().when_some(
+                                                note.project_name(),
+                                                |d, name| {
+                                                    d.child(
+                                                        div()
+                                                            .flex()
+                                                            .items_center()
+                                                            .gap_1p5()
+                                                            .child(
+                                                                self.project_mark(
+                                                                    note.source_cwd
+                                                                        .as_deref()
+                                                                        .unwrap_or(""),
+                                                                    12.,
+                                                                ),
+                                                            )
+                                                            .child(name),
+                                                    )
+                                                },
+                                            ))
+                                            .child(relative_time(note.updated_at)),
+                                    )
+                                })
+                                .child(
+                                    page::label()
+                                        .when(!one_project, |d| d.mt_1())
                                         .flex()
                                         .items_center()
-                                        .gap_1()
-                                        .overflow_hidden()
-                                        .children(note.tags.iter().take(3).map(|tag| {
-                                            div()
-                                                .max_w(px(96.))
-                                                .truncate()
-                                                .rounded(px(radius::SMALL))
-                                                .bg(content(0.08))
-                                                .px_1p5()
-                                                .py(px(2.))
-                                                .text_size(px(page::META_SIZE))
-                                                .text_color(page::secondary_ink())
-                                                .child(format!("#{tag}"))
-                                        }))
-                                        .when(note.tags.len() > 3, |d| {
+                                        .gap_2()
+                                        .font_weight(FontWeight::SEMIBOLD)
+                                        .when(self.recordings.contains_key(&note.id), |d| {
+                                            d.child(icon("mic", page::ICON_SIZE))
+                                        })
+                                        .child(div().flex_1().min_w_0().truncate().child(
+                                            if note.title.is_empty() {
+                                                "Untitled".into()
+                                            } else {
+                                                note.title.clone()
+                                            },
+                                        ))
+                                        .when(one_project, |d| {
                                             d.child(
-                                                div()
-                                                    .text_size(px(page::META_SIZE))
-                                                    .text_color(page::secondary_ink())
-                                                    .child(format!("+{}", note.tags.len() - 3)),
+                                                page::meta()
+                                                    .flex_shrink_0()
+                                                    .font_weight(FontWeight::NORMAL)
+                                                    .child(relative_time(note.updated_at)),
                                             )
                                         }),
                                 )
-                            })
-                            .on_click(cx.listener({
-                                let id = id.clone();
-                                move |this, _, _, cx| this.select(id.clone(), cx)
-                            }))
-                            .on_mouse_down(
-                                MouseButton::Middle,
-                                cx.listener(move |this, _, _, cx| {
-                                    this.request_open_tab(&id, cx);
-                                    cx.stop_propagation();
-                                }),
-                            )
-                    })),
+                                .when(!preview.is_empty(), |d| {
+                                    d.child(page::meta().mt_1().truncate().child(preview))
+                                })
+                                .when(!note.tags.is_empty(), |d| {
+                                    d.child(
+                                        div()
+                                            .mt_1p5()
+                                            .flex()
+                                            .items_center()
+                                            .gap_1()
+                                            .overflow_hidden()
+                                            .children(note.tags.iter().take(3).map(|tag| {
+                                                div()
+                                                    .max_w(px(96.))
+                                                    .truncate()
+                                                    .rounded(px(radius::SMALL))
+                                                    .bg(content(0.08))
+                                                    .px_1p5()
+                                                    .py(px(2.))
+                                                    .text_size(px(page::META_SIZE))
+                                                    .text_color(page::secondary_ink())
+                                                    .child(format!("#{tag}"))
+                                            }))
+                                            .when(note.tags.len() > 3, |d| {
+                                                d.child(
+                                                    div()
+                                                        .text_size(px(page::META_SIZE))
+                                                        .text_color(page::secondary_ink())
+                                                        .child(format!("+{}", note.tags.len() - 3)),
+                                                )
+                                            }),
+                                    )
+                                })
+                                .on_click(cx.listener({
+                                    let id = id.clone();
+                                    move |this, _, _, cx| this.select(id.clone(), cx)
+                                }))
+                                .on_mouse_down(
+                                    MouseButton::Middle,
+                                    cx.listener(move |this, _, _, cx| {
+                                        this.request_open_tab(&id, cx);
+                                        cx.stop_propagation();
+                                    }),
+                                )
+                        }),
+                    ),
             )
             .when(!narrow, |d| {
                 d.child(
@@ -1739,12 +1778,13 @@ impl gpui::Render for Notes {
                         .items_center()
                         .gap_2()
                         .text_size(px(12.))
-                        .text_color(gpui::rgb(0xf87171))
+                        .text_color(vorkspace_ui::theme::danger())
                         .child(div().flex_1().child(error))
                         .child(
                             div()
                                 .id("retry-note-save")
                                 .role(Role::Button)
+                                .map(vorkspace_ui::theme::tab_reachable)
                                 .aria_label("Retry saving note")
                                 .underline()
                                 .child("Retry")
@@ -2534,5 +2574,42 @@ mod tests {
             .unwrap();
         let saved = locked(&store).unwrap().list_notes().unwrap();
         assert_eq!(saved[0].body, "Hello");
+    }
+}
+
+/// The body as the preview shows it: a leading heading that repeats the
+/// title the page already shows above it is left out. Source keeps it.
+fn without_title_heading<'a>(body: &'a str, title: &str) -> &'a str {
+    let trimmed = body.trim_start();
+    let Some(rest) = trimmed.strip_prefix("# ") else {
+        return body;
+    };
+    let (line, after) = rest.split_once('\n').unwrap_or((rest, ""));
+    if !title.trim().is_empty() && line.trim().eq_ignore_ascii_case(title.trim()) {
+        after.trim_start_matches(['\n', '\r'])
+    } else {
+        body
+    }
+}
+
+#[cfg(test)]
+mod title_tests {
+    use super::without_title_heading;
+
+    #[test]
+    fn a_heading_that_repeats_the_title_is_left_out_of_the_preview() {
+        assert_eq!(
+            without_title_heading("# Glide timing\n\nThe thumb springs.", "Glide timing"),
+            "The thumb springs."
+        );
+        assert_eq!(without_title_heading("# Glide timing", "glide timing"), "");
+        // Another heading, a subheading or no title keeps the body whole.
+        let body = "# Other\n\nText";
+        assert_eq!(without_title_heading(body, "Glide timing"), body);
+        assert_eq!(
+            without_title_heading("## Glide timing\nx", "Glide timing"),
+            "## Glide timing\nx"
+        );
+        assert_eq!(without_title_heading("# Untitled\nx", ""), "# Untitled\nx");
     }
 }

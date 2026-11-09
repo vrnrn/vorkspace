@@ -463,7 +463,7 @@ fn inline_selected(
         text.push_str(&run.text);
         let range = start..text.len();
         let color = if style.link.is_some() {
-            rgb(0x38bdf8).into()
+            vorkspace_ui::theme::accent_color()
         } else if style.bold || style.italic || style.code {
             content(tone.strong())
         } else {
@@ -501,7 +501,7 @@ fn inline_selected(
             highlights.push((range.clone(), highlight));
         }
         if style.code || style.math {
-            fonts.push((range.clone(), vorkspace_ui::fonts::FIXED_FONT.into()));
+            fonts.push((range.clone(), vorkspace_ui::fonts::MONO.into()));
         }
         if let Some(url) = &style.link {
             links.push(range);
@@ -608,7 +608,7 @@ fn rich_inline(
                         .search
                         .map(search::search_background)
                         .unwrap_or_else(|| content(0.08)))
-                    .font_family(vorkspace_ui::fonts::FIXED_FONT)
+                    .font_family(vorkspace_ui::fonts::MONO)
                     .text_size(px(font_size * 0.8))
                     .line_height(px(24.))
                     .text_color(content(1.))
@@ -616,7 +616,7 @@ fn rich_inline(
                         let path = code_link(run, infer_file_links).unwrap().to_owned();
                         let menu_path = path.clone();
                         d.cursor(gpui::CursorStyle::PointingHand)
-                            .hover(|s| s.bg(content(0.13)))
+                            .hover(|s| s.bg(vorkspace_ui::fluid::hover(0.13)))
                             .on_click(move |event, window, cx| {
                                 if activate_link(event, clicked_selection.as_ref()) {
                                     open_link(&path, window, cx)
@@ -646,7 +646,7 @@ fn rich_inline(
                     value
                 };
                 let color = if style.link.is_some() {
-                    rgb(0x38bdf8).into()
+                    vorkspace_ui::theme::accent_color()
                 } else if style.bold || style.italic {
                     content(tone.strong())
                 } else {
@@ -852,7 +852,7 @@ pub(crate) fn body_selected(
         }
         Part::Rule => body
             .py_2()
-            .child(div().w_full().h(px(1.)).bg(content(0.1)))
+            .child(vorkspace_ui::fluid::rule())
             .into_any_element(),
         Part::Diagram { kind, source } => {
             let kind = *kind;
@@ -872,7 +872,7 @@ pub(crate) fn body_selected(
                         .py_2()
                         .rounded(px(radius::CONTAINER))
                         .bg(content(0.06))
-                        .font_family(vorkspace_ui::fonts::FIXED_FONT)
+                        .font_family(vorkspace_ui::fonts::MONO)
                         .text_size(px(12.))
                         .line_height(px(18.))
                         .text_color(content(0.7))
@@ -891,7 +891,7 @@ pub(crate) fn body_selected(
             } else {
                 child
             };
-            body.font_family(vorkspace_ui::fonts::FIXED_FONT)
+            body.font_family(vorkspace_ui::fonts::MONO)
                 .text_color(content(0.78))
                 .child(child)
                 .into_any_element()
@@ -937,6 +937,20 @@ pub(crate) fn body_selected(
                                     .when(*header && ix == 0, |d| {
                                         d.font_weight(FontWeight::SEMIBOLD)
                                     })
+                                    // Numbers line up in Obel Mono's tabular digits.
+                                    .when(
+                                        !(*header && ix == 0)
+                                            && vorkspace_ui::fluid::is_numeric(
+                                                &cell
+                                                    .iter()
+                                                    .map(|r| r.text.as_str())
+                                                    .collect::<String>(),
+                                            ),
+                                        |d| {
+                                            d.font_family(vorkspace_ui::fonts::MONO)
+                                                .font_features(crate::panel_kit::tabular())
+                                        },
+                                    )
                                     .when(align.get(col) == Some(&TableAlign::Center), |d| {
                                         d.text_center()
                                     })
@@ -1015,7 +1029,10 @@ pub(crate) fn code_lines_selected(
                     (
                         span.range.clone(),
                         HighlightStyle {
-                            color: Some(rgb(span.color).into()),
+                            // The highlighter speaks Dark+; resolve it
+                            // through the live palette, as diffs do, so light
+                            // themes never get Dark+'s pale default ink.
+                            color: Some(vorkspace_ui::theme::diff_syntax_color(span.color)),
                             ..Default::default()
                         },
                     )
@@ -1041,7 +1058,7 @@ pub(crate) fn code_lines_selected(
                 .min_w_full()
                 .line_height(px(20.))
                 .text_size(px(12.))
-                .font_family(vorkspace_ui::fonts::FIXED_FONT)
+                .font_family(vorkspace_ui::fonts::MONO)
                 .when(fence.numbered, |d| {
                     d.child(
                         div()

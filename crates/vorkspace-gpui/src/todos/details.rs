@@ -30,10 +30,14 @@ impl TodoBoardView {
         let editor = self.details.as_ref()?;
         let item = self.details_item(editor)?;
         let size = window.viewport_size();
-        let width = 760_f32.min((size.width.as_f32() - 32.).max(0.));
+
         let height = 680_f32.min((size.height.as_f32() - 40.).max(0.));
         let error = self.change_error.as_ref().or(self.error.as_ref());
-        let body = if self.detail_editing || item.pending_edit.is_some() {
+        // Reading a to-do fits the dialog to it; editing keeps the full
+        // height the editor needs. Either way the top edge stays put.
+        let editing = self.detail_editing || item.pending_edit.is_some();
+        let width = (if editing { 760_f32 } else { 600. }).min((size.width.as_f32() - 32.).max(0.));
+        let body = if editing {
             self.editor_panel(cx)?
         } else {
             self.details_preview(item, editor, cx)
@@ -51,7 +55,7 @@ impl TodoBoardView {
                                 div()
                                     .w(size.width)
                                     .h(size.height)
-                                    .bg(gpui::black().opacity(0.4))
+                                    .bg(vorkspace_ui::fluid::scrim(0.4))
                                     .occlude(),
                             ),
                     )
@@ -69,7 +73,13 @@ impl TodoBoardView {
                     .without_animation()
                     .priority(70)
                     .width(width)
-                    .height(height)
+                    .map(|p| {
+                        if editing {
+                            p.height(height)
+                        } else {
+                            p.max_height(height)
+                        }
+                    })
                     .gap(0.)
                     .on_dismiss(move |window, cx| {
                         let _ = weak.update(cx, |this, cx| this.dismiss_details(window, cx));
@@ -81,7 +91,8 @@ impl TodoBoardView {
                             .role(Role::Dialog)
                             .aria_label("To-do details")
                             .track_focus(&self.detail_focus)
-                            .size_full()
+                            .w_full()
+                            .when(editing, |d| d.h_full())
                             .min_h_0()
                             .flex()
                             .flex_col()
@@ -98,7 +109,7 @@ impl TodoBoardView {
                                     .px_3()
                                     .py_2()
                                     .text_size(px(page::META_SIZE))
-                                    .text_color(gpui::rgb(0xe5484d))
+                                    .text_color(vorkspace_ui::theme::danger())
                                     .child(error.clone())
                             }))
                             .when(
@@ -295,6 +306,9 @@ impl TodoBoardView {
                             true,
                             pending || self.pending_changes > 0,
                         )
+                        // The destructive action stands apart from the ones
+                        // that move the work forward.
+                        .ml_auto()
                         .on_click(cx.listener({
                             let id = item.id.clone();
                             move |this, _, window, cx| {

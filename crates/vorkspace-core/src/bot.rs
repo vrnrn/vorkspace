@@ -3,7 +3,6 @@
 pub mod api;
 pub mod bridge;
 pub mod cards;
-pub mod channels;
 pub mod files;
 pub mod habits;
 pub mod home;
@@ -58,6 +57,22 @@ impl Bot {
         self.seed
             .filter(|&s| s > 0)
             .unwrap_or_else(|| default_seed_for(&self.id))
+    }
+    /// The body pattern; textured Bots without one print in dither.
+    pub fn resolved_pattern(&self) -> &'static str {
+        if !self.textured {
+            return "solid";
+        }
+        match crate::project_appearance::normalize_bot_pattern(
+            self.pattern.as_deref().unwrap_or("dither"),
+        ) {
+            // Bots no longer offer the rings; an old choice prints in dither.
+            "rings" => "dither",
+            pattern => pattern,
+        }
+    }
+    pub fn resolved_print(&self) -> &'static str {
+        crate::project_appearance::normalize_bot_print(self.print.as_deref().unwrap_or("ground"))
     }
     pub fn resolved_grid(&self) -> u8 {
         self.grid.unwrap_or(4).clamp(2, 8)
@@ -443,7 +458,7 @@ pub fn minions_enabled() -> bool {
     MINIONS.load(std::sync::atomic::Ordering::Relaxed)
 }
 
-const MINIONS_GUIDE: &str = "Minions are persistent team members with roles and specialties. Inspect minions.list and reuse useful members with bots.send {to,message,expectReply:true}; replies arrive automatically, so do not poll. Hire a missing role with minions.hire {name,role,specialties?}, then delegate through bots.send. A hire does not start a task. Inspect saved history before recovering failed tasks with minions.retry or minions.discard {minion,messageId}; never blindly replay uncertain work. Use minions.fire {minion} to retire an unhelpful member; its history stays saved. Do not create a new member for each task or every mention of Minions. Members share your soul, memory, todos and live project assignments. Their communication is limited to you and active siblings, directly or in team-only channels. Users cannot message them.";
+const MINIONS_GUIDE: &str = "Minions are persistent team members with roles and specialties. Inspect minions.list and reuse useful members with bots.send {to,message,expectReply:true}; replies arrive automatically, so do not poll. Hire a missing role with minions.hire {name,role,specialties?}, then delegate through bots.send. A hire does not start a task. Inspect saved history before recovering failed tasks with minions.retry or minions.discard {minion,messageId}; never blindly replay uncertain work. Use minions.fire {minion} to retire an unhelpful member; its history stays saved. Do not create a new member for each task or every mention of Minions. Members share your soul, memory, todos and live project assignments. Their communication is limited to you and active siblings. Users cannot message them.";
 
 /// A minion's context: its parent's soul and memory, shared with the parent
 /// and its other minions.

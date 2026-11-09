@@ -1,5 +1,7 @@
-//! 3D curved Bot avatars (`80%` spherical curvature, direct backing, `4` rings/cell
-//! concentric texture at `60%` opacity) + sidebar cursor gaze tracking & textured pills.
+//! Bot avatars: a flat body printed in its pattern, rasterized once per look
+//! and size, with a vector face drawn over it. Gaze, blinks, hops and squash
+//! move only the vector face and the body's bounds, so a pose costs a few GPU
+//! quads rather than a rasterized frame. Plus sidebar cursor gaze tracking.
 use gpui::{
     AnyElement, Bounds, Corners, DispatchPhase, Pixels, Point, RenderImage, Window, canvas,
     prelude::*, px,
@@ -11,11 +13,13 @@ use std::{
     sync::{Arc, LazyLock, Mutex},
     time::Duration,
 };
+#[cfg(test)]
+use vorkspace_core::project_appearance::render_badge_or_bot_with_eyes;
 use vorkspace_core::{
     bot::Bot,
     project_appearance::{
         BADGE_SHAPES, BOT_FACES, BotAnimState, default_foreground_color, default_seed_for,
-        normalize_badge_shape, normalize_bot_face, render_badge_or_bot_with_eyes,
+        normalize_badge_shape, normalize_bot_face,
     },
 };
 use vorkspace_ui::clock::Instant;
@@ -517,6 +521,10 @@ fn cached_image<K: Hash + Eq>(
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub(crate) struct BotLookConfig {
     pub shape: String,
+    /// The body's printed pattern; projects keep "rings".
+    pub pattern: &'static str,
+    /// Where the pattern sits on the body.
+    pub print: &'static str,
     pub face: String,
     pub one_eye: bool,
     pub textured: bool,
@@ -532,6 +540,8 @@ impl BotLookConfig {
         }
         Self {
             shape: bot.badge_shape().into(),
+            pattern: bot.resolved_pattern(),
+            print: bot.resolved_print(),
             face: bot.face_style().into(),
             one_eye: false,
             textured: bot.textured,
@@ -545,6 +555,8 @@ impl BotLookConfig {
         let seed = default_seed_for(&format!("{mascot}:{color:06x}"));
         Self {
             shape: "squircle".into(),
+            pattern: "dither",
+            print: "ground",
             face: normalize_bot_face(mascot).into(),
             one_eye: false,
             textured: true,
@@ -563,6 +575,14 @@ pub(crate) fn minion_look(parent: &Bot, identity: &str) -> BotLookConfig {
     let choice = |part: &str| default_seed_for(&format!("minion-{part}:{identity}")) as usize;
     BotLookConfig {
         shape: BADGE_SHAPES[choice("body") % BADGE_SHAPES.len()].into(),
+        // A team member prints in its parent's pattern, as it wears its
+        // palette; a team member is always printed, so a plain parent's
+        // members print in dither.
+        print: parent.resolved_print(),
+        pattern: match parent.resolved_pattern() {
+            "solid" => "dither",
+            pattern => pattern,
+        },
         face: BOT_FACES[choice("face") % BOT_FACES.len()].into(),
         one_eye: true,
         textured: true,
@@ -573,10 +593,12 @@ pub(crate) fn minion_look(parent: &Bot, identity: &str) -> BotLookConfig {
     }
 }
 
+#[cfg(test)]
 #[derive(Clone, PartialEq, Eq, Hash)]
 struct FrameCacheKey {
     is_bot: bool,
     shape: String,
+    pattern: &'static str,
     face: String,
     one_eye: bool,
     needs_you: bool,
@@ -597,12 +619,7 @@ struct FrameCacheKey {
     crossed_eyes: bool,
 }
 
-/// About 3,000 sidebar poses or 250 header poses: every idle pose of a full
-/// sidebar stays warm, while working motion and pointer gaze recycle.
-const FRAME_CACHE_BYTES: usize = 16 * 1024 * 1024;
-static FRAME_CACHE: LazyLock<Mutex<ImageCache<FrameCacheKey>>> =
-    LazyLock::new(|| Mutex::new(ImageCache::new(FRAME_CACHE_BYTES)));
-
+#[cfg(test)]
 fn frame_cache_key(
     is_bot: bool,
     look: &BotLookConfig,
@@ -613,6 +630,7 @@ fn frame_cache_key(
     FrameCacheKey {
         is_bot,
         shape: normalize_badge_shape(&look.shape).into(),
+        pattern: look.pattern,
         face: normalize_bot_face(&look.face).into(),
         one_eye: is_bot && look.one_eye,
         needs_you,
@@ -634,40 +652,239 @@ fn frame_cache_key(
     }
 }
 
+#[cfg(test)]
 fn render_frame(key: &FrameCacheKey, look: &BotLookConfig, anim: BotAnimState) -> Arc<RenderImage> {
-    to_render_image(render_badge_or_bot_with_eyes(
-        key.is_bot,
-        &key.shape,
-        &key.face,
-        key.needs_you,
-        look.textured,
-        look.seed,
-        look.grid,
-        look.bg_color,
-        look.fg_color,
-        key.pixel_side,
-        key.one_eye,
-        anim,
-    ))
+    to_render_image(
+        vorkspace_core::project_appearance::render_badge_or_bot_with_eyes(
+            key.is_bot,
+            &key.shape,
+            &key.face,
+            key.needs_you,
+            key.pattern,
+            look.textured,
+            look.seed,
+            look.grid,
+            look.bg_color,
+            look.fg_color,
+            key.pixel_side,
+            key.one_eye,
+            anim,
+        ),
+    )
 }
 
-pub(crate) fn cached_badge_or_bot_image(
-    is_bot: bool,
-    look: &BotLookConfig,
-    needs_you: bool,
+#[derive(Clone, PartialEq, Eq, Hash)]
+struct BodyKey {
+    shape: String,
+    pattern: &'static str,
+    print: &'static str,
+    textured: bool,
+    seed: u32,
+    grid: u8,
+    bg_color: u32,
+    fg_color: u32,
     pixel_side: u32,
-    anim: BotAnimState,
+}
+
+/// One body per look and size; poses never enter the key.
+const BODY_CACHE_BYTES: usize = 12 * 1024 * 1024;
+static BODY_CACHE: LazyLock<Mutex<ImageCache<BodyKey>>> =
+    LazyLock::new(|| Mutex::new(ImageCache::new(BODY_CACHE_BYTES)));
+
+fn body_image(
+    look: &BotLookConfig,
+    pixel_side: u32,
     window: &mut Window,
     cx: &mut gpui::App,
 ) -> Arc<RenderImage> {
-    let key = frame_cache_key(is_bot, look, needs_you, pixel_side, anim);
-    cached_image(&FRAME_CACHE, key.clone(), window, cx, || {
-        render_frame(&key, look, anim)
+    let key = BodyKey {
+        shape: normalize_badge_shape(&look.shape).into(),
+        pattern: look.pattern,
+        print: look.print,
+        textured: look.textured,
+        seed: look.seed,
+        grid: look.grid,
+        bg_color: look.bg_color,
+        fg_color: look.fg_color,
+        pixel_side,
+    };
+    cached_image(&BODY_CACHE, key.clone(), window, cx, || {
+        to_render_image(vorkspace_core::project_appearance::render_bot_body(
+            &key.shape,
+            key.pattern,
+            key.print,
+            key.textured,
+            key.seed,
+            key.grid,
+            key.bg_color,
+            key.fg_color,
+            key.pixel_side,
+        ))
     })
 }
 
+fn rgb_hsla(hex: u32) -> gpui::Hsla {
+    gpui::rgb(hex).into()
+}
+
+/// Paints a Bot in `bounds`: its cached body moved by the pose's hop and
+/// squash, then the face as vector shapes placed by gaze, blink and width.
+pub(crate) fn paint_bot(
+    bounds: Bounds<Pixels>,
+    look: &BotLookConfig,
+    needs_you: bool,
+    anim: BotAnimState,
+    window: &mut Window,
+    cx: &mut gpui::App,
+) {
+    use gpui::{PathBuilder, fill, point, size};
+    let s = bounds.size.width.as_f32();
+    let pixel_side = (s * window.scale_factor()).ceil().clamp(28., 512.) as u32;
+    // Squash about the base, then hop.
+    let w = s * anim.squash_x;
+    let h = s * anim.squash_y;
+    let pivot = bounds.origin.y.as_f32() + s * 0.88;
+    let body = Bounds::new(
+        point(
+            px(bounds.origin.x.as_f32() + (s - w) * 0.5),
+            px(pivot - s * 0.88 * anim.squash_y + anim.hop_y * s),
+        ),
+        size(px(w), px(h)),
+    );
+    let image = body_image(look, pixel_side, window, cx);
+    let _ = window.paint_image(body, body, Corners::default(), image, 0, false);
+
+    let ink = rgb_hsla(if look.textured {
+        look.fg_color
+    } else {
+        vorkspace_core::project_appearance::auto_contrast_color(look.bg_color)
+    });
+    let at = |x: f32, y: f32| {
+        point(
+            px(body.origin.x.as_f32() + x * w),
+            px(body.origin.y.as_f32() + y * h),
+        )
+    };
+    // Gaze shifts the face; `wide` opens the eyes.
+    let (cx0, cy0) = (0.5 + anim.yaw * 0.1, 0.46 + anim.pitch * 0.1);
+    let grow = 1. + 0.3 * anim.wide;
+    let blink = anim.blink.clamp(0.08, 1.);
+    let slots: &[f32] = if look.one_eye { &[0.] } else { &[-1., 1.] };
+    let rect = |x: f32, y: f32, ew: f32, eh: f32| {
+        Bounds::new(
+            point(at(x, y).x - px(ew * w / 2.), at(x, y).y - px(eh * w / 2.)),
+            size(px(ew * w), px(eh * w)),
+        )
+    };
+    let stroke = |points: &[(f32, f32)], width: f32, window: &mut Window| {
+        let mut path = PathBuilder::stroke(px(width * w));
+        for (i, &(x, y)) in points.iter().enumerate() {
+            let p = at(x, y);
+            if i == 0 {
+                path.move_to(p);
+            } else {
+                path.line_to(p);
+            }
+        }
+        if let Ok(path) = path.build() {
+            window.paint_path(path, ink);
+        }
+    };
+    let face = if anim.crossed_eyes {
+        "crossed"
+    } else {
+        normalize_bot_face(&look.face)
+    };
+    let gap = 0.135;
+    match face {
+        "crossed" => {
+            let r = 0.075 * grow;
+            for &side in slots {
+                let x = cx0 + side * gap;
+                stroke(&[(x - r, cy0 - r), (x + r, cy0 + r)], 0.05, window);
+                stroke(&[(x - r, cy0 + r), (x + r, cy0 - r)], 0.05, window);
+            }
+        }
+        "dots" => {
+            let d = 0.176 * grow;
+            for &side in slots {
+                let eye = rect(cx0 + side * gap, cy0, d, d * blink);
+                window.paint_quad(fill(eye, ink).corner_radii(px(d * w / 2.)));
+            }
+        }
+        "visor" => {
+            let vw = if look.one_eye { 0.34 } else { 0.58 };
+            let visor = rect(cx0, cy0, vw, 0.25 * grow);
+            window.paint_quad(fill(visor, ink).corner_radii(px(0.12 * w)));
+            for &side in slots {
+                let hole = rect(cx0 + side * 0.13, cy0, 0.11 * grow, 0.127 * grow * blink);
+                window.paint_quad(fill(hole, rgb_hsla(look.bg_color)).corner_radii(px(0.04 * w)));
+            }
+        }
+        "square" => {
+            // Square eyes with softened corners, a little robotic.
+            let e = 0.15 * grow;
+            for &side in slots {
+                let eye = rect(cx0 + side * gap, cy0, e, e * blink);
+                window.paint_quad(fill(eye, ink).corner_radii(px(0.035 * w)));
+            }
+        }
+        "slits" => {
+            // Calm horizontal bars; a blink thins them to a line.
+            let ew = 0.17 * grow;
+            let eh = (0.065 * blink).max(0.022) * grow;
+            for &side in slots {
+                let eye = rect(cx0 + side * gap, cy0, ew, eh);
+                window.paint_quad(fill(eye, ink).corner_radii(px(eh * w / 2.)));
+            }
+        }
+        "rings" => {
+            // Hollow round eyes: an ink ring with the body showing through.
+            let d = 0.19 * grow;
+            let hole = 0.085 * grow;
+            for &side in slots {
+                let x = cx0 + side * gap;
+                let outer = rect(x, cy0, d, d * blink);
+                window.paint_quad(fill(outer, ink).corner_radii(px(d * w / 2.)));
+                if blink > 0.4 {
+                    let inner = rect(x, cy0, hole, hole * blink);
+                    window.paint_quad(
+                        fill(inner, rgb_hsla(look.bg_color)).corner_radii(px(hole * w / 2.)),
+                    );
+                }
+            }
+        }
+        // Pills, the default.
+        _ => {
+            let pw = 0.118 * grow;
+            let ph = (0.26 * blink).max(0.042) * grow;
+            for &side in slots {
+                let eye = rect(cx0 + side * gap, cy0, pw, ph);
+                window.paint_quad(fill(eye, ink).corner_radii(px(pw.min(ph) * w / 2.)));
+            }
+        }
+    }
+    // Waiting on you: an amber dot in a dark ring at the top corner.
+    if needs_you {
+        let r = (s * 0.13).max(2.5);
+        let ring = (s * 0.03).max(1.);
+        let c = point(
+            px(bounds.origin.x.as_f32() + s - r * 1.05),
+            px(bounds.origin.y.as_f32() + r * 1.05),
+        );
+        let dot = |radius: f32| {
+            Bounds::new(
+                point(c.x - px(radius), c.y - px(radius)),
+                size(px(radius * 2.), px(radius * 2.)),
+            )
+        };
+        window.paint_quad(fill(dot(r + ring / 2.), rgb_hsla(0x141416)).corner_radii(px(r + ring)));
+        window.paint_quad(fill(dot(r - ring / 2.), rgb_hsla(0xffd24a)).corner_radii(px(r)));
+    }
+}
+
 /// Render a 30% opacity full-button concentric texture / color highlight pill for
-/// selected Project and Channel rows in the sidebar.
+/// selected rows in the sidebar.
 fn compute_bot_anim(
     seed: u32,
     status: &str,
@@ -821,19 +1038,7 @@ pub(super) fn header_avatar(
             let (anim, next) =
                 header_anim_at(look.seed, &status, animate, avatar_start().elapsed());
             schedule(window, cx, next);
-            let pixel_side = (bounds.size.width.as_f32() * window.scale_factor())
-                .ceil()
-                .clamp(28., 128.) as u32;
-            let image = cached_badge_or_bot_image(
-                true,
-                &look,
-                status == "needs-you",
-                pixel_side,
-                anim,
-                window,
-                cx,
-            );
-            let _ = window.paint_image(bounds, bounds, Corners::default(), image, 0, false);
+            paint_bot(bounds, &look, status == "needs-you", anim, window, cx);
         },
     )
     .size(px(side))
@@ -873,38 +1078,7 @@ pub(super) fn settings_preview(
     cx: &mut gpui::App,
 ) -> AnyElement {
     let look = BotLookConfig::from_bot(bot);
-    let handle = window.window_handle();
-    let frame = window.use_keyed_state(
-        gpui::SharedString::from(format!("bot-settings-preview:{}", bot.id)),
-        cx,
-        |_, cx| {
-            // The retained frame owns its atlas tile.
-            cx.on_release(
-                move |frame: &mut Option<(FrameCacheKey, Arc<RenderImage>)>, cx| {
-                    if let Some((_, image)) = frame.take() {
-                        cx.defer(move |cx| {
-                            let mut image = Some(image);
-                            if handle
-                                .update(cx, |_, window, _| {
-                                    retire_images(window, vec![image.take().unwrap()]);
-                                })
-                                .is_err()
-                            {
-                                if let Some(image) = image.take() {
-                                    RETIRED_IMAGES.with(|retired| {
-                                        retired.borrow_mut().insert(image.id, image);
-                                    });
-                                }
-                                release_retired_images(cx, None);
-                            }
-                        });
-                    }
-                },
-            )
-            .detach();
-            None::<(FrameCacheKey, Arc<RenderImage>)>
-        },
-    );
+    let _ = (window, cx);
     canvas(
         |_, _, _| {},
         move |bounds, _, window: &mut Window, cx| {
@@ -928,26 +1102,8 @@ pub(super) fn settings_preview(
                     cx.notify(view);
                 }
             });
-            let pixel_side = (bounds.size.width.as_f32() * window.scale_factor())
-                .ceil()
-                .clamp(128., 512.) as u32;
-            let key = frame_cache_key(true, &look, false, pixel_side, anim);
-            let cached = frame
-                .read(cx)
-                .as_ref()
-                .filter(|(previous, _)| previous == &key)
-                .map(|(_, image)| image.clone());
-            let image = cached.unwrap_or_else(|| {
-                let image = render_frame(&key, &look, anim);
-                let previous = frame.update(cx, |frame, _| frame.replace((key, image.clone())));
-                retire_images(
-                    window,
-                    previous.into_iter().map(|(_, image)| image).collect(),
-                );
-                image
-            });
-            pin_scene_image(window, cx, &image);
-            let _ = window.paint_image(bounds, bounds, Corners::default(), image, 0, false);
+            // The pointer only moves the vector face; the body is cached.
+            paint_bot(bounds, &look, false, anim, window, cx);
         },
     )
     .size(px(side))
@@ -962,7 +1118,6 @@ pub(crate) fn avatar_with_look(
     still: bool,
 ) -> AnyElement {
     let status = status.to_string();
-    let pixel_side = ((side * 2.0).round() as u32).clamp(28, 128);
     canvas(
         |_, _, _| {},
         move |bounds, _, window: &mut Window, cx| {
@@ -977,16 +1132,7 @@ pub(crate) fn avatar_with_look(
                 && (!still || status == "working" || sidebar_hovered);
             let (anim, next) = compute_bot_anim(look.seed, &status, bounds, animate, window);
             schedule(window, cx, next);
-            let image = cached_badge_or_bot_image(
-                true,
-                &look,
-                status == "needs-you",
-                pixel_side,
-                anim,
-                window,
-                cx,
-            );
-            let _ = window.paint_image(bounds, bounds, Corners::default(), image, 0, false);
+            paint_bot(bounds, &look, status == "needs-you", anim, window, cx);
         },
     )
     .size(px(side))
@@ -1110,5 +1256,7 @@ mod preview_tests {
 #[cfg(test)]
 mod idle_tests;
 
+#[cfg(test)]
+mod face_tests;
 #[cfg(test)]
 mod minion_tests;

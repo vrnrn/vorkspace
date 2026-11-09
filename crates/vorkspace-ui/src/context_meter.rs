@@ -37,7 +37,11 @@ pub fn ring(ratio: f32) -> impl IntoElement {
                         path.close();
                     }
                     if let Ok(path) = path.build() {
-                        window.paint_path(path, stroke);
+                        if alpha < 1. {
+                            window.paint_path(path, crate::fluid::ring_track(stroke));
+                        } else {
+                            window.paint_path(path, stroke);
+                        }
                     }
                     if alpha == 1. && amount < 1. {
                         for angle in [

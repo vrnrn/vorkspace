@@ -439,7 +439,7 @@ impl Conversation {
                         .text_size(px(11.))
                         .text_color(content(1.))
                         .bg(content(0.1))
-                        .hover(|s| s.bg(content(0.15)))
+                        .hover(|s| s.bg(vorkspace_ui::fluid::hover(0.15)))
                 })
                 .child(self.account_anchor.probe())
                 .child(if switching {
@@ -621,8 +621,10 @@ fn usage_button(
         })
         .when(disabled, |d| d.opacity(0.45))
         .when(!disabled, |d| {
-            d.cursor_pointer()
-                .hover(move |s| s.bg(content(0.15)).text_color(content(1.)))
+            d.cursor_pointer().hover(move |s| {
+                s.bg(vorkspace_ui::fluid::hover(0.15))
+                    .text_color(content(1.))
+            })
         })
 }
 

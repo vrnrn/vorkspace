@@ -555,7 +555,8 @@ impl Conversation {
                 )
             })
             // A Bot works across its projects; a session owns one checkout.
-            .when(!bot, |d| d.child(workspace))
+            // Without a project there is no checkout to show or choose.
+            .when(!bot && !self.summary.cwd.is_empty(), |d| d.child(workspace))
             .when_some(branch.filter(|_| !bot), |d, branch| {
                 let detached = !new && self.git.as_ref().is_some_and(|s| s.detached);
                 let label = if detached {
@@ -604,6 +605,7 @@ impl Conversation {
                             div()
                                 .id("cancel-edit-last-turn")
                                 .role(Role::Button)
+                                .map(vorkspace_ui::theme::tab_reachable)
                                 .aria_label("Cancel editing")
                                 .text_size(px(11.))
                                 .text_color(content(0.6))
@@ -686,6 +688,7 @@ impl Conversation {
                         popover("context-tooltip", Anchor::Slot(self.context_anchor.clone()))
                             .side(Side::Top)
                             .align(Align::End)
+                            .tip()
                             .max_width(240.)
                             .padding(10.)
                             .child(
@@ -694,13 +697,13 @@ impl Conversation {
                                     .flex_col()
                                     .text_size(px(12.))
                                     .line_height(px(16.))
-                                    .text_color(content(1.))
+                                    .text_color(vorkspace_ui::fluid::tip_text(1.))
                                     .child(headline)
                                     .when_some(detail, |d, detail| {
                                         d.child(
                                             div()
                                                 .text_size(px(11.))
-                                                .text_color(content(0.5))
+                                                .text_color(vorkspace_ui::fluid::tip_text(0.6))
                                                 .child(detail),
                                         )
                                     }),
@@ -747,12 +750,23 @@ impl Conversation {
                 Some((fill, _)) => d
                     .bg(fill)
                     .when(enabled, |d| d.hover(|s| s.bg(fill.blend(content(0.12))))),
+                // Without an accent the submit is theme ink, like every
+                // primary button, so it reads in light mode as in dark.
                 None => d
-                    .bg(white(if enabled { 1. } else { 0.3 }))
-                    .when(enabled, |d| d.hover(|s| s.bg(white(0.9)))),
+                    .bg(content(if enabled { 1. } else { 0.1 }))
+                    .when(enabled, |d| d.hover(|s| s.bg(content(0.85)))),
             })
             .map(|d| {
-                let ink = accent.map_or(black(if enabled { 1. } else { 0.4 }), |(_, ink)| ink);
+                let ink = accent.map_or_else(
+                    || {
+                        if enabled {
+                            vorkspace_ui::fluid::on_ink()
+                        } else {
+                            content(0.35)
+                        }
+                    },
+                    |(_, ink)| ink,
+                );
                 if busy {
                     d.child(div().size(px(10.)).rounded(px(2.)).bg(ink))
                 } else {
@@ -777,6 +791,7 @@ impl Conversation {
     pub(super) fn empty(&mut self, window: &Window, cx: &mut Context<Self>) -> AnyElement {
         let this = cx.entity().downgrade();
         let narrow = self.narrow;
+        let short = self.short;
         let docked = narrow && self.beside_pane;
         self.attachment_drop_target("empty-session", cx)
             .relative()
@@ -787,10 +802,12 @@ impl Conversation {
                 canvas(
                     move |bounds, _, cx| {
                         let now = bounds.size.width < px(COMPOSER_COLUMN);
-                        if now != narrow {
+                        let now_short = bounds.size.height < px(SHORT_EMPTY_HEIGHT);
+                        if now != narrow || now_short != short {
                             cx.defer(move |cx| {
                                 let _ = this.update(cx, |this, cx| {
                                     this.narrow = now;
+                                    this.short = now_short;
                                     cx.notify();
                                 });
                             });
@@ -811,25 +828,57 @@ impl Conversation {
                     .pt(px(24.))
                     .pb(px(6.))
                     .child(div().flex_grow(1.).flex_basis(px(0.)))
-                    .when(!docked, |d| {
+                    .when(!docked && !short, |d| {
+                        // A still, printed field above the prompt: the page is
+                        // empty, not blank.
                         d.child(
                             div()
-                                .id("empty-session-title")
-                                .role(Role::Heading)
                                 .flex_shrink_0()
-                                .mb_4()
-                                .px(px(10.))
-                                .text_size(px(18.))
-                                .line_height(px(28.))
-                                .text_color(content(1.))
-                                .truncate()
-                                .child(format!(
-                                    "What should we work on in {}?",
-                                    self.project_appearance.label(&self.summary.cwd)
-                                )),
+                                .h(px(132.))
+                                .mx(px(10.))
+                                .mb_6()
+                                .child(vorkspace_ui::fluid::field("empty-session-field")),
                         )
                     })
+                    // Docked beside a pane the field gives way, but the pane
+                    // still says what it is for rather than standing blank.
+                    .child(
+                        div()
+                            .id("empty-session-title")
+                            .role(Role::Heading)
+                            .flex_shrink_0()
+                            .mb_4()
+                            .px(px(10.))
+                            .text_size(px(18.))
+                            .line_height(px(28.))
+                            .text_color(content(1.))
+                            // A narrow pane wraps the question onto a second
+                            // line rather than cutting off the project name.
+                            .line_clamp(2)
+                            .child(if self.summary.cwd.is_empty() {
+                                "What should we work on?".to_owned()
+                            } else {
+                                format!(
+                                    "What should we work on in {}?",
+                                    self.project_appearance.label(&self.summary.cwd)
+                                )
+                            }),
+                    )
                     .child(self.composer(window, cx))
+                    // Three ways to begin, below the prompt; hidden once the
+                    // pane is too narrow to show them on one or two rows.
+                    // Project-shaped prompts need a project to be about.
+                    .when(!narrow && !short && !self.summary.cwd.is_empty(), |d| {
+                        d.child(div().mt_4().flex().justify_center().child(self.starters(
+                            "session-starter",
+                            vec![
+                                "Explain how this project is organized".into(),
+                                "Find and fix a failing test".into(),
+                                "Review my uncommitted changes".into(),
+                            ],
+                            cx,
+                        )))
+                    })
                     .when(!docked, |d| {
                         d.child(div().flex_grow(1.).flex_shrink(1.).flex_basis(px(18.)))
                     }),

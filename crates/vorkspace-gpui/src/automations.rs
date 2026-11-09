@@ -21,9 +21,8 @@ use vorkspace_core::{
         Service,
     },
     provider::Kind,
-    session_groups::Folder,
 };
-use vorkspace_runtime::runtime::{Database, locked};
+use vorkspace_runtime::runtime::Database;
 use vorkspace_ui::radius;
 use vorkspace_ui::theme::*;
 
@@ -94,7 +93,6 @@ enum Choice {
     Access,
     Workspace,
     Conversation,
-    Folder,
     Grace,
     AddTrigger,
     TriggerEvent(String),
@@ -139,7 +137,6 @@ pub(crate) struct Automations {
     history: bool,
     advanced: bool,
     confirm_delete: bool,
-    folders: Vec<Folder>,
     choice: Option<ChoiceMenu>,
     models: Option<Entity<ModelList>>,
     model_controls: Vec<vorkspace_core::catalog::ModelControl>,
@@ -205,7 +202,6 @@ impl Automations {
             history: false,
             advanced: false,
             confirm_delete: false,
-            folders: Vec::new(),
             choice: None,
             models: None,
             model_controls: Vec::new(),
@@ -222,9 +218,8 @@ impl Automations {
         this.refresh(cx);
         this
     }
-    pub(crate) fn set_database(&mut self, database: Database, cx: &mut Context<Self>) {
+    pub(crate) fn set_database(&mut self, database: Database) {
         self.database = Some(database);
-        self.load_folders(cx);
     }
     pub(crate) fn set_appearances(
         &mut self,
@@ -254,7 +249,6 @@ impl Automations {
     ) {
         self.cwd = cwd;
         self.projects = projects;
-        self.load_folders(cx);
         cx.notify();
     }
     pub(crate) fn set_pane_width(&mut self, width: f32, cx: &mut Context<Self>) {
@@ -338,35 +332,11 @@ impl Automations {
         })
         .detach();
     }
-    fn load_folders(&mut self, cx: &mut Context<Self>) {
-        let Some(database) = self.database.clone() else {
-            return;
-        };
-        let cwd = self
-            .editor
-            .as_ref()
-            .map(|e| e.draft.cwd.clone())
-            .unwrap_or_else(|| self.cwd.clone());
-        let expected = cwd.clone();
-        let work = cx
-            .background_executor()
-            .spawn(async move { locked(&database)?.groups(&cwd) });
-        cx.spawn(async move |this, cx| {
-            let result = work.await;
-            let _ = this.update(cx, |this, cx| {
-                if this
-                    .editor
-                    .as_ref()
-                    .map(|e| e.draft.cwd.as_str())
-                    .unwrap_or(&this.cwd)
-                    == expected
-                {
-                    this.folders = result.map(|g| g.folders).unwrap_or_default();
-                    cx.notify();
-                }
-            });
-        })
-        .detach();
+    /// Opens the editor on the first template, for captures.
+    #[cfg(test)]
+    pub(crate) fn begin_first_template(&mut self, cx: &mut Context<Self>) {
+        let template = self.templates.first().cloned();
+        self.begin(template, cx);
     }
     fn begin(&mut self, template: Option<Template>, cx: &mut Context<Self>) {
         let preferences = cx.try_global::<vorkspace_ui::preferences::Preferences>();
@@ -431,7 +401,6 @@ impl Automations {
     }
     fn set_editor(&mut self, draft: AutomationUpsert, saved: bool, cx: &mut Context<Self>) {
         self.install_editor(draft, saved, cx);
-        self.load_folders(cx);
         self.load_controls(cx);
         cx.notify();
     }
@@ -845,7 +814,6 @@ impl Automations {
                                 .update(cx, |completion, cx| completion.set_cwd(path, cx));
                             editor.dirty = true;
                         }
-                        this.load_folders(cx);
                         this.load_controls(cx);
                     }
                     ProjectPicked::New => this.browse_project(cx),
@@ -885,7 +853,6 @@ impl Automations {
                         e.draft.session_folder_id.clear();
                         e.dirty = true;
                     }
-                    this.load_folders(cx);
                     this.load_controls(cx);
                     cx.notify();
                 }
@@ -934,13 +901,26 @@ impl Automations {
             .flex_col()
             .gap(px(4.));
         if visible.is_empty() {
-            list = list.child(page::meta().px(px(8.)).py(px(4.)).child(if self.loading {
-                "Loading automations…"
+            list = list.child(if self.loading {
+                page::meta()
+                    .px(px(8.))
+                    .py(px(4.))
+                    .child("Loading automations…")
             } else if query.trim().is_empty() {
-                "No automations yet"
+                page::empty(
+                    icon("zap", 20.),
+                    "No automations yet",
+                    // The gallery beside it already invites a first pick.
+                    if self.gallery {
+                        "Automations you create are listed here."
+                    } else {
+                        "The one you are drafting appears here once it is created."
+                    },
+                )
+                .h(px(240.))
             } else {
-                "No matching automations"
-            }));
+                page::empty(icon("search", 20.), "No matching automations", "").h(px(200.))
+            });
         }
         for automation in visible {
             let id = automation.id.clone();
@@ -1079,13 +1059,8 @@ impl Render for Automations {
             .flex()
             .flex_col()
             .text_color(content(1.))
-            .capture_key_down(cx.listener(|this, event: &gpui::KeyDownEvent, window, cx| {
-                if event.keystroke.key == "escape" {
-                    // Let the trigger menu close its active submenu first.
-                    if this.trigger_menu.is_some() {
-                        cx.propagate();
-                        return;
-                    }
+            .on_action(
+                cx.listener(|this, _: &vorkspace_ui::actions::DismissMenu, window, cx| {
                     if this.confirm_delete {
                         this.confirm_delete = false;
                     } else if this.choice.is_some()
@@ -1097,6 +1072,7 @@ impl Render for Automations {
                         this.trigger_menu = None;
                         this.models = None;
                         this.project_picker = None;
+                        window.focus(&this.focus, cx);
                     } else if this.is_narrow(window) && this.narrow_detail {
                         this.back_to_list(window, cx);
                     } else if !this.is_narrow(window) && this.editor.is_some() && !this.gallery {
@@ -1104,10 +1080,9 @@ impl Render for Automations {
                     } else {
                         cx.emit(Event::Close);
                     }
-                    cx.stop_propagation();
                     cx.notify();
-                }
-            }))
+                }),
+            )
             .child(
                 div()
                     .flex_1()

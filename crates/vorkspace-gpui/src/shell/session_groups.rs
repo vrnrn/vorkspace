@@ -2,12 +2,8 @@
 //! folders and deletion, and the grouped list they shape.
 use super::*;
 use chrono::{Local, NaiveDateTime, TimeZone};
-use gpui::EventEmitter;
 use vorkspace_core::{
-    session_groups::{
-        Entry, Groups, build_list, format_reminder, navigation_ids, parse_github_work_item,
-        reminder_at, reminder_presets,
-    },
+    session_groups::{format_reminder, parse_github_work_item, reminder_at, reminder_presets},
     store::Reminder,
 };
 use vorkspace_ui::radius;
@@ -34,26 +30,6 @@ pub(super) fn bind(cx: &mut App) {
     ]);
 }
 
-/// tabGroups.ts's TAB_GROUP_COLORS; 0 is the default wash.
-const FOLDER_COLORS: [(f32, f32, f32); 9] = [
-    (210., 0.08, 0.58),
-    (211., 0.92, 0.62),
-    (12., 0.80, 0.58),
-    (45., 0.90, 0.55),
-    (142., 0.55, 0.50),
-    (330., 0.70, 0.62),
-    (280., 0.55, 0.62),
-    (175., 0.55, 0.48),
-    (25., 0.85, 0.58),
-];
-fn folder_color(ix: usize) -> Option<gpui::Hsla> {
-    FOLDER_COLORS
-        .get(ix)
-        .map(|&(h, s, l)| gpui::hsla(h / 360., s, l, 1.))
-}
-/// Sidebar.tsx's REMINDERS_COLOR, amber-500.
-const REMINDERS_COLOR: u32 = 0xf59e0b;
-
 fn local_ms(at: NaiveDateTime) -> Option<u64> {
     Local
         .from_local_datetime(&at)
@@ -67,37 +43,10 @@ fn local_time(ms: u64) -> Option<NaiveDateTime> {
 pub(super) fn local_reminder_label(ms: u64) -> String {
     local_time(ms).map(format_reminder).unwrap_or_default()
 }
-pub(super) fn reminder_caption(ms: u64) -> String {
-    let Some(at) = local_time(ms) else {
-        return String::new();
-    };
-    let now = Local::now().naive_local();
-    if at <= now {
-        "Now".into()
-    } else if at.date() == now.date() {
-        at.format("%-H:%M").to_string()
-    } else {
-        at.format("%a").to_string()
-    }
-}
-
-#[derive(Clone, PartialEq)]
-pub(super) enum ListDrop {
-    Folder(String),
-    Session(i64),
-}
-pub(super) struct FolderDrag {
-    id: String,
-    start: Point<Pixels>,
-    active: bool,
-    over: Option<String>,
-}
 
 #[derive(Clone, PartialEq)]
 pub(super) enum RenameTarget {
     Session(i64),
-    Folder(String),
-    ProjectGroup(String),
 }
 pub(super) struct Renaming {
     pub(super) target: RenameTarget,
@@ -112,57 +61,11 @@ pub(super) struct LinkDialog {
     _events: Vec<Subscription>,
 }
 
-/// FolderColorSwatches: the folder menu's palette row.
-pub(super) struct FolderSwatches {
-    focus: FocusHandle,
-    selected: usize,
-}
-pub(super) struct SwatchPicked(Option<usize>);
-impl EventEmitter<SwatchPicked> for FolderSwatches {}
-impl Render for FolderSwatches {
-    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        div()
-            .track_focus(&self.focus)
-            .px_2()
-            .py_1p5()
-            .flex()
-            .items_center()
-            .gap_1p5()
-            .children((0..FOLDER_COLORS.len()).map(|ix| {
-                let selected = ix == self.selected;
-                div()
-                    .id(("folder-swatch", ix))
-                    .debug_selector(move || format!("folder-color-{ix}"))
-                    .role(Role::Button)
-                    .aria_label(if ix == 0 {
-                        "Default color".to_string()
-                    } else {
-                        format!("Color {ix}")
-                    })
-                    .size(px(18.))
-                    .rounded_full()
-                    .border_2()
-                    .border_color(if selected { content(0.9) } else { content(0.) })
-                    .hover(|s| s.border_color(content(0.5)))
-                    .child(
-                        div()
-                            .size_full()
-                            .rounded_full()
-                            .border_2()
-                            .border_color(content(0.))
-                            .bg(folder_color(ix).unwrap()),
-                    )
-                    .on_click(cx.listener(move |this, _, _, cx| {
-                        this.selected = ix;
-                        cx.emit(SwatchPicked((ix > 0).then_some(ix)));
-                        cx.notify();
-                    }))
-            }))
-    }
-}
-
 impl Shell {
     pub(super) fn rename_sidebar_item(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if !self.workspace.project_rail_open {
+            return;
+        }
         let target = if self.sidebar_focus.is_focused(window) {
             self.sidebar_target.clone()
         } else {
@@ -170,8 +73,10 @@ impl Shell {
                 .or(self.workspace.active)
                 .map(RenameTarget::Session)
         };
-        if let Some(target) = target {
-            self.start_rename(target, window, cx);
+        if let Some(RenameTarget::Session(id)) = target
+            && self.sidebar_session_ids(cx).contains(&id)
+        {
+            self.start_rename(RenameTarget::Session(id), window, cx);
         }
     }
     pub(super) fn delete_sidebar_selection(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -226,126 +131,6 @@ impl Shell {
         })
         .detach();
     }
-    pub(super) fn sidebar_drop_at(
-        &self,
-        position: Point<Pixels>,
-        source: i64,
-        cx: &App,
-    ) -> Option<ListDrop> {
-        if !self.workspace.sidebar_visible || self.reminders.iter().any(|r| r.session_id == source)
-        {
-            return None;
-        }
-        let groups = self.project_groups();
-        for folder in &groups.folders {
-            if self
-                .folder_bounds
-                .get(&folder.id)
-                .and_then(AnchorSlot::get)
-                .is_some_and(|b| b.contains(&position))
-            {
-                return Some(ListDrop::Folder(folder.id.clone()));
-            }
-        }
-        for id in self.sidebar_navigation_ids(cx) {
-            if id == source || self.reminders.iter().any(|r| r.session_id == id) {
-                continue;
-            }
-            if self
-                .session_row_bounds
-                .get(&id)
-                .and_then(AnchorSlot::get)
-                .is_some_and(|b| b.contains(&position))
-            {
-                return Some(match groups.folder_of(id) {
-                    Some(folder) => ListDrop::Folder(folder.id.clone()),
-                    None => ListDrop::Session(id),
-                });
-            }
-        }
-        None
-    }
-    pub(super) fn apply_sidebar_drop(
-        &mut self,
-        source: i64,
-        target: ListDrop,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        match target {
-            ListDrop::Folder(folder) => {
-                self.update_groups(cx, |g| g.add_to_folder(&folder, source))
-            }
-            ListDrop::Session(target) if source != target => {
-                let folder = format!("{:x}-{source}-{target}", vorkspace_core::time::now_ms());
-                self.update_groups(cx, |g| {
-                    g.create_folder(&[source, target], folder.clone());
-                });
-                self.start_rename(RenameTarget::Folder(folder), window, cx);
-            }
-            _ => {}
-        }
-    }
-    pub(super) fn move_folder_drag(&mut self, event: &MouseMoveEvent, cx: &mut Context<Self>) {
-        let Some(drag) = &mut self.folder_drag else {
-            return;
-        };
-        if event.pressed_button != Some(MouseButton::Left) {
-            self.folder_drag = None;
-            return;
-        }
-        let delta = event.position - drag.start;
-        if !drag.active && delta.x.as_f32().hypot(delta.y.as_f32()) < 5. {
-            return;
-        }
-        drag.active = true;
-        self.skip_folder_click = true;
-        drag.over = self.folder_bounds.iter().find_map(|(id, slot)| {
-            slot.get()
-                .filter(|b| b.contains(&event.position))
-                .map(|_| id.clone())
-        });
-        self.notify_sidebar(cx);
-    }
-    pub(super) fn finish_folder_drag(&mut self, cx: &mut Context<Self>) {
-        let Some(drag) = self.folder_drag.take() else {
-            return;
-        };
-        if !drag.active {
-            return;
-        }
-        if let Some(over) = drag.over {
-            self.update_groups(cx, |g| {
-                if let Some((from, to)) = g
-                    .folders
-                    .iter()
-                    .position(|f| f.id == drag.id)
-                    .zip(g.folders.iter().position(|f| f.id == over))
-                {
-                    let folder = g.folders.remove(from);
-                    g.folders.insert(to, folder);
-                }
-            });
-        }
-        self.notify_sidebar(cx);
-    }
-    pub(super) fn project_groups(&self) -> Groups {
-        self.groups
-            .get(&self.workspace.project)
-            .cloned()
-            .unwrap_or_default()
-    }
-    fn update_groups(&mut self, cx: &mut Context<Self>, change: impl FnOnce(&mut Groups)) {
-        let project = self.workspace.project.clone();
-        let groups = self.groups.entry(project.clone()).or_default();
-        change(groups);
-        let groups = groups.clone();
-        self.store_write("save folders", cx, move |store| {
-            store.save_groups(&project, &groups)
-        });
-        self.invalidate_chrome(cx);
-        cx.notify();
-    }
     pub(super) fn store_write(
         &mut self,
         what: &'static str,
@@ -370,36 +155,9 @@ impl Shell {
         }));
     }
 
-    /// The project's sidebar entries, reminders first.
-    pub(super) fn session_entries(&self, ids: &[i64], cx: &App) -> Vec<Entry> {
-        let reminders: Vec<_> = self
-            .reminders
-            .iter()
-            .map(|r| (r.session_id, r.due_at))
-            .collect();
-        build_list(
-            ids,
-            |id| self.session_metadata(id, cx).summary.pinned,
-            &self.project_groups(),
-            &reminders,
-        )
-    }
-    /// The sessions in the order the sidebar shows them, for stepping.
+    /// The sessions in the order the rail shows them, for stepping.
     pub(super) fn sidebar_navigation_ids(&self, cx: &App) -> Vec<i64> {
-        let ids = self.sidebar_session_ids(cx);
-        let groups = self.project_groups();
-        let entries: Vec<_> = self
-            .session_entries(&ids, cx)
-            .into_iter()
-            .filter(|entry| {
-                !self.query.is_empty()
-                    || match entry {
-                        Entry::Folder { id, .. } => groups.folder(id).is_none_or(|f| !f.collapsed),
-                        _ => true,
-                    }
-            })
-            .collect();
-        navigation_ids(&entries, !self.query.is_empty())
+        self.rail_session_ids(cx)
     }
 
     fn session_menu_ids(&self, id: i64, cx: &App) -> Vec<i64> {
@@ -468,7 +226,6 @@ impl Shell {
         let summary = self.session_metadata(id, cx).summary;
         let ids = self.session_menu_ids(id, cx);
         let multiple = ids.len() > 1;
-        let groups = self.project_groups();
         let all_pinned = ids
             .iter()
             .all(|id| self.session_metadata(*id, cx).summary.pinned);
@@ -477,14 +234,26 @@ impl Shell {
             .all(|id| self.session_metadata(*id, cx).summary.archived);
         let mut items = Vec::new();
         if self.reminders.iter().any(|r| ids.contains(&r.session_id)) {
-            items.push(MenuAction::new("reminder:cancel", "Cancel reminder").into());
+            items.push(
+                MenuAction::new("reminder:cancel", "Cancel reminder")
+                    .icon("circle-x")
+                    .into(),
+            );
             items.push(MenuItem::Separator);
         }
-        items.push(MenuAction::new("pin", if all_pinned { "Unpin" } else { "Pin" }).into());
+        items.push(
+            MenuAction::new("pin", if all_pinned { "Unpin" } else { "Pin" })
+                .icon("pin")
+                .into(),
+        );
         if !multiple {
             items.extend([
-                MenuAction::new("rename", "Rename").shortcut("F2").into(),
+                MenuAction::new("rename", "Rename")
+                    .icon("pencil-edit")
+                    .shortcut("F2")
+                    .into(),
                 MenuAction::new("copy-session-id", "Copy session ID")
+                    .icon("response-copy")
                     .submenu(vec![
                         MenuAction::new("copy-harness-session-id", "Harness session ID")
                             .disabled(summary.provider_id.is_none()),
@@ -499,53 +268,29 @@ impl Shell {
                         "Link GitHub issue or PR…"
                     },
                 )
+                .icon("external-link")
                 .into(),
             ]);
         }
-        items.extend([
-            MenuAction::new("reminder", "Remind me")
-                .submenu(
-                    reminder_presets(Local::now().naive_local())
-                        .into_iter()
-                        .map(|(id, label, enabled)| MenuAction::new(id, label).disabled(!enabled))
-                        .collect(),
-                )
-                .into(),
-            MenuItem::Separator,
-            MenuAction::new("folder-new", "New folder").into(),
-        ]);
-        if !groups.folders.is_empty() {
-            items.push(MenuItem::Separator);
-            items.extend(groups.folders.iter().map(|folder| {
-                MenuAction::new(
-                    format!("folder-add:{}", folder.id),
-                    format!("Add to {}", folder.name),
-                )
-                .checked(ids.iter().all(|id| folder.session_ids.contains(id)))
-                .into()
-            }));
-        }
-        if ids.iter().any(|id| groups.folder_of(*id).is_some()) {
-            items.push(
-                MenuAction::new(
-                    "folder-remove",
-                    if multiple {
-                        "Remove from folders"
-                    } else {
-                        "Remove from folder"
-                    },
-                )
-                .into(),
-            );
-        }
+        items.extend([MenuAction::new("reminder", "Remind me")
+            .icon("clock")
+            .submenu(
+                reminder_presets(Local::now().naive_local())
+                    .into_iter()
+                    .map(|(id, label, enabled)| MenuAction::new(id, label).disabled(!enabled))
+                    .collect(),
+            )
+            .into()]);
         items.extend([
             MenuItem::Separator,
             MenuAction::new(
                 "archive",
                 if all_archived { "Unarchive" } else { "Archive" },
             )
+            .icon("archive")
             .into(),
             MenuAction::new("delete", "Delete")
+                .icon("trash")
                 .shortcut("⌫")
                 .danger()
                 .into(),
@@ -618,29 +363,9 @@ impl Shell {
                     due_at,
                     fired_at: None,
                 }));
-                let project = self.workspace.project.clone();
-                if let Some(groups) = self.groups.get_mut(&project) {
-                    groups.reminders_collapsed = false;
-                }
-                self.update_groups(cx, |_| {});
+                self.invalidate_chrome(cx);
                 self.store_write("set the reminder", cx, move |s| {
                     s.set_reminders(&ids, due_at)
-                });
-            }
-            "folder-new" => {
-                let folder = format!("{:x}", vorkspace_core::time::now_ms() ^ ((id as u64) << 40));
-                self.update_groups(cx, |groups| {
-                    groups.create_folder(&ids, folder.clone());
-                });
-                self.start_rename(RenameTarget::Folder(folder), window, cx);
-            }
-            "folder-remove" => self.update_groups(cx, |groups| groups.remove_sessions(&ids)),
-            add if add.starts_with("folder-add:") => {
-                let folder = add["folder-add:".len()..].to_string();
-                self.update_groups(cx, |groups| {
-                    for id in &ids {
-                        groups.add_to_folder(&folder, *id);
-                    }
                 });
             }
             "archive" => {
@@ -654,49 +379,6 @@ impl Shell {
                 }
             }
             "delete" => self.request_delete_sessions(ids, window, cx),
-            _ => {}
-        }
-    }
-    pub(super) fn folder_menu_items(
-        &self,
-        folder: &str,
-        events: &mut Vec<Subscription>,
-        cx: &mut Context<Self>,
-    ) -> Vec<MenuItem> {
-        let selected = self
-            .project_groups()
-            .folder(folder)
-            .and_then(|f| f.color_index)
-            .unwrap_or(0);
-        let swatches = cx.new(|cx| FolderSwatches {
-            focus: cx.focus_handle(),
-            selected,
-        });
-        let id = folder.to_string();
-        events.push(
-            cx.subscribe(&swatches, move |this, _, SwatchPicked(color), cx| {
-                let color = *color;
-                this.update_groups(cx, |groups| groups.set_color(&id, color));
-            }),
-        );
-        let focus = swatches.read(cx).focus.clone();
-        vec![
-            MenuItem::Custom(swatches.into(), focus),
-            MenuAction::new("rename", "Rename").shortcut("F2").into(),
-            MenuItem::Separator,
-            MenuAction::new("ungroup", "Ungroup").into(),
-        ]
-    }
-    pub(super) fn run_folder_menu(
-        &mut self,
-        folder: String,
-        action: &str,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        match action {
-            "rename" => self.start_rename(RenameTarget::Folder(folder), window, cx),
-            "ungroup" => self.update_groups(cx, |groups| groups.dissolve(&folder)),
             _ => {}
         }
     }
@@ -716,63 +398,98 @@ impl Shell {
     }
 
     pub(super) fn poll_reminders(&mut self, cx: &mut Context<Self>) {
-        if self.notification_state.reminder_error.is_some() {
+        if self.notification_state.reminder_error.is_some()
+            || self.reminder_poll_in_flight
+            || !self.holds_scheduler(cx)
+        {
             return;
         }
-        let now = vorkspace_core::time::now_ms();
-        let due: Vec<_> = self
-            .reminders
-            .iter_mut()
-            .filter_map(|reminder| {
-                if reminder.due_at > now || reminder.fired_at.is_some() {
-                    return None;
-                }
-                reminder.fired_at = Some(now);
-                Some((reminder.session_id, reminder.due_at))
-            })
+        self.reminder_poll_in_flight = true;
+        let before = self.reminders.clone();
+        let known: HashSet<_> = before
+            .iter()
+            .map(|r| r.session_id)
+            .filter(|id| self.session_summaries.contains_key(id))
             .collect();
-        if due.is_empty() {
-            return;
-        }
         let store = self.store.clone();
         let previous = self.group_writes.take();
         self.group_writes = Some(cx.spawn(async move |this, cx| {
             if let Some(previous) = previous {
                 previous.await;
             }
-            let work = cx
-                .background_executor()
-                .spawn(async move { locked(&store)?.take_due_reminders(now) });
+            if !this
+                .update(cx, |shell, _| {
+                    if shell.notification_state.reminder_error.is_some() {
+                        shell.reminder_poll_in_flight = false;
+                        return false;
+                    }
+                    true
+                })
+                .unwrap_or(false)
+            {
+                return;
+            }
+            let work = cx.background_executor().spawn(async move {
+                let mut store = locked(&store)?;
+                let now = vorkspace_core::time::now_ms();
+                let mut reminders = store.reminders()?;
+                let missing: HashSet<_> = reminders
+                    .iter()
+                    .filter(|r| r.due_at <= now && !known.contains(&r.session_id))
+                    .map(|r| r.session_id)
+                    .collect();
+                let summaries = if missing.is_empty() {
+                    Vec::new()
+                } else {
+                    store
+                        .sessions()?
+                        .into_iter()
+                        .filter(|s| missing.contains(&s.id))
+                        .collect()
+                };
+                let claimed = store.claim_due_reminders(&reminders, now)?;
+                let fired: HashSet<_> = claimed.iter().map(|r| r.session_id).collect();
+                for reminder in &mut reminders {
+                    if fired.contains(&reminder.session_id) {
+                        reminder.fired_at = Some(now);
+                    }
+                }
+                Ok::<_, String>((reminders, claimed, summaries))
+            });
             let result = work.await;
             let _ = this.update(cx, |this, cx| {
+                this.reminder_poll_in_flight = false;
                 match result {
-                    Ok(claimed) => {
-                        this.notification_state.reminder_error = None;
+                    Ok((mut reminders, mut claimed, summaries)) => {
+                        // Keep edits made here while the ordered store read was pending.
+                        // Rows absent in both local snapshots can still be due in the store.
+                        if this.reminders != before {
+                            let before: HashMap<_, _> =
+                                before.iter().map(|r| (r.session_id, r)).collect();
+                            let local: HashMap<_, _> =
+                                this.reminders.iter().map(|r| (r.session_id, r)).collect();
+                            let unchanged = |id| before.get(&id) == local.get(&id);
+                            reminders.retain(|r| unchanged(r.session_id));
+                            reminders.extend(
+                                this.reminders
+                                    .iter()
+                                    .filter(|r| !unchanged(r.session_id))
+                                    .cloned(),
+                            );
+                            claimed.retain(|r| unchanged(r.session_id));
+                        }
+                        if reminders == this.reminders && claimed.is_empty() {
+                            return;
+                        }
+                        this.reminders = reminders;
+                        for summary in summaries {
+                            this.session_summaries.entry(summary.id).or_insert(summary);
+                        }
                         for reminder in claimed {
-                            // A cancel/reschedule while the store operation was
-                            // pending must never deliver an obsolete occurrence.
-                            if this.reminders.iter().any(|current| {
-                                current.session_id == reminder.session_id
-                                    && current.due_at == reminder.due_at
-                            }) {
-                                this.deliver_reminder_notice(
-                                    reminder.session_id,
-                                    reminder.due_at,
-                                    cx,
-                                );
-                            }
+                            this.deliver_reminder_notice(reminder.session_id, reminder.due_at, cx);
                         }
                     }
                     Err(error) => {
-                        // Re-arm only the occurrences claimed by this request;
-                        // a newer schedule has its own independent fired state.
-                        for reminder in &mut this.reminders {
-                            if due.contains(&(reminder.session_id, reminder.due_at))
-                                && reminder.fired_at == Some(now)
-                            {
-                                reminder.fired_at = None;
-                            }
-                        }
                         this.notification_state.reminder_error =
                             Some(format!("Could not deliver reminders: {error}"));
                     }
@@ -781,7 +498,6 @@ impl Shell {
                 cx.notify();
             });
         }));
-        self.invalidate_chrome(cx);
     }
 
     fn report_session_delete_error(&mut self, id: i64, reason: &str) {
@@ -891,20 +607,6 @@ impl Shell {
         {
             self.renaming = None;
         }
-        let projects: Vec<String> = self
-            .groups
-            .iter()
-            .filter(|(_, g)| g.folder_of(id).is_some())
-            .map(|(p, _)| p.clone())
-            .collect();
-        for project in projects {
-            let groups = self.groups.get_mut(&project).unwrap();
-            groups.remove_sessions(&[id]);
-            let groups = groups.clone();
-            self.store_write("save folders", cx, move |s| {
-                s.save_groups(&project, &groups)
-            });
-        }
         self.persist(cx);
     }
 
@@ -917,18 +619,6 @@ impl Shell {
         self.close_preview(cx);
         let text = match &target {
             RenameTarget::Session(id) => self.session_metadata(*id, cx).display_title(),
-            RenameTarget::ProjectGroup(id) => self
-                .workspace
-                .project_rail_state
-                .as_ref()
-                .and_then(|r| r.groups.iter().find(|g| &g.id == id))
-                .map(|g| g.name.clone())
-                .unwrap_or_default(),
-            RenameTarget::Folder(folder) => self
-                .project_groups()
-                .folder(folder)
-                .map(|f| f.name.clone())
-                .unwrap_or_default(),
         };
         let input = cx.new(|cx| {
             let mut input = input::Input::field(
@@ -989,21 +679,6 @@ impl Shell {
                         self.store_write("rename the session", cx, move |s| s.title(id, &name));
                     }
                 }
-                RenameTarget::ProjectGroup(id) => {
-                    if let Some(group) = self
-                        .workspace
-                        .project_rail_mut()
-                        .groups
-                        .iter_mut()
-                        .find(|g| g.id == id)
-                    {
-                        group.name = name;
-                        self.persist(cx);
-                    }
-                }
-                RenameTarget::Folder(folder) => {
-                    self.update_groups(cx, |groups| groups.rename_folder(&folder, &name))
-                }
             }
         }
         if renaming.input.read(cx).focus_handle(cx).is_focused(window) {
@@ -1012,7 +687,7 @@ impl Shell {
         self.invalidate_chrome(cx);
         cx.notify();
     }
-    /// SessionRenameRow and FolderRenameRow: the name in a focused field.
+    /// SessionRenameRow: the name in a focused field.
     pub(super) fn rename_row(
         &self,
         target: &RenameTarget,
@@ -1029,18 +704,6 @@ impl Shell {
                 .px_2()
                 .flex()
                 .items_center()
-                .gap_2()
-                .child(
-                    div()
-                        .size(px(16.))
-                        .flex_shrink_0()
-                        .flex()
-                        .items_center()
-                        .justify_center()
-                        .when(matches!(target, RenameTarget::Folder(_)), |d| {
-                            d.child(icon("chevron-down", 14.))
-                        }),
-                )
                 .child(
                     div()
                         .flex_1()
@@ -1104,225 +767,6 @@ impl Shell {
                 }))
                 .into_any(),
         )
-    }
-
-    /// A virtualized group renders its header separately from its member cards.
-    pub(super) fn sidebar_group_header(&self, entry: &Entry, cx: &mut Context<Self>) -> AnyElement {
-        let searching = !self.query.is_empty();
-        let folders = self.project_groups();
-        let (key, name, glyph, color, collapsed, sessions): (
-            String,
-            String,
-            &'static str,
-            Option<gpui::Hsla>,
-            bool,
-            &Vec<i64>,
-        ) = match entry {
-            Entry::Reminders {
-                collapsed,
-                sessions,
-            } => (
-                "reminders".into(),
-                "Reminders".into(),
-                "clock",
-                Some(rgb(REMINDERS_COLOR).into()),
-                *collapsed,
-                sessions,
-            ),
-            Entry::Folder { id, sessions } => {
-                let Some(folder) = folders.folder(id) else {
-                    return div().into_any();
-                };
-                (
-                    format!("folder:{id}"),
-                    folder.name.clone(),
-                    "folder",
-                    folder
-                        .custom_color
-                        .as_deref()
-                        .and_then(|color| color.strip_prefix('#'))
-                        .and_then(|color| u32::from_str_radix(color, 16).ok())
-                        .map(|color| rgb(color).into())
-                        .or_else(|| folder.color_index.and_then(folder_color)),
-                    folder.collapsed,
-                    sessions,
-                )
-            }
-            Entry::Pinned { .. } | Entry::Session(_) => return div().into_any(),
-        };
-        let expanded = searching || !collapsed;
-        let folder_id = key.strip_prefix("folder:").map(str::to_string);
-        folder_id
-            .as_ref()
-            .and_then(|f| self.rename_row(&RenameTarget::Folder(f.clone()), cx))
-            .unwrap_or_else(|| self.group_row(&key, name, glyph, color, expanded, sessions, cx))
-    }
-    #[allow(clippy::too_many_arguments)]
-    fn group_row(
-        &self,
-        key: &str,
-        name: String,
-        glyph: &'static str,
-        color: Option<gpui::Hsla>,
-        expanded: bool,
-        sessions: &[i64],
-        cx: &mut Context<Self>,
-    ) -> AnyElement {
-        let approval = sessions
-            .iter()
-            .any(|id| self.session_metadata(*id, cx).needs_approval());
-        let done = sessions.iter().any(|id| self.unseen_finished.contains(id));
-        let group = SharedString::from(format!("group-row-{key}"));
-        let toggle_key = key.to_string();
-        let menu_key = key.to_string();
-        let drag_key = key.strip_prefix("folder:").map(str::to_string);
-        let bounds = drag_key
-            .as_ref()
-            .and_then(|id| self.folder_bounds.get(id))
-            .cloned();
-        let drop_target = drag_key.as_ref().is_some_and(|id| {
-            self.sidebar_drop == Some(ListDrop::Folder(id.clone()))
-                || self
-                    .folder_drag
-                    .as_ref()
-                    .is_some_and(|drag| drag.active && drag.over.as_ref() == Some(id))
-        });
-        let mark = |side| {
-            let glyph = icon(glyph, side);
-            match color {
-                Some(color) => glyph.text_color(color),
-                None => glyph,
-            }
-        };
-        div()
-            .id(SharedString::from(format!("session-group-{key}")))
-            .debug_selector({
-                let key = key.to_string();
-                move || format!("session-group-{key}")
-            })
-            .group(group.clone())
-            .role(Role::Button)
-            .aria_label(name.clone())
-            .aria_expanded(expanded)
-            .cursor(CursorStyle::Arrow)
-            .h(px(32.))
-            .px_2()
-            .rounded(px(radius::CONTROL))
-            .flex()
-            .items_center()
-            .gap_2()
-            .text_color(content(0.5))
-            .when(expanded, |d| d.bg(content(0.05)).text_color(content(0.8)))
-            .hover(|s| s.bg(content(0.1)).text_color(content(1.)))
-            .when(drop_target, |d| d.bg(content(0.14)))
-            .when(
-                drag_key.as_ref().is_some_and(|id| {
-                    self.folder_drag
-                        .as_ref()
-                        .is_some_and(|drag| drag.active && &drag.id == id)
-                }),
-                |d| d.opacity(0.4),
-            )
-            .child(
-                div()
-                    .size(px(16.))
-                    .flex_shrink_0()
-                    .flex()
-                    .items_center()
-                    .justify_center()
-                    .opacity(0.7)
-                    .child(
-                        div()
-                            .when(expanded, |d| d.invisible())
-                            .group_hover(group.clone(), |s| s.invisible())
-                            .child(mark(16.)),
-                    )
-                    .child(
-                        div()
-                            .absolute()
-                            .invisible()
-                            .when(expanded, |d| d.visible())
-                            .group_hover(group.clone(), |s| s.visible())
-                            .child(icon(
-                                if expanded {
-                                    "chevron-down"
-                                } else {
-                                    "chevron-right"
-                                },
-                                16.,
-                            )),
-                    )
-                    .relative(),
-            )
-            .child(
-                div()
-                    .flex_1()
-                    .min_w_0()
-                    .truncate()
-                    .text_size(px(14.))
-                    .font_weight(FontWeight::MEDIUM)
-                    .child(name),
-            )
-            .child(
-                div()
-                    .flex_shrink_0()
-                    .flex()
-                    .items_center()
-                    .gap_1()
-                    .text_size(px(11.))
-                    .text_color(content(0.4))
-                    .when(!expanded && approval, |d| {
-                        d.child(icon("circle-alert", 12.).text_color(rgb(0xfbbf24)))
-                    })
-                    .when(!expanded && !approval && done, |d| {
-                        d.child(icon("check-circle-2", 12.).text_color(rgb(0x2dd4bf)))
-                    })
-                    .child(sessions.len().to_string()),
-            )
-            .children(bounds.map(|slot| slot.probe().into_any_element()))
-            .relative()
-            .when_some(drag_key, |d, id| {
-                d.on_mouse_down(
-                    MouseButton::Left,
-                    cx.listener(move |this, event: &MouseDownEvent, _, _| {
-                        this.skip_folder_click = false;
-                        this.folder_drag = Some(FolderDrag {
-                            id: id.clone(),
-                            start: event.position,
-                            active: false,
-                            over: None,
-                        });
-                    }),
-                )
-            })
-            .on_click(cx.listener(move |this, _, window, cx| {
-                if std::mem::take(&mut this.skip_folder_click) {
-                    return;
-                }
-                this.sidebar_target = toggle_key
-                    .strip_prefix("folder:")
-                    .map(|id| RenameTarget::Folder(id.into()));
-                window.focus(&this.sidebar_focus, cx);
-                if !this.query.is_empty() {
-                    return;
-                }
-                let key = toggle_key.clone();
-                this.update_groups(cx, |groups| match key.as_str() {
-                    "reminders" => groups.reminders_collapsed = !groups.reminders_collapsed,
-                    folder => groups.toggle_folder(folder.trim_start_matches("folder:")),
-                });
-            }))
-            .when(key.starts_with("folder:"), |d| {
-                d.on_mouse_down(
-                    MouseButton::Right,
-                    cx.listener(move |this, event: &MouseDownEvent, window, cx| {
-                        let folder = menu_key.trim_start_matches("folder:").to_string();
-                        let anchor = Anchor::Point(event.position);
-                        this.open_menu(MenuTarget::Folder(folder), anchor, window, cx);
-                    }),
-                )
-            })
-            .into_any()
     }
 
     fn open_link_dialog(&mut self, id: i64, window: &mut Window, cx: &mut Context<Self>) {
@@ -1415,6 +859,8 @@ impl Shell {
             div()
                 .id(id)
                 .role(Role::Button)
+                .aria_label(label)
+                .map(vorkspace_ui::theme::tab_reachable)
                 .cursor(CursorStyle::Arrow)
                 .px_3()
                 .py_1p5()
@@ -1442,7 +888,7 @@ impl Shell {
             div()
                 .absolute()
                 .size_full()
-                .bg(black(0.4))
+                .bg(vorkspace_ui::fluid::scrim(0.4))
                 .child(
                     popover("link-work-item-modal", anchor)
                         .modal_surface(self.workspace.classic_layout)
@@ -1512,8 +958,9 @@ impl Shell {
                                                     Some(error) => div()
                                                             .id("link-error")
                                                         .role(Role::Alert)
+                                                        .aria_label(error.clone())
                                                         .text_size(px(11.))
-                                                        .text_color(rgb(0xf87171))
+                                                        .text_color(vorkspace_ui::theme::danger())
                                                         .child(error.clone()),
                                                     None => div()
                                                             .id("link-help")
@@ -1534,8 +981,8 @@ impl Shell {
                                                     d.child(
                                                         button("link-remove", "Remove link")
                                                             .mr_auto()
-                                                            .text_color(rgb(0xf87171))
-                                                            .hover(|s| s.bg(rgba(0xf871711a)))
+                                                            .text_color(vorkspace_ui::theme::danger())
+                                                            .hover(|s| s.bg(vorkspace_ui::fluid::wash(rgba(0xf871711a).into())))
                                                             .on_click(cx.listener(|this, _, window, cx| {
                                                                 this.save_link(false, window, cx)
                                                             })),
@@ -1543,7 +990,7 @@ impl Shell {
                                                 })
                                                 .child(
                                                     button("link-cancel", "Cancel")
-                                                        .hover(|s| s.bg(content(0.08)))
+                                                        .hover(|s| s.bg(vorkspace_ui::fluid::hover(0.08)))
                                                         .on_click(cx.listener(|this, _, window, cx| {
                                                             this.close_link_dialog(window, cx)
                                                         })),

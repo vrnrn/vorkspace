@@ -44,7 +44,6 @@ impl Shell {
             .prune(&self.workspace.open_sessions(), self.workspace.active);
         self.navigation_revision += 1;
         self.begin_pane_motion(before);
-        self.fit_sidebar(cx);
         if self.workspace.active != active {
             if let Some(active) = self.workspace.active {
                 self.open(active, window, cx);
@@ -56,7 +55,7 @@ impl Shell {
         }
     }
     pub(super) fn pane_available_width(&self) -> f32 {
-        let sidebar = if self.workspace.sidebar_visible && self.has_session_panes() {
+        let sidebar = if self.workspace.sidebar_visible && self.settings.is_none() {
             self.workspace.right_panel_width
         } else {
             0.
@@ -80,15 +79,10 @@ impl Shell {
             .map_or(expected, |bounds| bounds.size.width.as_f32().min(expected))
     }
 
-    /// `fit_sidebar` automatically hides the session sidebar when a split
-    /// needs its room and restores it when it fits again.
+    /// The sidebar is a persistent user toggle, so a split only gets the
+    /// room left beside it.
     pub(super) fn pane_admission_width(&self) -> f32 {
         self.pane_available_width()
-            + if self.workspace.sidebar_visible && self.has_session_panes() {
-                self.workspace.right_panel_width
-            } else {
-                0.
-            }
     }
 
     pub(super) fn pane_layout_allowed(&self, before: &PaneNode, after: &PaneNode) -> bool {
@@ -322,7 +316,6 @@ impl Shell {
         if let Some(before) = before {
             self.fit_active_pane_width();
             self.begin_pane_motion(before);
-            self.fit_sidebar(cx);
         }
         self.activate_session(id, window, cx);
         if !compatible {
@@ -523,19 +516,9 @@ impl Shell {
             drag.insert = insert;
             self.tabs_frame.update(cx, |_, cx| cx.notify());
         }
-        let drop = matches!(source, DragSource::Session(_))
-            .then(|| self.sidebar_drop_at(event.position, source.session(), cx))
-            .flatten();
-        if self.sidebar_drop != drop {
-            self.sidebar_drop = drop;
-            self.notify_sidebar(cx);
-        }
         cx.notify();
     }
     pub(super) fn cancel_pane_drag(&mut self, cx: &mut Context<Self>) {
-        if self.sidebar_drop.take().is_some() {
-            self.notify_sidebar(cx);
-        }
         if let Some(drag) = self.pane_drag.take() {
             if drag.insert.is_some() {
                 self.tabs_frame.update(cx, |_, cx| cx.notify());
@@ -552,16 +535,22 @@ impl Shell {
         if !drag.active {
             return;
         }
-        if let Some(target) = self.sidebar_drop.take() {
-            self.apply_sidebar_drop(drag.source.session(), target, window, cx);
-            return;
-        }
         if let Some((target, edge)) = drag.over
             && drag.insert.is_none()
-            && !self.placement_allowed(drag.source, target, edge)
         {
-            self.reject_pane_placement(cx);
-            return;
+            if let DragSource::Session(id) = drag.source
+                && let Some(tab) = self.workspace.tab_of(target)
+                && let Some((project, _)) = self.pane_layout_anchor(id, cx)
+                && !self.split_project_fits(&self.workspace.layout(tab), project, cx)
+            {
+                self.error = Some(SPLIT_PROJECT_MISMATCH.into());
+                cx.notify();
+                return;
+            }
+            if !self.placement_allowed(drag.source, target, edge) {
+                self.reject_pane_placement(cx);
+                return;
+            }
         }
         let mut before = self.active_leaves();
         let id = drag.source.session();
@@ -620,7 +609,6 @@ impl Shell {
         self.fit_active_pane_width();
         self.history
             .prune(&self.workspace.open_sessions(), self.workspace.active);
-        self.fit_sidebar(cx);
         if let Some(active) = self.workspace.active {
             self.open(active, window, cx);
         }

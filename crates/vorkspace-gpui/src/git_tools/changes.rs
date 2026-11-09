@@ -12,7 +12,7 @@ use crate::{
 };
 use gpui::{
     AnyElement, App, Context, Entity, EventEmitter, FontWeight, Hsla, PromptLevel, Role,
-    SharedString, Subscription, Task, Window, div, prelude::*, px, rgb, uniform_list,
+    SharedString, Subscription, Task, Window, div, prelude::*, px, uniform_list,
 };
 use serde::{Deserialize, Serialize};
 use std::{
@@ -171,15 +171,7 @@ fn status_letter(status: &str) -> &'static str {
         _ => "M",
     }
 }
-pub(crate) fn status_color(status: &str) -> Hsla {
-    rgb(match status {
-        "untracked" => SKY_400,
-        "added" => DIFF_ADD,
-        "deleted" => DIFF_DEL,
-        _ => AMBER_400,
-    })
-    .into()
-}
+pub(crate) use crate::git_status::status_color;
 fn sync_status_label(index: &DiffIndex) -> String {
     let plural = |n: i64| if n == 1 { "" } else { "s" };
     if index.ahead > 0 && index.behind > 0 {
@@ -904,7 +896,7 @@ impl Changes {
                         .disabled(!can_push_pr)
                         .into(),
                     MenuItem::Separator,
-                    MenuAction::new("amend", "Amend Last Commit")
+                    MenuAction::new("amend", "Amend last commit")
                         .checked(self.amend.is_some())
                         .into(),
                 ]
@@ -980,6 +972,7 @@ impl Changes {
                                 div()
                                     .flex_shrink_0()
                                     .font_features(tabular())
+                                    .font_family(vorkspace_ui::fonts::MONO)
                                     .text_size(px(11.))
                                     .text_color(content(0.4))
                                     .child(format!("↑{}", index.ahead)),
@@ -990,6 +983,7 @@ impl Changes {
                                 div()
                                     .flex_shrink_0()
                                     .font_features(tabular())
+                                    .font_family(vorkspace_ui::fonts::MONO)
                                     .text_size(px(11.))
                                     .text_color(content(0.4))
                                     .child(format!("↓{}", index.behind)),
@@ -1018,6 +1012,7 @@ impl Changes {
                     div()
                         .id("branch-actions")
                         .role(Role::Button)
+                        .map(vorkspace_ui::theme::tab_reachable)
                         .aria_label("Branch actions")
                         .aria_expanded(menu_open)
                         .group("branch-actions")
@@ -1031,7 +1026,9 @@ impl Changes {
                         .child(self.branch_anchor.probe())
                         .when(busy, |d| d.opacity(0.4))
                         .when(menu_open, |d| d.bg(content(0.1)))
-                        .when(!busy && !menu_open, |d| d.hover(|s| s.bg(content(0.05))))
+                        .when(!busy && !menu_open, |d| {
+                            d.hover(|s| s.bg(vorkspace_ui::fluid::hover(0.05)))
+                        })
                         .child(if self.busy.as_deref() == Some("pull") {
                             spinner("pull-spin", "loader", 14.)
                         } else {
@@ -1071,8 +1068,14 @@ impl Changes {
             .update(cx, |m, cx| m.set_placeholder(placeholder, cx));
         // `bg-content` buttons with `text-background-base`, 40% when unavailable.
         let solid: Hsla = content(1.);
-        let face = if can_commit { solid } else { content(0.4) };
-        let ink: Hsla = rgb(BACKGROUND_BASE).into();
+        // Ink when there is something to commit; otherwise the faint well
+        // and dim glyphs of the composer's idle submit.
+        let face = if can_commit { solid } else { content(0.1) };
+        let ink: Hsla = if can_commit {
+            vorkspace_ui::fluid::on_ink()
+        } else {
+            content(0.4)
+        };
         let generate_label = if generating {
             "Cancel commit message generation"
         } else {
@@ -1104,6 +1107,7 @@ impl Changes {
                         div()
                             .id("generate-commit-message")
                             .role(Role::Button)
+                            .map(vorkspace_ui::theme::tab_reachable)
                             .aria_label(generate_label)
                             .group("generate")
                             .absolute()
@@ -1162,7 +1166,8 @@ impl Changes {
                         div()
                             .id("commit")
                             .role(Role::Button)
-                            .aria_label(if amend { "Amend Commit" } else { "Commit" })
+                            .map(|d| vorkspace_ui::theme::tab_reachable_on_fill(d, can_commit))
+                            .aria_label(if amend { "Amend commit" } else { "Commit" })
                             .h(px(28.))
                             .min_w_0()
                             .flex_1()
@@ -1176,7 +1181,7 @@ impl Changes {
                             .bg(face)
                             .text_color(ink)
                             .child(icon("check-2", 14.).text_color(ink))
-                            .child(if amend { "Amend Commit" } else { "Commit" })
+                            .child(if amend { "Amend commit" } else { "Commit" })
                             .when(can_commit, |d| {
                                 d.on_click(cx.listener(|this, _, window, cx| {
                                     this.commit(false, false, window, cx)
@@ -1187,6 +1192,7 @@ impl Changes {
                         div()
                             .id("commit-options")
                             .role(Role::Button)
+                            .map(|d| vorkspace_ui::theme::tab_reachable_on_fill(d, can_open_menu))
                             .aria_label("Commit options")
                             .aria_expanded(menu_open)
                             .size(px(28.))
@@ -1196,11 +1202,19 @@ impl Changes {
                             .justify_center()
                             .rounded_r_md()
                             .border_l_1()
-                            .border_color(rgb(BACKGROUND_BASE).opacity(0.1))
-                            .bg(if menu_open { solid } else { face })
+                            .border_color(ink.opacity(0.15))
+                            .bg(match (menu_open, can_commit) {
+                                (true, true) => solid,
+                                (true, false) => content(0.16),
+                                (false, _) => face,
+                            })
                             .when(can_open_menu && !menu_open, |d| {
                                 d.hover(move |s| {
-                                    s.bg(if can_commit { content(0.8) } else { solid })
+                                    s.bg(if can_commit {
+                                        content(0.8)
+                                    } else {
+                                        content(0.16)
+                                    })
                                 })
                             })
                             .child(icon("chevron-down-2", 14.).text_color(ink))
@@ -1249,10 +1263,10 @@ impl Changes {
         let syncing = self.busy.as_deref() == Some("sync");
         let plural = |n: i64| if n == 1 { "" } else { "s" };
         let sync_title = if syncing {
-            "Synchronizing Changes...".to_owned()
+            "Syncing changes…".to_owned()
         } else if can_publish {
-            index.branch.as_ref().map_or("Publish Branch".into(), |b| {
-                format!("Publish Branch \"{b}\"")
+            index.branch.as_ref().map_or("Publish branch".into(), |b| {
+                format!("Publish branch \"{b}\"")
             })
         } else if behind > 0 && ahead > 0 {
             format!("Pull {behind} and push {ahead} commits between {dest}")
@@ -1265,6 +1279,7 @@ impl Changes {
             div()
                 .id(id)
                 .role(Role::Button)
+                .map(vorkspace_ui::theme::tab_reachable)
                 .aria_label(SharedString::from(title))
                 .h(px(28.))
                 .w_full()
@@ -1280,7 +1295,9 @@ impl Changes {
                 .bg(content(0.1))
                 .text_color(content(1.))
                 .when(!enabled, |d| d.opacity(0.4))
-                .when(enabled, |d| d.hover(|s| s.bg(content(0.15))))
+                .when(enabled, |d| {
+                    d.hover(|s| s.bg(vorkspace_ui::fluid::hover(0.15)))
+                })
         };
         let glyph = |path: &'static str| icon(path, 14.).text_color(content(1.)).into_any_element();
         div()
@@ -1296,7 +1313,7 @@ impl Changes {
                         } else {
                             glyph("cloud-upload")
                         })
-                        .child(div().min_w_0().truncate().child("Publish Branch"))
+                        .child(div().min_w_0().truncate().child("Publish branch"))
                         .when(!busy, |d| {
                             d.on_click(cx.listener(|this, _, window, cx| this.sync(window, cx)))
                         }),
@@ -1310,12 +1327,13 @@ impl Changes {
                         } else {
                             glyph("refresh-cw")
                         })
-                        .child(div().min_w_0().truncate().child("Sync Changes"))
+                        .child(div().min_w_0().truncate().child("Sync changes"))
                         .when(behind > 0, |d| {
                             d.child(
                                 div()
                                     .flex_shrink_0()
                                     .font_features(tabular())
+                                    .font_family(vorkspace_ui::fonts::MONO)
                                     .text_color(content(0.55))
                                     .child(format!("↓{behind}")),
                             )
@@ -1325,6 +1343,7 @@ impl Changes {
                                 div()
                                     .flex_shrink_0()
                                     .font_features(tabular())
+                                    .font_family(vorkspace_ui::fonts::MONO)
                                     .text_color(content(0.55))
                                     .child(format!("↑{ahead}")),
                             )
@@ -1405,7 +1424,7 @@ impl Changes {
         match self.lines[ix].clone() {
             Line::Section(kind) => {
                 let (title, open) = match kind {
-                    Kind2::Staged => ("Staged Changes", self.staged_open),
+                    Kind2::Staged => ("Staged changes", self.staged_open),
                     Kind2::Unstaged => ("Changes", self.changes_open),
                 };
                 let count = files
@@ -1418,13 +1437,13 @@ impl Changes {
                 let tree = self.view == ChangesView::Tree;
                 let actions: Vec<(&'static str, &'static str, &'static str)> = match kind {
                     Kind2::Staged => vec![
-                        ("open-all-staged", "Open All Changes", "file-diff"),
-                        ("unstage-all", "Unstage All Changes", "minus-sign"),
+                        ("open-all-staged", "Open all changes", "file-diff"),
+                        ("unstage-all", "Unstage all changes", "minus-sign"),
                     ],
                     Kind2::Unstaged => vec![
-                        ("open-all-unstaged", "Open All Changes", "file-diff"),
-                        ("discard-all", "Discard All Changes", "undo"),
-                        ("stage-all", "Stage All Changes", "plus"),
+                        ("open-all-unstaged", "Open all changes", "file-diff"),
+                        ("discard-all", "Discard all changes", "undo"),
+                        ("stage-all", "Stage all changes", "plus"),
                     ],
                 };
                 div()
@@ -1438,6 +1457,7 @@ impl Changes {
                         div()
                             .id(("section", ix))
                             .role(Role::Button)
+                            .map(vorkspace_ui::theme::tab_reachable)
                             .aria_label(title)
                             .aria_expanded(open)
                             .min_w_0()
@@ -1460,10 +1480,10 @@ impl Changes {
                                 div()
                                     .min_w_0()
                                     .truncate()
-                                    .text_size(px(10.))
+                                    .text_size(px(11.))
                                     .font_weight(FontWeight::SEMIBOLD)
                                     .text_color(content(0.55))
-                                    .child(title.to_uppercase()),
+                                    .child(title),
                             )
                             .child(
                                 div()
@@ -1545,7 +1565,7 @@ impl Changes {
                     .pl(px(8. + depth as f32 * 12.))
                     .pr_2()
                     .text_color(content(1.))
-                    .hover(|s| s.bg(content(0.05)))
+                    .hover(|s| s.bg(vorkspace_ui::fluid::hover(0.05)))
                     .child(
                         div()
                             .id(("change-dir-toggle", ix))
@@ -1673,11 +1693,14 @@ impl Changes {
                     })
                     .text_color(content(1.))
                     .when(active, |d| d.bg(selection()))
-                    .when(!active, |d| d.hover(|s| s.bg(content(0.05))))
+                    .when(!active, |d| {
+                        d.hover(|s| s.bg(vorkspace_ui::fluid::hover(0.05)))
+                    })
                     .child(
                         div()
                             .id(("change-open", ix))
                             .role(Role::Button)
+                            .map(vorkspace_ui::theme::tab_reachable)
                             .aria_label(SharedString::from(file.relative.clone()))
                             .h_full()
                             .min_w_0()

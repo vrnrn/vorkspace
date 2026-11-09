@@ -15,8 +15,8 @@ impl TranscriptView {
         let long = note.text.lines().count() > 4 || note.text.len() > 300;
         let severity = note.severity.as_deref();
         let color = match severity {
-            Some("blocker") => rgb(0xf87171).into(),
-            Some("concern") => rgb(0xfbbf24).into(),
+            Some("blocker") => vorkspace_ui::theme::danger(),
+            Some("concern") => vorkspace_ui::theme::warning(),
             _ => content(0.55),
         };
         div()
@@ -73,6 +73,7 @@ impl TranscriptView {
                     div()
                         .id(("interjection-expand", message_start))
                         .role(Role::Button)
+                        .map(vorkspace_ui::theme::tab_reachable)
                         .aria_expanded(open)
                         .text_size(px(11.))
                         .text_color(content(0.5))
@@ -115,7 +116,7 @@ impl TranscriptView {
             elapsed.map(|duration| duration.as_millis() as u64),
             live,
         );
-        let open = self.work_folds.get(&turn).copied().unwrap_or(false);
+        let open = self.work_open(turn, expandable);
         let label = if expandable {
             if open {
                 "Hide the work".into()
@@ -148,7 +149,25 @@ impl TranscriptView {
                     .relative()
                     .size(px(14.))
                     .flex_shrink_0()
-                    .when(!open, |d| {
+                    // While the turn works, fluidither's thinking cells
+                    // stand in for the provider mark.
+                    .when(!open && live, |d| {
+                        d.child(
+                            div()
+                                .size_full()
+                                .flex()
+                                .items_center()
+                                .when(expandable, |i| {
+                                    i.group_hover("work-fold", |s| s.opacity(0.))
+                                })
+                                .child(crate::panel_kit::spinner(
+                                    ("live-work-cells", turn),
+                                    "",
+                                    14.,
+                                )),
+                        )
+                    })
+                    .when(!open && !live, |d| {
                         d.child(
                             provider_icon(
                                 self.turns
@@ -188,7 +207,7 @@ impl TranscriptView {
                     .flex_1()
                     .truncate()
                     .when(live, |d| d.debug_selector(|| "live-work-receipt".into()))
-                    .child(if live {
+                    .child(if live && self.visible {
                         crate::activity::shimmer(
                             title,
                             self.started.map_or(0., |s| s.elapsed().as_secs_f32()),
@@ -282,14 +301,20 @@ impl TranscriptView {
                             .group_hover("activity-phase", |s| s.opacity(1.)),
                     ),
             )
-            .child(div().min_w_0().flex_1().truncate().child(if active {
-                crate::activity::shimmer(
-                    title,
-                    self.started.map_or(0., |s| s.elapsed().as_secs_f32()),
-                )
-            } else {
-                div().child(title).into_any_element()
-            }))
+            .child(
+                div()
+                    .min_w_0()
+                    .flex_1()
+                    .truncate()
+                    .child(if active && self.visible {
+                        crate::activity::shimmer(
+                            title,
+                            self.started.map_or(0., |s| s.elapsed().as_secs_f32()),
+                        )
+                    } else {
+                        div().child(title).into_any_element()
+                    }),
+            )
             .hover(|s| s.text_color(content(0.8)))
             .on_click(cx.listener(move |this, _, _, cx| {
                 this.toggle_phase(group, !open, cx);
@@ -320,6 +345,7 @@ impl TranscriptView {
             .id(("thinking", message_start))
             .debug_selector(move || format!("thinking-{message_start}"))
             .role(Role::Button)
+            .map(vorkspace_ui::theme::tab_reachable)
             .aria_label(format!(
                 "{} thinking: {summary}",
                 if open { "Hide" } else { "Show" }
@@ -453,7 +479,7 @@ impl TranscriptView {
             .flex()
             .flex_col()
             .text_color(if error {
-                rgb(0xf87171).into()
+                vorkspace_ui::theme::danger()
             } else {
                 content(1.)
             })
@@ -528,6 +554,7 @@ impl TranscriptView {
                         div()
                             .id(("prompt-more", message_start))
                             .role(Role::Button)
+                            .map(vorkspace_ui::theme::tab_reachable)
                             .aria_expanded(!collapsed)
                             .mt_1()
                             .px_1()
@@ -536,7 +563,10 @@ impl TranscriptView {
                             .text_size(px(12.))
                             .line_height(px(16.))
                             .text_color(content(0.6))
-                            .hover(|s| s.bg(content(0.08)).text_color(content(1.)))
+                            .hover(|s| {
+                                s.bg(vorkspace_ui::fluid::hover(0.08))
+                                    .text_color(content(1.))
+                            })
                             .child(if collapsed { "Show more" } else { "Show less" })
                             .on_mouse_down(gpui::MouseButton::Left, |_, _, cx| {
                                 cx.stop_propagation()

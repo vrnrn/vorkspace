@@ -157,7 +157,9 @@ impl SearchView {
     fn reload_files(&mut self, cx: &mut Context<Self>) {
         self.listing_cancel.store(true, Ordering::Release);
         self.listing_cancel = Arc::new(AtomicBool::new(false));
-        self.files.clear();
+        // A view searches one root for its whole life, so the previous listing
+        // stays usable while the refreshed one loads; clearing it would empty
+        // recents and file results for the length of a large repository scan.
         self.listing_pending = true;
         let flag = self.listing_cancel.clone();
         let check = flag.clone();
@@ -227,9 +229,13 @@ impl SearchView {
             );
         }
         self.live_revision += 1;
-        if self.visible && !self.query.is_empty() {
+        if self.visible {
+            // Recents and results both follow the session; only a query has
+            // live transcript rows to search again.
             self.rank(cx);
-            self.refresh_live(cx);
+            if !self.query.is_empty() {
+                self.refresh_live(cx);
+            }
         }
     }
     pub(crate) fn forget_session(&mut self, id: i64, cx: &mut Context<Self>) {
@@ -296,7 +302,13 @@ impl SearchView {
     }
     fn rank(&mut self, cx: &mut Context<Self>) {
         self.hits = if self.query.is_empty() {
-            vec![]
+            search::recents(
+                &self.summaries,
+                &self.files,
+                &self.recent,
+                &self.projects,
+                self.scope,
+            )
         } else {
             search::grouped(
                 search::titles(&self.summaries, &self.query)
@@ -629,7 +641,7 @@ impl Render for SearchView {
                             }),
                     ),
             )
-            .child(if self.query.is_empty() {
+            .child(if self.query.is_empty() && self.hits.is_empty() {
                 empty_state()
             } else {
                 div()
@@ -641,6 +653,18 @@ impl Render for SearchView {
                     .p(px(6.))
                     .overflow_y_scroll()
                     .track_scroll(&self.scroll)
+                    .when(self.query.is_empty(), |d| {
+                        d.child(
+                            div()
+                                .px_2p5()
+                                .pt_1()
+                                .pb_1p5()
+                                .text_size(px(page::META_SIZE))
+                                .font_weight(gpui::FontWeight::MEDIUM)
+                                .text_color(page::secondary_ink())
+                                .child("Recent"),
+                        )
+                    })
                     .when(self.truncated.0 || self.truncated.1, |d| {
                         d.child(
                             div()

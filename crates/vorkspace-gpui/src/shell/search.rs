@@ -90,7 +90,9 @@ impl Shell {
                                     });
                                 }
                             }
-                            Target::Project(path) => this.select_project(path.clone(), window, cx),
+                            Target::Project(path) => {
+                                this.open_project_from_user(path.clone(), window, cx)
+                            }
                         }
                     }
                 },
@@ -142,7 +144,7 @@ impl Shell {
         Sources {
             summaries: summaries.into_values().collect(),
             live,
-            projects: self.workspace.projects.clone(),
+            projects: self.workspace.vorkspace_projects(),
             recent: self
                 .workspace
                 .recent_files
@@ -186,9 +188,21 @@ impl Shell {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        if self.bots.as_ref().is_some_and(|bots| {
+            bots.read(cx)
+                .roster
+                .of_session(id)
+                .is_some_and(|bot| self.workspace.bot_hidden_in_vorkspace(&bot.id))
+        }) {
+            self.error = Some("This Bot belongs to another vorkspace.".into());
+            cx.notify();
+            return;
+        }
         if let Some(view) = self.ensure_session(id, cx) {
             self.open(id, window, cx);
-            if let Some((row, query)) = jump {
+            if self.workspace.active == Some(id)
+                && let Some((row, query)) = jump
+            {
                 view.update(cx, |v, cx| v.reveal_search(row, query, cx));
             }
             return;
@@ -218,10 +232,13 @@ impl Shell {
                 }
                 match result {
                     Ok(summary) => {
-                        this.add(summary, cx);
+                        this.add_loaded(summary, cx);
                         this.open(id, window, cx);
-                        if let Some((row, query)) = jump {
-                            this.sessions[&id].update(cx, |v, cx| v.reveal_search(row, query, cx));
+                        if this.workspace.active == Some(id)
+                            && let Some((row, query)) = jump
+                            && let Some(view) = this.sessions.get(&id)
+                        {
+                            view.update(cx, |v, cx| v.reveal_search(row, query, cx));
                         }
                     }
                     Err(error) => {

@@ -120,6 +120,39 @@ struct Symbol {
     lines: String,
 }
 fn symbols(value: &Value) -> Vec<Symbol> {
+    // Full-text search returns ranked rows with complete qualified names.
+    // Browsing the index returns rows grouped by their qualified-name prefix.
+    if let (Some(columns), Some(rows)) = (value["cols"].as_array(), value["rows"].as_array()) {
+        let column = |name| {
+            columns
+                .iter()
+                .position(|column| column.as_str() == Some(name))
+        };
+        if let Some(qualified) = column("qn") {
+            let kind = column("label");
+            let file = column("file");
+            let lines = column("lines");
+            return rows
+                .iter()
+                .filter_map(|row| {
+                    let qualified = row[qualified].as_str()?;
+                    let field = |index: Option<usize>| {
+                        index
+                            .and_then(|index| row[index].as_str())
+                            .unwrap_or_default()
+                    };
+                    Some(Symbol {
+                        name: qualified.rsplit('.').next().unwrap_or(qualified).into(),
+                        qualified: qualified.into(),
+                        kind: field(kind).into(),
+                        file: field(file).into(),
+                        lines: field(lines).into(),
+                    })
+                })
+                .take(200)
+                .collect();
+        }
+    }
     value["groups"]
         .as_array()
         .into_iter()
@@ -147,6 +180,26 @@ fn symbols(value: &Value) -> Vec<Symbol> {
         })
         .take(200)
         .collect()
+}
+
+#[test]
+fn ranked_codebase_results_keep_the_identity_used_to_open_source() {
+    let response = json!({
+        "cols": ["qn", "label", "file", "lines", "rank"],
+        "rows": [
+            ["atlas.src.greet.greet", "Function", "src/greet.js", "1-3", -41.1],
+            ["atlas.src.greet", "Module", "src/greet.js", "1-6", -1.0]
+        ],
+        "search_mode": "bm25"
+    });
+    let matches = symbols(&response);
+    assert_eq!(matches.len(), 2);
+    assert_eq!(matches[0].name, "greet");
+    assert_eq!(matches[0].qualified, "atlas.src.greet.greet");
+    assert_eq!(matches[0].kind, "Function");
+    assert_eq!(matches[0].file, "src/greet.js");
+    assert_eq!(matches[0].lines, "1-3");
+    assert_eq!(matches[1].qualified, "atlas.src.greet");
 }
 
 pub(crate) struct Page {

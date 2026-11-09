@@ -391,6 +391,7 @@ fn item_pages_keep_pinned_identity_and_independent_view_state_across_snapshots(
         repo: "team/repo".into(),
         title: "First issue".into(),
         updated_at: "2026-11-01T10:00:00Z".into(),
+        project_path: "/work/clone-b".into(),
         ..Default::default()
     };
     let second = Item {
@@ -400,7 +401,20 @@ fn item_pages_keep_pinned_identity_and_independent_view_state_across_snapshots(
     };
     let (section, first_page, second_page) = window
         .update(cx, |root, _, cx| {
-            root.snapshot.items = vec![first.clone(), second.clone()];
+            root.snapshot.items = vec![
+                Item {
+                    project_path: "/work/clone-a".into(),
+                    other_project_paths: vec![first.project_path.clone()],
+                    ..first.clone()
+                },
+                second.clone(),
+            ];
+            assert_eq!(
+                root.item_by_key_for_project(&first.key(), &first.project_path)
+                    .unwrap()
+                    .project_path,
+                first.project_path
+            );
             let section = root.connector_page("github", cx);
             let first_page = root.connector_item_page("github", first.clone(), cx);
             let second_page = root.connector_item_page("github", second.clone(), cx);
@@ -422,6 +436,7 @@ fn item_pages_keep_pinned_identity_and_independent_view_state_across_snapshots(
         ] {
             page.update(cx, |page, cx| {
                 assert_eq!(page.pinned_item().unwrap().key(), item.key());
+                assert_eq!(page.document_cwd(), PathBuf::from(&item.project_path));
                 page.comment
                     .update(cx, |input, cx| input.set_text(draft.into(), cx));
                 page.reply = Some((item.key(), draft.into()));
@@ -491,6 +506,8 @@ fn item_pages_keep_pinned_identity_and_independent_view_state_across_snapshots(
             root.snapshot.items = vec![Item {
                 title: "First issue updated".into(),
                 updated_at: "2026-11-03T10:00:00Z".into(),
+                project_path: "/work/clone-a".into(),
+                other_project_paths: vec![first.project_path.clone()],
                 ..first.clone()
             }];
             root.publish_pages(cx);
@@ -501,6 +518,7 @@ fn item_pages_keep_pinned_identity_and_independent_view_state_across_snapshots(
         first_page.update(cx, |page, _| {
             assert_eq!(page.item().unwrap().key(), first.key());
             assert_eq!(page.pane_title(), "First issue updated");
+            assert_eq!(page.document_cwd(), PathBuf::from(&first.project_path));
         });
         second_page.update(cx, |page, _| {
             assert_eq!(page.item().unwrap().key(), second.key());
@@ -1264,4 +1282,22 @@ fn toolbar_icons_have_explicit_ink_and_the_original_distinct_assets() {
         let bytes = crate::assets::Assets.load(name).unwrap().unwrap();
         assert!(std::str::from_utf8(&bytes).unwrap().contains("<svg"));
     }
+}
+
+#[gpui::test]
+fn an_unconnected_source_spans_the_page_without_a_detail_pane(cx: &mut TestAppContext) {
+    let window = inbox_window(cx);
+    let visual = &mut gpui::VisualTestContext::from_window(window.into(), cx);
+    visual.run_until_parked();
+    visual.refresh().unwrap();
+    assert!(
+        window
+            .update(visual, |inbox, _, _| inbox.unavailable())
+            .unwrap()
+    );
+    let list = visual.debug_bounds("connector-list").unwrap();
+    assert!(
+        f32::from(list.size.width) > 1000.,
+        "the explanation uses the whole page, not the list column: {list:?}"
+    );
 }

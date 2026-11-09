@@ -35,11 +35,12 @@ pub(crate) fn glass_frame() -> Div {
 }
 
 /// Shared shell for the compact cards in the top-right notification stack.
+/// A solid hairline: the tone strip at the leading edge carries the urgency,
+/// and a dashed outline beside it read as a drop target.
 pub(crate) fn toast_frame() -> Div {
     glass_frame()
         .w_full()
         .occlude()
-        .border_dashed()
-        .border_color(content(0.2))
+        .border_color(content(0.14))
         .bg(content(0.1))
 }

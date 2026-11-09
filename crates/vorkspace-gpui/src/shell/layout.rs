@@ -15,6 +15,10 @@ use std::collections::HashMap;
 use vorkspace_ui::theme::*;
 
 impl Shell {
+    pub(super) fn docked_sidebar_width(&self) -> f32 {
+        self.sidebar_content_width * self.sidebar_fraction
+    }
+
     pub(super) fn layout_body(
         &mut self,
         sidebar_width: f32,
@@ -86,7 +90,7 @@ impl Shell {
                         .absolute()
                         .left_0()
                         .top_0()
-                        .w(px(self.workspace.right_panel_width))
+                        .w(px(self.sidebar_content_width))
                         .h_full()
                         .flex()
                         .flex_col()
@@ -169,30 +173,16 @@ impl Shell {
     /// Project tools have their own header.
     pub(super) fn corner_room(&self, cx: &gpui::App) -> f32 {
         // The open sidebar's header holds them instead (`classic_corner`).
-        if self.sidebar_fraction > 0. {
-            return 6.;
-        }
-        6. + self.diff_stat_room(cx) + 24. + 12.
+        let _ = cx;
+        6.
     }
     pub(super) fn classic_corner(
         &self,
         _window: &mut Window,
         cx: &mut Context<Self>,
     ) -> AnyElement {
-        // The open sidebar's header has its own search and the diff stat.
-        if self.sidebar_fraction > 0. {
-            return div().into_any_element();
-        }
-        div()
-            .h(px(TITLE_BAR_HEIGHT))
-            .flex_shrink_0()
-            .flex()
-            .items_center()
-            .pl_1p5()
-            .pr_3()
-            .children(self.project_diff_stat(cx))
-            .child(self.file_search_button(cx))
-            .into_any_element()
+        let _ = cx;
+        div().into_any_element()
     }
     pub(super) fn sidebar_uncached(&self) -> bool {
         self.sidebar_slide.is_some()
@@ -209,7 +199,7 @@ impl Shell {
                 .clone()
                 .cached(
                     StyleRefinement::default()
-                        .w(px(self.workspace.right_panel_width))
+                        .w(px(self.sidebar_content_width))
                         .h_full(),
                 )
                 .into_any_element()
@@ -218,6 +208,7 @@ impl Shell {
     fn sidebar_resize(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
         (self.workspace.sidebar_visible
             && self.sidebar_fraction > 0.
+            && self.sidebar_content_width == self.workspace.right_panel_width
             && self.sidebar_slide.is_none())
         .then(|| {
             // Drag the sidebar's separator on the pane's side.
@@ -326,7 +317,7 @@ impl Shell {
             div()
                 .absolute()
                 .size_full()
-                .bg(black(0.4))
+                .bg(vorkspace_ui::fluid::scrim(0.4))
                 .child(
                     popover("running-work-modal", anchor)
                         .modal_surface(self.workspace.classic_layout)

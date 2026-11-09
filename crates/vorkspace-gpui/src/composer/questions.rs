@@ -149,7 +149,7 @@ impl Render for QuestionCard {
                             .border_1()
                             .border_color(content(if selected { 0.4 } else { 0.12 }))
                             .bg(content(if selected { 0.12 } else { 0.03 }))
-                            .hover(|s| s.bg(content(0.1)))
+                            .hover(|s| s.bg(vorkspace_ui::fluid::hover(0.1)))
                             .child(label.clone())
                             .when(!option.description.is_empty(), |d| {
                                 d.child(
@@ -264,6 +264,7 @@ impl Render for QuestionCard {
                         div()
                             .id("question-skip")
                             .role(Role::Button)
+                            .map(vorkspace_ui::theme::tab_reachable)
                             .aria_label("Skip question")
                             .px_2()
                             .py_1()
@@ -282,6 +283,7 @@ impl Render for QuestionCard {
                             .id("question-answer")
                             .debug_selector(|| "question-answer".into())
                             .role(Role::Button)
+                            .map(vorkspace_ui::theme::tab_reachable)
                             .aria_label("Submit answers")
                             .px_2()
                             .py_1()

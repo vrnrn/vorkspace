@@ -258,7 +258,6 @@ impl Shell {
         }
         self.review_focused = true;
         review.update(cx, |r, cx| r.focus_active(window, cx));
-        self.fit_sidebar(cx);
         cx.notify();
     }
 
@@ -278,7 +277,6 @@ impl Shell {
         self.review_focused = true;
         review.update(cx, |review, cx| review.set_visible(true, cx));
         self.remember_title_tab(TitleTab::Workspace(self.workspace.tab_of(id).unwrap()));
-        self.fit_sidebar(cx);
         self.finish_app_pane_open(window, cx);
     }
 
@@ -329,7 +327,6 @@ impl Shell {
             };
             self.review_slide = Some((id, slide, review));
         }
-        self.fit_sidebar(cx);
         self.persist(cx);
         cx.notify();
     }

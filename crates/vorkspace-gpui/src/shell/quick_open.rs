@@ -98,7 +98,7 @@ impl Shell {
             div()
                 .absolute()
                 .size_full()
-                .bg(black(0.35))
+                .bg(vorkspace_ui::fluid::scrim(0.35))
                 .child(
                     popover("quick-open-modal", anchor)
                         .modal_surface(self.workspace.classic_layout)
@@ -138,12 +138,14 @@ mod tests {
                 })
                 .unwrap();
             visual.run_until_parked();
-            // With the sidebar open, its header holds the file search instead.
-            let search = visual
-                .debug_bounds("titlebar-file-search")
-                .or_else(|| visual.debug_bounds("sidebar-file-search"))
-                .unwrap();
-            visual.simulate_click(search.center(), Default::default());
+            // The inset layout has a titlebar button; the original layout
+            // reaches file search through ⌘P alone.
+            match visual.debug_bounds("titlebar-file-search") {
+                Some(search) => visual.simulate_click(search.center(), Default::default()),
+                None => window
+                    .update(visual, |shell, w, cx| shell.open_quick_open(false, w, cx))
+                    .unwrap(),
+            }
             visual.run_until_parked();
             window
                 .update(visual, |shell, w, cx| {

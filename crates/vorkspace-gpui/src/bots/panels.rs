@@ -105,9 +105,8 @@ fn switch_setting(label: &str, description: &str, disabled: bool, control: AnyEl
                 .child(
                     div()
                         .text_size(px(12.))
-                        .line_height(px(20.))
-                        .text_color(content(0.4))
-                        .truncate()
+                        .line_height(px(18.))
+                        .text_color(content(0.45))
                         .child(description.to_string()),
                 ),
         )
@@ -143,7 +142,7 @@ fn card() -> Div {
         .flex_col()
 }
 /// botPanelParts' EmptyState: an icon over a short, centred note.
-fn empty_state(glyph: &'static str, message: &str) -> AnyElement {
+pub(super) fn empty_state(glyph: &'static str, message: &str) -> AnyElement {
     div()
         .size_full()
         .flex()
@@ -154,7 +153,10 @@ fn empty_state(glyph: &'static str, message: &str) -> AnyElement {
         .px_6()
         .py_10()
         .text_center()
-        .child(icon(glyph, 18.).text_color(content(0.55)))
+        .child(vorkspace_ui::fluid::empty_mark(
+            icon(glyph, 18.).text_color(content(0.55)),
+            40.,
+        ))
         .child(
             div()
                 .max_w(px(288.))
@@ -175,7 +177,6 @@ enum EditingColor {
 }
 struct LookEditor {
     bot: Bot,
-    shape_open: bool,
     dragging_grid: bool,
     grid_bounds: AnchorSlot,
     editing_color: Option<EditingColor>,
@@ -202,7 +203,6 @@ impl LookEditor {
         )];
         Self {
             bot,
-            shape_open: false,
             dragging_grid: false,
             grid_bounds: AnchorSlot::default(),
             editing_color: None,
@@ -251,126 +251,164 @@ impl LookEditor {
         }
         cx.notify();
     }
+    /// Every body, previewed as this Bot wearing it.
     fn shape_section(&self, prefix: &'static str, cx: &mut Context<Self>) -> AnyElement {
-        const SHAPE_LABELS: [(&str, &str); 5] = [
+        const SHAPE_LABELS: [(&str, &str); 8] = [
             ("squircle", "Squircle"),
             ("circle", "Circle"),
             ("rounded", "Rounded"),
             ("pill", "Capsule"),
-            ("hex", "Soft Hex"),
+            ("hex", "Hexagon"),
+            ("octagon", "Octagon"),
+            ("ghost", "Ghost"),
+            ("tv", "Screen"),
         ];
-        let current_shape = self.bot.badge_shape();
-        let current_label = SHAPE_LABELS
-            .iter()
-            .find(|(id, _)| *id == current_shape)
-            .map(|(_, l)| *l)
-            .unwrap_or("Squircle");
-        let dropdown_id = format!("{prefix}-shape-dropdown");
-        let selector_dropdown = dropdown_id.clone();
+        let current = self.bot.badge_shape();
         div()
             .px_1()
             .flex()
             .flex_col()
-            .gap_1()
+            .gap_1p5()
             .child(
                 div()
+                    .text_size(px(12.))
+                    .text_color(content(0.75))
+                    .child("Shape"),
+            )
+            .child(
+                div()
+                    .id(SharedString::from(format!("{prefix}-shape-dropdown")))
+                    .debug_selector(|| "bot-shape-options".into())
+                    .role(Role::TabList)
+                    .aria_label("Shape")
                     .flex()
-                    .items_center()
-                    .justify_between()
-                    .child(
+                    .gap_1()
+                    .children(SHAPE_LABELS.iter().map(|&(shape_id, label)| {
+                        let selected = current == shape_id;
+                        let mut look = crate::avatar::BotLookConfig::from_bot(&self.bot);
+                        look.shape = shape_id.into();
                         div()
-                            .text_size(px(12.))
-                            .text_color(content(0.75))
-                            .child("Shape"),
-                    )
-                    .child(
-                        div()
-                            .id(SharedString::from(dropdown_id))
-                            .debug_selector(move || selector_dropdown.clone())
-                            .role(Role::ComboBox)
-                            .aria_label("Shape")
-                            .aria_expanded(self.shape_open)
-                            .h(px(26.))
-                            .px_2p5()
+                            .id(SharedString::from(format!("{prefix}-shape-{shape_id}")))
+                            .debug_selector(move || format!("bot-shape-{shape_id}"))
+                            .role(Role::RadioButton)
+                            .aria_label(label)
+                            .aria_selected(selected)
+                            .map(vorkspace_ui::theme::tab_reachable)
+                            .h(px(40.))
+                            .flex_1()
+                            .min_w_0()
                             .rounded(px(radius::CONTROL))
-                            .border_1()
-                            .border_color(content(0.14))
-                            .bg(content(0.05))
-                            .hover(|s| s.bg(content(0.1)).border_color(content(0.24)))
                             .flex()
                             .items_center()
-                            .gap_2()
-                            .text_size(px(12.))
-                            .text_color(content(0.9))
-                            .child(current_label)
-                            .child(icon("chevron-down", 12.).text_color(content(0.5)))
-                            .on_click(cx.listener(|this, _, _, cx| {
-                                this.shape_open = !this.shape_open;
+                            .justify_center()
+                            .when(selected, |d| {
+                                d.bg(content(0.1)).border_1().border_color(content(0.2))
+                            })
+                            .hover(|d| d.bg(vorkspace_ui::fluid::hover(0.06)))
+                            .cursor_pointer()
+                            .child(crate::avatar::avatar_with_look(look, "idle", 24., true))
+                            .on_click(cx.listener(move |this, _, _, cx| {
+                                this.bot.shape = shape_id.into();
+                                cx.emit(LookChanged {
+                                    bot: this.bot.clone(),
+                                });
                                 cx.notify();
-                            })),
-                    ),
+                            }))
+                    })),
             )
-            .when(self.shape_open, |d| {
-                d.child(
-                    div()
-                        .id(SharedString::from(format!("{prefix}-shape-options")))
-                        .debug_selector(move || format!("{prefix}-shape-options"))
-                        .role(Role::ListBox)
-                        .aria_label("Badge shape")
-                        .p_1()
-                        .rounded(px(radius::CONTROL))
-                        .border_1()
-                        .border_color(content(0.12))
-                        .bg(content(0.06))
-                        .flex()
-                        .flex_col()
-                        .gap(px(1.))
-                        .children(SHAPE_LABELS.iter().enumerate().map(
-                            |(ix, (shape_id, label))| {
-                                let selected = current_shape == *shape_id;
-                                let opt_id = format!("{prefix}-shape-{ix}");
-                                let opt_sel = opt_id.clone();
-                                div()
-                                    .id(SharedString::from(opt_id))
-                                    .debug_selector(move || opt_sel.clone())
-                                    .role(Role::ListBoxOption)
-                                    .aria_label(*label)
-                                    .aria_selected(selected)
-                                    .h(px(26.))
-                                    .px_2()
-                                    .rounded(px(radius::SMALL))
-                                    .flex()
-                                    .items_center()
-                                    .justify_between()
-                                    .text_size(px(12.))
-                                    .text_color(content(if selected { 1. } else { 0.75 }))
-                                    .when(selected, |d| d.bg(content(0.12)))
-                                    .hover(|s| s.bg(content(0.08)).text_color(content(1.)))
-                                    .child(*label)
-                                    .when(selected, |d| {
-                                        d.child(icon("check", 12.).text_color(content(1.)))
-                                    })
-                                    .on_click(cx.listener(move |this, _, _, cx| {
-                                        this.bot.shape = (*shape_id).into();
-                                        this.shape_open = false;
-                                        cx.emit(LookChanged {
-                                            bot: this.bot.clone(),
-                                        });
-                                        cx.notify();
-                                    }))
-                            },
-                        )),
-                )
-            })
             .into_any_element()
     }
     fn texture_and_grid_section(&self, prefix: &'static str, cx: &mut Context<Self>) -> AnyElement {
+        let toggle_id = format!("{prefix}-texture-toggle");
+        let toggle_sel = toggle_id.clone();
+        div()
+            .px_1()
+            .flex()
+            .flex_col()
+            .gap_2()
+            .child(
+                div()
+                    .text_size(px(12.))
+                    .text_color(content(0.75))
+                    .child("Pattern"),
+            )
+            // Each choice previews this Bot in that print, so the pick is
+            // made by eye rather than by name.
+            .child(
+                div()
+                    .id(SharedString::from(toggle_id))
+                    .debug_selector(move || toggle_sel.clone())
+                    .role(Role::TabList)
+                    .aria_label("Pattern")
+                    .flex()
+                    .gap_1p5()
+                    .children(vorkspace_core::project_appearance::BOT_PATTERNS.iter().map(
+                        |&pattern| {
+                            let selected = self.bot.resolved_pattern() == pattern;
+                            let mut look = crate::avatar::BotLookConfig::from_bot(&self.bot);
+                            look.pattern = pattern;
+                            look.textured = pattern != "solid";
+                            let label: SharedString = {
+                                let mut c = pattern.chars();
+                                c.next()
+                                    .map(|f| f.to_uppercase().chain(c).collect::<String>())
+                                    .unwrap_or_default()
+                                    .into()
+                            };
+                            div()
+                                .id(SharedString::from(format!("{prefix}-pattern-{pattern}")))
+                                .debug_selector(move || format!("bot-pattern-{pattern}"))
+                                .role(Role::Tab)
+                                .aria_label(label.clone())
+                                .aria_selected(selected)
+                                .map(vorkspace_ui::theme::tab_reachable)
+                                .flex_1()
+                                .flex()
+                                .flex_col()
+                                .items_center()
+                                .gap_1()
+                                .py_1p5()
+                                .rounded(px(radius::CONTROL))
+                                .border_1()
+                                .border_color(if selected { content(0.6) } else { content(0.) })
+                                .when(selected, |d| d.bg(content(0.06)))
+                                .when(!selected, |d| {
+                                    d.hover(|s| s.bg(vorkspace_ui::fluid::hover(0.06)))
+                                })
+                                .cursor_pointer()
+                                .child(crate::avatar::avatar_with_look(look, "idle", 30., true))
+                                .child(
+                                    div()
+                                        .text_size(px(10.))
+                                        .text_color(content(if selected { 0.9 } else { 0.5 }))
+                                        .child(label),
+                                )
+                                .on_click(cx.listener(move |this, _, _, cx| {
+                                    this.bot.textured = pattern != "solid";
+                                    this.bot.pattern =
+                                        (pattern != "solid").then(|| pattern.to_string());
+                                    if !this.bot.textured
+                                        && this.editing_color == Some(EditingColor::Foreground)
+                                    {
+                                        this.editing_color = None;
+                                    }
+                                    cx.emit(LookChanged {
+                                        bot: this.bot.clone(),
+                                    });
+                                    cx.notify();
+                                }))
+                        },
+                    )),
+            )
+            .into_any_element()
+    }
+    /// Where the print sits and how coarse it is; beside the colors so the
+    /// editor's two columns carry similar weight.
+    fn print_and_scale_section(&self, prefix: &'static str, cx: &mut Context<Self>) -> AnyElement {
         let textured = self.bot.textured;
         let grid = self.bot.resolved_grid();
         let fraction = (grid.saturating_sub(2) as f32 / 6.).clamp(0., 1.);
         let probe = self.grid_bounds.clone();
-        let toggle_id = format!("{prefix}-texture-toggle");
-        let toggle_sel = toggle_id.clone();
         let rand_id = format!("{prefix}-randomize-seed");
         let rand_sel = rand_id.clone();
         let slider_id = format!("{prefix}-grid-slider");
@@ -380,39 +418,70 @@ impl LookEditor {
             .flex()
             .flex_col()
             .gap_2()
-            .child(
-                div()
-                    .flex()
-                    .items_center()
-                    .justify_between()
-                    .child(
-                        div()
-                            .text_size(px(12.))
-                            .text_color(content(0.75))
-                            .child("Texture"),
-                    )
-                    .child(
-                        crate::controls::switch(
-                            SharedString::from(toggle_id),
-                            "Texture",
-                            textured,
-                            true,
+            // Where the print sits: rising from the base, falling from the
+            // top, or across the whole body.
+            .when(textured, |d| {
+                let current = self.bot.resolved_print();
+                d.child(
+                    div()
+                        .flex()
+                        .items_center()
+                        .justify_between()
+                        .child(
+                            div()
+                                .text_size(px(12.))
+                                .text_color(content(0.75))
+                                .child("Print"),
                         )
-                        .debug_selector(move || toggle_sel.clone())
-                        .on_click(cx.listener(|this, _, _, cx| {
-                            this.bot.textured = !this.bot.textured;
-                            if !this.bot.textured
-                                && this.editing_color == Some(EditingColor::Foreground)
-                            {
-                                this.editing_color = None;
-                            }
-                            cx.emit(LookChanged {
-                                bot: this.bot.clone(),
-                            });
-                            cx.notify();
-                        })),
-                    ),
-            )
+                        .child(
+                            div()
+                                .flex()
+                                .gap_px()
+                                .p(px(2.))
+                                .rounded(px(radius::CONTROL))
+                                .bg(content(0.06))
+                                .children(
+                                    [("ground", "Base"), ("cap", "Top"), ("full", "All over")].map(
+                                        |(id, label)| {
+                                            let selected = current == id;
+                                            div()
+                                                .id(SharedString::from(format!(
+                                                    "{prefix}-print-{id}"
+                                                )))
+                                                .debug_selector(move || format!("bot-print-{id}"))
+                                                .role(Role::Tab)
+                                                .aria_label(label)
+                                                .aria_selected(selected)
+                                                .map(vorkspace_ui::theme::tab_reachable)
+                                                .px_2()
+                                                .py(px(3.))
+                                                .rounded(px(radius::CONTROL - 2.))
+                                                .text_size(px(11.))
+                                                .text_color(content(if selected {
+                                                    1.
+                                                } else {
+                                                    0.55
+                                                }))
+                                                .when(selected, |d| d.bg(content(0.1)))
+                                                .when(!selected, |d| {
+                                                    d.hover(|s| s.text_color(content(0.9)))
+                                                })
+                                                .cursor_pointer()
+                                                .child(label)
+                                                .on_click(cx.listener(move |this, _, _, cx| {
+                                                    this.bot.print =
+                                                        (id != "ground").then(|| id.to_string());
+                                                    cx.emit(LookChanged {
+                                                        bot: this.bot.clone(),
+                                                    });
+                                                    cx.notify();
+                                                }))
+                                        },
+                                    ),
+                                ),
+                        ),
+                )
+            })
             .when(textured, |d| {
                 d.child(
                     div()
@@ -424,9 +493,9 @@ impl LookEditor {
                                 .flex()
                                 .items_center()
                                 .justify_between()
-                                .text_size(px(11.))
-                                .text_color(content(0.5))
-                                .child("Grid Scale")
+                                .text_size(px(12.))
+                                .text_color(content(0.75))
+                                .child("Scale")
                                 .child(
                                     div()
                                         .flex()
@@ -442,18 +511,20 @@ impl LookEditor {
                                                 .id(SharedString::from(rand_id))
                                                 .debug_selector(move || rand_sel.clone())
                                                 .role(Role::Button)
+                                                .map(vorkspace_ui::theme::tab_reachable)
                                                 .aria_label("Randomize texture seed")
                                                 .size(px(22.))
                                                 .rounded(px(radius::CONTROL))
                                                 .border_1()
                                                 .border_color(content(0.14))
                                                 .bg(content(0.06))
-                                                .hover(|s| s.bg(content(0.14)))
+                                                .hover(|s| s.bg(vorkspace_ui::fluid::hover(0.14)))
                                                 .flex()
                                                 .items_center()
                                                 .justify_center()
-                                                .text_size(px(11.))
-                                                .child("🎲")
+                                                .child(
+                                                    icon("shuffle", 13.).text_color(content(0.7)),
+                                                )
                                                 .on_click(cx.listener(|this, _, _, cx| {
                                                     this.randomize_seed(cx);
                                                 })),
@@ -473,16 +544,7 @@ impl LookEditor {
                                 .flex()
                                 .items_center()
                                 .child(probe.probe())
-                                .child(div().w_full().h(px(4.)).rounded_full().bg(content(0.16)))
-                                .child(
-                                    div()
-                                        .absolute()
-                                        .top(px(1.))
-                                        .left(gpui::relative(fraction * 0.94))
-                                        .size(px(12.))
-                                        .rounded_full()
-                                        .bg(content(1.)),
-                                )
+                                .children(vorkspace_ui::fluid::slider_parts(fraction))
                                 .on_mouse_down(
                                     MouseButton::Left,
                                     cx.listener(|this, event: &gpui::MouseDownEvent, _, cx| {
@@ -532,8 +594,8 @@ impl LookEditor {
             .gap_1p5()
             .child(
                 div()
-                    .text_size(px(11.))
-                    .text_color(content(0.5))
+                    .text_size(px(12.))
+                    .text_color(content(0.75))
                     .child(if textured { "Colors" } else { "Color" }),
             )
             .child(
@@ -546,6 +608,7 @@ impl LookEditor {
                             .id(SharedString::from(bg_id))
                             .debug_selector(move || bg_sel.clone())
                             .role(Role::Button)
+                            .map(vorkspace_ui::theme::tab_reachable)
                             .aria_label(if textured {
                                 "Background color"
                             } else {
@@ -563,7 +626,7 @@ impl LookEditor {
                                 content(0.15)
                             })
                             .bg(content(if bg_active { 0.12 } else { 0.05 }))
-                            .hover(|s| s.bg(content(0.1)))
+                            .hover(|s| s.bg(vorkspace_ui::fluid::hover(0.1)))
                             .flex()
                             .items_center()
                             .justify_center()
@@ -585,6 +648,7 @@ impl LookEditor {
                                 .id(SharedString::from(fg_id))
                                 .debug_selector(move || fg_sel.clone())
                                 .role(Role::Button)
+                                .map(vorkspace_ui::theme::tab_reachable)
                                 .aria_label("Foreground color")
                                 .aria_expanded(fg_active)
                                 .flex_1()
@@ -598,7 +662,7 @@ impl LookEditor {
                                     content(0.15)
                                 })
                                 .bg(content(if fg_active { 0.12 } else { 0.05 }))
-                                .hover(|s| s.bg(content(0.1)))
+                                .hover(|s| s.bg(vorkspace_ui::fluid::hover(0.1)))
                                 .flex()
                                 .items_center()
                                 .justify_center()
@@ -619,6 +683,7 @@ impl LookEditor {
                                 .id(SharedString::from(swap_id))
                                 .debug_selector(move || swap_sel.clone())
                                 .role(Role::Button)
+                                .map(vorkspace_ui::theme::tab_reachable)
                                 .aria_label("Swap background and foreground colors")
                                 .h(px(24.))
                                 .w(px(28.))
@@ -627,7 +692,7 @@ impl LookEditor {
                                 .border_1()
                                 .border_color(content(0.15))
                                 .bg(content(0.05))
-                                .hover(|s| s.bg(content(0.12)))
+                                .hover(|s| s.bg(vorkspace_ui::fluid::hover(0.12)))
                                 .flex()
                                 .items_center()
                                 .justify_center()
@@ -668,12 +733,13 @@ impl LookEditor {
         const COLOR_NAMES: [&str; 9] = [
             "Blue", "Coral", "Yellow", "Green", "Pink", "Purple", "Teal", "Orange", "Indigo",
         ];
-        const FACE_LABELS: [(&str, &str); 5] = [
-            ("pills", "3D Pills"),
-            ("dots", "Round Dots"),
+        const FACE_LABELS: [(&str, &str); 6] = [
+            ("pills", "Pills"),
+            ("dots", "Dots"),
             ("visor", "Visor"),
-            ("carets", "Happy ^ ^"),
-            ("wink", "Wink"),
+            ("square", "Square"),
+            ("slits", "Slits"),
+            ("rings", "Rings"),
         ];
         let current_face = self.bot.face_style();
         let textured = self.bot.textured;
@@ -686,109 +752,135 @@ impl LookEditor {
             .p_3()
             .w_full()
             .flex()
-            .flex_col()
-            .gap_2p5()
+            .gap_4()
+            // Form on the left, colour on the right: one row of choices
+            // instead of a column taller than the window.
             .child(
                 div()
-                    .id("bot-mascot-options")
-                    .role(Role::RadioGroup)
-                    .aria_label("Face style")
-                    .px_1()
+                    .w(px(300.))
+                    .flex_shrink_0()
                     .flex()
-                    .gap_1()
-                    .children(
-                        FACE_LABELS
-                            .iter()
-                            .enumerate()
-                            .map(|(ix, (face_id, label))| {
-                                let selected = current_face == *face_id;
-                                let mut preview_bot = self.bot.clone();
-                                preview_bot.mascot = (*face_id).into();
-                                div()
-                                    .id(("settings-mascot", ix))
-                                    .debug_selector(move || format!("bot-mascot-{ix}"))
-                                    .role(Role::RadioButton)
-                                    .aria_label(*label)
-                                    .aria_selected(selected)
-                                    .h(px(44.))
-                                    .flex_1()
-                                    .min_w_0()
-                                    .rounded(px(radius::CONTROL))
-                                    .flex()
-                                    .items_center()
-                                    .justify_center()
-                                    .when(selected, |d| {
-                                        d.bg(content(0.1)).border_1().border_color(content(0.2))
-                                    })
-                                    .hover(|d| d.bg(content(0.06)))
-                                    .child(avatar::bot_avatar(&preview_bot, "idle", 28., !selected))
-                                    .on_click(cx.listener(move |this, _, _, cx| {
-                                        this.bot.mascot = (*face_id).into();
-                                        cx.emit(LookChanged {
-                                            bot: this.bot.clone(),
-                                        });
-                                        cx.notify();
-                                    }))
-                            }),
-                    ),
+                    .flex_col()
+                    .gap_2p5()
+                    .child(
+                        div()
+                            .px_1()
+                            .text_size(px(12.))
+                            .text_color(content(0.75))
+                            .child("Eyes"),
+                    )
+                    .child(
+                        div()
+                            .id("bot-mascot-options")
+                            .role(Role::TabList)
+                            .aria_label("Face style")
+                            .px_1()
+                            .flex()
+                            .gap_1()
+                            .children(FACE_LABELS.iter().enumerate().map(
+                                |(ix, (face_id, label))| {
+                                    let selected = current_face == *face_id;
+                                    let mut preview_bot = self.bot.clone();
+                                    preview_bot.mascot = (*face_id).into();
+                                    div()
+                                        .id(("settings-mascot", ix))
+                                        .debug_selector(move || format!("bot-mascot-{ix}"))
+                                        .role(Role::RadioButton)
+                                        .aria_label(*label)
+                                        .aria_selected(selected)
+                                        .map(vorkspace_ui::theme::tab_reachable)
+                                        .h(px(44.))
+                                        .flex_1()
+                                        .min_w_0()
+                                        .rounded(px(radius::CONTROL))
+                                        .flex()
+                                        .items_center()
+                                        .justify_center()
+                                        .when(selected, |d| {
+                                            d.bg(content(0.1)).border_1().border_color(content(0.2))
+                                        })
+                                        .hover(|d| d.bg(vorkspace_ui::fluid::hover(0.06)))
+                                        .child(avatar::bot_avatar(
+                                            &preview_bot,
+                                            "idle",
+                                            28.,
+                                            !selected,
+                                        ))
+                                        .on_click(cx.listener(move |this, _, _, cx| {
+                                            this.bot.mascot = (*face_id).into();
+                                            cx.emit(LookChanged {
+                                                bot: this.bot.clone(),
+                                            });
+                                            cx.notify();
+                                        }))
+                                },
+                            )),
+                    )
+                    .child(self.shape_section("settings-bot", cx))
+                    .child(self.texture_and_grid_section("settings-bot", cx)),
             )
-            .child(self.shape_section("settings-bot", cx))
-            .child(self.texture_and_grid_section("settings-bot", cx))
-            .child(div().h(px(1.)).bg(content(0.1)))
-            .child(self.color_buttons_section("settings-bot", cx))
+            .child(div().w(px(1.)).flex_shrink_0().bg(content(0.08)))
             .child(
                 div()
-                    .id("bot-color-options")
-                    .role(Role::Group)
-                    .aria_label("Color")
-                    .px_1()
+                    .flex_1()
+                    .min_w_0()
                     .flex()
-                    .justify_between()
-                    .gap_1()
-                    .children(
-                        bot::COLORS_BOT
-                            .into_iter()
-                            .enumerate()
-                            .map(|(index, color)| {
-                                let pair_fg = TEXTURE_PALETTES
-                                    .get(index)
-                                    .map(|p| p.2)
-                                    .unwrap_or_else(|| default_foreground_color(color));
-                                let selected = self.bot.color == color;
-                                div()
-                                    .id(("settings-color", index))
-                                    .debug_selector(move || format!("bot-color-{index}"))
-                                    .role(Role::Button)
-                                    .aria_label(COLOR_NAMES[index])
-                                    .aria_selected(selected)
-                                    .size(px(26.))
-                                    .flex()
-                                    .items_center()
-                                    .justify_center()
-                                    .rounded_full()
-                                    .when(selected, |d| d.border_2().border_color(content(0.8)))
-                                    .child(avatar::color_swatch_circle(
-                                        color,
-                                        textured.then_some(pair_fg),
-                                        20.,
-                                    ))
-                                    .on_click(cx.listener(move |this, _, _, cx| {
-                                        this.bot.color = color;
-                                        if this.bot.textured {
-                                            this.bot.fg_color = Some(pair_fg);
-                                        }
-                                        this.editing_color = None;
-                                        cx.emit(LookChanged {
-                                            bot: this.bot.clone(),
-                                        });
-                                        cx.notify();
-                                    }))
-                            }),
-                    ),
+                    .flex_col()
+                    .gap_2p5()
+                    .child(self.color_buttons_section("settings-bot", cx))
+                    .child(
+                        div()
+                            .id("bot-color-options")
+                            .role(Role::Group)
+                            .aria_label("Color")
+                            .px_1()
+                            .flex()
+                            .justify_between()
+                            .gap_1()
+                            .children(bot::COLORS_BOT.into_iter().enumerate().map(
+                                |(index, color)| {
+                                    let pair_fg = TEXTURE_PALETTES
+                                        .get(index)
+                                        .map(|p| p.2)
+                                        .unwrap_or_else(|| default_foreground_color(color));
+                                    let selected = self.bot.color == color;
+                                    div()
+                                        .id(("settings-color", index))
+                                        .debug_selector(move || format!("bot-color-{index}"))
+                                        .role(Role::Button)
+                                        .map(vorkspace_ui::theme::tab_reachable)
+                                        .aria_label(COLOR_NAMES[index])
+                                        .aria_selected(selected)
+                                        .size(px(26.))
+                                        .flex()
+                                        .items_center()
+                                        .justify_center()
+                                        .rounded_full()
+                                        .when(selected, |d| d.border_2().border_color(content(0.8)))
+                                        .child(avatar::color_swatch_circle(
+                                            color,
+                                            textured.then_some(pair_fg),
+                                            20.,
+                                        ))
+                                        .on_click(cx.listener(move |this, _, _, cx| {
+                                            this.bot.color = color;
+                                            if this.bot.textured {
+                                                this.bot.fg_color = Some(pair_fg);
+                                            }
+                                            this.editing_color = None;
+                                            cx.emit(LookChanged {
+                                                bot: this.bot.clone(),
+                                            });
+                                            cx.notify();
+                                        }))
+                                },
+                            )),
+                    )
+                    .child(self.print_and_scale_section("settings-bot", cx))
+                    .when(self.editing_color.is_some(), |d| {
+                        d.child(div().px_1().pt_2().child(self.custom.clone()))
+                    }),
             )
-            .when(self.editing_color.is_some(), |d| {
-                d.child(div().px_1().pt_2().child(self.custom.clone()))
-            })
             .into_any_element()
     }
 }
@@ -900,7 +992,7 @@ impl Bots {
         .relative()
         .rounded(px(radius::CONTROL))
         .when(active, |d| d.bg(content(0.1)))
-        .hover(|s| s.bg(content(0.08)))
+        .hover(|s| s.bg(vorkspace_ui::fluid::hover(0.08)))
         .child(avatar::minion_avatar(parent, &id, status, 16., false))
         .child(
             div()
@@ -933,7 +1025,12 @@ impl Bots {
         .into_any_element()
     }
 
-    fn open_settings_look(&mut self, id: &str, window: &mut Window, cx: &mut Context<Self>) {
+    pub(super) fn open_settings_look(
+        &mut self,
+        id: &str,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         let Some(bot) = self.settings_bot(id).cloned() else {
             return;
         };
@@ -948,6 +1045,8 @@ impl Bots {
                     bot.color = event.bot.color;
                     bot.fg_color = event.bot.fg_color;
                     bot.textured = event.bot.textured;
+                    bot.pattern = event.bot.pattern.clone();
+                    bot.print = event.bot.print.clone();
                     bot.seed = event.bot.seed;
                     bot.grid = event.bot.grid;
                 },
@@ -967,7 +1066,7 @@ impl Bots {
                 window,
                 cx,
             )
-            .width(280.)
+            .width(620.)
         });
         let target = id.to_string();
         let closed = cx.subscribe_in(
@@ -987,7 +1086,7 @@ impl Bots {
         self.picker = Some(OpenPicker {
             menu,
             anchor,
-            width: 280.,
+            width: 620.,
             align: crate::popover::Align::Center,
             _events: vec![changed, closed],
         });
@@ -1006,9 +1105,7 @@ impl Bots {
         }
         let label = label.to_string();
         let field = cx.new(|cx| {
-            let mut f = if key.starts_with("channel-draft:") {
-                Input::channel_message(cx)
-            } else if multi {
+            let mut f = if multi {
                 Input::markdown_editor(&label, cx)
             } else if key == "memory-fact" || key.starts_with("memory-edit:") {
                 Input::memory_fact(&label, cx)
@@ -1037,12 +1134,6 @@ impl Bots {
                 {
                     return;
                 }
-                if key_owned.starts_with("channel-draft:")
-                    && let Err(error) = locked(&this.store)
-                        .and_then(|db| db.save_setting(&key_owned, &input.read(cx).content))
-                {
-                    this.error = Some(error);
-                }
                 if key_owned == "bot-name" {
                     let name = input.read(cx).content.trim().chars().take(40).collect();
                     if let Some(id) = this
@@ -1058,17 +1149,6 @@ impl Bots {
             }),
         );
         self.fields.insert(key.into(), field.clone());
-        if let Some(channel) = key.strip_prefix("channel-draft:") {
-            let channel = channel.to_owned();
-            self.observations.push(cx.subscribe(
-                &field,
-                move |this, _, _: &input::Submitted, cx| {
-                    if this.channels.open && this.channels.selected.as_deref() == Some(&channel) {
-                        this.send_channel_message(&channel, cx);
-                    }
-                },
-            ));
-        }
         field
     }
     pub(super) fn value(&self, key: &str, cx: &App) -> String {

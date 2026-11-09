@@ -1008,6 +1008,16 @@ impl VisualTestContext {
         self.simulate_window_resize(self.window, size)
     }
 
+    /// Simulates an assistive client asking the test window for its tree.
+    pub fn activate_accessibility(&mut self) {
+        self.update(|window, cx| {
+            let active = Arc::new(std::sync::atomic::AtomicBool::new(true));
+            window.a11y = crate::window::a11y::A11y::new(active, false, None);
+            window.refresh();
+            window.draw(cx).clear(cx);
+        });
+    }
+
     /// Simulates a change in whether the platform is presenting this window.
     pub fn simulate_visibility_change(&self, visibility: WindowVisibility) {
         self.simulate_window_visibility_change(self.window, visibility);

@@ -251,6 +251,7 @@ impl RemoteProjectPicker {
         div()
             .id(("remote-folder", id))
             .role(Role::Button)
+            .map(vorkspace_ui::theme::tab_reachable)
             .aria_label(format!("Browse {name}"))
             .w_full()
             .rounded(px(radius::CONTROL))
@@ -262,7 +263,10 @@ impl RemoteProjectPicker {
             .text_size(px(12.))
             .text_color(content(0.75))
             .cursor_pointer()
-            .hover(|s| s.bg(content(0.08)).text_color(content(1.)))
+            .hover(|s| {
+                s.bg(vorkspace_ui::fluid::hover(0.08))
+                    .text_color(content(1.))
+            })
             .child(icon("folder", 14.).text_color(content(0.45)))
             .child(div().min_w_0().flex_1().truncate().child(name))
             .child(icon("chevron-right", 12.).text_color(content(0.3)))
@@ -422,7 +426,7 @@ impl Render for RemoteProjectPicker {
                     .role(Role::Alert)
                     .text_size(px(12.))
                     .line_height(px(17.))
-                    .text_color(rgb(0xf87171))
+                    .text_color(vorkspace_ui::theme::danger())
                     .child(self.error.clone()),
             );
         }
@@ -470,21 +474,25 @@ impl Shell {
         self.close_preview(cx);
         let picker =
             cx.new(|cx| RemoteProjectPicker::new(self.remote.clone(), self.store.clone(), cx));
-        let events = cx.subscribe_in(&picker, window, |this, _, event: &Picked, window, cx| {
-            this.close_remote_project(window, cx);
-            match event {
-                Picked::Open(key) => {
-                    this.workspace.add_project(key);
-                    this.select_project(key.clone(), window, cx);
+        let target = self.project_picker_target();
+        let events = cx.subscribe_in(
+            &picker,
+            window,
+            move |this, _, event: &Picked, window, cx| {
+                this.close_remote_project(window, cx);
+                match event {
+                    Picked::Open(key) => {
+                        this.open_picked_project(&target, key.clone(), window, cx);
+                    }
+                    Picked::Connections => {
+                        this.open_settings(crate::settings::Section::Connections, window, cx)
+                    }
+                    Picked::Cancel => {}
                 }
-                Picked::Connections => {
-                    this.open_settings(crate::settings::Section::Connections, window, cx)
-                }
-                Picked::Cancel => {}
-            }
-            this.invalidate_chrome(cx);
-            cx.notify();
-        });
+                this.invalidate_chrome(cx);
+                cx.notify();
+            },
+        );
         window.focus(&picker.focus_handle(cx), cx);
         self.remote_project_picker = Some(Open {
             picker,
@@ -522,7 +530,7 @@ impl Shell {
             div()
                 .absolute()
                 .size_full()
-                .bg(black(0.3))
+                .bg(vorkspace_ui::fluid::scrim(0.3))
                 .child(
                     popover("remote-project-modal", anchor)
                         .modal_surface(self.workspace.classic_layout)

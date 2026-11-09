@@ -962,6 +962,7 @@ impl Render for ImageLightbox {
                     .group("image-preview-close")
                     .debug_selector(|| "close-image-preview".into())
                     .role(Role::Button)
+                    .map(vorkspace_ui::theme::tab_reachable)
                     .aria_label("Close image preview")
                     .track_focus(&self.focus)
                     .absolute()

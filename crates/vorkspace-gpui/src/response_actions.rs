@@ -72,7 +72,10 @@ pub(crate) fn button(
         .justify_center()
         .text_color(content(if active { 0.7 } else { 0.4 }))
         .when(active, |d| d.bg(content(0.08)))
-        .hover(|s| s.bg(content(0.08)).text_color(content(0.7)))
+        .hover(|s| {
+            s.bg(vorkspace_ui::fluid::hover(0.08))
+                .text_color(content(0.7))
+        })
         .on_mouse_down(gpui::MouseButton::Left, |_, _, cx| cx.stop_propagation())
         .child(
             icon(glyph, 14.)

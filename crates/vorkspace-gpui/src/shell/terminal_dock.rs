@@ -499,6 +499,7 @@ impl Shell {
                                         div()
                                             .id(("terminal-tab-close", ix))
                                             .role(Role::Button)
+                                            .map(vorkspace_ui::theme::tab_reachable)
                                             .aria_label(SharedString::from(format!(
                                                 "Close {label}"
                                             )))
@@ -516,7 +517,7 @@ impl Shell {
                                             } else {
                                                 0.
                                             })
-                                            .hover(|s| s.bg(content(0.1)))
+                                            .hover(|s| s.bg(vorkspace_ui::fluid::hover(0.1)))
                                             .child(
                                                 icon("x", 12.)
                                                     .text_color(content(0.5))
@@ -613,7 +614,7 @@ impl Shell {
                         ),
                     )
                     .child(
-                        icon_button("move-terminal", "Move Terminal", side)
+                        icon_button("move-terminal", "Move terminal", side)
                             .child(move_anchor.probe())
                             .on_click(cx.listener(move |this, _, window, cx| {
                                 // ExplorerMenu hangs from the button's bottom-left corner.
@@ -655,24 +656,29 @@ impl Shell {
     }
 }
 
-const NEW_TERMINAL_LABEL: &str = "New Terminal (⌘`)";
-const HIDE_TERMINAL_LABEL: &str = "Hide Terminal (⌘J)";
+const NEW_TERMINAL_LABEL: &str = "New terminal (⌘`)";
+const HIDE_TERMINAL_LABEL: &str = "Hide terminal (⌘J)";
 
 impl Shell {
     /// newTerminalCwd: the focused session's worktree, else its folder, else
     /// the project.
     pub(super) fn terminal_cwd(&self, cx: &App) -> String {
+        self.focused_checkout(cx).to_owned()
+    }
+
+    pub(super) fn focused_checkout<'a>(&'a self, cx: &'a App) -> &'a str {
         self.workspace
             .active
+            .and_then(|id| self.workspace.session_for_pane(id))
             .and_then(|id| self.sessions.get(&id))
             .map(|view| {
                 let view = view.read(cx);
                 view.settings
                     .worktree_cwd
-                    .clone()
-                    .unwrap_or_else(|| view.summary.cwd.clone())
+                    .as_deref()
+                    .unwrap_or(&view.summary.cwd)
             })
-            .unwrap_or_else(|| self.working_copy().to_owned())
+            .unwrap_or_else(|| self.working_copy())
     }
     pub(super) fn spawn_terminal(
         &mut self,
@@ -762,7 +768,6 @@ impl Shell {
             self.slide_dock(true);
         }
         self.focus_terminal(window, cx);
-        self.fit_sidebar(cx);
         self.persist(cx);
         cx.notify();
     }
@@ -792,7 +797,6 @@ impl Shell {
         } else if self.dock_focused(window, cx).is_some() {
             self.focus_active(window, cx);
         }
-        self.fit_sidebar(cx);
         self.persist(cx);
         cx.notify();
     }
@@ -879,7 +883,6 @@ impl Shell {
             if had_focus {
                 self.focus_active(window, cx);
             }
-            self.fit_sidebar(cx);
         } else if had_focus {
             self.focus_terminal(window, cx);
         }
@@ -893,7 +896,6 @@ impl Shell {
             dock.size = side.clamp(dock.size, viewport);
         }
         self.dock_slide = None;
-        self.fit_sidebar(cx);
         self.persist(cx);
         cx.notify();
     }

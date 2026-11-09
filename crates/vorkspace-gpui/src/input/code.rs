@@ -1173,14 +1173,12 @@ impl Input {
                         .min((rail.size.height - px(32.)).max(px(0.))),
                 )
                 .max_w(px(360.))
-                .px_2()
+                .px(px(9.))
                 .py_1()
-                .rounded(px(radius::CONTROL))
-                .bg(vorkspace_ui::theme::pane_fill())
-                .border_1()
-                .border_color(vorkspace_ui::theme::content(0.14))
+                .rounded(px(vorkspace_ui::fluid::TIP_RADIUS))
+                .bg(vorkspace_ui::fluid::tip_fill())
                 .text_size(px(12.))
-                .text_color(vorkspace_ui::theme::content(1.))
+                .text_color(vorkspace_ui::fluid::tip_text(1.))
                 .child(marker.message.clone())
                 .into_any_element(),
         )
@@ -1291,10 +1289,12 @@ fn paint_rail(
             } else {
                 code.top(code.row(change.to.saturating_sub(1)) + 1, i.line_height)
             };
+            // A slim lane at the rail's outer edge: in a short file a change
+            // spans most of the rail, and a full-width band reads as a slab.
             let bounds = Bounds::new(
-                rail.origin + point(px(3.), px(top / total * height)),
+                rail.origin + point(px(WIDTH - 6.), px(top / total * height)),
                 size(
-                    px(WIDTH - 5.),
+                    px(4.),
                     px(((bottom - top).max(0.) / total * height).max(3.)),
                 ),
             );
@@ -1559,7 +1559,7 @@ fn shape(i: &Input, row: usize, width: Option<Pixels>, w: &mut Window) -> Wrappe
                 decorated.push(TextRun {
                     len: b - a,
                     underline: Some(UnderlineStyle {
-                        color: Some(rgb(0xf87171).into()),
+                        color: Some(vorkspace_ui::theme::danger()),
                         thickness: px(1.),
                         wavy: true,
                     }),

@@ -1,6 +1,6 @@
 //! Compact semantic tool captions with clickable file targets.
 use super::{TranscriptView, tasks};
-use gpui::{Animation, AnimationExt, AnyElement, Context, Div, Role, div, prelude::*, px, rgb};
+use gpui::{Animation, AnimationExt, AnyElement, Context, Div, Role, div, prelude::*, px};
 use vorkspace_core::tool::{CommandStep, ToolCall, ToolState};
 use vorkspace_ui::radius;
 use vorkspace_ui::theme::*;
@@ -84,7 +84,7 @@ impl TranscriptView {
                 .py_1()
                 .line_height(px(20.))
                 .text_color(if failed {
-                    rgb(0xf87171).into()
+                    vorkspace_ui::theme::danger()
                 } else {
                     content(0.55)
                 })
@@ -117,17 +117,22 @@ impl TranscriptView {
                     };
                     icon(glyph, 14.)
                         .text_color(if failed {
-                            rgb(0xf87171).into()
+                            vorkspace_ui::theme::danger()
                         } else {
                             content(0.45)
                         })
                         .into_any_element()
                 })
-                .child(div().min_w_0().truncate().child(if running {
-                    crate::activity::shimmer(label, self.started_at.elapsed().as_secs_f32())
-                } else {
-                    div().child(label).into_any_element()
-                }))
+                .child(
+                    div()
+                        .min_w_0()
+                        .truncate()
+                        .child(if running && self.visible {
+                            crate::activity::shimmer(label, self.started_at.elapsed().as_secs_f32())
+                        } else {
+                            div().child(label).into_any_element()
+                        }),
+                )
                 .into_any_element();
         }
         let shown = tool.presentation_in(self.file_link_base.as_deref());
@@ -242,7 +247,7 @@ impl TranscriptView {
                     div()
                         .flex_shrink_0()
                         .text_color(if failed {
-                            rgb(0xf87171).into()
+                            vorkspace_ui::theme::danger()
                         } else {
                             content(0.5)
                         })
@@ -265,7 +270,7 @@ impl TranscriptView {
                                 .text_size(px(12.))
                         })
                         .text_color(if failed {
-                            rgb(0xff6467).into()
+                            vorkspace_ui::theme::danger()
                         } else {
                             content(0.7)
                         })
@@ -294,7 +299,7 @@ impl TranscriptView {
                                         .bg(content(0.))
                                         .border_color(content(0.12))
                                         .text_color(if failed {
-                                            rgb(0xff6467).into()
+                                            vorkspace_ui::theme::danger()
                                         } else {
                                             content(0.5)
                                         })
@@ -319,7 +324,9 @@ impl TranscriptView {
                             d.role(Role::Button)
                                 .aria_label(format!("Open {path}"))
                                 .cursor_pointer()
-                                .hover(|style| style.text_color(rgb(0x7dd3fc)))
+                                .hover(|style| {
+                                    style.text_color(vorkspace_ui::theme::accent_color())
+                                })
                                 .on_click(move |_, window, cx| {
                                     cx.stop_propagation();
                                     window.dispatch_action(
@@ -399,7 +406,11 @@ impl TranscriptView {
                                                 d.role(Role::Button)
                                                     .aria_label(format!("Open {path}"))
                                                     .cursor_pointer()
-                                                    .hover(|style| style.text_color(rgb(0x7dd3fc)))
+                                                    .hover(|style| {
+                                                        style.text_color(
+                                                            vorkspace_ui::theme::accent_color(),
+                                                        )
+                                                    })
                                                     .on_click(move |_, window, cx| {
                                                         cx.stop_propagation();
                                                         window.dispatch_action(
@@ -427,7 +438,7 @@ impl TranscriptView {
                                             .bg(content(0.))
                                             .border_color(content(0.12))
                                             .text_color(if failed {
-                                                rgb(0xff6467).into()
+                                                vorkspace_ui::theme::danger()
                                             } else {
                                                 content(0.5)
                                             })
@@ -442,7 +453,11 @@ impl TranscriptView {
                 ),
             )
             .when(failed, |d| {
-                d.child(icon("close", 14.).text_color(rgb(0xff6467)).flex_shrink_0())
+                d.child(
+                    icon("close", 14.)
+                        .text_color(vorkspace_ui::theme::danger())
+                        .flex_shrink_0(),
+                )
             })
             .when(has_detail, |d| {
                 let toggle_key = error_key.clone();
@@ -451,6 +466,7 @@ impl TranscriptView {
                         div()
                             .id("error-toggle")
                             .role(Role::Button)
+                            .map(vorkspace_ui::theme::tab_reachable)
                             .aria_expanded(error_open)
                             .aria_label(format!(
                                 "{} {} for {caption}",
@@ -468,7 +484,7 @@ impl TranscriptView {
                                     14.,
                                 )
                                 .text_color(if has_error {
-                                    rgb(0xf87171).into()
+                                    vorkspace_ui::theme::danger()
                                 } else {
                                     content(0.4)
                                 }),
@@ -534,7 +550,10 @@ impl TranscriptView {
                                         d.role(Role::Button)
                                             .aria_label(format!("Open {path}"))
                                             .cursor_pointer()
-                                            .hover(|style| style.text_color(rgb(0x7dd3fc)))
+                                            .hover(|style| {
+                                                style
+                                                    .text_color(vorkspace_ui::theme::accent_color())
+                                            })
                                             .on_click(move |_, window, cx| {
                                                 cx.stop_propagation();
                                                 window.dispatch_action(
@@ -557,7 +576,7 @@ impl TranscriptView {
                         .font_family(vorkspace_ui::fonts::FIXED_FONT)
                         .text_size(px(12.))
                         .line_height(px(20.))
-                        .text_color(rgb(0xf87171))
+                        .text_color(vorkspace_ui::theme::danger())
                         .child(error_detail),
                 )
             })

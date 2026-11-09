@@ -13,7 +13,7 @@ use gpui::{
     AnyElement, App, ClipboardEntry, ClipboardItem, Context, Entity, EventEmitter, ExternalPaths,
     FocusHandle, Focusable, FontWeight, Hsla, KeyBinding, KeyDownEvent, ListAlignment, ListState,
     MouseButton, MouseDownEvent, Point, PromptLevel, Role, SharedString, StyleRefinement,
-    Subscription, Window, actions, div, list, prelude::*, px, rgb,
+    Subscription, Window, actions, div, list, prelude::*, px,
 };
 use std::time::Instant;
 use std::{
@@ -1229,16 +1229,18 @@ impl Explorer {
             .role(Role::Button)
             .aria_label(label)
             .group(id)
-            .h(px(24.))
-            .min_w_0()
-            .flex_1()
+            // A square button: a quarter-width strip read as a tab.
+            .size(px(24.))
+            .flex_shrink_0()
             .self_center()
             .flex()
             .items_center()
             .justify_center()
             .rounded(px(radius::CONTROL))
             .when(!enabled, |d| d.opacity(0.4))
-            .when(enabled, |d| d.hover(|s| s.bg(content(0.05))))
+            .when(enabled, |d| {
+                d.hover(|s| s.bg(vorkspace_ui::fluid::hover(0.05)))
+            })
             .child(icon(path, 14.).text_color(content(0.5)).when(enabled, |i| {
                 i.group_hover(id, |s| s.text_color(content(1.)))
             }))
@@ -1340,9 +1342,9 @@ impl Explorer {
                     statuses.files.get(&entry.path)
                 };
                 let git_color: Option<Hsla> = status.and_then(|s| match s.as_str() {
-                    "modified" => Some(rgb(AMBER_400).into()),
-                    "added" | "untracked" => Some(rgb(DIFF_ADD).into()),
-                    "deleted" => Some(rgb(DIFF_DEL).into()),
+                    "modified" | "added" | "untracked" | "deleted" => {
+                        Some(crate::git_status::status_color(s))
+                    }
                     _ => None,
                 });
                 let path = entry.path.clone();
@@ -1367,7 +1369,9 @@ impl Explorer {
                     .line_height(px(ENTRY_FONT_SIZE))
                     .text_color(content(1.))
                     .when(selected || over, |d| d.bg(selection()))
-                    .when(!selected && !over, |d| d.hover(|s| s.bg(content(0.05))))
+                    .when(!selected && !over, |d| {
+                        d.hover(|s| s.bg(vorkspace_ui::fluid::hover(0.05)))
+                    })
                     .when(selected && focused && self.keyboard, |d| {
                         d.border_1().border_color(accent_color().opacity(0.4))
                     })
@@ -1483,7 +1487,7 @@ impl Render for Explorer {
                 .into_any_element();
         }
         let root_open = self.expanded.contains(&self.cwd);
-        let name: SharedString = basename(&self.cwd).to_uppercase().into();
+        let name: SharedString = basename(&self.cwd).into();
         let root_selected = self.drag_over.as_deref() == Some(self.cwd.as_str());
         let focused = self.focus.contains_focused(window, cx);
         let entity = cx.entity();
@@ -1606,6 +1610,8 @@ impl Render for Explorer {
             )
             .child(
                 pane_header("explorer-header", "Explorer")
+                    .justify_end()
+                    .gap_1()
                     .on_mouse_down(MouseButton::Right, |_, _, cx| cx.stop_propagation())
                     .child(
                         Self::header_icon("explorer-new-file", "New File".into(), "file-add", true)

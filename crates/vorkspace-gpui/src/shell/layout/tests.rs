@@ -23,9 +23,6 @@ fn mixed_window(cx: &mut TestAppContext) -> (WindowHandle<Shell>, Entity<Bots>, 
     let (window, _, session) = window(cx);
     let (manager, id) = window
         .update(cx, |shell, w, cx| {
-            // Channels are experimental and hidden by default.
-            shell.workspace.preferences.channels = true;
-            shell.apply_preferences(cx);
             let manager = shell.bot_manager();
             manager.update(cx, |m, cx| {
                 m.create_named(Vec::new(), w, cx);
@@ -230,6 +227,8 @@ fn search_header_clears_navigation_and_keeps_its_query_across_rail_modes(cx: &mu
         window
             .update(visual, |shell, w, cx| {
                 shell.workspace.project_rail_open = mode == "expanded";
+                // Measured with no project sidebar drawn beside the rail.
+                shell.workspace.sidebar_visible = false;
                 if mode != "expanded" {
                     shell.workspace.preferences.collapsed_project_rail = mode.into();
                 }
@@ -269,34 +268,6 @@ fn search_header_clears_navigation_and_keeps_its_query_across_rail_modes(cx: &mu
 }
 
 #[gpui::test]
-fn channels_after_bot_details_keep_a_plain_header_and_full_tab_width(cx: &mut TestAppContext) {
-    vorkspace_ui::clock::use_test_clock(cx);
-    let (window, manager, _, _) = mixed_window(cx);
-    let visual = &mut gpui::VisualTestContext::from_window(window.into(), cx);
-    visual.simulate_resize(gpui::size(px(1600.), px(1000.)));
-    visual.run_until_parked();
-    assert!(visual.debug_bounds("bot-island").is_some());
-
-    let channels = visual.debug_bounds("classic-add-channel").unwrap();
-    visual.simulate_click(channels.center(), Default::default());
-    visual.run_until_parked();
-    assert!(manager.read_with(visual, |manager, _| manager.classic_channels_open()));
-    assert!(visual.debug_bounds("right-panel-frame").is_none());
-    assert!(visual.debug_bounds("bot-overview-tabs").is_none());
-    assert!(visual.debug_bounds("toggle-right-panel").is_none());
-    window
-        .update(visual, |shell, window, cx| {
-            assert_eq!(shell.right_drawn, 0.);
-            assert_eq!(shell.corner_room(cx), 42.);
-            assert_eq!(
-                shell.tabs_width(window, cx),
-                1600. - shell.classic_rail_width() - 42.
-            );
-        })
-        .unwrap();
-}
-
-#[gpui::test]
 fn hidden_workspace_panes_do_not_leave_a_resize_hitbox_over_global_surfaces(
     cx: &mut TestAppContext,
 ) {
@@ -327,7 +298,7 @@ fn hidden_workspace_panes_do_not_leave_a_resize_hitbox_over_global_surfaces(
         })
         .unwrap();
 
-    for surface in ["GitHub", "Notes", "Search", "Bot", "Settings", "Channels"] {
+    for surface in ["GitHub", "Notes", "Search", "Bot", "Settings"] {
         window
             .update(visual, |shell, window, cx| {
                 if shell.settings.is_some() {
@@ -343,20 +314,27 @@ fn hidden_workspace_panes_do_not_leave_a_resize_hitbox_over_global_surfaces(
                     "Settings" => {
                         shell.open_settings(crate::settings::Section::General, window, cx)
                     }
-                    "Channels" => (),
                     _ => unreachable!(),
                 }
                 cx.notify();
             })
             .unwrap();
         visual.run_until_parked();
-        if surface == "Channels" {
-            let add = visual.debug_bounds("classic-add-channel").unwrap();
-            visual.simulate_click(add.center(), Default::default());
-            visual.run_until_parked();
+        // The sidebar stays as the user left it; only Settings covers it.
+        let covered = surface == "Settings";
+        assert_eq!(
+            visual.debug_bounds("sidebar-frame").is_none(),
+            covered,
+            "{surface}"
+        );
+        assert_eq!(
+            visual.debug_bounds("sidebar-resize").is_none(),
+            covered,
+            "{surface}"
+        );
+        if !covered {
+            continue;
         }
-        assert!(visual.debug_bounds("sidebar-frame").is_none(), "{surface}");
-        assert!(visual.debug_bounds("sidebar-resize").is_none(), "{surface}");
         let (old_sash, before) = window
             .update(visual, |shell, _, _| {
                 (
@@ -403,9 +381,9 @@ fn original_workspace_tabs_fit_sidebar_widths_and_keep_their_actions(cx: &mut Te
         visual.run_until_parked();
         let sidebar = visual.debug_bounds("sidebar-frame").unwrap();
         let selectors = [
-            "classic-tab-sessions",
             "classic-tab-explorer",
             "classic-tab-changes",
+            "classic-tab-to-dos",
         ];
         let tabs = selectors.map(|selector| visual.debug_bounds(selector).unwrap());
         assert_eq!(sidebar.size.width, px(width));
@@ -415,7 +393,7 @@ fn original_workspace_tabs_fit_sidebar_widths_and_keep_their_actions(cx: &mut Te
         assert!(tabs[2].right() <= sidebar.right());
         assert!(tabs.iter().all(|tab| tab.size.width > px(0.)));
         assert!(visual.debug_bounds("right-panel-frame").is_none());
-        for (index, expected) in [SidebarTab::Sessions, SidebarTab::Files, SidebarTab::Changes]
+        for (index, expected) in [SidebarTab::Files, SidebarTab::Changes, SidebarTab::Todos]
             .into_iter()
             .enumerate()
         {
@@ -427,6 +405,9 @@ fn original_workspace_tabs_fit_sidebar_widths_and_keep_their_actions(cx: &mut Te
                 })
                 .unwrap();
         }
+        // History sits under Changes.
+        visual.simulate_click(tabs[1].center(), Default::default());
+        visual.run_until_parked();
         let history = visual.debug_bounds("classic-source-history").unwrap();
         visual.simulate_click(history.center(), Default::default());
         visual.run_until_parked();
@@ -457,7 +438,7 @@ fn collapsed_sidebar_stays_closed_when_hovering_the_rail(cx: &mut TestAppContext
     let rail = visual.debug_bounds("classic-project-rail").unwrap();
     let positions = [
         visual
-            .debug_bounds("classic-compact-tab-sessions")
+            .debug_bounds("classic-compact-sessions")
             .unwrap()
             .center(),
         visual.debug_bounds("toggle-sidebar").unwrap().center(),

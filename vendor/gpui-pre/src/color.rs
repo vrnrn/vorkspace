@@ -747,6 +747,7 @@ pub(crate) enum BackgroundTag {
     LinearGradient = 1,
     PatternSlash = 2,
     Checkerboard = 3,
+    Dither = 4,
 }
 
 /// A color space for color interpolation.
@@ -805,6 +806,14 @@ impl std::fmt::Debug for Background {
                 "Checkerboard({:?}, {})",
                 self.solid, self.gradient_angle_or_pattern_height
             ),
+            BackgroundTag::Dither => write!(
+                f,
+                "Dither({:?}, tone {}, to {}, cell {})",
+                self.solid,
+                self.colors[0].percentage,
+                self.colors[1].percentage,
+                self.gradient_angle_or_pattern_height
+            ),
         }
     }
 }
@@ -843,6 +852,37 @@ pub fn checkerboard(color: impl Into<Hsla>, size: f32) -> Background {
         tag: BackgroundTag::Checkerboard,
         solid: color.into(),
         gradient_angle_or_pattern_height: size,
+        ..Default::default()
+    }
+}
+
+/// Vorkspace: an ordered dither. Each `cell`-sized square (logical pixels) is
+/// either inked with `color` or left clear, by a 4×4 Bayer threshold, so that
+/// `tone` (0 to 1) of the cells are inked. The cells tile from the quad's origin
+/// and the quad's rounded corners still clip them. `cell` is scaled to device
+/// pixels when the quad is painted.
+pub fn dither(color: impl Into<Hsla>, tone: f32, cell: f32) -> Background {
+    vertical_dither(color, tone, tone, cell)
+}
+
+/// Vorkspace: an ordered dither whose tone ramps from `top` at the top of the
+/// painted bounds to `bottom` at their bottom, for shading under a line or a
+/// fade toward an edge. See [`dither`].
+pub fn vertical_dither(color: impl Into<Hsla>, top: f32, bottom: f32, cell: f32) -> Background {
+    Background {
+        tag: BackgroundTag::Dither,
+        solid: color.into(),
+        gradient_angle_or_pattern_height: cell.max(0.),
+        colors: [
+            LinearColorStop {
+                color: Hsla::default(),
+                percentage: top.clamp(0., 1.),
+            },
+            LinearColorStop {
+                color: Hsla::default(),
+                percentage: bottom.clamp(0., 1.),
+            },
+        ],
         ..Default::default()
     }
 }
@@ -917,6 +957,15 @@ impl Background {
         }
     }
 
+    /// Patterns sized in logical pixels move to device pixels here. Only the
+    /// dither is scaled; the upstream patterns keep their device-pixel sizes.
+    pub(crate) fn scale_pattern(mut self, factor: f32) -> Self {
+        if self.tag == BackgroundTag::Dither {
+            self.gradient_angle_or_pattern_height *= factor;
+        }
+        self
+    }
+
     /// Use specified color space for color interpolation.
     ///
     /// <https://developer.mozilla.org/en-US/docs/Web/CSS/color-interpolation-method>
@@ -943,6 +992,11 @@ impl Background {
             BackgroundTag::LinearGradient => self.colors.iter().all(|c| c.color.is_transparent()),
             BackgroundTag::PatternSlash => self.solid.is_transparent(),
             BackgroundTag::Checkerboard => self.solid.is_transparent(),
+            BackgroundTag::Dither => {
+                self.solid.is_transparent()
+                    || (self.colors[0].percentage <= 0. && self.colors[1].percentage <= 0.)
+                    || self.gradient_angle_or_pattern_height <= 0.
+            }
         }
     }
 }

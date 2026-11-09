@@ -13,7 +13,7 @@ use gpui::{
     AnyElement, App, Bounds, Context, EventEmitter, FocusHandle, Focusable, FontWeight,
     HighlightStyle, Hsla, KeyBinding, ListAlignment, ListOffset, ListState, MouseButton,
     MouseDownEvent, MouseMoveEvent, Pixels, Role, ScrollWheelEvent, SharedString, StyledText,
-    Subscription, Task, Window, actions, canvas, div, list, prelude::*, px, rgb,
+    Subscription, Task, Window, actions, canvas, div, list, prelude::*, px,
 };
 use std::{
     borrow::Cow,
@@ -1125,6 +1125,7 @@ impl DiffView {
                             "diff-layout-unified"
                         })
                         .role(Role::Button)
+                        .map(vorkspace_ui::theme::tab_reachable)
                         .aria_label(label)
                         .cursor_pointer()
                         .px_2()
@@ -1135,7 +1136,7 @@ impl DiffView {
                         .when((self.layout == Layout::Split) == split, |d| {
                             d.bg(content(0.1))
                         })
-                        .hover(|d| d.bg(content(0.12)))
+                        .hover(|d| d.bg(vorkspace_ui::fluid::hover(0.12)))
                         .child(label)
                         .on_click(cx.listener(move |_, _, window, cx| {
                             if split {
@@ -1211,6 +1212,7 @@ impl DiffView {
                             .text_size(px(10.))
                             .font_weight(FontWeight::NORMAL)
                             .font_features(tabular())
+                            .font_family(vorkspace_ui::fonts::MONO)
                             .text_color(content(0.4))
                             .child(position),
                     )
@@ -1267,7 +1269,7 @@ impl DiffView {
             .px_3()
             .border_b_1()
             .border_color(stroke())
-            .hover(|s| s.bg(content(0.08)))
+            .hover(|s| s.bg(vorkspace_ui::fluid::hover(0.08)))
             .child(
                 div()
                     .id(("diff-file-toggle", file * 2 + usize::from(sticky)))
@@ -1354,7 +1356,6 @@ impl DiffView {
             return div().into_any_element();
         };
         let gutter = self.gutter_width();
-        let number_width = self.number_width;
         let accent: Hsla = accent_color();
         match row.kind {
             RowKind::File => self.file_header(row.file, false, cx),
@@ -1381,26 +1382,9 @@ impl DiffView {
                 .border_t_1()
                 .border_b_1()
                 .border_color(accent.opacity(0.1))
-                .child(
-                    div()
-                        .w(px(gutter))
-                        .flex_shrink_0()
-                        .flex()
-                        .pl(px(3.))
-                        .text_size(px(9.))
-                        .text_color(content(0.35))
-                        .children(
-                            (if self.layout == Layout::Split {
-                                vec![]
-                            } else {
-                                vec!["Old", "New"]
-                            })
-                            .into_iter()
-                            .map(|label| {
-                                div().w(px(number_width)).pr_2().text_right().child(label)
-                            }),
-                        ),
-                )
+                // The gutter's columns read as old and new from the -/+ rows
+                // themselves; labelling them on every hunk was noise.
+                .child(div().w(px(gutter)).flex_shrink_0())
                 .child(
                     div()
                         .min_w_0()
@@ -1564,6 +1548,7 @@ impl DiffView {
                 .text_right()
                 .text_size(px(11.))
                 .font_features(tabular())
+                .font_family(vorkspace_ui::fonts::MONO)
                 .when(hide, |d| d.invisible())
                 .child(n.map(|n| n.to_string()).unwrap_or_default())
         };
@@ -1639,6 +1624,7 @@ impl DiffView {
                             div()
                                 .id(("diff-comment", ix))
                                 .role(Role::Button)
+                                .map(vorkspace_ui::theme::tab_reachable)
                                 .aria_label(SharedString::from(format!(
                                     "Comment on line {}",
                                     number.map(|n| n.to_string()).unwrap_or_default()
@@ -1652,7 +1638,7 @@ impl DiffView {
                                 .items_center()
                                 .justify_center()
                                 .rounded(px(radius::SMALL))
-                                .hover(|s| s.bg(content(0.12)))
+                                .hover(|s| s.bg(vorkspace_ui::fluid::hover(0.12)))
                                 .child(icon("comment-add", 12.).text_color(content(1.)))
                                 .on_click(cx.listener(move |this, _, window, cx| {
                                     this.open_comment(
@@ -1669,6 +1655,7 @@ impl DiffView {
                                 div()
                                     .id(("diff-stage-hunk", ix))
                                     .role(Role::Button)
+                                    .map(vorkspace_ui::theme::tab_reachable)
                                     .aria_label("Stage hunk")
                                     .absolute()
                                     .top_0()
@@ -1680,7 +1667,9 @@ impl DiffView {
                                     .justify_center()
                                     .rounded(px(radius::SMALL))
                                     .when(busy, |d| d.opacity(0.35))
-                                    .when(!busy, |d| d.hover(|s| s.bg(content(0.12))))
+                                    .when(!busy, |d| {
+                                        d.hover(|s| s.bg(vorkspace_ui::fluid::hover(0.12)))
+                                    })
                                     .child(icon("check", 12.).text_color(content(1.)))
                                     .when(!busy, |d| {
                                         d.on_click(cx.listener(move |_, _, _, cx| {
@@ -1825,6 +1814,7 @@ pub(crate) fn diff_counts(additions: u32, deletions: u32) -> AnyElement {
         .text_size(px(11.))
         .font_weight(FontWeight::MEDIUM)
         .font_features(tabular())
+        .font_family(vorkspace_ui::fonts::MONO)
         .when(additions > 0, |d| {
             d.child(
                 div()
@@ -1854,7 +1844,9 @@ fn tool_button(
     crate::controls::icon_button(id, label, enabled)
         .group(group.clone())
         .when(!enabled, |d| d.opacity(0.3))
-        .when(enabled, |d| d.hover(|s| s.bg(content(0.05))))
+        .when(enabled, |d| {
+            d.hover(|s| s.bg(vorkspace_ui::fluid::hover(0.05)))
+        })
         .child(
             icon(path, 14.)
                 .text_color(content(0.45))
@@ -1988,6 +1980,7 @@ impl Render for DiffView {
                                 div()
                                     .id("add-comment")
                                     .role(Role::Button)
+                                    .map(|d| vorkspace_ui::theme::tab_reachable_on_fill(d, can_add))
                                     .aria_label("Add to chat")
                                     .h(px(28.))
                                     .flex()
@@ -1998,12 +1991,12 @@ impl Render for DiffView {
                                     .bg(content(1.))
                                     .text_size(px(12.))
                                     .font_weight(FontWeight::MEDIUM)
-                                    .text_color(rgb(crate::panel_kit::BACKGROUND_BASE))
+                                    .text_color(vorkspace_ui::fluid::on_ink())
                                     .when(!can_add, |d| d.opacity(0.4))
                                     .when(can_add, |d| d.hover(|s| s.opacity(0.8)))
                                     .child(
                                         icon("comment-add", 14.)
-                                            .text_color(rgb(crate::panel_kit::BACKGROUND_BASE)),
+                                            .text_color(vorkspace_ui::fluid::on_ink()),
                                     )
                                     .child("Add to chat")
                                     .when(can_add, |d| {

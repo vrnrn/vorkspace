@@ -178,6 +178,7 @@ pub(crate) fn tab_button(
                                         .line_height(px(16.))
                                         .font_weight(gpui::FontWeight::MEDIUM)
                                         .font_features(crate::panel_kit::tabular())
+                                        .font_family(vorkspace_ui::fonts::MONO)
                                         .text_center()
                                         .child(label.count.to_string()),
                                 )

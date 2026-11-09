@@ -9,7 +9,7 @@ use crate::{
 use gpui::{
     AnyElement, App, Context, Entity, EventEmitter, FocusHandle, Focusable, Image, ImageFormat,
     KeyBinding, ObjectFit, PromptLevel, Role, SharedString, Subscription, Task, Window, actions,
-    div, img, prelude::*, px, rgb,
+    div, img, prelude::*, px,
 };
 use std::{path::PathBuf, sync::Arc, time::Duration};
 use vorkspace_core::files::document::{self, Document, TextDocument};
@@ -1048,11 +1048,12 @@ impl gpui::Render for FileEditor {
                         div()
                             .id("open-file-externally")
                             .role(Role::Button)
+                            .map(vorkspace_ui::theme::tab_reachable)
                             .aria_label("Open externally")
                             .px_3()
                             .py_1()
                             .rounded(px(radius::CONTROL))
-                            .hover(|s| s.bg(content(0.1)))
+                            .hover(|s| s.bg(vorkspace_ui::fluid::hover(0.1)))
                             .child("Open externally")
                             .on_click(cx.listener(|this, _, _, cx| {
                                 cx.open_url(&format!(
@@ -1076,6 +1077,7 @@ impl gpui::Render for FileEditor {
                                 div()
                                     .id("retry-file")
                                     .role(Role::Button)
+                                    .map(vorkspace_ui::theme::tab_reachable)
                                     .aria_label("Retry")
                                     .px_3()
                                     .py_1()
@@ -1088,6 +1090,7 @@ impl gpui::Render for FileEditor {
                                 div()
                                     .id("reveal-file")
                                     .role(Role::Button)
+                                    .map(vorkspace_ui::theme::tab_reachable)
                                     .aria_label("Reveal")
                                     .px_3()
                                     .py_1()
@@ -1107,6 +1110,7 @@ impl gpui::Render for FileEditor {
                                 div()
                                     .id("copy-file-path")
                                     .role(Role::Button)
+                                    .map(vorkspace_ui::theme::tab_reachable)
                                     .aria_label("Copy path")
                                     .px_3()
                                     .py_1()
@@ -1208,7 +1212,7 @@ impl gpui::Render for FileEditor {
                             .px_3()
                             .py_2()
                             .text_size(px(12.))
-                            .text_color(rgb(0xfbbf24))
+                            .text_color(vorkspace_ui::theme::warning())
                             .flex()
                             .items_center()
                             .gap_3()
@@ -1218,6 +1222,7 @@ impl gpui::Render for FileEditor {
                                     div()
                                         .id("file-conflict-reload")
                                         .role(Role::Button)
+                                        .map(vorkspace_ui::theme::tab_reachable)
                                         .aria_label("Reload from disk")
                                         .cursor_pointer()
                                         .child("Reload from disk")
@@ -1227,6 +1232,7 @@ impl gpui::Render for FileEditor {
                                     div()
                                         .id("file-conflict-save-mine")
                                         .role(Role::Button)
+                                        .map(vorkspace_ui::theme::tab_reachable)
                                         .aria_label("Save my changes")
                                         .cursor_pointer()
                                         .child("Save my changes")

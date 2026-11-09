@@ -20,6 +20,16 @@ pub(in crate::settings) struct MeetingEditor {
     result: Option<Result<(), String>>,
 }
 
+/// A feature's name with the same mark it has in the settings navigation.
+fn feature_label(section: Section) -> gpui::Div {
+    div()
+        .flex()
+        .items_center()
+        .gap_2()
+        .child(vorkspace_ui::theme::icon(section.icon(), 16.).text_color(content(0.6)))
+        .child(section.label())
+}
+
 impl SettingsView {
     pub(super) fn connectors_page(&mut self, cx: &mut Context<Self>) -> Vec<AnyElement> {
         let mut rows = Vec::new();
@@ -46,7 +56,7 @@ impl SettingsView {
             rows.push(self.row(
                 None,
                 false,
-                section.label(),
+                feature_label(section),
                 Some(section.description().into()),
                 if self.section_available(section) {
                     vec![self.feature_link(section, cx), toggle]
@@ -60,7 +70,7 @@ impl SettingsView {
             rows.push(self.row(
                 None,
                 false,
-                section.label(),
+                feature_label(section),
                 Some(section.description().into()),
                 if self.section_available(section) {
                     vec![self.feature_link(section, cx), toggle]
@@ -210,7 +220,7 @@ impl SettingsView {
         let editor = match self.meeting_editor(cx) {
             Ok(editor) => editor,
             Err(error) => {
-                page.push(note(error));
+                page.push(super::super::widgets::page_hint(error));
                 return page;
             }
         };

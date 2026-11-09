@@ -136,7 +136,7 @@ impl WorktreeSwitcher {
         let search = cx.new(|cx| {
             let mut input = input::Input::field(
                 "Search working copies",
-                "Search or create a worktree...",
+                "Search or create a worktree…",
                 content(0.35),
                 cx,
             );
@@ -396,7 +396,7 @@ impl Render for WorktreeSwitcher {
                                 if self.active == index {
                                     d.bg(content(0.1))
                                 } else {
-                                    d.hover(|s| s.bg(content(0.05)))
+                                    d.hover(|s| s.bg(vorkspace_ui::fluid::hover(0.05)))
                                 }
                             })
                             .child(
@@ -491,7 +491,7 @@ impl Render for WorktreeSwitcher {
                             .px_2()
                             .py_2()
                             .text_size(px(11.))
-                            .text_color(gpui::rgb(0xf87171))
+                            .text_color(vorkspace_ui::theme::danger())
                             .child(error),
                     )
                 },
@@ -508,6 +508,7 @@ impl Render for WorktreeSwitcher {
                                 .id("create-sidebar-worktree")
                                 .debug_selector(|| "create-sidebar-worktree".into())
                                 .role(Role::Button)
+                                .map(vorkspace_ui::theme::tab_reachable)
                                 .aria_label(format!("Create worktree {}", self.query(cx)))
                                 .h(px(36.))
                                 .w_full()
@@ -520,8 +521,10 @@ impl Render for WorktreeSwitcher {
                                 .text_color(content(0.75))
                                 .when(self.creating, |d| d.opacity(0.6))
                                 .when(!self.creating, |d| {
-                                    d.cursor_pointer()
-                                        .hover(|s| s.bg(content(0.08)).text_color(content(1.)))
+                                    d.cursor_pointer().hover(|s| {
+                                        s.bg(vorkspace_ui::fluid::hover(0.08))
+                                            .text_color(content(1.))
+                                    })
                                 })
                                 .child(icon(if self.creating { "loader" } else { "plus" }, 16.))
                                 .child(format!("Create worktree {}", self.query(cx)))

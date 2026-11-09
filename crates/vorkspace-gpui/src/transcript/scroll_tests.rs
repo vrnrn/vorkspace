@@ -1352,3 +1352,46 @@ fn sent_prompt_stays_at_the_top_then_long_replies_follow_until_scrolled_away(
         })
         .unwrap();
 }
+
+#[gpui::test]
+fn a_turn_without_work_never_opens_even_when_a_search_marks_it(cx: &mut TestAppContext) {
+    let window = cx.update(|cx| {
+        cx.open_window(Default::default(), |_, cx| {
+            cx.new(|_| TranscriptView::new())
+        })
+        .unwrap()
+    });
+    let visual = &mut gpui::VisualTestContext::from_window(window.into(), cx);
+    window
+        .update(visual, |view, _, cx| {
+            view.patch(
+                0,
+                vec![row("user", "Hello"), row("assistant", "Hi there")],
+                cx,
+            );
+            // What a search hit does to the turn it lands in.
+            view.work_folds.insert(1, true);
+            view.rebuild(0, cx);
+            assert!(view.rows.iter().any(|r| matches!(
+                r.body,
+                Body::WorkLine {
+                    turn: 1,
+                    expandable: false
+                }
+            )));
+        })
+        .unwrap();
+    visual.run_until_parked();
+    visual.refresh().unwrap();
+    let fold = visual
+        .debug_bounds("work-fold-1")
+        .expect("the turn's work line");
+    // Closed, the line keeps its provider mark and hangs no rail.
+    window
+        .update(visual, |view, _, _| {
+            assert!(!view.work_open(1, false));
+            assert!(view.work_open(1, true), "a turn with work honours the mark");
+        })
+        .unwrap();
+    assert!(fold.size.height > gpui::px(0.));
+}

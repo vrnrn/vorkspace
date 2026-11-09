@@ -8,6 +8,24 @@ pub(super) fn rounded_highlight(
     alpha: f32,
     visual: &mut gpui::VisualTestContext,
 ) -> bool {
+    rounded_background(
+        window,
+        selector,
+        |background| {
+            background
+                .as_solid()
+                .is_some_and(|color| (color.a - alpha).abs() < 0.001)
+        },
+        visual,
+    )
+}
+
+fn rounded_background(
+    window: WindowHandle<Shell>,
+    selector: &str,
+    matches: impl Fn(&gpui::Background) -> bool,
+    visual: &mut gpui::VisualTestContext,
+) -> bool {
     let bounds = visual
         .debug_bounds(Box::leak(selector.to_owned().into_boxed_str()))
         .unwrap_or_else(|| panic!("{selector} is visible"));
@@ -19,10 +37,7 @@ pub(super) fn rounded_highlight(
                     && (quad.bounds.top().0 - bounds.top().as_f32() * scale).abs() < 0.5
                     && (quad.bounds.size.width.0 - bounds.size.width.as_f32() * scale).abs() < 0.5
                     && (quad.bounds.size.height.0 - bounds.size.height.as_f32() * scale).abs() < 0.5
-                    && quad
-                        .background
-                        .as_solid()
-                        .is_some_and(|color| (color.a - alpha).abs() < 0.001)
+                    && matches(&quad.background)
                     && [
                         quad.corner_radii.top_left,
                         quad.corner_radii.top_right,
@@ -37,7 +52,7 @@ pub(super) fn rounded_highlight(
 }
 
 #[gpui::test]
-fn hovering_archive_preserves_history_and_does_not_select_the_row(cx: &mut TestAppContext) {
+fn hovering_keeps_card_size_and_menu_archive_preserves_history(cx: &mut TestAppContext) {
     let (window, a, b) = window(cx);
     window
         .update(cx, |shell, _, cx| {
@@ -51,21 +66,24 @@ fn hovering_archive_preserves_history_and_does_not_select_the_row(cx: &mut TestA
         .unwrap();
     cx.refresh().unwrap();
     let visual = &mut gpui::VisualTestContext::from_window(window.into(), cx);
-    let row = visual.debug_bounds("sidebar-session-1").unwrap();
+    let row = visual.debug_bounds("rail-session-1").unwrap();
     visual.simulate_mouse_move(row.center(), None, Default::default());
     visual.run_until_parked();
     visual.refresh().unwrap();
-    let archive = visual
-        .debug_bounds("archive-session-1")
-        .expect("hover reveals Archive");
-    visual.simulate_click(archive.center(), Default::default());
+    // Hover reveals nothing on the card, so passing over cards never moves them.
+    assert_eq!(visual.debug_bounds("rail-session-1").unwrap(), row);
+    window
+        .update(visual, |shell, window, cx| {
+            shell.run_menu(MenuTarget::Session(a), "archive", None, window, cx);
+        })
+        .unwrap();
     visual.run_until_parked();
     window
         .update(visual, |shell, window, cx| {
             assert_eq!(
                 shell.workspace.active,
                 Some(b),
-                "the archive click must not select its row"
+                "archiving from the menu must not select its row"
             );
             assert!(!shell.workspace.tabs.contains(&a));
             assert!(shell.sessions[&a].read(cx).summary.archived);
@@ -200,12 +218,11 @@ fn sidebar_rows_have_a_gap_and_preview_survives_crossing_into_the_card(cx: &mut 
     cx.refresh().unwrap();
     let visual = &mut gpui::VisualTestContext::from_window(window.into(), cx);
     let first = visual
-        .debug_bounds(Box::leak(format!("sidebar-session-{b}").into_boxed_str()))
+        .debug_bounds(Box::leak(format!("rail-session-{b}").into_boxed_str()))
         .unwrap();
     let second = visual
-        .debug_bounds(Box::leak(format!("sidebar-session-{a}").into_boxed_str()))
+        .debug_bounds(Box::leak(format!("rail-session-{a}").into_boxed_str()))
         .unwrap();
-    assert_eq!(first.size.height, px(32.));
     assert_eq!(
         second.top() - first.bottom(),
         px(1.),
@@ -261,7 +278,7 @@ fn sidebar_rows_have_a_gap_and_preview_survives_crossing_into_the_card(cx: &mut 
         .update(cx, |shell, window, cx| {
             let preview = shell.session_preview.as_ref().unwrap();
             assert_eq!(preview.id, a, "another row replaces the old preview");
-            assert_eq!(preview.anchor.get().unwrap().top() - first.bottom(), px(1.));
+            assert!((preview.anchor.get().unwrap().top() - second.top()).abs() < px(2.));
             shell.open(a, window, cx);
             assert!(
                 shell.session_preview.is_none(),
@@ -777,275 +794,21 @@ fn header_menu_switches_projects_from_its_picker_flyout(cx: &mut TestAppContext)
         .unwrap();
 }
 #[gpui::test]
-fn project_appearance_menu_edits_and_background_dialog_persist_per_project(
-    cx: &mut TestAppContext,
-) {
-    use vorkspace_core::project_appearance::{Background, COLORS, Effect, Scope};
-    let (window, _, active) = window(cx);
-    cx.update(|cx| {
-        input::bind(cx);
-        crate::popover::bind(cx);
-        vorkspace_ui::clock::use_test_clock(cx);
-    });
-    window
-        .update(cx, |shell, w, cx| {
-            let anchor = Anchor::Slot(shell.project_anchor.clone());
-            shell.open_menu(MenuTarget::Header, anchor, w, cx);
-        })
-        .unwrap();
-    cx.run_until_parked();
-    // The settings flyout opens beside the header menu and focuses its name.
-    cx.simulate_keystrokes(window.into(), "down down right");
-    cx.run_until_parked();
-    cx.simulate_input(window.into(), "Small");
-    cx.simulate_keystrokes(window.into(), "space");
-    cx.simulate_input(window.into(), "Studio");
-    cx.run_until_parked();
-    let visual = &mut gpui::VisualTestContext::from_window(window.into(), cx);
-    let flyout = window
-        .update(visual, |shell, _, cx| {
-            shell
-                .menu
-                .as_ref()
-                .unwrap()
-                .menu
-                .read(cx)
-                .submenu_region()
-                .get()
-                .unwrap()
-        })
-        .unwrap();
-    let controls = visual.debug_bounds("project-appearance-controls").unwrap();
-    let name = visual.debug_bounds("project-appearance-name").unwrap();
-    let logo = visual.debug_bounds("choose-project-logo").unwrap();
-    // TabGroupMenu's p-2 belongs to the whole card, including its actions.
-    for inset in [
-        controls.left() - flyout.left(),
-        flyout.right() - controls.right(),
-        name.top() - flyout.top(),
-    ] {
-        assert_eq!(inset, px(9.), "8px of padding inside the card's 1px frame");
-    }
-    assert_eq!(name.left(), controls.left());
-    assert_eq!(logo.left() - controls.left(), px(2.));
-    assert_eq!(logo.top() - name.bottom(), px(8.));
-    assert_eq!(logo.size, gpui::size(px(36.), px(36.)));
-    let background = visual.debug_bounds("menu-action-background").unwrap();
-    assert_eq!(background.left() - flyout.left(), px(9.));
-    assert_eq!(flyout.right() - background.right(), px(9.));
-    let color = visual
-        .debug_bounds("project-color-4")
-        .expect("appearance controls in the flyout");
-    visual.simulate_click(color.center(), Default::default());
-    visual.run_until_parked();
-    vorkspace_ui::clock::settle_animations(window, visual);
-    let grid_slider = visual.debug_bounds("project-grid-slider").unwrap();
-    let click_x = grid_slider.left() + grid_slider.size.width * (4. / 6.);
-    visual.simulate_click(
-        gpui::point(click_x, grid_slider.center().y),
-        Default::default(),
-    );
-    visual.run_until_parked();
-    vorkspace_ui::clock::settle_animations(window, visual);
-    visual.simulate_keystrokes("escape");
-    visual.run_until_parked();
-    vorkspace_ui::clock::settle_animations(window, visual);
-    window
-        .update(visual, |shell, w, cx| {
-            assert!(shell.menu.is_none());
-            assert_eq!(shell.project_label("/work/vorkspace"), "Small Studio");
-            let appearance = shell
-                .workspace
-                .project_appearance
-                .get_mut("/work/vorkspace")
-                .unwrap();
-            assert_eq!(appearance.color, Some(COLORS[4]));
-            assert_eq!(appearance.grid, Some(6));
-            appearance.background = Some(Background {
-                path: concat!(env!("CARGO_MANIFEST_DIR"), "/assets/vorkspace.png").into(),
-                ..Default::default()
-            });
-            assert!(
-                !shell
-                    .workspace
-                    .project_appearance
-                    .contains_key("/work/another-project")
-            );
-            shell.open_menu(
-                MenuTarget::Project {
-                    path: "/work/vorkspace".into(),
-                    rail: false,
-                },
-                Anchor::Point(gpui::point(px(300.), px(60.))),
-                w,
-                cx,
-            );
-        })
-        .unwrap();
-    visual.run_until_parked();
-    vorkspace_ui::clock::settle_animations(window, visual);
-    let card = window
-        .update(visual, |shell, _, cx| {
-            let menu = shell.menu.as_ref().unwrap().menu.read(cx);
-            menu.surface_region().get().unwrap()
-        })
-        .unwrap();
-    let background_row = visual.debug_bounds("menu-action-background").unwrap();
-    let last_row = visual.debug_bounds("menu-action-delete").unwrap();
-    assert_eq!(background_row.left() - card.left(), px(9.));
-    assert_eq!(card.right() - background_row.right(), px(9.));
-    assert_eq!(background_row.size.height, px(32.));
-    assert_eq!(card.bottom() - last_row.bottom(), px(9.));
-    visual.simulate_click(background_row.center(), Default::default());
-    visual.run_until_parked();
-    vorkspace_ui::clock::settle_animations(window, visual);
-    assert!(visual.debug_bounds("project-background-dialog").is_some());
-    let dialog = visual.debug_bounds("project-background-dialog").unwrap();
-    let header = visual.debug_bounds("background-dialog-header").unwrap();
-    let preview = visual.debug_bounds("background-dialog-preview").unwrap();
-    let change = visual
-        .debug_bounds("project-settings-Change image")
-        .unwrap();
-    let effect = visual.debug_bounds("background-effect-row").unwrap();
-    let scope = visual.debug_bounds("background-scope-row").unwrap();
-    let scope_control = visual.debug_bounds("background-scope-control").unwrap();
-    let empty_row = visual.debug_bounds("background-empty-row").unwrap();
-    let session_row = visual.debug_bounds("background-session-row").unwrap();
-    let remove = visual
-        .debug_bounds("project-settings-Remove background image")
-        .unwrap();
-    // Modal.tsx + ProjectBackgroundDialog.tsx: match the React box metrics.
-    assert_eq!(dialog.size.width, px(418.));
-    assert_eq!(preview.size, gpui::size(px(386.), px(162.)));
-    assert_eq!(preview.left() - dialog.left(), px(16.));
-    assert_eq!(preview.top() - header.bottom(), px(16.));
-    assert_eq!(change.top() - preview.bottom(), px(8.));
-    assert_eq!(change.size.height, px(32.));
-    assert_eq!(effect.size.height, px(57.5));
-    assert_eq!(scope_control.size, gpui::size(px(176.), px(32.)));
-    for (before, after) in [
-        (effect, scope),
-        (scope, empty_row),
-        (empty_row, session_row),
-        (session_row, remove),
-    ] {
-        assert_eq!(after.top() - before.bottom(), px(20.));
-    }
-    assert_eq!(dialog.bottom() - remove.bottom(), px(16.));
-    window
-        .update(visual, |_, w, _| {
-            assert_eq!(
-                w.painted_quads()
-                    .iter()
-                    .filter(|q| q.background == content(0.15).into()
-                        && q.bounds.size.width.0 == 172. * w.scale_factor()
-                        && q.bounds.size.height.0 == 4. * w.scale_factor())
-                    .count(),
-                2
-            );
-        })
-        .unwrap();
-    let effect_trigger = visual.debug_bounds("project-background-effect").unwrap();
-    assert_eq!(effect_trigger.size, gpui::size(px(144.), px(36.)));
-    assert_eq!(effect_trigger.right(), preview.right());
-    visual.simulate_click(effect_trigger.center(), Default::default());
-    visual.run_until_parked();
-    vorkspace_ui::clock::settle_animations(window, visual);
-    visual.simulate_keystrokes("escape");
-    visual.run_until_parked();
-    vorkspace_ui::clock::settle_animations(window, visual);
-    assert!(visual.debug_bounds("project-background-dialog").is_some());
-    assert!(visual.debug_bounds("project-settings-Haze").is_none());
-    visual.simulate_click(effect_trigger.center(), Default::default());
-    visual.run_until_parked();
-    vorkspace_ui::clock::settle_animations(window, visual);
-    for selector in ["project-settings-Haze", "project-settings-Empty only"] {
-        let bounds = visual.debug_bounds(selector).unwrap();
-        visual.simulate_click(bounds.center(), Default::default());
-        visual.run_until_parked();
-        vorkspace_ui::clock::settle_animations(window, visual);
-    }
-    let opacity = visual.debug_bounds("empty-background-opacity").unwrap();
-    visual.simulate_click(opacity.center(), Default::default());
-    visual.simulate_keystrokes("right");
-    visual.run_until_parked();
-    vorkspace_ui::clock::settle_animations(window, visual);
-    window
-        .update(visual, |shell, _, _| {
-            let background = shell.workspace.project_appearance["/work/vorkspace"]
-                .background
-                .as_ref()
-                .unwrap();
-            assert_eq!(background.effect, Effect::GradientBlur);
-            assert_eq!(background.scope, Scope::Empty);
-            assert!((background.empty_opacity - 0.36).abs() < 0.001);
-            let restored = Workspace::restore(
-                Some(&serde_json::to_string(&shell.workspace).unwrap()),
-                &[(active, "/work/vorkspace".into())],
-                "/work/vorkspace",
-            );
-            assert_eq!(
-                restored.project_appearance,
-                shell.workspace.project_appearance
-            );
-        })
-        .unwrap();
-    visual.simulate_keystrokes("escape");
-    visual.run_until_parked();
-    vorkspace_ui::clock::settle_animations(window, visual);
-    window
-        .update(visual, |shell, _, _| {
-            assert!(shell.background_dialog.is_none())
-        })
-        .unwrap();
-    assert!(visual.debug_bounds("project-chat-background").is_some());
-    // Empty-only backgrounds disappear once a conversation has messages.
-    window
-        .update(visual, |shell, _, cx| {
-            shell.sessions[&active].update(cx, |session, cx| {
-                session.summary.has_messages = true;
-                cx.notify();
-            });
-            cx.notify();
-        })
-        .unwrap();
-    visual.run_until_parked();
-    vorkspace_ui::clock::settle_animations(window, visual);
-    assert!(visual.debug_bounds("project-chat-background").is_none());
-    visual.simulate_resize(gpui::size(px(820.), px(520.)));
-    window
-        .update(visual, |shell, w, cx| {
-            shell.open_background_dialog("/work/vorkspace".into(), w, cx);
-        })
-        .unwrap();
-    visual.run_until_parked();
-    vorkspace_ui::clock::settle_animations(window, visual);
-    let compact = visual.debug_bounds("project-background-dialog").unwrap();
-    let body = visual.debug_bounds("background-dialog-body").unwrap();
-    assert!(compact.top() >= px(16.));
-    assert!(compact.bottom() <= px(504.));
-    assert!(body.bottom() <= compact.bottom());
-}
-#[gpui::test]
 fn backgrounds_survive_tab_and_notes_switches_until_the_tab_closes(cx: &mut TestAppContext) {
-    use vorkspace_core::project_appearance::{Background, Effect, ProjectAppearance};
+    use vorkspace_core::project_appearance::{Background, Effect};
     let (window, a, b) = window(cx);
     window
         .update(cx, |shell, _, cx| {
-            for path in ["/work/another-project", "/work/vorkspace"] {
-                shell.workspace.project_appearance.insert(
-                    path.into(),
-                    ProjectAppearance {
-                        background: Some(Background {
-                            path: concat!(env!("CARGO_MANIFEST_DIR"), "/assets/vorkspace.png")
-                                .into(),
-                            effect: Effect::Dither,
-                            ..Default::default()
-                        }),
-                        ..Default::default()
-                    },
-                );
-            }
+            let vorkspace = shell.workspace.active_vorkspace.clone();
+            shell
+                .workspace
+                .vorkspace_mut(&vorkspace)
+                .unwrap()
+                .background = Some(Background {
+                path: concat!(env!("CARGO_MANIFEST_DIR"), "/assets/vorkspace.png").into(),
+                effect: Effect::Dither,
+                ..Default::default()
+            });
             cx.notify();
         })
         .unwrap();
@@ -1599,11 +1362,9 @@ fn project_rail_toggle_holds_still_and_history_follows_the_rail(cx: &mut TestApp
     visual.run_until_parked();
     let toggle = visual.debug_bounds("toggle-sidebar").unwrap();
     assert_eq!(toggle.left(), px(traffic_light_inset(1., false)));
-    let expanded = visual.debug_bounds("classic-project-rail").unwrap();
-    assert_eq!(
-        visual.debug_bounds("visit-forward").unwrap().right(),
-        expanded.right() - px(6.)
-    );
+    assert!(visual.debug_bounds("classic-project-rail").is_some());
+    let explorer = visual.debug_bounds("toggle-explorer").unwrap();
+    assert_eq!(explorer.left(), toggle.right());
     visual.simulate_click(toggle.center(), Default::default());
     visual.run_until_parked();
     assert_eq!(visual.debug_bounds("toggle-sidebar").unwrap(), toggle);
@@ -1615,14 +1376,8 @@ fn project_rail_toggle_holds_still_and_history_follows_the_rail(cx: &mut TestApp
             .width,
         px(48.)
     );
-    assert_eq!(
-        visual.debug_bounds("visit-back").unwrap().left(),
-        toggle.right()
-    );
-    assert_eq!(
-        visual.debug_bounds("visit-forward").unwrap().right(),
-        px(traffic_light_inset(1., false) + 72.)
-    );
+    // Both toggles hold still as the rail collapses.
+    assert_eq!(visual.debug_bounds("toggle-explorer").unwrap(), explorer);
     window
         .update(visual, |shell, _, _| {
             assert!(!shell.workspace.project_rail_open);
@@ -1642,53 +1397,52 @@ fn project_rail_toggle_holds_still_and_history_follows_the_rail(cx: &mut TestApp
         px(NO_TRAFFIC_LIGHTS)
     );
     assert_eq!(
-        visual.debug_bounds("visit-forward").unwrap().right(),
-        px(NO_TRAFFIC_LIGHTS + 72.)
+        visual.debug_bounds("toggle-explorer").unwrap().right(),
+        px(NO_TRAFFIC_LIGHTS + 48.)
     );
 }
 #[gpui::test]
-fn compact_rail_workspace_tabs_reopen_the_sidebar_without_changing_the_project(
-    cx: &mut TestAppContext,
-) {
-    use crate::workspace::SidebarTab;
+fn compact_rail_follows_the_full_rail_and_sessions_opens_it(cx: &mut TestAppContext) {
     let (window, _, active) = window(cx);
     vorkspace_ui::clock::use_test_clock(cx);
     window
-        .update(cx, |shell, window, cx| {
+        .update(cx, |shell, _, cx| {
             shell.toggle_project_rail(cx);
-            shell.toggle_sidebar(window, cx);
             assert!(!shell.workspace.project_rail_open);
-            assert!(!shell.workspace.sidebar_visible);
         })
         .unwrap();
     let visual = &mut gpui::VisualTestContext::from_window(window.into(), cx);
     visual.run_until_parked();
-    for (selector, expected) in [
-        ("classic-compact-tab-explorer", SidebarTab::Files),
-        ("classic-compact-tab-changes", SidebarTab::Changes),
-        ("classic-compact-tab-sessions", SidebarTab::Sessions),
-    ] {
-        let button = visual.debug_bounds(selector).unwrap();
-        visual.simulate_click(button.center(), Default::default());
-        visual.run_until_parked();
-        let rail = visual.debug_bounds("classic-project-rail").unwrap();
-        let sidebar = visual.debug_bounds("sidebar-frame").unwrap();
-        assert_eq!(rail.size.width, px(48.));
-        assert_eq!(sidebar.left(), rail.right());
-        assert_eq!(
-            sidebar.right(),
-            visual.debug_bounds("main-pane-frame").unwrap().left()
-        );
-        window
-            .update(visual, |shell, _, _| {
-                assert_eq!(shell.workspace.sidebar_tab(), expected);
-                assert!(shell.workspace.sidebar_visible);
-                assert!(!shell.workspace.project_rail_open);
-                assert_eq!(shell.workspace.project, "/work/vorkspace");
-                assert_eq!(shell.workspace.active, Some(active));
-            })
-            .unwrap();
-    }
+    // Same order as the full rail: vorkspace, navigation, then Sessions.
+    let vorkspace = visual.debug_bounds("classic-compact-vorkspace").unwrap();
+    let search = visual.debug_bounds("sidebar-navigation-Search").unwrap();
+    let sessions = visual.debug_bounds("classic-compact-sessions").unwrap();
+    assert!(vorkspace.bottom() <= search.top());
+    assert!(search.bottom() <= sessions.top());
+    // Project tools live in the sidebar; the icon rail has no tab buttons.
+    assert!(
+        visual
+            .debug_bounds("classic-compact-tab-explorer")
+            .is_none()
+    );
+    assert!(
+        visual
+            .debug_bounds("classic-compact-project-picker")
+            .is_none()
+    );
+    visual.simulate_click(sessions.center(), Default::default());
+    visual.run_until_parked();
+    window
+        .update(visual, |shell, _, _| {
+            assert!(
+                shell.workspace.project_rail_open,
+                "Sessions opens the full rail"
+            );
+            assert_eq!(shell.workspace.project, "/work/vorkspace");
+            assert_eq!(shell.workspace.active, Some(active));
+        })
+        .unwrap();
+    assert!(visual.debug_bounds("rail-sessions").is_some());
 }
 #[gpui::test]
 fn original_layout_keeps_project_rail_sidebar_and_workspace_independent(cx: &mut TestAppContext) {
@@ -1742,9 +1496,9 @@ fn original_layout_keeps_project_rail_sidebar_and_workspace_independent(cx: &mut
     assert!(tabs.left() >= main.left());
     assert!(visual.debug_bounds("right-panel-frame").is_none());
     for selector in [
-        "classic-tab-sessions",
         "classic-tab-explorer",
         "classic-tab-changes",
+        "classic-tab-to-dos",
     ] {
         assert!(visual.debug_bounds(selector).is_some());
     }
@@ -1852,11 +1606,6 @@ fn original_workspace_tabs_open_tools_on_the_left_and_remember_each_project(
             SidebarTab::Changes,
             "changes-header",
         ),
-        (
-            "classic-tab-sessions",
-            SidebarTab::Sessions,
-            "classic-session-filter",
-        ),
     ] {
         let button = visual.debug_bounds(selector).unwrap();
         visual.simulate_click(button.center(), Default::default());
@@ -1879,7 +1628,7 @@ fn original_workspace_tabs_open_tools_on_the_left_and_remember_each_project(
         .update(visual, |shell, window, cx| {
             shell.select_classic_sidebar(SidebarTab::Changes, window, cx);
             shell.select_project("/work/another-project".into(), window, cx);
-            assert_eq!(shell.workspace.sidebar_tab(), SidebarTab::Sessions);
+            assert_eq!(shell.workspace.sidebar_tab(), SidebarTab::Files);
             shell.select_classic_sidebar(SidebarTab::Files, window, cx);
             shell.select_project("/work/vorkspace".into(), window, cx);
             assert_eq!(shell.workspace.sidebar_tab(), SidebarTab::Changes);
@@ -2006,16 +1755,15 @@ fn main_pane_covers_a_fixed_sidebar_with_a_clipped_fade(cx: &mut TestAppContext)
             w.painted_quads()
                 .into_iter()
                 .find(|q| {
+                    // The selected sidebar tab's pill is the sample.
                     q.background == content(0.1).into()
-                        && q.bounds.size.height.0 == 32. * w.scale_factor()
-                        && q.bounds.size.width.0
-                            > shell.workspace.right_panel_width / 2. * w.scale_factor()
+                        && q.bounds.size.height.0 == 28. * w.scale_factor()
                         && q.bounds.left().0 >= shell.classic_rail_width() * w.scale_factor()
                         && q.bounds.right().0
                             <= (shell.classic_rail_width() + shell.workspace.right_panel_width)
                                 * w.scale_factor()
                 })
-                .expect("selected session has a painted background")
+                .expect("the selected sidebar tab has a painted background")
                 .bounds
         })
         .unwrap();
@@ -2439,7 +2187,7 @@ fn typing_in_the_session_filter_matches_titles_without_case_and_keeps_session_st
                 );
             })
             .unwrap();
-        for (id, selector) in [(a, "sidebar-session-1"), (b, "sidebar-session-2")] {
+        for (id, selector) in [(a, "rail-session-1"), (b, "rail-session-2")] {
             assert_eq!(
                 visual.debug_bounds(selector).is_some(),
                 expected.contains(&id),
@@ -2523,7 +2271,38 @@ fn many_blank_tabs_fit_without_creating_sidebar_conversations(cx: &mut TestAppCo
         .unwrap();
     cx.run_until_parked();
 }
-fn same_project_window(cx: &mut TestAppContext) -> (WindowHandle<Shell>, i64, i64) {
+#[gpui::test]
+fn stepping_to_another_project_does_not_replace_a_split_leaf(cx: &mut TestAppContext) {
+    let (window, a, b) = window(cx);
+    window
+        .update(cx, |shell, w, cx| {
+            shell.workspace.close(a);
+            for (id, updated_at) in [(a, 10), (b, 20)] {
+                shell.sessions[&id].update(cx, |session, _| {
+                    session.summary.has_messages = true;
+                    session.summary.updated_at = updated_at;
+                });
+            }
+            let sibling = locked(&shell.store)
+                .unwrap()
+                .create("codex", &shell.workspace.project)
+                .unwrap();
+            let sibling_id = sibling.id;
+            shell.add(sibling, cx);
+            shell.workspace.split(sibling_id, SplitDir::Down);
+            shell.open(b, w, cx);
+            let layout = shell.workspace.layout(b);
+            assert!(layout.is_split());
+            assert_eq!(shell.sidebar_navigation_ids(cx), [b, a]);
+            shell.step_session(1, true, w, cx);
+            assert_eq!(shell.workspace.active, Some(a));
+            assert_eq!(shell.workspace.layout(b), layout);
+            assert_ne!(shell.workspace.tab_of(a), shell.workspace.tab_of(b));
+        })
+        .unwrap();
+}
+
+pub(super) fn same_project_window(cx: &mut TestAppContext) -> (WindowHandle<Shell>, i64, i64) {
     let (window, a, b) = window(cx);
     window
         .update(cx, |shell, _, cx| {
@@ -2841,7 +2620,16 @@ fn pane_limit_width_changes_with_window_and_preserves_horizontal_overflow(cx: &m
         .update(visual, |shell, _, _| {
             assert_eq!(shell.workspace.layout(b), before);
             assert_eq!(shell.workspace.layout(b).leaf_ids(), [b, a]);
-            assert!(shell.pane_bounds.get().unwrap().size.width.as_f32() >= 840.);
+            let viewport = shell.pane_viewport.get().unwrap().size.width.as_f32();
+            let canvas = shell.pane_bounds.get().unwrap().size.width.as_f32();
+            assert!(
+                canvas > viewport,
+                "the other pane remains reachable by scrolling"
+            );
+            assert!(
+                (canvas / 2. - viewport.min(MIN_CHAT_WIDTH)).abs() < 1.,
+                "an even split fits one pane within the narrow viewport"
+            );
             assert!(!shell.placement_allowed(DragSource::Session(i64::MAX), a, Edge::Right));
             assert!(shell.placement_allowed(DragSource::Session(i64::MAX), a, Edge::Bottom));
         })
@@ -2997,6 +2785,104 @@ pub(super) fn window_with_scale(
     cx.run_until_parked();
     (window, ids.0, ids.1)
 }
+#[gpui::test]
+fn compact_review_switches_surfaces_without_changing_the_draft_or_split(cx: &mut TestAppContext) {
+    let (window, _, id) = window(cx);
+    let visual = &mut gpui::VisualTestContext::from_window(window.into(), cx);
+    visual.simulate_resize(gpui::size(px(1500.), px(850.)));
+    visual.run_until_parked();
+    let ratio = window
+        .update(visual, |shell, w, cx| {
+            shell.set_sidebar_visible(true, cx);
+            shell.open(id, w, cx);
+            let input = shell.sessions[&id].read(cx).input.clone();
+            input.update(cx, |input, cx| input.set_text("Keep my draft".into(), cx));
+            shell.open_review(
+                crate::git_tools::review::ReviewTab::Changes {
+                    cwd: "/work/vorkspace".into(),
+                    path: None,
+                    staged: None,
+                },
+                w,
+                cx,
+            );
+            shell.reviews[&id].read(cx).state.ratio
+        })
+        .unwrap();
+    vorkspace_ui::clock::settle_animations(window, visual);
+    visual.simulate_resize(gpui::size(px(600.), px(680.)));
+    vorkspace_ui::clock::settle_animations(window, visual);
+    let chat = visual.debug_bounds("compact-review-Chat").unwrap().center();
+    visual.simulate_click(chat, Default::default());
+    visual.run_until_parked();
+    assert!(visual.debug_bounds("composer-box").unwrap().size.height > px(20.));
+    window
+        .update(visual, |shell, w, cx| {
+            assert!(!shell.review_focused);
+            let input = shell.sessions[&id].read(cx).input.read(cx);
+            assert_eq!(input.content, "Keep my draft");
+            assert!(input.focus_handle(cx).is_focused(w));
+        })
+        .unwrap();
+    let review = visual
+        .debug_bounds("compact-review-Review")
+        .unwrap()
+        .center();
+    visual.simulate_click(review, Default::default());
+    visual.run_until_parked();
+    visual.simulate_resize(gpui::size(px(1500.), px(850.)));
+    vorkspace_ui::clock::settle_animations(window, visual);
+    assert!(visual.debug_bounds("compact-review-switcher").is_none());
+    assert!(visual.debug_bounds("review-frame").is_some());
+    window
+        .update(visual, |shell, _, cx| {
+            assert!(shell.review_focused);
+            assert_eq!(shell.reviews[&id].read(cx).state.ratio, ratio);
+            assert!(!shell.reviews[&id].read(cx).state.chat_hidden);
+        })
+        .unwrap();
+}
+
+#[gpui::test]
+fn compact_title_strip_keeps_every_open_tab_in_the_switcher(cx: &mut TestAppContext) {
+    let (window, _, _) = window(cx);
+    let visual = &mut gpui::VisualTestContext::from_window(window.into(), cx);
+    visual.simulate_resize(gpui::size(px(750.), px(680.)));
+    window
+        .update(visual, |shell, _, cx| {
+            shell.workspace.preferences.tab_animations = false;
+            for _ in 0..12 {
+                shell.create(Kind::Codex, cx);
+            }
+        })
+        .unwrap();
+    visual.run_until_parked();
+    let (tabs, active) = window
+        .update(visual, |shell, _, cx| {
+            (shell.visible_tabs(cx), shell.active_title_tab(cx).unwrap())
+        })
+        .unwrap();
+    let bounds = |visual: &mut gpui::VisualTestContext, tab: &TitleTab| {
+        let selector = format!("title-tab-{}", tab.session().unwrap());
+        visual.debug_bounds(Box::leak(selector.into_boxed_str()))
+    };
+    assert!(tabs.len() > 10);
+    assert!(bounds(visual, &active).unwrap().size.width >= px(112.));
+    for tab in tabs.iter().filter(|tab| **tab != active) {
+        assert!(bounds(visual, tab).is_none());
+    }
+    let menu = visual.debug_bounds("open-title-tabs").unwrap().center();
+    visual.simulate_click(menu, Default::default());
+    visual.run_until_parked();
+    window
+        .update(visual, |shell, _, _| {
+            assert!(shell.menu.as_ref().is_some_and(
+                |menu| matches!(&menu.target, MenuTarget::Tabs(listed) if *listed == tabs)
+            ));
+        })
+        .unwrap();
+}
+
 #[gpui::test]
 fn tab_delete_confirms_and_targets_the_original_session(cx: &mut TestAppContext) {
     let (window, a, b) = window(cx);
@@ -3436,7 +3322,7 @@ fn panes_split_resize_and_take_drops_from_panes_tabs_and_the_sidebar(cx: &mut Te
     cx.run_until_parked();
     vorkspace_ui::clock::settle_animations(window, cx);
     let row = cx
-        .debug_bounds(Box::leak(format!("sidebar-session-{a}").into_boxed_str()))
+        .debug_bounds(Box::leak(format!("rail-session-{a}").into_boxed_str()))
         .unwrap()
         .center();
     let below = point(right.center().x, right.bottom() - px(20.));
@@ -3822,63 +3708,6 @@ fn assert_closed_header_stays_hidden(cx: &mut TestAppContext, file: bool) {
 }
 
 #[gpui::test]
-fn a_crowding_pane_collapses_the_sidebar_and_its_room_brings_it_back(cx: &mut TestAppContext) {
-    let (window, _, b) = window(cx);
-    cx.update(|cx| {
-        bind_keys(cx);
-        vorkspace_ui::clock::use_test_clock(cx);
-    });
-    cx.simulate_window_resize(window.into(), gpui::size(px(1200.), px(800.)));
-    window
-        .update(cx, |shell, w, cx| {
-            shell.open(b, w, cx);
-            shell.focus_active(w, cx);
-        })
-        .unwrap();
-    let cx = &mut gpui::VisualTestContext::from_window(window.into(), cx);
-    cx.run_until_parked();
-    window
-        .update(cx, |shell, _, _| {
-            assert!(shell.workspace.sidebar_visible);
-            assert_eq!(shell.viewport_width, 1200.);
-        })
-        .unwrap();
-    cx.simulate_keystrokes("cmd-d");
-    cx.run_until_parked();
-    let new = window
-        .update(cx, |shell, _, cx| {
-            // A 200px project rail and 260px sidebar leave ~370px per pane.
-            assert!(!shell.workspace.sidebar_visible);
-            assert!(shell.narrowest_chat(false, cx) >= MIN_CHAT_WIDTH);
-            shell.workspace.active.unwrap()
-        })
-        .unwrap();
-    window
-        .update(cx, |shell, w, cx| shell.close_pane(new, w, cx))
-        .unwrap();
-    cx.run_until_parked();
-    window
-        .update(cx, |shell, _, _| assert!(shell.workspace.sidebar_visible))
-        .unwrap();
-    // A sidebar the user hid stays hidden when room comes back.
-    cx.simulate_keystrokes("cmd-d");
-    cx.run_until_parked();
-    // Collapsed for the split; shown, then hidden again by hand.
-    cx.simulate_keystrokes("cmd-shift-b cmd-shift-b");
-    cx.run_until_parked();
-    window
-        .update(cx, |shell, w, cx| {
-            assert!(!shell.workspace.sidebar_visible);
-            let pane = shell.workspace.active.unwrap();
-            shell.close_pane(pane, w, cx);
-        })
-        .unwrap();
-    cx.run_until_parked();
-    window
-        .update(cx, |shell, _, _| assert!(!shell.workspace.sidebar_visible))
-        .unwrap();
-}
-#[gpui::test]
 fn reordered_tabs_slide_into_place_instead_of_jumping(cx: &mut TestAppContext) {
     use gpui::{Modifiers, point};
     let (window, a, b) = same_project_window(cx);
@@ -3995,7 +3824,8 @@ fn the_terminal_dock_toggles_adds_closes_and_moves(cx: &mut TestAppContext) {
         .update(cx, |shell, _, cx| {
             shell.workspace.docks.get_mut(&project).unwrap().size = 360.;
             shell.set_dock_side(DockSide::Right, cx);
-            assert!(!shell.workspace.sidebar_visible);
+            // The sidebar is the user's toggle; a narrow window keeps it.
+            assert!(shell.workspace.sidebar_visible);
         })
         .unwrap();
     cx.run_until_parked();
@@ -4197,13 +4027,9 @@ fn settled_title_does_not_schedule_decorative_redraws(cx: &mut TestAppContext) {
         .unwrap();
     cx.run_until_parked();
     cx.refresh().unwrap();
-    // Settle the title-change layout before measuring idle redraw work.
-    cx.update_window(window.into(), |_, window, cx| {
-        window.simulate_next_frame(cx);
-        window.draw(cx).clear(cx);
-    })
-    .unwrap();
-    cx.run_until_parked();
+    // Settle the title-change layout, and the new title's 0.7 s scramble,
+    // before measuring idle redraw work.
+    vorkspace_ui::clock::settle_animations(window, cx);
     let (sidebar, tabs, transcript) = window
         .read_with(cx, |shell, cx| {
             (

@@ -119,6 +119,16 @@ pub(crate) const ROOT_NODE_ID: NodeId = NodeId(0);
 pub(crate) type A11yActionListener =
     Box<dyn FnMut(Option<&accesskit::ActionData>, &mut Window, &mut App) + 'static>;
 
+pub(crate) struct A11yPrepaintCheckpoint {
+    parent: NodeId,
+    children: usize,
+    nodes: usize,
+    focus: Option<NodeId>,
+    active_descendant: Option<NodeId>,
+    focus_ids: usize,
+    last_focus_without_node: Option<FocusId>,
+}
+
 /// Per-window accessibility state.
 ///
 /// Manages the AccessKit tree that is built each frame and the mappings
@@ -149,6 +159,8 @@ pub(crate) struct A11y {
     pub(crate) focus_ids: FxHashMap<NodeId, FocusId>,
     pub(crate) node_bounds: FxHashMap<NodeId, Bounds<Pixels>>,
     pub(crate) action_listeners: FxHashMap<NodeId, Vec<(Action, A11yActionListener)>>,
+    prepaint_depth: usize,
+    prepaint_focus_undo: Vec<(NodeId, Option<FocusId>)>,
     /// The window's title, used to label the root node so assistive
     /// technology can tell windows apart.
     window_title: Option<SharedString>,
@@ -177,6 +189,8 @@ impl A11y {
             focus_ids: FxHashMap::default(),
             node_bounds: FxHashMap::default(),
             action_listeners: FxHashMap::default(),
+            prepaint_depth: 0,
+            prepaint_focus_undo: Vec::new(),
             window_title,
             last_focus_without_node: None,
             debug: debug::A11yDebug::default(),
@@ -222,7 +236,60 @@ impl A11y {
     }
 
     pub(crate) fn set_focusable(&mut self, node_id: NodeId, focus_id: FocusId) {
-        self.focus_ids.insert(node_id, focus_id);
+        let previous = self.focus_ids.insert(node_id, focus_id);
+        if self.prepaint_depth != 0 {
+            self.prepaint_focus_undo.push((node_id, previous));
+        }
+    }
+
+    pub(crate) fn prepaint_checkpoint(&mut self) -> Option<A11yPrepaintCheckpoint> {
+        if !self.is_active() {
+            return None;
+        }
+        let parent = *self.nodes.ids_stack.last()?;
+        self.prepaint_depth += 1;
+        Some(A11yPrepaintCheckpoint {
+            parent,
+            children: self.nodes.nodes_stack.last().unwrap().children().len(),
+            nodes: self.nodes.all_nodes.len(),
+            focus: self.nodes.focus,
+            active_descendant: self.nodes.active_descendant,
+            focus_ids: self.prepaint_focus_undo.len(),
+            last_focus_without_node: self.last_focus_without_node,
+        })
+    }
+
+    pub(crate) fn finish_prepaint(&mut self, checkpoint: A11yPrepaintCheckpoint, commit: bool) {
+        if !commit {
+            // Child prepaints can run again at the final position. Discard the
+            // speculative tree and action bounds, including synthetic children.
+            debug_assert_eq!(self.nodes.ids_stack.last(), Some(&checkpoint.parent));
+            let parent = self.nodes.nodes_stack.last_mut().unwrap();
+            if parent.children().len() > checkpoint.children {
+                parent.set_children(parent.children()[..checkpoint.children].to_vec());
+            }
+            for (id, _) in self.nodes.all_nodes.drain(checkpoint.nodes..) {
+                self.nodes.seen_ids.remove(&id);
+                self.node_bounds.remove(&id);
+                #[cfg(debug_assertions)]
+                self.nodes.node_info.remove(&id);
+            }
+            self.nodes.focus = checkpoint.focus;
+            self.nodes.active_descendant = checkpoint.active_descendant;
+            self.last_focus_without_node = checkpoint.last_focus_without_node;
+            // A focus handle may have been registered by an element with no role.
+            for (id, previous) in self.prepaint_focus_undo.drain(checkpoint.focus_ids..).rev() {
+                if let Some(previous) = previous {
+                    self.focus_ids.insert(id, previous);
+                } else {
+                    self.focus_ids.remove(&id);
+                }
+            }
+        }
+        self.prepaint_depth -= 1;
+        if self.prepaint_depth == 0 {
+            self.prepaint_focus_undo.clear();
+        }
     }
 
     /// Report `node_id` as the currently-focused node, if it is present in the
@@ -273,6 +340,7 @@ impl A11y {
 
     /// Clear per-frame state and push the root node to start a new frame.
     pub(crate) fn begin_frame(&mut self) {
+        debug_assert_eq!(self.prepaint_depth, 0);
         self.focus_ids.clear();
         self.node_bounds.clear();
         self.action_listeners.clear();

@@ -3,11 +3,13 @@
 //! pane keeps its split tree in `layouts` and its last focused pane in
 //! `focused`. `active` is always the focused pane.
 mod panes;
+mod vorkspaces;
 pub(crate) use panes::{AppPane, AppPaneState};
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 use std::sync::atomic::{AtomicU64, Ordering};
 use vorkspace_model::pane_layout::{Edge, PaneNode, SplitDir, leaf};
+pub(crate) use vorkspaces::VorkspaceDef;
 
 static NEXT_TERMINAL_TAB_ID: AtomicU64 = AtomicU64::new(1);
 
@@ -188,9 +190,10 @@ impl SidebarTab {
         let mut tabs = Vec::new();
         for tab in order
             .iter()
-            .chain(&[Self::Sessions, Self::Files, Self::Changes, Self::Todos])
+            .chain(&[Self::Files, Self::Changes, Self::Todos])
         {
-            if *tab != Self::Graph && !tabs.contains(tab) {
+            // Sessions live in the rail; the sidebar holds project tools.
+            if !matches!(tab, Self::Graph | Self::Sessions) && !tabs.contains(tab) {
                 tabs.push(*tab);
             }
         }
@@ -203,15 +206,6 @@ impl SidebarTab {
             Self::Changes => "Changes",
             Self::Graph => "History",
             Self::Todos => "To-dos",
-        }
-    }
-    pub fn icon(self) -> &'static str {
-        match self {
-            Self::Sessions => "message-multiple",
-            Self::Files => "folder",
-            Self::Changes => "git-compare",
-            Self::Graph => "git-branch",
-            Self::Todos => "check-circle",
         }
     }
 }
@@ -378,6 +372,18 @@ pub(crate) struct Workspace {
     pub desktop_workspace_snapshot: Option<serde_json::Value>,
     /// Exact source strings retained for preferences with no native equivalent.
     pub desktop_preferences_metadata: Option<serde_json::Value>,
+    /// Named sets of projects and Bots. Folders and Bots keep their own data;
+    /// a vorkspace only decides what this window lists.
+    pub vorkspaces: Vec<VorkspaceDef>,
+    pub active_vorkspace: String,
+    /// The project each vorkspace last showed, so switching back returns there.
+    pub vorkspace_project: HashMap<String, String>,
+    /// Bots already placed in a vorkspace once; a new one joins the active.
+    pub seen_bots: HashSet<String>,
+    /// Folders first discovered during `restore`, carried into `AppCore` when
+    /// shared vorkspaces load.
+    #[serde(skip)]
+    pub restored_new_projects: Vec<String>,
 }
 
 /// Port of src/features/projects/model/projectTerminal.ts.
@@ -552,6 +558,11 @@ impl Default for Workspace {
             desktop_project_preferences: None,
             desktop_workspace_snapshot: None,
             desktop_preferences_metadata: None,
+            vorkspaces: Vec::new(),
+            active_vorkspace: String::new(),
+            vorkspace_project: HashMap::new(),
+            seen_bots: HashSet::new(),
+            restored_new_projects: Vec::new(),
         }
     }
 }
@@ -563,6 +574,11 @@ impl Workspace {
                 vorkspace_core::desktop_preferences::DesktopPreferences::restore_sidebar_preferences(
                     &mut value,
                 );
+                if let Some(panes) = value.get_mut("app_panes").and_then(|v| v.as_object_mut()) {
+                    panes.retain(|_, pane| {
+                        serde_json::from_value::<AppPaneState>(pane.clone()).is_ok()
+                    });
+                }
                 serde_json::from_value::<Self>(value).ok()
             })
             .unwrap_or_default();
@@ -611,9 +627,9 @@ impl Workspace {
         {
             state.project = cwd.into();
         }
-        for appearance in state.project_appearance.values_mut() {
-            appearance.normalize();
-        }
+        // Projects are no longer customized: each is a folder in the color
+        // its path hashes to, with its folder name. Old customizations go.
+        state.project_appearance.clear();
         let mut known: HashSet<_> = sessions.iter().map(|s| s.0).collect();
         state.review_owners.retain(|id, owner| {
             *id < 0
@@ -755,6 +771,13 @@ impl Workspace {
             state.project = state.projects.first().cloned().unwrap_or_default();
             state.active = None;
         }
+        let known_before_restore: HashSet<String> = state
+            .projects
+            .iter()
+            .map(|p| vorkspace_core::files::path_key(p))
+            .collect();
+        let legacy_vorkspace = state.vorkspaces.is_empty();
+        state.ensure_vorkspaces();
         if state
             .project_archive
             .get(&vorkspace_core::files::path_key(cwd))
@@ -773,26 +796,37 @@ impl Workspace {
                     *known == review_owners.get(id).copied().unwrap_or(*id) && path == project
                 })
         });
-        if let Some((_, project)) = sessions.iter().find(|(id, path)| {
-            state
-                .project_archive
-                .get(&vorkspace_core::files::path_key(path))
-                != Some(&true)
-                && !state
-                    .deleted_projects
-                    .contains(&vorkspace_core::files::path_key(path))
-                && state
-                    .active
-                    .is_some_and(|pane| state.session_for_pane(pane) == Some(*id))
-        }) {
-            state.project = project.clone();
-            state
-                .project_focus
-                .insert(project.clone(), state.active.unwrap());
+        if let Some(active) = state.active {
+            if let Some((_, project)) = sessions
+                .iter()
+                .find(|(id, _)| state.session_for_pane(active) == Some(*id))
+            {
+                if state.is_project_available(project)
+                    && (legacy_vorkspace || state.vorkspace_has_project(project))
+                {
+                    state.project = project.clone();
+                    state.project_focus.insert(project.clone(), active);
+                } else {
+                    state.active = None;
+                }
+            } else if state.app_panes.get(&active).is_some_and(|pane| {
+                pane.content.project_scoped()
+                    && !pane.project.is_empty()
+                    && !state.vorkspace_has_project(&pane.project)
+            }) {
+                state.active = None;
+            }
         }
-        if !state.project.is_empty() {
+        if legacy_vorkspace && !state.project.is_empty() {
             state.add_project(&state.project.clone());
         }
+        state.reconcile_project_scope();
+        state.restored_new_projects = state
+            .projects
+            .iter()
+            .filter(|p| !known_before_restore.contains(&vorkspace_core::files::path_key(p)))
+            .cloned()
+            .collect();
         state
     }
     /// Reorder the available projection, merging it into the complete order so
@@ -844,16 +878,18 @@ impl Workspace {
                     .get(&vorkspace_core::files::path_key(&self.project))
             })
             .copied()
+            .filter(|tab| *tab != SidebarTab::Sessions)
             .filter(|tab| *tab != SidebarTab::Todos || self.preferences.todos)
             .unwrap_or_else(|| {
                 self.sidebar_tab_order
                     .iter()
                     .find(|tab| {
                         **tab != SidebarTab::Graph
+                            && **tab != SidebarTab::Sessions
                             && (**tab != SidebarTab::Todos || self.preferences.todos)
                     })
                     .copied()
-                    .unwrap_or_default()
+                    .unwrap_or(SidebarTab::Files)
             })
     }
     pub fn migrate_project_rail(&mut self) -> Result<(), String> {
@@ -945,23 +981,35 @@ impl Workspace {
         self.add_project(path);
     }
     pub fn add_project(&mut self, path: &str) {
+        // A folder the app has never seen joins the vorkspace in view,
+        // however it arrived (a dialog, a remote host, an agent command).
+        if self.register_project(path) {
+            let active = self.active_vorkspace.clone();
+            self.join_vorkspace(&active, path);
+        }
+    }
+    /// Lists `path` as a known project without placing it in any vorkspace.
+    /// Returns whether it was new to the app.
+    pub(crate) fn register_project(&mut self, path: &str) -> bool {
         if path.is_empty() {
-            return;
+            return false;
         }
         let key = vorkspace_core::files::path_key(path);
         if self.deleted_projects.contains(&key) {
-            return;
+            return false;
         }
         if self.project_archive.contains_key(&key) {
             self.project_archive.insert(key.clone(), false);
         }
-        if !self
+        if self
             .projects
             .iter()
             .any(|p| vorkspace_core::files::path_key(p) == key)
         {
-            self.projects.push(path.into());
+            return false;
         }
+        self.projects.push(path.into());
+        true
     }
     pub fn session_for_pane(&self, id: i64) -> Option<i64> {
         self.review_owners

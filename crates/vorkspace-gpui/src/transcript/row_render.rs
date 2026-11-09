@@ -146,7 +146,9 @@ impl TranscriptView {
                                     let menu_path = path.clone();
                                     d.role(Role::Link)
                                         .cursor_pointer()
-                                        .hover(|s| s.text_color(rgb(0x7dd3fc)))
+                                        .hover(|s| {
+                                            s.text_color(vorkspace_ui::theme::accent_color())
+                                        })
                                         .on_click(move |event, window, cx| {
                                             if event.click_count() == 1 {
                                                 window.dispatch_action(
@@ -413,7 +415,7 @@ impl TranscriptView {
                     && let Some(id) = cards::session(&value["sessionId"])
                     && let Some(view) = self.launches.get(&id)
                 {
-                    bot_cards::launch(id, Some(view), self.started_at.elapsed().as_secs_f32(), cx)
+                    bot_cards::launch(id, Some(view), cx)
                 } else {
                     bot_cards::render(value, cx)
                 }
@@ -499,7 +501,7 @@ impl TranscriptView {
                 }
             );
         let receipt_open = match self.rows[ix].body {
-            Body::WorkLine { turn, .. } => self.work_folds.get(&turn).copied().unwrap_or(false),
+            Body::WorkLine { turn, expandable } => self.work_open(turn, expandable),
             _ => false,
         };
         let prose = matches!(self.rows[ix].body, Body::Markdown(..));
@@ -603,7 +605,7 @@ impl TranscriptView {
                                                 .top(px(22.))
                                                 .bottom(px(-4.))
                                                 .w(px(1.))
-                                                .bg(rgb(0x323232)),
+                                                .bg(content(0.14)),
                                         )
                                     })
                                     .child(body),

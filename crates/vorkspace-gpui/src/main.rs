@@ -309,7 +309,13 @@ fn main() {
             .and_then(|state| {
                 state["project"]
                     .as_str()
-                    .filter(|s| !s.is_empty())
+                    // A saved empty vorkspace deliberately has no launch cwd.
+                    .filter(|s| {
+                        !s.is_empty()
+                            || state["active_vorkspace"]
+                                .as_str()
+                                .is_some_and(|id| !id.is_empty())
+                    })
                     .map(str::to_owned)
             })
             .or_else(|| {
@@ -385,6 +391,7 @@ fn main() {
             }
             cx.set_reduce_motion(vorkspace_macos::accessibility::reduce_motion());
             dev_reload::install(cx);
+            vorkspace_ui::fluid::init(cx);
             vorkspace_macos::updater::start(cx);
             app_menu::init(cx);
             input::bind(cx);

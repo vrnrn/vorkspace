@@ -135,12 +135,10 @@ fn bot_and_session_metrics_hover_show_the_same_text_and_fit_at_both_widths(
                     .painted_quads()
                     .into_iter()
                     .find(|quad| {
-                        quad.background
-                            == gpui::Background::from(vorkspace_ui::theme::content(0.02))
+                        quad.background == gpui::Background::from(vorkspace_ui::fluid::tip_fill())
                     })
-                    .expect("painted tooltip glass surface");
-                // Inspect the glass fill: GPUI splits transparent border
-                // quads into edge fragments that intentionally omit the center.
+                    .expect("painted tooltip ink surface");
+                // Inspect the tip's ink fill, which covers the whole card.
                 // The tooltip must escape the Bot strip's 24px overflow clip.
                 assert!(
                     frame.content_mask.bounds.contains(&frame.bounds.center()),

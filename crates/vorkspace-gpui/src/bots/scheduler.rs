@@ -135,7 +135,7 @@ fn habit_field(field: Entity<Input>) -> gpui::Div {
         .px_2()
         .py_1()
         .rounded(px(radius::CONTROL))
-        .hover(|s| s.bg(content(0.05)))
+        .hover(|s| s.bg(vorkspace_ui::fluid::hover(0.05)))
         .w_full()
         .min_w_0()
         .flex_shrink_0()
@@ -155,7 +155,10 @@ fn habit_icon_button(
                 .focus_visible(|s| s.opacity(1.).bg(content(0.15)))
         })
         .text_color(content(0.5))
-        .hover(|s| s.bg(content(0.08)).text_color(content(1.)))
+        .hover(|s| {
+            s.bg(vorkspace_ui::fluid::hover(0.08))
+                .text_color(content(1.))
+        })
         .child(icon(glyph, 14.))
 }
 impl Bots {
@@ -232,10 +235,8 @@ impl Bots {
         div().id("bot-habits-list").debug_selector(|| "bot-habits-list".into())
             .size_full().min_w_0().overflow_y_scroll().p_2().flex().flex_col().gap_4()
             .when(self.habits.is_empty(), |d| d.child(
-                div().flex_1().min_h(px(160.)).flex().flex_col().items_center().justify_center()
-                    .gap_3().px_6().py_10().text_center().text_size(px(12.)).line_height(px(18.))
-                    .text_color(content(0.55)).child(icon("clock", 18.))
-                    .child(format!("Ask {} to put recurring work on a schedule, like a morning digest or a weekly report.", bot.label()))))
+                div().flex_1().min_h(px(160.)).flex()
+                    .child(super::panels::empty_state("clock", &format!("Ask {} to put recurring work on a schedule, like a morning digest or a weekly report.", bot.label())))))
             .children(["Up next today", "Done today", "Later"].into_iter().zip(groups).filter(|(_, items)| !items.is_empty()).map(|(title, items)| {
                 div().flex_shrink_0().w_full().min_w_0().flex().flex_col().gap_1p5()
                     .child(div().px_2().text_size(px(11.)).text_color(content(0.4)).child(title))
@@ -267,7 +268,7 @@ impl Bots {
             .rounded(px(radius::CONTROL))
             .flex()
             .items_center()
-            .hover(|s| s.bg(content(0.05)))
+            .hover(|s| s.bg(vorkspace_ui::fluid::hover(0.05)))
             .child(
                 div()
                     .id(SharedString::from(format!("bot-habit-open-{id}")))
@@ -585,7 +586,7 @@ impl Bots {
         let (label, color) = match run.outcome.as_str() {
             "posted" => ("Messaged you", rgb(bot.color).into()),
             "quiet" => ("Nothing to report", content(0.25)),
-            _ => ("Couldn't finish", rgb(0xf87171).into()),
+            _ => ("Couldn't finish", vorkspace_ui::theme::danger()),
         };
         let time = format!(
             "{}{}",
@@ -625,7 +626,8 @@ impl Bots {
                     .gap_2p5()
                     .text_size(px(12.))
                     .when(detail, |d| {
-                        d.aria_expanded(expanded).hover(|s| s.bg(content(0.05)))
+                        d.aria_expanded(expanded)
+                            .hover(|s| s.bg(vorkspace_ui::fluid::hover(0.05)))
                     })
                     .child(div().size(px(8.)).flex_shrink_0().rounded_full().bg(color))
                     .child(
@@ -693,7 +695,11 @@ impl Bots {
                     ));
                 }
             } else if let Some(error) = &run.error {
-                body = body.child(div().text_color(rgb(0xf87171)).child(error.clone()));
+                body = body.child(
+                    div()
+                        .text_color(vorkspace_ui::theme::danger())
+                        .child(error.clone()),
+                );
             }
             card = card.child(body);
         }
@@ -851,7 +857,7 @@ impl Bots {
                                         .px_2()
                                         .pt_2()
                                         .text_size(px(12.))
-                                        .text_color(rgb(0xf87171))
+                                        .text_color(vorkspace_ui::theme::danger())
                                         .child(error),
                                 )
                             }),
@@ -900,7 +906,7 @@ impl Bots {
             .px_2()
             .rounded(px(radius::CONTROL))
             .bg(content(0.1))
-            .hover(|s| s.bg(content(0.14)))
+            .hover(|s| s.bg(vorkspace_ui::fluid::hover(0.14)))
             .flex()
             .items_center()
             .gap_1()
@@ -1210,19 +1216,6 @@ impl Bots {
             view.update(cx, |chat, cx| chat.sync_native_history(cx));
         }
         self.resume_peer_queues(cx);
-        // A failed settlement write may be retried locally. The provider turn
-        // itself is never replayed; starts belong only to this live owner.
-        let unsettled = self
-            .channels
-            .views
-            .iter()
-            .filter(|(_, v)| !v.read(cx).busy)
-            .map(|(key, _)| key.clone())
-            .collect::<Vec<_>>();
-        for key in unsettled {
-            self.channel_finished(&key, cx);
-        }
-        self.channel_tick(cx);
         self.check_habits(cx);
         cx.notify();
     }

@@ -23,6 +23,7 @@ pub(crate) struct Launch {
     pub access: AccessMode,
     pub prompt: String,
     pub foreground: bool,
+    pub browsed_folder: bool,
 }
 #[derive(Default)]
 pub(crate) struct Controller {
@@ -73,6 +74,8 @@ pub(crate) struct QuickComposer {
     completion: Entity<crate::composer::composer_completion::Completion>,
     projects: Vec<String>,
     cwd: String,
+    browsed_folder: bool,
+    error: Option<String>,
     kind: Kind,
     model: Option<String>,
     access: AccessMode,
@@ -135,6 +138,8 @@ impl QuickComposer {
             completion,
             projects,
             cwd: choice.cwd,
+            browsed_folder: false,
+            error: None,
             kind: choice.kind,
             model: choice.model,
             access: choice.access,
@@ -156,6 +161,10 @@ impl QuickComposer {
         if prompt.is_empty() {
             return;
         }
+        if self.cwd.is_empty() {
+            self.show_error("Choose a project to start a session.", cx);
+            return;
+        }
         cx.emit(Launch {
             cwd: self.cwd.clone(),
             kind: self.kind,
@@ -163,7 +172,13 @@ impl QuickComposer {
             access: self.access,
             prompt,
             foreground,
+            browsed_folder: self.browsed_folder,
         });
+    }
+
+    pub(crate) fn show_error(&mut self, message: &str, cx: &mut Context<Self>) {
+        self.error = Some(message.into());
+        cx.notify();
     }
     pub fn focus(&self, window: &mut Window, cx: &mut Context<Self>) {
         window.focus(&self.input.focus_handle(cx), cx);
@@ -184,7 +199,11 @@ impl QuickComposer {
                     this.choose_project(cx);
                     return;
                 };
+                if this.cwd != *path {
+                    this.browsed_folder = false;
+                }
                 this.cwd = path.clone();
+                this.error = None;
                 let p = cx.global::<vorkspace_ui::preferences::Preferences>();
                 this.kind = p
                     .default_provider
@@ -220,6 +239,8 @@ impl QuickComposer {
                     && let Some(path) = paths.first()
                 {
                     this.cwd = path.to_string_lossy().into_owned();
+                    this.browsed_folder = true;
+                    this.error = None;
                     if !this.projects.contains(&this.cwd) {
                         this.projects.push(this.cwd.clone());
                     }
@@ -317,17 +338,26 @@ impl Render for QuickComposer {
                     .relative()
                     .child(self.project_anchor.probe())
                     .child(icon("folder", 14.))
-                    .child(
-                        std::path::Path::new(&self.cwd)
-                            .file_name()
-                            .unwrap_or_default()
-                            .to_string_lossy()
-                            .into_owned(),
-                    )
+                    .child(if self.cwd.is_empty() {
+                        "Choose project…".into()
+                    } else {
+                        vorkspace_core::files::leaf_name(&self.cwd)
+                    })
                     .child(icon("chevron-down", 12.))
                     .on_click(cx.listener(|this, _, window, cx| this.projects(window, cx))),
             )
             .child(div().flex_1().min_h_0().child(self.completion.clone()))
+            .when_some(self.error.clone(), |d, message| {
+                d.child(
+                    div()
+                        .id("quick-composer-error")
+                        .role(Role::Alert)
+                        .aria_label(message.clone())
+                        .text_size(px(12.))
+                        .text_color(vorkspace_ui::theme::danger())
+                        .child(message),
+                )
+            })
             .child(
                 div()
                     .flex()
@@ -368,12 +398,10 @@ impl Render for QuickComposer {
                         })),
                     )
                     .child(div().flex_1())
-                    .child(
-                        div()
-                            .text_size(px(10.))
-                            .text_color(content(0.35))
-                            .child("↵ start · ⌘↵ open"),
-                    )
+                    .child(vorkspace_ui::fluid::key_hints(&[
+                        ("↵", "start"),
+                        ("⌘↵", "open"),
+                    ]))
                     .child(
                         crate::controls::primary_button(
                             "quick-send",
@@ -412,12 +440,13 @@ impl Render for QuickComposer {
                             div()
                                 .id(gpui::SharedString::from(mode.id()))
                                 .role(Role::Button)
+                                .map(vorkspace_ui::theme::tab_reachable)
                                 .aria_label(mode.label())
                                 .px_3()
                                 .py_2()
                                 .rounded(px(radius::CONTROL))
                                 .text_size(px(12.))
-                                .hover(|s| s.bg(content(0.1)))
+                                .hover(|s| s.bg(vorkspace_ui::fluid::hover(0.1)))
                                 .child(mode.label())
                                 .on_click(cx.listener(move |this, _, window, cx| {
                                     this.access = mode;

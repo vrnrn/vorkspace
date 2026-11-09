@@ -47,8 +47,7 @@ impl Conversation {
         let Some(approval) = self.approvals.front() else {
             return div().into_any_element();
         };
-        let mut ink = shell_fill();
-        ink.a = 1.;
+        let ink = vorkspace_ui::fluid::on_ink();
         let deny_id = approval.id.clone();
         let session_id = approval.id.clone();
         let allow_id = approval.id.clone();
@@ -61,7 +60,7 @@ impl Conversation {
                     .flex()
                     .items_center()
                     .gap(px(10.))
-                    .child(icon("square-lock", 14.).text_color(gpui::rgb(0xfbbf24)))
+                    .child(icon("square-lock", 14.).text_color(vorkspace_ui::theme::warning()))
                     .child(
                         div()
                             .min_w_0()
@@ -100,7 +99,10 @@ impl Conversation {
                     .child(
                         approval_button("approval-deny", "Deny")
                             .text_color(content(0.5))
-                            .hover(|s| s.bg(content(0.08)).text_color(content(0.9)))
+                            .hover(|s| {
+                                s.bg(vorkspace_ui::fluid::hover(0.08))
+                                    .text_color(content(0.9))
+                            })
                             .on_click(cx.listener(move |this, _, _, cx| {
                                 this.decide_notification_request(&deny_id, Decision::Deny, cx);
                             })),
@@ -109,7 +111,7 @@ impl Conversation {
                         d.child(
                             approval_button("approval-session", "Allow for this session")
                                 .bg(content(0.06))
-                                .hover(|s| s.bg(content(0.1)))
+                                .hover(|s| s.bg(vorkspace_ui::fluid::hover(0.1)))
                                 .on_click(cx.listener(move |this, _, _, cx| {
                                     this.decide_notification_request(
                                         &session_id,

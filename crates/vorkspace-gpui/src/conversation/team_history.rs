@@ -119,7 +119,7 @@ impl Conversation {
                         if member.retired { " · Retired" } else { "" }
                     )
                 } else {
-                    "Team channel history".into()
+                    "Team history".into()
                 }
             })
             .unwrap_or_else(|| "Minion history".into());

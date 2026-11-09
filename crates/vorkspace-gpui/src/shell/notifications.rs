@@ -330,7 +330,16 @@ impl Shell {
                         for target in platform::drain_clicks() {
                             this.open_notice_target(target, cx);
                         }
-                        this.poll_reminders(cx);
+                        // Known reminders keep one-second precision. The session
+                        // clock also discovers schedules saved by other windows.
+                        let now = vorkspace_core::time::now_ms();
+                        if this
+                            .reminders
+                            .iter()
+                            .any(|r| r.due_at <= now && r.fired_at.is_none())
+                        {
+                            this.poll_reminders(cx);
+                        }
                         this.poll_linked_activity(cx);
                         // Scheduled mutes expire without a preference change.
                         if !this.notification_state.approvals.read(cx).is_empty()
@@ -436,33 +445,56 @@ impl Shell {
             return false;
         }
         self.workspace.active_tab().is_some_and(|tab| {
-            self.workspace
-                .layout(tab)
-                .leaf_ids()
-                .into_iter()
-                .any(|pane| {
-                    if self.workspace.session_for_pane(pane) == Some(id)
-                        && !self.workspace.review_owners.contains_key(&pane)
-                    {
-                        return true;
-                    }
-                    let Some(crate::workspace::AppPane::Bot(bot)) = self
-                        .workspace
-                        .app_panes
-                        .get(&pane)
-                        .map(|pane| &pane.content)
+            let layout = self.workspace.layout(tab);
+            let split = layout.is_split();
+            layout.leaves().into_iter().any(|leaf| {
+                // A split can be scrolled or clipped. Only suppress a
+                // toast when the whole pane can show the inline request.
+                if split {
+                    let Some((canvas, viewport)) =
+                        self.pane_bounds.get().zip(self.pane_viewport.get())
                     else {
                         return false;
                     };
-                    self.workspace.preferences.bots
-                        && self.bots.as_ref().is_some_and(|manager| {
-                            manager.read(cx).pane_notification_session(bot, cx) == Some(id)
-                        })
-                })
+                    let rect = leaf.rect;
+                    let top_left = viewport.origin
+                        + self.pane_scroll.offset()
+                        + gpui::point(canvas.size.width * rect.x, canvas.size.height * rect.y);
+                    let bottom_right = top_left
+                        + gpui::point(canvas.size.width * rect.w, canvas.size.height * rect.h);
+                    let tolerance = px(0.5);
+                    if top_left.x < viewport.left() - tolerance
+                        || top_left.y < viewport.top() - tolerance
+                        || bottom_right.x > viewport.right() + tolerance
+                        || bottom_right.y > viewport.bottom() + tolerance
+                    {
+                        return false;
+                    }
+                }
+                let pane = leaf.id;
+                if self.workspace.session_for_pane(pane) == Some(id)
+                    && !self.workspace.review_owners.contains_key(&pane)
+                {
+                    return !self.review_covers_chat(pane, cx);
+                }
+                let Some(crate::workspace::AppPane::Bot(bot)) = self
+                    .workspace
+                    .app_panes
+                    .get(&pane)
+                    .map(|pane| &pane.content)
+                else {
+                    return false;
+                };
+                self.workspace.preferences.bots
+                    && !self.workspace.bot_hidden_in_vorkspace(bot)
+                    && self.bots.as_ref().is_some_and(|manager| {
+                        manager.read(cx).pane_notification_session(bot, cx) == Some(id)
+                    })
+            })
         })
     }
 
-    pub(super) fn sync_notices(&mut self, window: &Window, cx: &mut Context<Self>) {
+    pub(super) fn sync_notices(&mut self, cx: &mut Context<Self>) {
         let now = vorkspace_core::time::now_ms();
         let prefs = self.workspace.preferences.clone();
         if self.notification_state.sounds_enabled != prefs.sounds {
@@ -495,7 +527,6 @@ impl Shell {
                 completed.push((chat.summary.clone(), chat.notification_reply_body(cx)));
             }
             directories.insert(id.to_string(), chat.summary.cwd.clone());
-            let bot_visible = self.bot_active(cx) && self.notice_session_visible(id, cx);
             snapshots.push(SessionInputs {
                 session_id: id.to_string(),
                 title: chat.display_title().to_owned(),
@@ -504,15 +535,10 @@ impl Shell {
                 pending: chat.pending_notification_inputs(cx),
                 inbox_ask: false,
                 orchestration_worker: self.orchestration_worker(id),
-                conversation_focused: self.window_active
-                    && (self
-                        .workspace
-                        .active
-                        .and_then(|pane| self.workspace.session_for_pane(pane))
-                        == Some(id)
-                        || bot_visible)
-                    && self.notice_session_visible(id, cx)
-                    && chat.composer_focused(window, cx),
+                // A conversation on screen already shows its request as the
+                // inline card, so a toast for it would ask the same thing twice.
+                // Where the keyboard focus sits does not change what is visible.
+                conversation_focused: self.window_active && self.notice_session_visible(id, cx),
             });
         }
         self.notification_state
@@ -702,74 +728,106 @@ impl Shell {
     }
 
     fn open_notice_target(&mut self, target: Target, cx: &mut Context<Self>) {
+        let core = self.app_core.clone();
         cx.spawn(async move |this, cx| {
-            let _ = this.update_in(cx, |this, window, cx| {
-                let id = match target {
-                    Target::Session(id) => id,
-                    Target::Reminder { session_id, due_at } => {
-                        this.clear_notification_reminder(session_id, due_at, cx);
-                        session_id
-                    }
-                };
-                this.close_settings(window, cx);
-                this.leave_app_views(cx);
-                this.leave_app_search(cx);
-                if let Some(bots) = this.bots.clone()
-                    && bots.update(cx, |m, cx| m.open_notification_session(id, window, cx))
-                {
-                    window.activate_window();
-                    return;
-                }
-                // Habit runs share their live Conversation with the Bot
-                // manager. Adopt that entity so controls answer the running
-                // provider, rather than constructing a disconnected history.
-                if !this.sessions.contains_key(&id)
-                    && let Some(view) = this.notification_chat(id, cx)
-                {
-                    let summary = view.read(cx).summary.clone();
-                    this.session_summaries.insert(id, summary.clone());
-                    this.session_marks
-                        .insert(id, cx.new(|_| SessionMark::new(summary.provider.clone())));
-                    this.tab_marks
-                        .insert(id, cx.new(|_| SessionMark::tab(summary.provider.clone())));
-                    this.observations.push(cx.subscribe(
-                        &view,
-                        move |this, _, _: &SessionChanged, cx| {
-                            this.refresh_session_mark(id, cx);
-                            this.notification_session_changed(id, cx);
-                            this.invalidate_chrome(cx);
-                            cx.notify();
-                        },
-                    ));
-                    this.sessions.insert(id, view);
-                    if !this.order.contains(&id) {
-                        this.order.push(id);
-                    }
-                }
-                if this.session_summaries.contains_key(&id) {
-                    // `open` normally dismisses today's due reminder. A stale
-                    // OS target must preserve a newer occurrence instead.
-                    let newer = match target {
-                        Target::Reminder { due_at, .. } => this
+            let id = match target {
+                Target::Session(id) | Target::Reminder { session_id: id, .. } => id,
+            };
+            let owner = cx
+                .update(|cx| {
+                    core.as_ref()?
+                        .read(cx)
+                        .session_owner(id, cx)
+                        .map(|owner| owner.downgrade())
+                })
+                .filter(|owner| owner != &this);
+            let show = |shell: &mut Self, window: &mut Window, cx: &mut Context<Self>| {
+                shell.show_notice_target(target, window, cx)
+            };
+            if let Some(opened) = owner.and_then(|owner| owner.update_in(cx, show).ok()) {
+                if opened && let Target::Reminder { session_id, due_at } = target {
+                    let _ = this.update(cx, |shell, cx| {
+                        shell
                             .reminders
-                            .iter()
-                            .find(|r| r.session_id == id && r.due_at != due_at)
-                            .cloned(),
-                        _ => None,
-                    };
-                    if newer.is_some() {
-                        this.reminders.retain(|r| r.session_id != id);
-                    }
-                    this.close_settings(window, cx);
-                    this.open(id, window, cx);
-                    if let Some(newer) = newer {
-                        this.reminders.push(newer);
-                    }
-                    window.activate_window();
+                            .retain(|r| r.session_id != session_id || r.due_at != due_at);
+                        shell.invalidate_chrome(cx);
+                        cx.notify();
+                    });
                 }
-            });
+            } else {
+                let _ = this.update_in(cx, show);
+            }
         })
         .detach();
+    }
+
+    fn show_notice_target(
+        &mut self,
+        target: Target,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        let (id, due) = match target {
+            Target::Session(id) => (id, None),
+            Target::Reminder { session_id, due_at } => (session_id, Some(due_at)),
+        };
+        self.close_settings(window, cx);
+        self.leave_app_views(cx);
+        self.leave_app_search(cx);
+        if let Some(bots) = self.bots.clone()
+            && bots.update(cx, |m, cx| m.open_notification_session(id, window, cx))
+        {
+            if let Some(due) = due {
+                self.clear_notification_reminder(id, due, cx);
+            }
+            window.activate_window();
+            return true;
+        }
+        // Habit runs share their live Conversation with the Bot
+        // manager. Adopt that entity so controls answer the running
+        // provider, rather than constructing a disconnected history.
+        if !self.sessions.contains_key(&id)
+            && let Some(view) = self.notification_chat(id, cx)
+        {
+            let summary = view.read(cx).summary.clone();
+            self.session_summaries.insert(id, summary.clone());
+            self.session_marks
+                .insert(id, cx.new(|_| SessionMark::new(summary.provider.clone())));
+            self.tab_marks
+                .insert(id, cx.new(|_| SessionMark::tab(summary.provider.clone())));
+            self.observations
+                .push(cx.subscribe(&view, move |this, _, _: &SessionChanged, cx| {
+                    this.refresh_session_mark(id, cx);
+                    this.notification_session_changed(id, cx);
+                    this.invalidate_chrome(cx);
+                    cx.notify();
+                }));
+            self.sessions.insert(id, view);
+            if !self.order.contains(&id) {
+                self.order.push(id);
+            }
+        }
+        if !self.session_summaries.contains_key(&id) {
+            return false;
+        }
+        // Opening normally dismisses the current reminder. A notice only
+        // acknowledges its own occurrence, after navigation succeeds.
+        let preserved = due
+            .and_then(|_| self.reminders.iter().position(|r| r.session_id == id))
+            .map(|ix| (ix, self.reminders.remove(ix)));
+        let revision = self.navigation_revision;
+        self.open(id, window, cx);
+        if let Some((ix, reminder)) = preserved {
+            self.reminders.insert(ix, reminder);
+        }
+        if self.navigation_revision == revision || self.workspace.active != Some(id) {
+            return false;
+        }
+        if let Some(due) = due {
+            self.clear_notification_reminder(id, due, cx);
+        }
+        window.activate_window();
+        true
     }
 
     pub(super) fn clear_notification_reminder(

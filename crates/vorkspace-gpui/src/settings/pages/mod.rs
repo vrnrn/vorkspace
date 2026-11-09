@@ -30,7 +30,7 @@ impl SettingsView {
             Section::Vox => self.vox_page(cx),
             Section::Connections => self.connections_page(cx),
             Section::Appearance => self.appearance_page(window, cx),
-            Section::Keybindings => self.keybindings_page(cx),
+            Section::Keybindings => self.keybindings_page(window, cx),
             Section::Chat => self.chat_page(cx),
             Section::Providers => self.providers_page(cx),
             Section::Mcp => self.mcp_page(cx),

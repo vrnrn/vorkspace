@@ -4,13 +4,31 @@ use serde_json::json;
 
 impl Shell {
     pub(super) fn refresh_remote_projects(&mut self, cx: &mut Context<Self>) {
-        if self.remote_refreshing || !self.workspace.project.starts_with("remote://") {
-            return;
+        let projects: Vec<_> = self
+            .workspace
+            .vorkspace_projects()
+            .into_iter()
+            .filter(|path| path.starts_with("remote://"))
+            .collect();
+        // A slow host gets one slot. Rotate through the remaining projects
+        // so a cached row can refresh even when another project is focused.
+        for _ in 0..projects.len() {
+            if self.remote_refreshing.len() >= 2 {
+                break;
+            }
+            let ix = self.remote_refresh_cursor % projects.len();
+            self.remote_refresh_cursor = ix + 1;
+            let project = &projects[ix];
+            if self.remote_refreshing.insert(project.clone()) {
+                self.refresh_remote_project(project.clone(), cx);
+            }
         }
-        self.remote_refreshing = true;
-        let project_key = self.workspace.project.clone();
+    }
+
+    fn refresh_remote_project(&mut self, project_key: String, cx: &mut Context<Self>) {
         let store = self.store.clone();
         let client = self.remote.clone();
+        let requested = project_key.clone();
         let work = cx.background_executor().spawn(async move {
             let project = locked(&store)?
                 .remote_projects()?
@@ -30,8 +48,14 @@ impl Shell {
             let mut summaries = Vec::new();
             let host_ids: HashSet<String> = values
                 .iter()
-                .filter_map(|value| value["id"].as_str().map(str::to_owned))
-                .collect();
+                .map(|value| {
+                    value["id"]
+                        .as_str()
+                        .filter(|id| !id.is_empty())
+                        .map(str::to_owned)
+                })
+                .collect::<Option<_>>()
+                .ok_or("Invalid remote session identity")?;
             store.prune_remote_sessions(&project, &host_ids)?;
             for value in values {
                 let summary = store.register_remote_summary(&project, value)?;
@@ -56,7 +80,7 @@ impl Shell {
         cx.spawn(async move |this, cx| {
             let result = work.await;
             let _ = this.update(cx, |this, cx| {
-                this.remote_refreshing = false;
+                this.remote_refreshing.remove(&requested);
                 match result {
                     Ok((project, summaries, retained)) => {
                         let removed: Vec<_> = this
@@ -109,8 +133,7 @@ impl Shell {
                             }
                             this.session_summaries.insert(id, summary);
                         }
-                        if this.workspace.project == project {
-                            this.refresh_sidebar_structure(cx);
+                        if this.workspace.vorkspace_has_project(&project) {
                             this.invalidate_chrome(cx);
                         }
                     }
@@ -120,6 +143,7 @@ impl Shell {
                         if let Some(id) = this.workspace.active
                             && let Some(owner) = this.workspace.session_for_pane(id)
                             && let Some(view) = this.sessions.get(&owner)
+                            && view.read(cx).summary.cwd == requested
                         {
                             view.update(cx, |view, cx| view.remote_connection_error(&error, cx));
                         }

@@ -54,6 +54,8 @@ pub(crate) struct Inbox {
     store: Database,
     service: Service,
     projects: Vec<PathBuf>,
+    /// Polling is app-wide. A window's list and destinations use `projects`.
+    poll_projects: Vec<PathBuf>,
     appearances:
         std::collections::HashMap<String, vorkspace_core::project_appearance::ProjectAppearance>,
     state: ViewState,
@@ -145,9 +147,12 @@ impl Inbox {
         store: Database,
         projects: Vec<PathBuf>,
         cwd: PathBuf,
+        poll_projects: Vec<PathBuf>,
         cx: &mut Context<Self>,
     ) -> Self {
-        Self::new_inner(store, projects, cwd, !cfg!(test), cx)
+        let mut inbox = Self::new_inner(store, projects, cwd, !cfg!(test), cx);
+        inbox.poll_projects = poll_projects;
+        inbox
     }
     fn new_inner(
         store: Database,
@@ -156,7 +161,7 @@ impl Inbox {
         poll: bool,
         cx: &mut Context<Self>,
     ) -> Self {
-        if !projects.contains(&cwd) {
+        if !cwd.as_os_str().is_empty() && !projects.contains(&cwd) {
             projects.push(cwd.clone());
         }
         let (state, data_dir) = locked(&store)
@@ -252,10 +257,15 @@ impl Inbox {
             owner: None,
             pages: Default::default(),
             service: Service {
+                cwd: if cwd.is_dir() {
+                    cwd.clone()
+                } else {
+                    data_dir.clone()
+                },
                 data_dir,
-                cwd: cwd.clone(),
             },
             store,
+            poll_projects: projects.clone(),
             projects,
             appearances: Default::default(),
             state,
@@ -345,19 +355,25 @@ impl Inbox {
 
     pub(crate) fn set_context(
         &mut self,
-        mut projects: Vec<PathBuf>,
+        projects: Vec<PathBuf>,
         cwd: PathBuf,
+        poll_projects: Vec<PathBuf>,
         cx: &mut Context<Self>,
     ) {
-        if !projects.contains(&cwd) {
-            projects.push(cwd.clone());
-        }
-        if self.projects != projects || self.service.cwd != cwd {
+        if self.projects != projects || self.start_project != cwd {
             self.projects = projects;
-            self.service.cwd = cwd.clone();
+            self.service.cwd = if cwd.is_dir() {
+                cwd.clone()
+            } else {
+                self.service.data_dir.clone()
+            };
             self.start_project = cwd;
-            self.refresh(cx);
             self.publish_pages(cx);
+            cx.notify();
+        }
+        if self.poll_projects != poll_projects {
+            self.poll_projects = poll_projects;
+            self.refresh(cx);
         }
     }
     pub(crate) fn set_appearances(
@@ -575,7 +591,7 @@ impl Inbox {
         let generation = self.generation;
         let service = self.service.clone();
         let state = self.state.clone();
-        let projects = self.projects.clone();
+        let projects = self.poll_projects.clone();
         let scope = state.fetch_scope(&projects);
         let store = self.store.clone();
         let task = cx.background_executor().spawn(async move {
@@ -606,7 +622,7 @@ impl Inbox {
             return;
         }
         self.loading = false;
-        if scope != self.state.fetch_scope(&self.projects) {
+        if scope != self.state.fetch_scope(&self.poll_projects) {
             self.refresh_queued = false;
             self.refresh(cx);
             return;
@@ -740,6 +756,7 @@ impl Inbox {
             .iter()
             .filter(|item| {
                 item.provider == provider
+                    && self.item_in_scope(item)
                     && self.state.connectors.enabled(provider)
                     && self.state.seen.unseen(item)
             })
@@ -754,7 +771,7 @@ impl Inbox {
             let mut page = Self::new_inner(
                 self.store.clone(),
                 self.projects.clone(),
-                self.service.cwd.clone(),
+                self.start_project.clone(),
                 false,
                 cx,
             );
@@ -775,7 +792,7 @@ impl Inbox {
     pub(crate) fn connector_item_page(
         &mut self,
         source: &str,
-        item: Item,
+        mut item: Item,
         cx: &mut Context<Self>,
     ) -> Entity<Self> {
         assert_eq!(source, item.provider, "item page provider must match item");
@@ -784,12 +801,24 @@ impl Inbox {
             page.update(cx, |page, _| page.release_pending = false);
             return page.clone();
         }
+        if let Some(current) = self
+            .snapshot
+            .items
+            .iter()
+            .find(|current| current.key() == item.key())
+        {
+            Self::refresh_pinned_summary(&mut item, current);
+        }
         let owner = cx.weak_entity();
         let page = cx.new(|cx| {
             let mut page = Self::new_inner(
                 self.store.clone(),
                 self.projects.clone(),
-                self.service.cwd.clone(),
+                if item.project_path.is_empty() {
+                    self.start_project.clone()
+                } else {
+                    PathBuf::from(&item.project_path)
+                },
                 false,
                 cx,
             );
@@ -842,11 +871,42 @@ impl Inbox {
         self.pinned_item.as_ref()
     }
 
+    fn refresh_pinned_summary(pinned: &mut Item, current: &Item) -> bool {
+        if current.key() != pinned.key() || current.updated_ms() < pinned.updated_ms() {
+            return false;
+        }
+        // Provider snapshots can prefer another clone of this repository.
+        // Keep this tab's checkout for relative links and its conversation target.
+        let project = std::mem::take(&mut pinned.project_path);
+        *pinned = current.clone();
+        pinned.project_path = project;
+        true
+    }
+
     fn item_in_project(item: &Item, project: &str) -> bool {
         (item.provider == "jira" && item.project_path.is_empty())
-            || (!item.project_path.is_empty()
-                && vorkspace_core::files::path_key(&item.project_path)
-                    == vorkspace_core::files::path_key(project))
+            || item.belongs_to_project(project)
+    }
+
+    fn scoped_project<'a>(&self, item: &'a Item) -> Option<&'a str> {
+        item.project_paths().find(|path| {
+            let key = vorkspace_core::files::path_key(path);
+            self.projects
+                .iter()
+                .any(|p| vorkspace_core::files::path_key(&p.to_string_lossy()) == key)
+        })
+    }
+
+    fn item_in_scope(&self, item: &Item) -> bool {
+        item.project_path.is_empty() || self.scoped_project(item).is_some()
+    }
+
+    fn scoped_item(&self, item: &Item) -> Item {
+        let mut scoped = item.clone();
+        if let Some(path) = self.scoped_project(item) {
+            scoped.project_path = path.into();
+        }
+        scoped
     }
 
     pub(crate) fn item_by_key_for_project(&self, key: &str, project: &str) -> Option<Item> {
@@ -855,6 +915,10 @@ impl Inbox {
             .iter()
             .find(|item| item.key() == key && Self::item_in_project(item, project))
             .cloned()
+            .map(|mut item| {
+                item.project_path = project.to_owned();
+                item
+            })
     }
 
     pub(crate) fn items_for_project(&self, project: &str, limit: usize) -> (Vec<Item>, bool) {
@@ -882,10 +946,32 @@ impl Inbox {
     fn publish_pages(&self, cx: &mut Context<Self>) {
         let owner = cx.weak_entity();
         cx.defer(move |cx| {
-            let Some(owner) = owner.upgrade() else { return; };
+            let Some(owner) = owner.upgrade() else {
+                return;
+            };
             let root = owner.read(cx);
-            let (state, snapshot, sessions, projects, service, bots, appearances, loading, pages) = (
-                root.state.clone(), root.snapshot.clone(), root.sessions.clone(), root.projects.clone(), root.service.clone(), root.bots.clone(), root.appearances.clone(), root.loading, root.pages.values().cloned().collect::<Vec<_>>()
+            let (
+                state,
+                snapshot,
+                sessions,
+                projects,
+                service,
+                cwd,
+                bots,
+                appearances,
+                loading,
+                pages,
+            ) = (
+                root.state.clone(),
+                root.snapshot.clone(),
+                root.sessions.clone(),
+                root.projects.clone(),
+                root.service.clone(),
+                root.start_project.clone(),
+                root.bots.clone(),
+                root.appearances.clone(),
+                root.loading,
+                root.pages.values().cloned().collect::<Vec<_>>(),
             );
             for page in pages {
                 page.update(cx, |page, cx| {
@@ -895,8 +981,15 @@ impl Inbox {
                     page.state.default_bots = state.default_bots.clone();
                     page.state.seen = state.seen.clone();
                     page.state.hidden_jira_projects = state.hidden_jira_projects.clone();
+                    let scope_changed = page.projects != projects;
                     page.projects = projects.clone();
                     page.service = service.clone();
+                    if scope_changed
+                        && page.pinned_item.is_none()
+                        && !page.projects.contains(&page.start_project)
+                    {
+                        page.start_project = cwd.clone();
+                    }
                     page.set_bots(bots.clone(), cx);
                     page.set_appearances(appearances.clone(), cx);
                     page.loading = loading;
@@ -906,16 +999,22 @@ impl Inbox {
                         page.snapshot = snapshot.clone();
                         page.sessions = sessions.clone();
                         if let Some(pinned) = page.pinned_item.as_mut()
-                            && let Some(current) = snapshot.items.iter().find(|item| {
-                                item.key() == pinned.key()
-                                    && item.updated_ms() >= pinned.updated_ms()
-                            }) {
-                            *pinned = current.clone();
+                            && let Some(current) = snapshot
+                                .items
+                                .iter()
+                                .find(|item| item.key() == pinned.key())
+                        {
+                            Self::refresh_pinned_summary(pinned, current);
                         }
-                        if page.pinned_item.is_none() && page.active && page.selected.is_none()
-                            && let Some(item) = page.visible_items(cx).first() {
+                        if page.pinned_item.is_none()
+                            && page.active
+                            && page.selected.is_none()
+                            && let Some(item) = page.visible_items(cx).first()
+                        {
                             page.select(item.key(), cx);
-                        } else if page.active && let Some(item) = page.item() {
+                        } else if page.active
+                            && let Some(item) = page.item()
+                        {
                             page.state.seen.mark(&item);
                             page.save(cx);
                         }
@@ -935,26 +1034,25 @@ impl Inbox {
             .iter()
             .filter(|item| {
                 self.state.connectors.enabled(&item.provider)
+                    && self.item_in_scope(item)
                     && self.state.filters.matches(item, &self.state.source, search)
             })
-            .cloned()
+            .map(|item| self.scoped_item(item))
             .collect()
     }
     fn item(&self) -> Option<Item> {
         if let Some(pinned) = &self.pinned_item {
-            return self
-                .snapshot
-                .items
-                .iter()
-                .find(|item| item.key() == pinned.key() && item.updated_ms() >= pinned.updated_ms())
-                .cloned()
-                .or_else(|| Some(pinned.clone()));
+            return Some(pinned.clone());
         }
         self.snapshot
             .items
             .iter()
-            .find(|item| item.provider == self.state.source && Some(item.key()) == self.selected)
-            .cloned()
+            .find(|item| {
+                item.provider == self.state.source
+                    && Some(item.key()) == self.selected
+                    && self.item_in_scope(item)
+            })
+            .map(|item| self.scoped_item(item))
     }
     fn select(&mut self, key: String, cx: &mut Context<Self>) {
         if self
@@ -1225,12 +1323,8 @@ impl Inbox {
             *old = item.clone();
             changed = true;
         }
-        if let Some(pinned) = self.pinned_item.as_mut()
-            && pinned.key() == key
-            && pinned.updated_ms() <= item.updated_ms()
-        {
-            *pinned = item;
-            changed = true;
+        if let Some(pinned) = self.pinned_item.as_mut() {
+            changed |= Self::refresh_pinned_summary(pinned, &item);
         }
         if changed && self.owner.is_none() {
             self.publish_pages(cx);
@@ -1404,7 +1498,7 @@ impl Inbox {
                             this.connect_provider = None;
                             if connected { this.change_source(provider, cx); }
                             this.refresh(cx);
-                        } else { this.connect_error = Some("GitHub is not connected. Run gh auth login in a terminal, then check again.".into()); }
+                        } else { this.connect_error = Some("GitHub is not connected. Run “gh auth login” in a terminal, then check again.".into()); }
                     }
                     Err(error) => this.connect_error = Some(error),
                 }

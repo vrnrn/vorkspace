@@ -299,7 +299,28 @@ impl Inbox {
         )
     }
 
+    /// A disabled or unconnected source has no items to open, so its page is
+    /// only the explanation and the way to connect, across the full width.
+    fn unavailable(&self) -> bool {
+        let source = &self.state.source;
+        if self
+            .snapshot
+            .items
+            .iter()
+            .any(|item| &item.provider == source)
+        {
+            return false;
+        }
+        !self.state.connectors.enabled(source)
+            || !self
+                .snapshot
+                .connections
+                .get(&self.state.source)
+                .is_some_and(|status| status.connected)
+    }
+
     fn list_view(&self, narrow: bool, cx: &mut Context<Self>) -> AnyElement {
+        let full = narrow || self.unavailable();
         let provider = model::provider_label(&self.state.source);
         let connected = self
             .snapshot
@@ -308,12 +329,15 @@ impl Inbox {
             .is_some_and(|status| status.connected);
         let items = self.visible_items(cx);
         let tools = page::toolbar()
-            .child(
-                page::search_frame(&self.search.focus_handle(cx))
-                    .flex_1()
-                    .child(action_icon("search", page::secondary_ink()))
-                    .child(self.search.clone()),
-            )
+            .when(!self.unavailable(), |d| {
+                d.child(
+                    page::search_frame(&self.search.focus_handle(cx))
+                        .flex_1()
+                        .child(action_icon("search", page::secondary_ink()))
+                        .child(self.search.clone()),
+                )
+            })
+            .when(self.unavailable(), |d| d.child(div().flex_1()))
             .when(connected, |d| {
                 d.child(
                     icon_button("inbox-filter", "Filter items", "filter")
@@ -358,19 +382,19 @@ impl Inbox {
         let (empty_title, empty_detail) = if !self.state.connectors.enabled(&self.state.source) {
             (
                 format!("{provider} is disabled"),
-                "Enable it in Settings → Connectors.".into(),
+                "Turn it on in Settings → Plugins.".into(),
             )
         } else if let Some(error) = self.snapshot.errors.get(&self.state.source) {
             (
                 format!("Could not load {provider}"),
-                format!("{error}. Check Settings → Connectors or refresh."),
+                format!("{error}. Check Settings → {provider} or refresh."),
             )
         } else if self.loading && items.is_empty() {
             (format!("Loading {provider}…"), String::new())
         } else if !connected {
             (
-                format!("Connect {provider}"),
-                "Open Settings → Connectors to connect your account.".into(),
+                format!("{provider} isn't connected"),
+                "Connect your account to see its items here.".into(),
             )
         } else if self.projects.is_empty() && !model::is_tracker(&self.state.source) {
             (
@@ -511,8 +535,8 @@ impl Inbox {
             .collect::<Vec<_>>();
         div()
             .relative()
-            .when(narrow, |d| d.w_full())
-            .when(!narrow, |d| {
+            .when(full, |d| d.w_full())
+            .when(!full, |d| {
                 d.w(px(self
                     .state
                     .list_width
@@ -538,17 +562,46 @@ impl Inbox {
                     .flex_col()
                     .gap(px(4.))
                     .when(rows.is_empty(), |d| {
-                        d.child(page::empty(
-                            provider_mark(&self.state.source)
-                                .size(px(24.))
-                                .text_color(page::secondary_ink()),
-                            empty_title,
-                            empty_detail,
-                        ))
+                        let source = self.state.source.clone();
+                        let can_connect = !connected
+                            && self
+                                .state
+                                .connectors
+                                .enabled_providers()
+                                .any(|p| *p == source);
+                        d.child(
+                            page::empty(
+                                provider_mark(&self.state.source)
+                                    .size(px(24.))
+                                    .text_color(page::secondary_ink()),
+                                empty_title,
+                                empty_detail,
+                            )
+                            // The way out of an unconnected page is one click.
+                            .when(can_connect, |d| {
+                                let label = format!("Connect {provider}");
+                                d.child(
+                                    crate::controls::primary_button(
+                                        "inbox-empty-connect",
+                                        label.clone(),
+                                        false,
+                                    )
+                                    .debug_selector(|| "inbox-empty-connect".into())
+                                    .mt(px(12.))
+                                    .px(px(12.))
+                                    .child(label)
+                                    .on_click(cx.listener(
+                                        move |this, _, _, cx| {
+                                            this.open_connection(source.clone(), cx)
+                                        },
+                                    )),
+                                )
+                            }),
+                        )
                     })
                     .children(rows),
             )
-            .when(!narrow, |d| {
+            .when(!full, |d| {
                 d.child(
                     page::detail_resize_handle(
                         "inbox-list-resize",
@@ -675,35 +728,36 @@ impl gpui::Render for Inbox {
                     .when(!pinned && (!narrow || !showing_detail), |d| {
                         d.child(self.list_view(narrow, cx))
                     })
-                    .when(pinned || !narrow || showing_detail, |d| {
-                        d.child(
-                            page::detail_pane(!narrow && !pinned)
-                                .when(narrow && !pinned, |d| {
-                                    d.child(
-                                        page::toolbar().child(
-                                            icon_action(
-                                                "inbox-back",
-                                                "Back to items",
-                                                "arrow-left",
-                                                true,
-                                            )
-                                            .on_click(
-                                                cx.listener(|this, _, window, cx| {
+                    .when(
+                        pinned || ((!narrow || showing_detail) && !self.unavailable()),
+                        |d| {
+                            d.child(
+                                page::detail_pane(!narrow && !pinned)
+                                    .when(narrow && !pinned, |d| {
+                                        d.child(
+                                            page::toolbar().child(
+                                                icon_action(
+                                                    "inbox-back",
+                                                    "Back to items",
+                                                    "arrow-left",
+                                                    true,
+                                                )
+                                                .on_click(cx.listener(|this, _, window, cx| {
                                                     this.back_to_list(window, cx);
-                                                }),
+                                                })),
                                             ),
-                                        ),
-                                    )
-                                })
-                                .child(
-                                    div()
-                                        .flex_1()
-                                        .min_h_0()
-                                        .min_w_0()
-                                        .child(self.detail_view(window, cx)),
-                                ),
-                        )
-                    }),
+                                        )
+                                    })
+                                    .child(
+                                        div()
+                                            .flex_1()
+                                            .min_h_0()
+                                            .min_w_0()
+                                            .child(self.detail_view(window, cx)),
+                                    ),
+                            )
+                        },
+                    ),
             )
             .when_some(self.error.clone(), |d, text| d.child(error(text)))
             .when(self.filters_open, |d| d.child(self.filters_menu(cx)))

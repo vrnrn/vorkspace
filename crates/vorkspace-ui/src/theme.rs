@@ -159,6 +159,17 @@ pub fn status(role: StatusColor, alpha: f32) -> Hsla {
     color.opacity(alpha)
 }
 
+/// Full-strength status ink, paired for light and dark.
+pub fn danger() -> Hsla {
+    status(StatusColor::Danger, 1.)
+}
+pub fn warning() -> Hsla {
+    status(StatusColor::Warning, 1.)
+}
+pub fn success() -> Hsla {
+    status(StatusColor::Success, 1.)
+}
+
 pub fn floating_fill() -> Hsla {
     let mut fill = pane_fill();
     if is_light() {
@@ -192,7 +203,13 @@ pub fn primary_action(enabled: bool) -> Option<(Hsla, Hsla)> {
     if !enabled {
         return Some((accent.opacity(0.28), content(0.35)));
     }
-    let rgb = accent.to_rgb();
+    Some((accent, ink_on(accent)))
+}
+
+/// Black or white, whichever reads better on `fill` (WCAG relative
+/// luminance against the 0.179 crossover).
+pub fn ink_on(fill: Hsla) -> Hsla {
+    let rgb = fill.to_rgb();
     let linear = |value: f32| {
         if value <= 0.04045 {
             value / 12.92
@@ -201,14 +218,11 @@ pub fn primary_action(enabled: bool) -> Option<(Hsla, Hsla)> {
         }
     };
     let luminance = 0.2126 * linear(rgb.r) + 0.7152 * linear(rgb.g) + 0.0722 * linear(rgb.b);
-    Some((
-        accent,
-        if luminance > 0.179 {
-            black(1.)
-        } else {
-            white(1.)
-        },
-    ))
+    if luminance > 0.179 {
+        black(1.)
+    } else {
+        white(1.)
+    }
 }
 
 /// `[data-composer-box]::before` uses content ink at 3% over its backdrop.
@@ -244,6 +258,11 @@ pub fn title_tab_fill(selected: bool, hovered: bool) -> Hsla {
     })
 }
 
+/// The plate's fill: a flat tint of content ink.
+pub fn title_tab_background(selected: bool, hovered: bool) -> gpui::Background {
+    title_tab_fill(selected, hovered).into()
+}
+
 /// A separate rounded highlight, centred in the title bar.
 /// Headline ink owns inactive dimming; the plate never fades its children.
 pub fn title_tab_plate(selected: bool, hovered: bool) -> Div {
@@ -253,7 +272,7 @@ pub fn title_tab_plate(selected: bool, hovered: bool) -> Div {
         .px_2()
         .flex()
         .items_center()
-        .bg(title_tab_fill(selected, hovered))
+        .bg(title_tab_background(selected, hovered))
 }
 pub fn shell_fill() -> Hsla {
     if let Some(fill) = TOKENS.with(|t| t.borrow().as_ref().map(|t| t.shell)) {
@@ -338,6 +357,29 @@ pub fn icon_button_enabled(
 /// A Tab stop that Enter and Space activate. The focus ring is keyboard-only, and
 /// pointer presses leave focus alone so clicking never pulls it out of the composer.
 /// A disabled action stays out of the tab order and tells assistive tech so.
+/// Puts a clickable element in the Tab order with the shared focus fill.
+/// Enter and Space then click it. Unlike `keyboard_reachable` it leaves
+/// mouse focus handling alone, so it suits rows and tiles as well as buttons.
+pub fn tab_reachable(element: Stateful<Div>) -> Stateful<Div> {
+    element
+        .focusable()
+        .tab_stop(true)
+        .focus_visible(|style| style.bg(content(0.16)))
+}
+
+/// Keeps a solid action's foreground and fill legible while it has focus.
+pub fn tab_reachable_on_fill(element: Stateful<Div>, enabled: bool) -> Stateful<Div> {
+    element.aria_disabled(!enabled).when(enabled, |element| {
+        element.focusable().tab_stop(true).focus_visible(|style| {
+            style.shadow(vec![
+                gpui::BoxShadow::new(px(0.), px(0.), accent_color())
+                    .spread_radius(px(2.))
+                    .inset(),
+            ])
+        })
+    })
+}
+
 pub fn keyboard_reachable(button: Stateful<Div>, enabled: bool) -> Stateful<Div> {
     button
         .aria_disabled(!enabled)

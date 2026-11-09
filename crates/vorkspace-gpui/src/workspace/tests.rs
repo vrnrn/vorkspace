@@ -47,6 +47,24 @@ fn codebase_tabs_retain_independent_project_and_worktree_identity() {
 }
 
 #[test]
+fn restore_keeps_empty_vorkspace_even_with_an_unrelated_saved_chat() {
+    let mut state = Workspace::default();
+    state.add_project("/work/atlas");
+    state.ensure_vorkspaces();
+    let empty = state.create_vorkspace("Empty");
+    state.active_vorkspace = empty.clone();
+    state.project = "/work/atlas".into();
+    state.open(42);
+
+    let saved = serde_json::to_string(&state).unwrap();
+    let restored = Workspace::restore(Some(&saved), &[(42, "/work/atlas".into())], "");
+    assert_eq!(restored.active_vorkspace, empty);
+    assert!(restored.project.is_empty());
+    assert_eq!(restored.active, None);
+    assert!(restored.tabs.contains(&42));
+}
+
+#[test]
 fn archived_project_is_not_reopened_by_active_session_or_stale_metadata() {
     let saved = serde_json::json!({
             "projects": ["/work/old", "/work/other"], "project": "/work/old", "active": 42,
@@ -364,12 +382,7 @@ fn project_rail_migration_and_native_edits_survive_stale_source_restart() {
 fn sidebar_tools_keep_per_project_selection_and_normalize_main_tab_order() {
     assert_eq!(
         SidebarTab::normalize(&[SidebarTab::Changes, SidebarTab::Graph, SidebarTab::Changes]),
-        [
-            SidebarTab::Changes,
-            SidebarTab::Sessions,
-            SidebarTab::Files,
-            SidebarTab::Todos
-        ]
+        [SidebarTab::Changes, SidebarTab::Files, SidebarTab::Todos]
     );
     let saved = serde_json::json!({
         "project":"/work",
@@ -384,21 +397,16 @@ fn sidebar_tools_keep_per_project_selection_and_normalize_main_tab_order() {
     assert_eq!(state.project_rail_width, 360.);
     assert_eq!(
         state.sidebar_tab_order,
-        [
-            SidebarTab::Changes,
-            SidebarTab::Sessions,
-            SidebarTab::Files,
-            SidebarTab::Todos
-        ]
+        [SidebarTab::Changes, SidebarTab::Files, SidebarTab::Todos]
     );
     state.project = "/other".into();
     assert_eq!(state.sidebar_tab(), SidebarTab::Files);
     state
         .sidebar_tabs
-        .insert("/other".into(), SidebarTab::Sessions);
+        .insert("/other".into(), SidebarTab::Graph);
     state.project_rail_width = 225.;
     let reopened = Workspace::restore(Some(&serde_json::to_string(&state).unwrap()), &[], "/other");
-    assert_eq!(reopened.sidebar_tab(), SidebarTab::Sessions);
+    assert_eq!(reopened.sidebar_tab(), SidebarTab::Graph);
     assert_eq!(reopened.project_rail_width, 225.);
     state.project = "/new".into();
     assert_eq!(state.sidebar_tab(), SidebarTab::Changes);
@@ -724,4 +732,37 @@ fn desktop_snapshot_translation_deserializes_and_retains_unported_metadata() {
     assert_eq!(restored.docks["/work"].terminals, ["/work/sub"]);
     assert!(!restored.docks["/work"].open);
     assert_eq!(restored.desktop_workspace_snapshot.as_ref(), Some(&source));
+}
+#[test]
+fn restore_drops_retired_channels_app_pane_without_losing_workspace_state() {
+    let saved = serde_json::json!({
+        "project": "/work/a",
+        "projects": ["/work/a"],
+        "tabs": [1, -10, -11],
+        "active": -10,
+        "app_panes": {
+            "-10": { "content": "Channels", "project": "/work/a", "worktree": "/work/a" },
+            "-11": { "content": { "App": "Notes" }, "project": "/work/a", "worktree": "/work/a" }
+        },
+        "vorkspaces": [{
+            "id": "vk-main",
+            "name": "Main",
+            "projects": ["/work/a"]
+        }],
+        "active_vorkspace": "vk-main"
+    })
+    .to_string();
+    let restored = Workspace::restore(
+        Some(&saved),
+        &[(1, "/work/a".into())],
+        "/work/new-startup-folder",
+    );
+    assert_eq!(restored.tabs, [1, -11]);
+    assert!(!restored.app_panes.contains_key(&-10));
+    assert!(restored.app_panes.contains_key(&-11));
+    assert_eq!(
+        restored.vorkspaces[0].projects,
+        ["/work/a", "/work/new-startup-folder"]
+    );
+    assert_eq!(restored.restored_new_projects, ["/work/new-startup-folder"]);
 }

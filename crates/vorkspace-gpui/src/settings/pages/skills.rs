@@ -52,6 +52,7 @@ impl SettingsView {
                         div()
                             .id(value)
                             .role(Role::Button)
+                            .map(vorkspace_ui::theme::tab_reachable)
                             .aria_label(label)
                             .flex_1()
                             .min_w_0()
@@ -110,6 +111,7 @@ impl SettingsView {
                         div()
                             .id("cancel-skill")
                             .role(Role::Button)
+                            .map(vorkspace_ui::theme::tab_reachable)
                             .aria_label("Cancel")
                             .px_2()
                             .py_1()
@@ -120,7 +122,10 @@ impl SettingsView {
                             .when(busy, |d| d.opacity(0.4))
                             .when(!busy, |d| {
                                 d.cursor_pointer()
-                                    .hover(|s| s.bg(content(0.1)).text_color(content(1.)))
+                                    .hover(|s| {
+                                        s.bg(vorkspace_ui::fluid::hover(0.1))
+                                            .text_color(content(1.))
+                                    })
                                     .on_click(cx.listener(|this, _, window, cx| {
                                         this.close_management(window, cx)
                                     }))
@@ -130,6 +135,7 @@ impl SettingsView {
                         div()
                             .id("create-skill")
                             .role(Role::Button)
+                            .map(vorkspace_ui::theme::tab_reachable)
                             .aria_label("Create skill")
                             .px_2()
                             .py_1()
@@ -341,6 +347,8 @@ impl SettingsView {
                 );
             }
             let count = skills.len();
+            // A scope badge only distinguishes rows when the list mixes scopes.
+            let mixed_scopes = skills.windows(2).any(|w| w[0].scope != w[1].scope);
             for (ix, skill) in skills.into_iter().enumerate() {
                 let path = skill.path.clone();
                 let skill_path = path.display().to_string();
@@ -371,6 +379,7 @@ impl SettingsView {
                                     div()
                                         .id("preview-name")
                                         .role(Role::Button)
+                                        .map(vorkspace_ui::theme::tab_reachable)
                                         .aria_label(format!("Preview {}", skill.name))
                                         .min_w_0()
                                         .flex_1()
@@ -383,23 +392,21 @@ impl SettingsView {
                                             cx.notify();
                                         })),
                                 )
-                                .child(
-                                    div()
-                                        .flex_shrink_0()
-                                        .rounded_full()
-                                        .bg(content(0.1))
-                                        .px(px(6.))
-                                        .py(px(2.))
-                                        .text_size(px(10.))
-                                        .text_color(content(0.6))
-                                        .child(if skill.scope == "user" {
-                                            "PERSONAL"
-                                        } else if skill.scope == "builtin" {
-                                            "VORKSPACE"
-                                        } else {
-                                            "PROJECT"
-                                        }),
-                                )
+                                .when(mixed_scopes, |d| {
+                                    d.child(match skill.scope.as_str() {
+                                        "user" => {
+                                            vorkspace_ui::fluid::badge("Personal", content(0.45))
+                                        }
+                                        "builtin" => vorkspace_ui::fluid::badge(
+                                            "vorkspace",
+                                            vorkspace_ui::theme::accent_color(),
+                                        ),
+                                        _ => vorkspace_ui::fluid::badge(
+                                            "Project",
+                                            vorkspace_ui::theme::success(),
+                                        ),
+                                    })
+                                })
                                 .child(
                                     div()
                                         .w(px(80.))
@@ -449,7 +456,7 @@ impl SettingsView {
                                         .truncate()
                                         .text_size(px(11.))
                                         .text_color(content(0.35))
-                                        .child(path.display().to_string()),
+                                        .child(crate::panel_kit::home_relative(&path)),
                                 )
                                 .child(
                                     icon_action(
@@ -651,7 +658,7 @@ impl SettingsView {
                                     .text_size(px(11.))
                                     .line_height(px(16.))
                                     .text_color(content(0.5))
-                                    .child(skill.path.display().to_string()),
+                                    .child(crate::panel_kit::home_relative(&skill.path)),
                             )
                             .child(
                                 div()
@@ -669,7 +676,7 @@ impl SettingsView {
                                 .id("skill-read-error")
                                 .role(Role::Alert)
                                 .text_size(px(12.))
-                                .text_color(gpui::rgb(0xf87171))
+                                .text_color(vorkspace_ui::theme::danger())
                                 .child(error.clone())
                                 .into_any_element()
                         } else if let Some(document) = document {

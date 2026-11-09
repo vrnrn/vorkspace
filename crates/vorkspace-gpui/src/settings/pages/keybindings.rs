@@ -1,6 +1,6 @@
 //! React's command names, defaults, scopes, filter and shortcut recorder.
 use crate::settings::{Preferences, SettingsView};
-use gpui::{AnyElement, Context, Focusable, FontWeight, Role, div, prelude::*, px};
+use gpui::{AnyElement, Context, Focusable, FontWeight, Role, Window, div, prelude::*, px};
 use vorkspace_ui::radius;
 use vorkspace_ui::theme::*;
 #[derive(Clone, Copy)]
@@ -48,7 +48,7 @@ pub(crate) const BINDINGS: &[Binding] = &[
         fixed: false,
     },
     Binding {
-        command: "App: New Window",
+        command: "App: New Claude Session",
         keys: "⌘⇧N",
         when: "Always",
         fixed: false,
@@ -358,7 +358,14 @@ pub(crate) fn shortcut_label(shortcut: &str) -> String {
     label
 }
 impl SettingsView {
-    pub(super) fn keybindings_page(&mut self, cx: &mut Context<Self>) -> Vec<AnyElement> {
+    pub(super) fn keybindings_page(
+        &mut self,
+        window: &Window,
+        cx: &mut Context<Self>,
+    ) -> Vec<AnyElement> {
+        let pane_width = self.scroll.bounds().size.width.as_f32();
+        let narrow =
+            window.viewport_size().width < px(800.) || (pane_width > 0. && pane_width < 580.);
         let query = self.keybinding_query.trim().to_lowercase();
         let rows: Vec<_> = BINDINGS
             .iter()
@@ -372,6 +379,8 @@ impl SettingsView {
         let action = div()
             .flex()
             .items_center()
+            .flex_wrap()
+            .max_w_full()
             .gap_3()
             .child(
                 div()
@@ -390,6 +399,7 @@ impl SettingsView {
             .child(
                 crate::controls::page::search_frame(&self.keybinding_filter.focus_handle(cx))
                     .w(px(176.))
+                    .max_w_full()
                     .child(icon("search-01", 14.))
                     .child(
                         div()
@@ -399,7 +409,14 @@ impl SettingsView {
                     ),
             )
             .into_any_element();
-        let mut children = vec![
+        let mut action = Some(action);
+        let mut children = vec![if narrow {
+            div()
+                .px_4()
+                .py_2()
+                .children(action.take())
+                .into_any_element()
+        } else {
             div()
                 .flex()
                 .items_center()
@@ -408,19 +425,41 @@ impl SettingsView {
                 .bg(content(0.05))
                 .px_4()
                 .py_2()
-                .text_size(px(11.))
-                .font_weight(FontWeight::SEMIBOLD)
-                .text_color(content(0.4))
-                .child(div().min_w_0().flex_1().child("COMMAND"))
-                .child(div().w(px(160.)).flex_shrink_0().child("KEYBINDING"))
-                .child(div().w(px(112.)).flex_shrink_0().child("WHEN"))
-                .into_any_element(),
-        ];
+                .text_size(px(12.))
+                .font_weight(FontWeight::MEDIUM)
+                .text_color(content(0.5))
+                .child(div().min_w_0().flex_1().child("Command"))
+                .child(div().w(px(160.)).flex_shrink_0().child("Keybinding"))
+                .child(div().w(px(150.)).flex_shrink_0().child("When"))
+                .into_any_element()
+        }];
         if rows.is_empty() {
             children.push(super::super::widgets::note("No matching bindings"));
         }
+        // Commands are named "Area: Action". The area becomes a header the
+        // first time it appears so each row only has to say what it does.
+        let mut area = "";
         for row in rows {
             let command = row.command;
+            let (row_area, name) = command.split_once(": ").unwrap_or(("", command));
+            if row_area != area && !row_area.is_empty() {
+                area = row_area;
+                children.push(
+                    div()
+                        .h(px(32.))
+                        .flex()
+                        .items_end()
+                        .pb(px(6.))
+                        .px_4()
+                        .border_b_1()
+                        .border_color(content(0.05))
+                        .text_size(px(11.))
+                        .font_weight(FontWeight::MEDIUM)
+                        .text_color(content(0.45))
+                        .child(row_area)
+                        .into_any_element(),
+                );
+            }
             let recording = self.recording.as_deref() == Some(command);
             let modified = self.prefs.keybindings.contains_key(command);
             let disabled = self.prefs.keybindings.get(command) == Some(&None);
@@ -435,9 +474,14 @@ impl SettingsView {
             };
             children.push(
                 div()
-                    .h(px(44.))
                     .flex()
-                    .items_center()
+                    .map(|d| {
+                        if narrow {
+                            d.flex_col().items_start().gap_1().py_2()
+                        } else {
+                            d.h(px(36.)).items_center()
+                        }
+                    })
                     .border_b_1()
                     .border_color(content(0.05))
                     .px_4()
@@ -445,14 +489,16 @@ impl SettingsView {
                     .child(
                         div()
                             .min_w_0()
-                            .flex_1()
+                            .when(narrow, |d| d.w_full())
+                            .when(!narrow, |d| d.flex_1())
                             .truncate()
                             .text_color(content(if disabled { 0.45 } else { 1. }))
-                            .child(command),
+                            .child(name),
                     )
                     .child(
                         div()
                             .w(px(160.))
+                            .max_w_full()
                             .flex_shrink_0()
                             .flex()
                             .items_center()
@@ -463,6 +509,7 @@ impl SettingsView {
                                     .debug_selector(move || format!("shortcut-{command}"))
                                     .role(if row.fixed { Role::Label } else { Role::Button })
                                     .aria_label(format!("Change {command} shortcut"))
+                                    .aria_description(format!("Available {}", row.when))
                                     .h(px(24.))
                                     .w(px(112.))
                                     .flex()
@@ -476,8 +523,10 @@ impl SettingsView {
                                         content(0.15)
                                     })
                                     .px(px(6.))
-                                    .font_family(vorkspace_ui::fonts::FIXED_FONT)
-                                    .text_size(px(11.))
+                                    // The system font draws ⌘ ⇧ ⌥ at text size;
+                                    // Obel Mono falls back to a tiny glyph.
+                                    .text_size(px(12.))
+                                    .font_features(crate::panel_kit::tabular())
                                     .text_color(content(if disabled {
                                         0.35
                                     } else if row.fixed {
@@ -487,15 +536,16 @@ impl SettingsView {
                                     }))
                                     .child(label)
                                     .when(!row.fixed, |d| {
-                                        d.cursor_pointer().hover(|s| s.bg(content(0.1))).on_click(
-                                            cx.listener(move |this, _, window, cx| {
+                                        d.map(vorkspace_ui::theme::tab_reachable)
+                                            .cursor_pointer()
+                                            .hover(|s| s.bg(vorkspace_ui::fluid::hover(0.1)))
+                                            .on_click(cx.listener(move |this, _, window, cx| {
                                                 this.recording = Some(command.into());
                                                 this.recording_preview.clear();
                                                 this.recording_error = None;
                                                 window.focus(&this.recorder_focus, cx);
                                                 cx.notify();
-                                            }),
-                                        )
+                                            }))
                                     }),
                             )
                             .when(modified, |d| {
@@ -504,11 +554,12 @@ impl SettingsView {
                                         .id(gpui::SharedString::from(format!("reset-{command}")))
                                         .debug_selector(move || format!("reset-shortcut-{command}"))
                                         .role(Role::Button)
+                                        .map(vorkspace_ui::theme::tab_reachable)
                                         .aria_label(format!("Reset {command} shortcut"))
                                         .p_1()
                                         .rounded(px(radius::CONTROL))
                                         .cursor_pointer()
-                                        .hover(|s| s.bg(content(0.1)))
+                                        .hover(|s| s.bg(vorkspace_ui::fluid::hover(0.1)))
                                         .child(icon("rotate-ccw", 14.))
                                         .on_click(cx.listener(move |this, _, _, cx| {
                                             this.update(cx, |p| {
@@ -518,16 +569,17 @@ impl SettingsView {
                                 )
                             }),
                     )
-                    .child(
-                        div()
-                            .w(px(112.))
-                            .flex_shrink_0()
-                            .truncate()
-                            .font_family(vorkspace_ui::fonts::FIXED_FONT)
-                            .text_size(px(11.))
-                            .text_color(content(0.4))
-                            .child(row.when),
-                    )
+                    .when(!narrow, |d| {
+                        d.child(
+                            div()
+                                .w(px(150.))
+                                .flex_shrink_0()
+                                .truncate()
+                                .text_size(px(12.))
+                                .text_color(content(0.45))
+                                .child(row.when),
+                        )
+                    })
                     .into_any_element(),
             );
         }
@@ -537,12 +589,12 @@ impl SettingsView {
                     .px_4()
                     .py_2()
                     .text_size(px(11.))
-                    .text_color(gpui::rgb(0xf87171))
+                    .text_color(vorkspace_ui::theme::danger())
                     .child(error.clone())
                     .into_any_element(),
             );
         }
-        vec![self.group(None,true,"Shortcuts",Some("Click a shortcut to record new keys. Press Delete while recording to disable it.".into()),Some(action),children)]
+        vec![self.group(None,true,"Shortcuts",Some("Click a shortcut to record new keys. Press Delete while recording to disable it.".into()),action,children)]
     }
     fn binding_label(&self, row: &Binding) -> String {
         command_shortcut(&self.prefs, row.command).unwrap_or_else(|| "Disabled".into())

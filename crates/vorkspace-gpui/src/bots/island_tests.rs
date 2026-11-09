@@ -16,6 +16,13 @@ fn bot_island_collapses_to_face_and_button_and_opens_settings(cx: &mut TestAppCo
         crate::popover::bind(cx);
     });
     let s = setup(cx);
+    // The island needs the width the project sidebar would otherwise take.
+    s.window
+        .update(cx, |shell, _, cx| {
+            shell.workspace.sidebar_visible = false;
+            cx.notify();
+        })
+        .unwrap();
     let chat = s.manager.update(cx, |m, cx| {
         m.settings = None;
         let chat = m.chat().unwrap();
@@ -96,8 +103,9 @@ fn bot_island_collapses_to_face_and_button_and_opens_settings(cx: &mut TestAppCo
     let island = visual.debug_bounds("bot-island").unwrap();
     let pane = visual.debug_bounds("main-pane-frame").unwrap();
     assert!(island.left() > pane.left() && island.right() < pane.right());
-    assert!(visual.debug_bounds("bot-document-list").is_some());
-    assert!(visual.debug_bounds("bot-session-list").is_some());
+    // A Bot with no sessions or documents yet explains both in one line.
+    assert!(visual.debug_bounds("bot-island-fresh").is_some());
+    assert!(visual.debug_bounds("bot-session-list").is_none());
     click(visual, "bot-island-settings");
     visual.run_until_parked();
     assert!(visual.debug_bounds("bot-settings-dialog").is_some());
@@ -117,159 +125,6 @@ fn bot_island_collapses_to_face_and_button_and_opens_settings(cx: &mut TestAppCo
         chat.read_with(visual, |chat, cx| chat.input.read(cx).content.clone()),
         "Keep my Bot draft"
     );
-}
-
-#[gpui::test]
-fn bot_island_prioritizes_live_work_and_expands_one_scrollable_section(cx: &mut TestAppContext) {
-    let s = setup(cx);
-    let summaries: Vec<_> = (0..24)
-        .map(|i| {
-            let mut summary = locked(&s.store)
-                .unwrap()
-                .create("codex", &s.project)
-                .unwrap();
-            summary.title = format!("Session {i}");
-            summary
-        })
-        .collect();
-    let chats: Vec<_> = summaries
-        .iter()
-        .map(|summary| {
-            s.window
-                .update(cx, |shell, _, cx| {
-                    shell.bot_install(summary.clone(), Default::default(), String::new(), true, cx);
-                    shell.bot_session_entity(summary.id).unwrap()
-                })
-                .unwrap()
-        })
-        .collect();
-    cx.run_until_parked();
-    s.manager.update(cx, |m, cx| {
-        m.settings = None;
-        // A saved filter must not hide live work from the compact island.
-        m.session_filters.done = true;
-        let bot = m.roster.get_mut(&s.id).unwrap();
-        bot.launches = summaries
-            .iter()
-            .map(|summary| bot::Launch {
-                session_id: summary.id,
-                title: summary.title.clone(),
-                cwd: s.project.clone(),
-                harness: "codex".into(),
-                model: None,
-                origin_turn: 0,
-                notify_on_complete: false,
-                completed: false,
-                dismissed: false,
-            })
-            .collect();
-        bot.documents = (0..24)
-            .map(|i| bot::Document {
-                id: format!("doc-{i}"),
-                title: format!("Document {i}"),
-                kind: "document".into(),
-                summary: String::new(),
-                body: "Saved content".into(),
-                created_at: i,
-                updated_at: if i == 0 { 100 } else { i },
-            })
-            .collect();
-        cx.notify();
-    });
-    for (i, chat) in chats.iter().enumerate() {
-        chat.update(cx, |chat, cx| {
-            chat.busy = i < 7;
-            chat.summary.updated_at = if i == 0 { 100 } else { i as u64 };
-            chat.summary.has_messages = true;
-            cx.emit(SessionChanged);
-            cx.notify();
-        });
-    }
-    let selectors: Vec<&'static str> = summaries
-        .iter()
-        .map(|summary| &*Box::leak(format!("bot-launch-{}", summary.id).into_boxed_str()))
-        .collect();
-    let visual = &mut gpui::VisualTestContext::from_window(s.window.into(), cx);
-    visual.simulate_resize(gpui::size(px(1440.), px(900.)));
-    visual.run_until_parked();
-    vorkspace_ui::clock::settle_animations(s.window, visual);
-    for (i, selector) in selectors.iter().enumerate() {
-        assert_eq!(
-            visual.debug_bounds(selector).is_some(),
-            matches!(i, 0 | 3..=6),
-            "active sessions: {i}"
-        );
-    }
-    assert!(
-        visual.debug_bounds("bot-document-doc-0").is_some(),
-        "updated old document comes first"
-    );
-    assert!(visual.debug_bounds("bot-document-doc-22").is_some());
-    assert!(visual.debug_bounds("bot-document-doc-21").is_none());
-    let compact = visual.debug_bounds("bot-island").unwrap();
-    let settings = visual.debug_bounds("bot-island-settings").unwrap();
-    assert!(settings.bottom() < visual.debug_bounds("bot-session-list").unwrap().top());
-
-    s.manager.update(visual, |m, cx| {
-        m.session_filters = Default::default();
-        cx.notify();
-    });
-    click(visual, "bot-island-more-sessions");
-    visual.run_until_parked();
-    for selector in &selectors[..7] {
-        assert!(
-            visual.debug_bounds(selector).is_some(),
-            "expanded active sessions"
-        );
-    }
-    click(visual, "bot-island-show-less");
-    visual.run_until_parked();
-
-    for chat in &chats[..7] {
-        chat.update(visual, |chat, cx| {
-            chat.busy = false;
-            cx.emit(SessionChanged);
-            cx.notify();
-        });
-    }
-    visual.run_until_parked();
-    for (i, selector) in selectors.iter().enumerate() {
-        assert_eq!(
-            visual.debug_bounds(selector).is_some(),
-            matches!(i, 0 | 22 | 23),
-            "recent sessions: {i}"
-        );
-    }
-    click(visual, "bot-island-more-sessions");
-    visual.run_until_parked();
-    assert!(visual.debug_bounds("bot-document-list").is_none());
-    let expanded = visual.debug_bounds("bot-island").unwrap();
-    assert!(expanded.bottom() > compact.bottom());
-    let content = visual.debug_bounds("bot-island-content").unwrap();
-    let first_before = visual.debug_bounds(selectors[0]).unwrap();
-    visual.simulate_event(gpui::ScrollWheelEvent {
-        position: content.center(),
-        delta: gpui::ScrollDelta::Pixels(gpui::point(px(0.), px(-2400.))),
-        ..Default::default()
-    });
-    visual.run_until_parked();
-    assert!(visual.debug_bounds(selectors[0]).unwrap().top() < first_before.top());
-    assert_eq!(
-        visual.debug_bounds("bot-island-settings").unwrap(),
-        settings
-    );
-    click(visual, "bot-island-show-less");
-    visual.run_until_parked();
-    assert!(visual.debug_bounds("bot-document-list").is_some());
-    click(visual, "bot-island-more-documents");
-    visual.run_until_parked();
-    assert!(visual.debug_bounds("bot-session-list").is_none());
-    assert_eq!(visual.debug_bounds("bot-island").unwrap(), expanded);
-    assert!(visual.debug_bounds("bot-document-doc-1").is_some());
-    click(visual, "bot-island-show-less");
-    visual.run_until_parked();
-    assert!(visual.debug_bounds("bot-session-list").is_some());
-    assert!(visual.debug_bounds("bot-document-doc-1").is_none());
 }
 
 #[test]
@@ -292,13 +147,6 @@ fn native_bot_island_capture() {
         ("expanded-rail", 1440., false, None, None),
         ("before-collapse", 1200., false, None, None),
         ("after-collapse", 1190., false, None, None),
-        (
-            "sessions",
-            1440.,
-            false,
-            Some(island::Section::Sessions),
-            None,
-        ),
         (
             "documents",
             1440.,

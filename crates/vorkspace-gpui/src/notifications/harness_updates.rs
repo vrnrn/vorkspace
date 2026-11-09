@@ -1,6 +1,6 @@
 //! Native counterpart of HarnessUpdateNotice.tsx. The parent positions this
 //! entity in the shared top-right notification stack.
-use gpui::{AnimationExt, Context, EventEmitter, Render, Role, Window, div, prelude::*, px};
+use gpui::{Context, EventEmitter, Render, Role, Window, div, prelude::*, px};
 use std::collections::HashMap;
 use vorkspace_core::{
     harness_updates::{self, Update},
@@ -160,6 +160,7 @@ impl Render for HarnessUpdates {
                 div()
                     .id("update-all-harnesses")
                     .role(Role::Button)
+                    .map(vorkspace_ui::theme::tab_reachable)
                     .aria_label("Update all")
                     .cursor_pointer()
                     .px(px(8.))
@@ -167,7 +168,7 @@ impl Render for HarnessUpdates {
                     .rounded(px(radius::CONTROL))
                     .text_size(px(11.))
                     .text_color(content(0.7))
-                    .hover(|s| s.bg(content(0.1)))
+                    .hover(|s| s.bg(vorkspace_ui::fluid::hover(0.1)))
                     .on_click(cx.listener(move |this, _, _, cx| this.start(pending.clone(), cx)))
                     .child("Update all"),
             );
@@ -176,6 +177,7 @@ impl Render for HarnessUpdates {
             div()
                 .id("dismiss-harness-updates")
                 .role(Role::Button)
+                .map(vorkspace_ui::theme::tab_reachable)
                 .aria_label("Dismiss harness updates")
                 .size(px(24.))
                 .flex()
@@ -185,7 +187,7 @@ impl Render for HarnessUpdates {
                 .text_color(content(if busy { 0.16 } else { 0.4 }))
                 .when(!busy, |el| {
                     el.cursor_pointer()
-                        .hover(|s| s.bg(content(0.1)))
+                        .hover(|s| s.bg(vorkspace_ui::fluid::hover(0.1)))
                         .on_click(cx.listener(|this, _, _, cx| this.dismiss(cx)))
                 })
                 .child(icon("x", 12.)),
@@ -209,7 +211,7 @@ impl Render for HarnessUpdates {
                 line = line.child(
                     div()
                         .text_size(px(11.))
-                        .text_color(gpui::rgb(0x34d399))
+                        .text_color(vorkspace_ui::theme::success())
                         .child(format!("✓ Updated to {version}")),
                 );
             } else {
@@ -236,28 +238,21 @@ impl Render for HarnessUpdates {
                             .text_size(px(11.))
                             .opacity(if updating { 0.6 } else { 1. })
                             .when(!updating, |el| {
-                                el.cursor_pointer().hover(|s| s.bg(content(0.15))).on_click(
-                                    cx.listener(move |this, _, _, cx| {
+                                el.cursor_pointer()
+                                    .hover(|s| s.bg(vorkspace_ui::fluid::hover(0.15)))
+                                    .on_click(cx.listener(move |this, _, _, cx| {
                                         this.start(vec![target.clone()], cx)
-                                    }),
-                                )
+                                    }))
                             })
                             .flex()
                             .items_center()
                             .gap(px(6.))
                             .when(updating, |el| {
-                                el.child(
-                                    icon("loader", 12.).with_animation(
-                                        "harness-update-spinner",
-                                        gpui::Animation::new(std::time::Duration::from_secs(1))
-                                            .repeat(),
-                                        |icon, delta| {
-                                            icon.with_transformation(gpui::Transformation::rotate(
-                                                gpui::percentage(delta),
-                                            ))
-                                        },
-                                    ),
-                                )
+                                el.child(crate::panel_kit::spinner(
+                                    "harness-update-spinner",
+                                    "loader",
+                                    12.,
+                                ))
                             })
                             .child(if updating {
                                 "Updating"
@@ -279,7 +274,7 @@ impl Render for HarnessUpdates {
                     div()
                         .mt(px(6.))
                         .text_size(px(11.))
-                        .text_color(gpui::rgb(0xfca5a5))
+                        .text_color(vorkspace_ui::theme::danger())
                         .child(error.clone()),
                 );
             }

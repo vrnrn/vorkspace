@@ -56,11 +56,7 @@ pub(crate) fn rail_divider(cap_top: Option<f32>) -> impl IntoElement {
     .absolute()
     .inset_0()
 }
-pub(crate) const DIFF_ADD: u32 = 0x6ee7b7;
-pub(crate) const DIFF_DEL: u32 = 0xfda4af;
 // Tailwind v4.
-pub(crate) const AMBER_400: u32 = 0xffb900;
-pub(crate) const SKY_400: u32 = 0x00bcff;
 /// `--color-background-base` in the default dark theme, hsl(240 0% 9%).
 pub(crate) const BACKGROUND_BASE: u32 = 0x171717;
 
@@ -140,7 +136,9 @@ pub(crate) fn icon_action(
         .justify_center()
         .rounded(px(radius::SMALL))
         .when(!enabled, |d| d.opacity(0.4))
-        .when(enabled, |d| d.hover(|s| s.bg(content(0.1))))
+        .when(enabled, |d| {
+            d.hover(|s| s.bg(vorkspace_ui::fluid::hover(0.1)))
+        })
         .child(
             icon(path, 14.)
                 .text_color(content(0.55))
@@ -150,16 +148,83 @@ pub(crate) fn icon_action(
         )
 }
 
-/// The `animate-spin` Loader.
-pub(crate) fn spinner(id: impl Into<gpui::ElementId>, path: &'static str, side: f32) -> AnyElement {
-    use gpui::{Animation, AnimationExt, Transformation, percentage};
-    icon(path, side)
-        .with_animation(
-            id,
-            Animation::new(std::time::Duration::from_secs(1)).repeat(),
-            |icon, delta| icon.with_transformation(Transformation::rotate(percentage(delta))),
-        )
-        .into_any_element()
+/// The busy indicator: fluidither's Loader, three printed cells counting up,
+/// sized to the icon slot it replaces. `_path` names the icon the slot used
+/// to spin, so callers keep describing what is loading.
+pub(crate) fn spinner(
+    id: impl Into<gpui::ElementId>,
+    _path: &'static str,
+    side: f32,
+) -> AnyElement {
+    Loader {
+        id: id.into(),
+        side,
+    }
+    .into_any_element()
+}
+
+/// How long each count of the loader holds.
+const LOADER_STEP: std::time::Duration = std::time::Duration::from_millis(300);
+
+/// The loader's count, advanced by its own timer. A repeating animation would
+/// redraw its view on every display refresh for an image that changes three
+/// times a cycle; this wakes the view only when a cell turns on. Dropped with
+/// the element, which cancels the timer.
+struct LoaderCount {
+    shown: usize,
+    _tick: gpui::Task<()>,
+}
+
+#[derive(IntoElement)]
+struct Loader {
+    id: gpui::ElementId,
+    side: f32,
+}
+
+impl RenderOnce for Loader {
+    fn render(self, window: &mut gpui::Window, cx: &mut gpui::App) -> impl IntoElement {
+        // Reduce Motion: a still loader, all cells lit, and no timer.
+        if cx.reduce_motion() {
+            return loader_cells(self.side, 3);
+        }
+        let count = window.use_keyed_state(self.id, cx, |_, cx| LoaderCount {
+            shown: 1,
+            _tick: cx.spawn(async move |this, cx| {
+                loop {
+                    cx.background_executor().timer(LOADER_STEP).await;
+                    if this
+                        .update(cx, |count: &mut LoaderCount, cx| {
+                            count.shown = count.shown % 3 + 1;
+                            cx.notify();
+                        })
+                        .is_err()
+                    {
+                        break;
+                    }
+                }
+            }),
+        });
+        loader_cells(self.side, count.read(cx).shown)
+    }
+}
+
+/// The loader's three cells with `shown` of them lit.
+fn loader_cells(side: f32, shown: usize) -> gpui::Div {
+    // Three cells and two gaps of the same size fill the slot's width.
+    let cell = (side / 5.).floor().max(2.);
+    div()
+        .size(px(side))
+        .flex_shrink_0()
+        .flex()
+        .items_center()
+        .justify_center()
+        .gap(px(cell))
+        .children((0..3).map(|index| {
+            div()
+                .size(px(cell))
+                .when(index < shown, |d| d.bg(content(0.6)))
+                .when(index >= shown, |d| d.bg(vorkspace_ui::fluid::track(0.1)))
+        }))
 }
 
 pub(crate) fn format_integer(value: i64) -> String {
@@ -188,6 +253,16 @@ pub(crate) fn diff_stat(
     let added = format_integer(stats.map_or(0, |s| s.additions.max(0)));
     let deleted = format_integer(stats.map_or(0, |s| s.deletions.max(0)));
     let scale = ((width - 18.) / (diff_stat_width(stats) - 18.)).clamp(0.1, 1.);
+    // A clean tree reads as quiet zeros, not as green and red changes.
+    let clean = stats.is_none_or(|s| s.additions <= 0 && s.deletions <= 0);
+    let (add, del) = if clean {
+        (content(0.35), content(0.35))
+    } else {
+        (
+            vorkspace_ui::theme::diff_foreground(true),
+            vorkspace_ui::theme::diff_foreground(false),
+        )
+    };
     div()
         .id("project-diff-stat")
         .debug_selector(|| "project-diff-stat".into())
@@ -208,14 +283,102 @@ pub(crate) fn diff_stat(
         .text_size(px(10. * scale))
         .font_weight(FontWeight::MEDIUM)
         .font_features(tabular())
-        .child(
+        .font_family(vorkspace_ui::fonts::MONO)
+        // The counts roll to each new total rather than jumping.
+        .child(div().text_color(add).child(vorkspace_ui::fluid::Count::new(
+            "project-diff-added",
+            stats.map_or(0, |s| s.additions.max(0)),
+            |n| format!("+{}", format_integer(n)),
+        )))
+        .child(div().text_color(del).child(vorkspace_ui::fluid::Count::new(
+            "project-diff-deleted",
+            stats.map_or(0, |s| s.deletions.max(0)),
+            |n| format!("-{}", format_integer(n)),
+        )))
+}
+
+/// A path as people read it: under the home folder it starts with `~`.
+pub(crate) fn home_relative(path: &std::path::Path) -> String {
+    std::env::var_os("HOME")
+        .and_then(|home| {
+            path.strip_prefix(home).ok().map(|rest| {
+                if rest.as_os_str().is_empty() {
+                    "~".to_owned()
+                } else {
+                    format!("~/{}", rest.display())
+                }
+            })
+        })
+        .unwrap_or_else(|| path.display().to_string())
+}
+
+#[cfg(test)]
+mod loader_tests {
+    use super::*;
+    use gpui::{TestAppContext, VisualTestContext};
+
+    struct Host;
+    impl gpui::Render for Host {
+        fn render(
+            &mut self,
+            _: &mut gpui::Window,
+            _: &mut gpui::Context<Self>,
+        ) -> impl IntoElement {
             div()
-                .text_color(gpui::rgb(DIFF_ADD))
-                .child(format!("+{added}")),
-        )
-        .child(
-            div()
-                .text_color(gpui::rgb(DIFF_DEL))
-                .child(format!("-{deleted}")),
-        )
+                .size_full()
+                .child(spinner("loader-under-test", "", 14.))
+        }
+    }
+
+    /// Cells lit, read from the painted quads: lit cells are solid ink.
+    fn lit(visual: &mut VisualTestContext) -> usize {
+        visual.update(|window, _| {
+            window
+                .painted_quads()
+                .iter()
+                .filter(|q| q.background == gpui::Background::from(content(0.6)))
+                .count()
+        })
+    }
+
+    #[gpui::test]
+    fn the_loader_counts_on_a_timer_and_never_asks_for_frames(cx: &mut TestAppContext) {
+        let window = cx.update(|cx| {
+            cx.open_window(Default::default(), |_, cx| cx.new(|_| Host))
+                .unwrap()
+        });
+        let visual = &mut VisualTestContext::from_window(window.into(), cx);
+        visual.run_until_parked();
+        visual.refresh().unwrap();
+        assert_eq!(lit(visual), 1);
+        // Nothing waits on the next display refresh: the view sleeps between
+        // counts instead of redrawing every frame.
+        let waiting = visual.update(|window, cx| window.simulate_next_frame(cx));
+        assert_eq!(waiting, 0);
+        visual.executor().advance_clock(LOADER_STEP);
+        visual.run_until_parked();
+        visual.refresh().unwrap();
+        assert_eq!(lit(visual), 2);
+        visual.executor().advance_clock(LOADER_STEP * 2);
+        visual.run_until_parked();
+        visual.refresh().unwrap();
+        assert_eq!(lit(visual), 1, "after three it starts over");
+    }
+
+    #[gpui::test]
+    fn under_reduce_motion_the_loader_holds_still(cx: &mut TestAppContext) {
+        cx.update(|cx| cx.set_reduce_motion(true));
+        let window = cx.update(|cx| {
+            cx.open_window(Default::default(), |_, cx| cx.new(|_| Host))
+                .unwrap()
+        });
+        let visual = &mut VisualTestContext::from_window(window.into(), cx);
+        visual.run_until_parked();
+        visual.refresh().unwrap();
+        assert_eq!(lit(visual), 3);
+        visual.executor().advance_clock(LOADER_STEP * 4);
+        visual.run_until_parked();
+        visual.refresh().unwrap();
+        assert_eq!(lit(visual), 3);
+    }
 }

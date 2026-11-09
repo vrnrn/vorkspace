@@ -500,6 +500,7 @@ impl UsageFooter {
         div()
             .id("usage-switch-account")
             .role(Role::Button)
+            .map(vorkspace_ui::theme::tab_reachable)
             .aria_label(format!("Switch account from {label}"))
             .h_8()
             .px(px(10.))
@@ -507,7 +508,7 @@ impl UsageFooter {
             .bg(content(0.045))
             .border_1()
             .border_color(content(0.06))
-            .hover(|s| s.bg(content(0.08)))
+            .hover(|s| s.bg(vorkspace_ui::fluid::hover(0.08)))
             .cursor_pointer()
             .flex()
             .items_center()
@@ -687,7 +688,7 @@ impl UsageFooter {
                             .bg(gpui::rgba(0xfbbf241a))
                             .text_size(px(10.))
                             .line_height(px(16.))
-                            .text_color(rgb(0xfcd34d))
+                            .text_color(vorkspace_ui::theme::warning())
                             .child("Couldn’t refresh. Showing the last available snapshot."),
                     )
                 },
@@ -798,6 +799,7 @@ impl UsageFooter {
         div()
             .id("usage-switch-account")
             .role(Role::Button)
+            .map(vorkspace_ui::theme::tab_reachable)
             .aria_label(format!("Switch {} account", kind.label()))
             .mt_1()
             .ml(px(-4.))
@@ -811,7 +813,7 @@ impl UsageFooter {
             .text_size(px(10.))
             .text_color(content(0.55))
             .cursor_pointer()
-            .hover(|s| s.bg(content(0.1)))
+            .hover(|s| s.bg(vorkspace_ui::fluid::hover(0.1)))
             .child(
                 div()
                     .max_w(gpui::relative(0.6))
@@ -889,7 +891,7 @@ impl UsageFooter {
                     .h(px(6.))
                     .w_full()
                     .rounded_full()
-                    .bg(content(0.1))
+                    .bg(vorkspace_ui::fluid::track(0.1))
                     .overflow_hidden()
                     .child(
                         div()
@@ -1099,7 +1101,11 @@ fn usage_ring(kind: Kind, window: &usage::Window) -> impl IntoElement {
                 let mut stroke = color;
                 stroke.a *= alpha;
                 if let Ok(path) = path.build() {
-                    window.paint_path(path, stroke);
+                    if alpha < 1. {
+                        window.paint_path(path, vorkspace_ui::fluid::ring_track(stroke));
+                    } else {
+                        window.paint_path(path, stroke);
+                    }
                 }
                 if alpha == 1. && amount < 1. {
                     for angle in [
@@ -1239,7 +1245,10 @@ impl Render for UsageFooter {
                             .flex()
                             .items_center()
                             .gap_2()
-                            .hover(|s| s.bg(content(0.08)).text_color(content(1.)))
+                            .hover(|s| {
+                                s.bg(vorkspace_ui::fluid::hover(0.08))
+                                    .text_color(content(1.))
+                            })
                             .child(anchor.probe())
                             .when(self.compact, |d| {
                                 d.children(ring.map(|w| usage_ring(key.kind, w)))
@@ -1295,10 +1304,9 @@ impl Render for UsageFooter {
             .child(
                 div()
                     .id("subscriptions-list")
-                    .when(self.compact, |d| d.flex().flex_col().gap_1())
-                    .max_h(px(220.))
-                    .min_h_0()
-                    .overflow_y_scroll()
+                    .flex()
+                    .flex_col()
+                    .when(self.compact, |d| d.gap_1())
                     .children(rows),
             )
             .when(self.open, |d| {

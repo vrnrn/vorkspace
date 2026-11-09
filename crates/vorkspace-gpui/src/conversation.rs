@@ -72,6 +72,8 @@ use vorkspace_ui::{composer_motion::ComposerMotion, theme::*};
 // Keep empty and docked composers aligned with the transcript column. Below
 // this width the empty session drops its title.
 const COMPOSER_COLUMN: f32 = COLUMN;
+/// Below this height an empty page keeps only its question and composer.
+const SHORT_EMPTY_HEIGHT: f32 = 520.;
 const UNCONFIRMED_TURN: &str =
     "Provider connection ended before completion was confirmed. This turn was not replayed.";
 // RUNTIME_MODE_LABEL and RUNTIME_MODE_HINT from the React session model,
@@ -106,7 +108,19 @@ const ACCESS_MODES: &[(&str, &str, &str, &str)] = &[
 const YELLOW_300: u32 = 0xffdf20;
 const SKY_300: u32 = 0x74d4ff;
 const FUCHSIA_300: u32 = 0xf4a8ff;
+/// One of the accents above, in the theme it is shown in: the light 300
+/// shades wash out on paper, so light mode takes the matching 600.
 fn tint(color: u32, alpha: f32) -> gpui::Hsla {
+    let color = if vorkspace_ui::theme::is_light() {
+        match color {
+            YELLOW_300 => 0xca8a04,
+            SKY_300 => 0x0284c7,
+            FUCHSIA_300 => 0xc026d3,
+            other => other,
+        }
+    } else {
+        color
+    };
     let mut c: gpui::Hsla = gpui::rgb(color).into();
     c.a = alpha;
     c
@@ -134,7 +148,6 @@ use response_menu::ResponseMenu;
 pub(crate) struct SessionChanged;
 /// A tool label changed; token/output changes do not wake session discovery.
 pub(crate) struct SessionActivityChanged;
-pub(crate) struct ChooseFolder(pub(crate) AnchorSlot);
 /// The review card asked to open the session's recorded changes.
 pub(crate) struct OpenSessionChanges(pub(crate) crate::git_tools::review::ReviewTab);
 /// A minion session's context and app environment.
@@ -180,7 +193,6 @@ pub(crate) struct Conversation {
     _draft_quit: Subscription,
     _input_focus: Option<[Subscription; 2]>,
     draft_has_value: bool,
-    folder_selected: bool,
     follow_ups: follow_up::FollowUps,
     attachments: Vec<std::path::PathBuf>,
     pending_attachments: Vec<std::path::PathBuf>,
@@ -218,7 +230,7 @@ pub(crate) struct Conversation {
     native_recovery: Option<native_history::Recovery>,
     pub(crate) busy: bool,
     /// The UI is idle; serialize the next launch behind the worker's last save.
-    stopping: bool,
+    pub(crate) stopping: bool,
     notification_cancelled: bool,
     /// The store's saved-draft flag, until the conversation loads its own.
     pub(crate) draft_hint: bool,
@@ -263,6 +275,8 @@ pub(crate) struct Conversation {
     composer_anchor: AnchorSlot,
     composer_motion: ComposerMotion,
     narrow: bool,
+    /// The empty page is too short for its decorative field and starters.
+    short: bool,
     // A split or review pane sits beside this chat; only then does a narrow
     // pane rest the composer where it docks.
     beside_pane: bool,
@@ -359,12 +373,11 @@ impl Conversation {
     pub(crate) fn needs_approval(&self) -> bool {
         !self.approvals.is_empty() || !self.questions.is_empty()
     }
+    pub(crate) fn is_stopping(&self) -> bool {
+        self.stopping
+    }
     pub(crate) fn responding(&self) -> bool {
         self.busy && !self.stopping
-    }
-    pub(crate) fn sidebar_details(&self) -> Option<(SharedString, Option<String>)> {
-        self.loaded
-            .then(|| (self.model_label(), self.branch.clone()))
     }
     pub(crate) fn new(summary: Session, store: Database, cx: &mut Context<Self>) -> Self {
         #[cfg(test)]
@@ -389,11 +402,7 @@ impl Conversation {
         let completion_event = cx.subscribe(
             &completion,
             |this, _, event: &crate::composer::composer_completion::ModePicked, cx| {
-                if event.0 == "add-to-folder" {
-                    this.request_folder(cx);
-                } else {
-                    this.enable_mode(event.0, cx);
-                }
+                this.enable_mode(event.0, cx);
             },
         );
         let command_removal = cx.subscribe(&input, |this, _, event: &input::CommandRemoved, cx| {
@@ -404,20 +413,6 @@ impl Conversation {
             if this.ticket_context.edited(&content) && this.status == "Loading ticket context…" {
                 this.status = "Ready".into();
                 cx.notify();
-            }
-            let folder = vorkspace_core::composer::consume_command(&content, "add-to-folder");
-            if folder.is_none() {
-                this.folder_selected = false;
-            }
-            if !this.folder_selected
-                && folder == Some("")
-                && content.ends_with(' ')
-                && !input.read(cx).is_composing()
-            {
-                input.update(cx, |input, cx| {
-                    input.set_text(content.trim_end().into(), cx)
-                });
-                this.request_folder(cx);
             }
             let has_value = input.read(cx).has_message_text();
             if this.draft_has_value != has_value {
@@ -523,7 +518,6 @@ impl Conversation {
             _draft_quit: draft_quit,
             _input_focus: None,
             draft_has_value: false,
-            folder_selected: false,
             follow_ups: Default::default(),
             attachments: Vec::new(),
             pending_attachments: Vec::new(),
@@ -602,6 +596,7 @@ impl Conversation {
             composer_anchor: AnchorSlot::default(),
             composer_motion: ComposerMotion::default(),
             narrow: false,
+            short: false,
             beside_pane: false,
             cancel: Arc::new(AtomicBool::new(false)),
             title_cancel: None,
@@ -634,7 +629,6 @@ impl Conversation {
 
 impl EventEmitter<SessionChanged> for Conversation {}
 impl EventEmitter<SessionActivityChanged> for Conversation {}
-impl EventEmitter<ChooseFolder> for Conversation {}
 impl EventEmitter<OpenSessionChanges> for Conversation {}
 impl EventEmitter<Transfer> for Conversation {}
 impl EventEmitter<composer_features::StartOrchestration> for Conversation {}
@@ -674,7 +668,7 @@ pub(crate) fn effort_name(value: &str) -> String {
         "low" => "Low",
         "medium" => "Medium",
         "high" => "High",
-        "xhigh" => "Extra High",
+        "xhigh" => "Extra high",
         "max" => "Max",
         "ultra" => "Ultra",
         "ultracode" => "Ultracode",
@@ -781,7 +775,7 @@ fn tool_pill(id: &'static str, label: &'static str) -> gpui::Stateful<gpui::Div>
         .gap_1()
         .bg(content(0.1))
         .text_color(content(1.))
-        .hover(|s| s.bg(content(0.15)))
+        .hover(|s| s.bg(vorkspace_ui::fluid::hover(0.15)))
         .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
 }
 /// The column a composer sits in, shared by sessions and Bots.
@@ -815,7 +809,10 @@ pub(super) fn quiet_control(
         .text_size(px(12.))
         .text_color(content(if open { 1. } else { 0.55 }))
         .when(open, |d| d.bg(content(0.08)))
-        .hover(|s| s.bg(content(0.08)).text_color(content(1.)))
+        .hover(|s| {
+            s.bg(vorkspace_ui::fluid::hover(0.08))
+                .text_color(content(1.))
+        })
         .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
 }
 // GitPickerTrigger: the quiet controls in the bar under the box.

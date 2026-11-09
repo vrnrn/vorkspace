@@ -13,58 +13,6 @@ fn search_field_fills_the_original_project_rail(cx: &mut TestAppContext) {
 }
 
 #[gpui::test]
-fn sidebar_density_stays_inert_while_activity_visibility_is_restored(cx: &mut TestAppContext) {
-    let (window, a, b) = super::super::tests::window(cx);
-    let card = window
-        .update(cx, |shell, _, cx| {
-            // Blank sessions are deliberately absent from navigation. Seed
-            // a real history summary so this measures a materialized card.
-            let mut summary = locked(&shell.store)
-                .unwrap()
-                .create("codex", "/work/vorkspace")
-                .unwrap();
-            summary.has_messages = true;
-            summary.title = "Saved conversation".into();
-            let card = summary.id;
-            shell.session_summaries.insert(card, summary);
-            shell.order.insert(0, card);
-            for id in [a, b] {
-                shell.sessions[&id].update(cx, |view, _| view.busy = true);
-            }
-            shell.unseen_finished.insert(a);
-            shell.workspace.compact_session_cards = false;
-            shell.workspace.sidebar_activity_visible = true;
-            shell.invalidate_chrome(cx);
-            card
-        })
-        .unwrap();
-    let visual = &mut gpui::VisualTestContext::from_window(window.into(), cx);
-    visual.run_until_parked();
-    let selector: &'static str = Box::leak(format!("sidebar-session-{card}").into_boxed_str());
-    assert_eq!(visual.debug_bounds(selector).unwrap().size.height, px(32.));
-    let tree: &'static str = Box::leak(format!("project-session-{b}").into_boxed_str());
-    assert!(visual.debug_bounds(tree).is_some());
-    window
-        .update(visual, |shell, _, cx| {
-            let loaded = shell.sessions.len();
-            shell.change_sidebar_option("compact-session-cards", cx);
-            shell.change_sidebar_option("sidebar-activity", cx);
-            assert!(!shell.workspace.compact_session_cards);
-            assert!(!shell.workspace.sidebar_activity_visible);
-            assert_eq!(shell.sessions.len(), loaded);
-            assert!(shell.unseen_finished.contains(&a));
-            for id in [a, b] {
-                assert!(shell.sessions[&id].read(cx).responding());
-            }
-            let items = shell.sidebar_options_menu_items(cx);
-            assert!(!items.iter().any(
-                |item| matches!(item, MenuItem::Action(a) if a.id == "compact-session-cards")
-            ));
-        })
-        .unwrap();
-}
-
-#[gpui::test]
 fn sidebar_visibility_switches_stay_open_preserve_notes_and_survive_restart(
     cx: &mut TestAppContext,
 ) {
@@ -84,7 +32,10 @@ fn sidebar_visibility_switches_stay_open_preserve_notes_and_survive_restart(
         .update(visual, |shell, _, cx| {
             let menu = shell.menu.as_ref().unwrap().menu.read(cx);
             let bounds = menu.surface_region().get().unwrap();
-            assert_eq!(bounds.left(), options.left());
+            // It ends at the trigger, kept inside the window, so it spans
+            // the trigger and never leaves the screen.
+            assert!(bounds.left() >= px(0.));
+            assert!(bounds.left() <= options.left() && bounds.right() >= options.right());
             assert_eq!(bounds.size.width, px(212.));
         })
         .unwrap();
@@ -97,7 +48,7 @@ fn sidebar_visibility_switches_stay_open_preserve_notes_and_survive_restart(
     assert!(
         visual
             .debug_bounds("menu-action-sidebar-activity")
-            .is_some()
+            .is_none()
     );
     assert!(
         visual
@@ -517,164 +468,5 @@ fn sidebar_settings_native_capture() {
     cx.capture_screenshot(window.into())
         .unwrap()
         .save(output.join("settings-app-group.png"))
-        .unwrap();
-}
-
-#[gpui::test]
-fn scroll_and_hover_redraws_reuse_the_sidebar_index(cx: &mut TestAppContext) {
-    let (window, _, _) = super::super::tests::window(cx);
-    window
-        .update(cx, |shell, _, cx| {
-            shell.refresh_sidebar_structure(cx);
-            let rebuilds = shell.sidebar_list.structural_rebuilds;
-            for _ in 0..100 {
-                // This is the path used by scroll/hover redraws: visible
-                // cards refresh, while membership/order stays cached.
-                shell.refresh_sidebar_structure(cx);
-            }
-            assert_eq!(shell.sidebar_list.structural_rebuilds, rebuilds);
-            shell.sidebar_list.invalidate_structure();
-            shell.refresh_sidebar_structure(cx);
-            assert_eq!(shell.sidebar_list.structural_rebuilds, rebuilds + 1);
-            // Time expiry is a content refresh, not navigation: retain
-            // the user's position instead of snapping back to the active row.
-            shell.sidebar_list.state.scroll_to(gpui::ListOffset {
-                item_ix: 1,
-                offset_in_item: px(5.),
-            });
-            let offset = shell.sidebar_list.state.logical_scroll_top();
-            shell.sidebar_list.indexed_minute = 0;
-            shell.refresh_sidebar_structure(cx);
-            let refreshed = shell.sidebar_list.state.logical_scroll_top();
-            assert_eq!(refreshed.item_ix, offset.item_ix);
-            assert_eq!(refreshed.offset_in_item, offset.offset_in_item);
-            assert_eq!(shell.sidebar_list.structural_rebuilds, rebuilds + 2);
-            // Scope changes are also detected without a notification hook.
-            shell.query.push_str("unmatched-session-query");
-            shell.refresh_sidebar_structure(cx);
-            assert_eq!(shell.sidebar_list.structural_rebuilds, rebuilds + 3);
-            assert!(shell.sidebar_list.rows.contains(&super::Row::Empty));
-        })
-        .unwrap();
-}
-
-#[gpui::test]
-fn large_project_only_lays_out_nearby_session_cards(cx: &mut TestAppContext) {
-    let (window, _, _) = super::super::tests::window(cx);
-    let started = std::time::Instant::now();
-    let (first, last) = window
-        .update(cx, |shell, window, cx| {
-            let mut summaries = Vec::new();
-            {
-                let store = locked(&shell.store).unwrap();
-                for i in 0..1000 {
-                    let mut summary = store.create("codex", "/work/many-sessions").unwrap();
-                    summary.title =
-                        format!("Session {i}: {}", "A long conversation title 🙂 ".repeat(4));
-                    summary.has_messages = true;
-                    summaries.push(summary);
-                }
-            }
-            let first = summaries.last().unwrap().id;
-            let last = summaries[0].id;
-            for summary in summaries {
-                shell.order.push(summary.id);
-                shell.session_summaries.insert(summary.id, summary);
-            }
-            shell.workspace.open(first);
-            shell.select_project("/work/many-sessions".into(), window, cx);
-            (first, last)
-        })
-        .unwrap();
-    cx.refresh().unwrap();
-    window
-        .update(cx, |shell, _, cx| {
-            let laid_out = shell
-                .session_row_bounds
-                .values()
-                .filter(|slot| slot.get().is_some())
-                .count();
-            eprintln!(
-                "1,000-session project: {laid_out} laid-out cards, {:?} setup + first frame",
-                started.elapsed()
-            );
-            assert!(laid_out > 0);
-            assert!(
-                shell.sessions.len() < 10,
-                "scrolling the sidebar must not construct off-screen conversations"
-            );
-            assert!(
-                laid_out < 80,
-                "off-screen session cards should not be laid out: {laid_out}"
-            );
-            assert!(shell.session_row_bounds[&first].get().is_some());
-            assert!(shell.session_row_bounds[&last].get().is_none());
-            shell.sidebar_list.state.scroll_to_end();
-            shell.sidebar_frame.update(cx, |_, cx| cx.notify());
-        })
-        .unwrap();
-    cx.refresh().unwrap();
-    window
-        .update(cx, |shell, _, cx| {
-            assert!(
-                shell.session_row_bounds[&first].get().is_none(),
-                "scrolled-away cards cannot remain hit targets"
-            );
-            assert!(
-                shell.session_row_bounds[&last].get().is_some(),
-                "the oldest conversation is reachable"
-            );
-            let members = shell.sidebar_session_ids(cx);
-            shell.groups.insert(
-                "/work/many-sessions".into(),
-                vorkspace_core::session_groups::Groups {
-                    folders: vec![vorkspace_core::session_groups::Folder {
-                        id: "large-folder".into(),
-                        name: "All history".into(),
-                        session_ids: members,
-                        ..Default::default()
-                    }],
-                    ..Default::default()
-                },
-            );
-            shell.notify_sidebar(cx);
-        })
-        .unwrap();
-    cx.refresh().unwrap();
-    window
-        .update(cx, |shell, _, _| {
-            let laid_out = shell
-                .session_row_bounds
-                .values()
-                .filter(|slot| slot.get().is_some())
-                .count();
-            assert!(
-                laid_out > 0 && laid_out < 80,
-                "expanded folders must also be virtualized: {laid_out}"
-            );
-            shell.sidebar_list.state.scroll_to_end();
-        })
-        .unwrap();
-    cx.refresh().unwrap();
-    let offset = window
-        .update(cx, |shell, window, cx| {
-            // Resolve scroll_to_end's end sentinel before checking selection.
-            let offset = shell.sidebar_list.state.logical_scroll_top();
-            shell.open(first - 1, window, cx);
-            offset
-        })
-        .unwrap();
-    cx.refresh().unwrap();
-    window
-        .update(cx, |shell, _, _| {
-            // Like the Tauri sidebar, selecting a session (e.g. from a
-            // title tab) leaves the user's scroll position alone.
-            let after = shell.sidebar_list.state.logical_scroll_top();
-            assert_eq!(
-                (after.item_ix, after.offset_in_item),
-                (offset.item_ix, offset.offset_in_item)
-            );
-            assert!(shell.session_row_bounds[&(first - 1)].get().is_none());
-        })
         .unwrap();
 }

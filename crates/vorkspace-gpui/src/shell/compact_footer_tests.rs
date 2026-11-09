@@ -88,6 +88,48 @@ fn near(a: Pixels, b: Pixels) {
 }
 
 #[gpui::test]
+fn expanded_status_grows_to_fit_and_scrolls_only_when_needed(cx: &mut TestAppContext) {
+    let (_directory, window) = shell(cx);
+    let visual = &mut VisualTestContext::from_window(window.into(), cx);
+    let keys = visual.update(|_, cx| accounts(true, cx));
+    window
+        .update(visual, |shell, _, cx| {
+            shell.workspace.project_rail_open = true;
+            shell.workspace.preferences.ui_scale = 160;
+            shell.invalidate_chrome(cx);
+            cx.notify();
+        })
+        .unwrap();
+    visual.simulate_resize(size(px(901.), px(600.)));
+    settle(visual);
+    let status = visual.debug_bounds("rail-footer-status").unwrap();
+    let last = keys.last().unwrap();
+    assert!(chrome(window, visual, last).0.get().unwrap().bottom() <= status.bottom());
+
+    visual.simulate_resize(size(px(901.), px(520.)));
+    settle(visual);
+    let status = visual.debug_bounds("rail-footer-status").unwrap();
+    let settings = visual.debug_bounds("classic-rail-settings").unwrap();
+    let before = chrome(window, visual, last).0.get().unwrap();
+    assert!(before.bottom() > status.bottom());
+    let position = visual.update(|window, _| window.logical_to_platform_point(status.center()));
+    visual.simulate_event(gpui::ScrollWheelEvent {
+        position,
+        delta: gpui::ScrollDelta::Pixels(gpui::point(px(0.), px(-100.))),
+        ..Default::default()
+    });
+    settle(visual);
+    let revealed = chrome(window, visual, last).0.get().unwrap();
+    assert!(revealed.top() >= status.top());
+    near(revealed.bottom(), status.bottom());
+    assert_eq!(visual.debug_bounds("classic-rail-settings"), Some(settings));
+    assert!(
+        visual.debug_bounds("rail-sessions").unwrap().bottom() <= status.top(),
+        "scrolling status keeps the Sessions section within its own viewport"
+    );
+}
+
+#[gpui::test]
 fn compact_footer_centers_and_fits_through_zoom_accounts_and_expansion(cx: &mut TestAppContext) {
     let (_directory, window) = shell(cx);
     let visual = &mut VisualTestContext::from_window(window.into(), cx);

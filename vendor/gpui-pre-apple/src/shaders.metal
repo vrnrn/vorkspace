@@ -46,6 +46,10 @@ struct GradientColor {
   float4 color0;
   float4 color1;
 };
+// Vorkspace: fluidither's BAYER_4 ranks, so a dither tone inks the same cells
+// as the fluidither web and GPUI components.
+constant uchar BAYER_4[16] = {0, 8, 2, 10, 12, 4, 14, 6, 3, 11, 1, 9, 15, 7, 13, 5};
+
 GradientColor prepare_fill_color(uint tag, uint color_space, Hsla solid, Hsla color0, Hsla color1);
 
 struct QuadVertexOutput {
@@ -1162,7 +1166,7 @@ float4 over(float4 below, float4 above) {
 GradientColor prepare_fill_color(uint tag, uint color_space, Hsla solid,
                                      Hsla color0, Hsla color1) {
   GradientColor out;
-  if (tag == 0 || tag == 2 || tag == 3) {
+  if (tag == 0 || tag == 2 || tag == 3 || tag == 4) {
     out.solid = hsla_to_rgba(solid);
   } else if (tag == 1) {
     out.color0 = hsla_to_rgba(color0);
@@ -1280,6 +1284,23 @@ float4 fill_color(Background background,
 
         color = solid_color;
         color.a *= saturate(should_be_colored);
+        break;
+    }
+    case 4: {
+        // Vorkspace: ordered 4x4 Bayer dither (see BAYER_4 above).
+        float cell = max(background.gradient_angle_or_pattern_height, 1.0);
+        float2 relative_position = position - float2(bounds.origin.x, bounds.origin.y);
+        int2 index = int2(floor(relative_position / cell));
+        int2 wrapped = ((index % 4) + 4) % 4;
+        float threshold = (float(BAYER_4[wrapped.y * 4 + wrapped.x]) + 0.5) / 16.0;
+        // The tone ramps from the top of the bounds to the bottom; a flat
+        // dither carries the same tone at both ends.
+        float along = bounds.size.height > 0.0
+            ? saturate(relative_position.y / bounds.size.height)
+            : 0.0;
+        float tone = mix(background.colors[0].percentage, background.colors[1].percentage, along);
+        color = solid_color;
+        color.a *= step(threshold, tone);
         break;
     }
   }

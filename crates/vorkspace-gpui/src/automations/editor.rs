@@ -1,6 +1,5 @@
 use super::*;
 use chrono::{Local, TimeZone};
-use gpui::AnimationExt;
 use vorkspace_ui::radius;
 
 pub(super) fn toggle(id: impl Into<gpui::ElementId>, on: bool) -> gpui::Stateful<gpui::Div> {
@@ -143,7 +142,6 @@ impl Automations {
                 }
             }
             Choice::Conversation => editor.draft.reuse_session = value == "reuse",
-            Choice::Folder => editor.draft.session_folder_id = value,
             Choice::Grace => editor.draft.missed_run_grace_minutes = value.parse().unwrap_or(720),
             Choice::ModelSetting(key) => {
                 set_control_value(&mut editor.draft, key, value);
@@ -358,11 +356,9 @@ impl Automations {
                     cx,
                 ));
             }
-            sentence = sentence
-                .child(page::meta().child(gmt_offset()))
-                .child(page::meta().child(next_run_preview(
-                    preview_trigger.next_at(vorkspace_core::time::now_ms() as i64),
-                )));
+            sentence = sentence.child(page::meta().child(next_run_preview(
+                preview_trigger.next_at(vorkspace_core::time::now_ms() as i64),
+            )));
         } else {
             sentence = sentence
                 .child(self.select_control(
@@ -671,13 +667,13 @@ impl Automations {
                     .child(div().h(px(1.)).bg(page::divider()))
                 })
                 .child(
-                    page::action("automation-add-trigger", "Add Trigger", triggers.len() < 20)
+                    page::action("automation-add-trigger", "Add trigger", triggers.len() < 20)
                         .relative()
                         .m(px(8.))
                         .justify_start()
                         .child(self.trigger_anchor.probe())
                         .child(icon("plus", page::ICON_SIZE))
-                        .child("Add Trigger")
+                        .child("Add trigger")
                         .on_click(cx.listener(|this, _, window, cx| {
                             this.open_trigger_menu(window, cx);
                         })),
@@ -779,23 +775,6 @@ impl Automations {
                     .mt(px(8.))
                     .child("Skills, @file references, and built-in commands work here."),
             );
-        let mut folder_options = vec![(String::new(), "No folder".into())];
-        folder_options.extend(self.folders.iter().map(|f| (f.id.clone(), f.name.clone())));
-        if !draft.session_folder_id.is_empty()
-            && !folder_options
-                .iter()
-                .any(|(id, _)| id == &draft.session_folder_id)
-        {
-            folder_options.push((
-                draft.session_folder_id.clone(),
-                draft.session_folder_id.clone(),
-            ));
-        }
-        let folder_label = folder_options
-            .iter()
-            .find(|(id, _)| id == &draft.session_folder_id)
-            .map(|(_, label)| label.clone())
-            .unwrap_or_else(|| "No folder".into());
         let workspace = self.select_control(
             "automation-workspace",
             if draft.workspace_mode == "worktree" {
@@ -838,22 +817,11 @@ impl Automations {
                     "This repo, or a fresh worktree",
                     workspace,
                 ))
-                .child(settings_row(
-                    "Conversation",
-                    "New chat, or continue the last run",
-                    conversation,
-                ))
                 .child(
                     settings_row(
-                        "Session folder",
-                        "Where runs appear in the sidebar",
-                        self.select_control(
-                            "automation-folder",
-                            folder_label,
-                            Choice::Folder,
-                            folder_options,
-                            cx,
-                        ),
+                        "Conversation",
+                        "New chat, or continue the last run",
+                        conversation,
                     )
                     .border_b_0(),
                 ),
@@ -881,7 +849,7 @@ impl Automations {
                     .items_center()
                     .gap(px(8.))
                     .cursor_pointer()
-                    .hover(|s| s.bg(content(0.05)))
+                    .hover(|s| s.bg(vorkspace_ui::fluid::hover(0.05)))
                     .child(
                         div()
                             .flex_1()
@@ -1011,14 +979,10 @@ impl Automations {
                     .text_color(color)
                     .bg(fill)
                     .when(run.status == "running", |d| {
-                        d.child(icon("loader", 12.).text_color(color).with_animation(
+                        d.child(crate::panel_kit::spinner(
                             SharedString::from(format!("automation-run-spinner-{index}")),
-                            gpui::Animation::new(std::time::Duration::from_secs(1)).repeat(),
-                            |icon, delta| {
-                                icon.with_transformation(gpui::Transformation::rotate(
-                                    gpui::percentage(delta),
-                                ))
-                            },
+                            "loader",
+                            12.,
                         ))
                     })
                     .child(label);
@@ -1060,7 +1024,8 @@ impl Automations {
                     .when(narrow, |d| d.flex_col().items_start().gap(px(4.)))
                     .when(!narrow, |d| d.items_center().gap(px(12.)))
                     .when(session.is_some(), |d| {
-                        d.cursor_pointer().hover(|s| s.bg(content(0.05)))
+                        d.cursor_pointer()
+                            .hover(|s| s.bg(vorkspace_ui::fluid::hover(0.05)))
                     })
                     .child(
                         page::label()

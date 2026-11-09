@@ -26,7 +26,7 @@ impl Shell {
     pub(super) fn navigation_width(&self, window: &Window) -> f32 {
         let scale = window.scale_factor();
         let minimum = self.traffic_lights(window)
-            + 3. * Self::navigation_button_size(window)
+            + 2. * Self::navigation_button_size(window)
             + self.navigation_padding();
         let minimum = (minimum * scale).ceil() / scale;
         self.classic_rail_width().max(minimum)
@@ -34,7 +34,7 @@ impl Shell {
     /// Room before the tabs where navigation overhangs the pane.
     pub(super) fn strip_lead(&self, window: &Window) -> f32 {
         // A left sidebar takes the overhang in its own row (`classic_body`).
-        let sidebar = self.workspace.right_panel_width * self.sidebar_fraction;
+        let sidebar = self.docked_sidebar_width();
         (self.rail_overhang(window) - sidebar).max(0.)
     }
     /// How far navigation reaches past the project rail.
@@ -74,29 +74,17 @@ impl Shell {
                     })
                     .on_click(cx.listener(|this, _, _, cx| this.toggle_project_rail(cx))),
             )
+            .child(
+                // The explorer sidebar is its own persistent toggle: it stays
+                // as the user leaves it, whatever the main pane shows.
+                icon_button("toggle-explorer", TOGGLE_EXPLORER_LABEL, "folder")
+                    .debug_selector(|| "toggle-explorer".into())
+                    .size(button_size)
+                    .when(self.workspace.sidebar_visible, |b| b.bg(content(0.08)))
+                    .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+                    .on_click(cx.listener(|this, _, window, cx| this.toggle_sidebar(window, cx))),
+            )
             .child(titlebar_drag_area().flex_1())
-            .child(
-                icon_button_enabled(
-                    "visit-back",
-                    BACK_LABEL,
-                    "chevron-left",
-                    !self.history.back.is_empty(),
-                )
-                .debug_selector(|| "visit-back".into())
-                .size(button_size)
-                .on_click(cx.listener(|this, _, window, cx| this.visit(-1, window, cx))),
-            )
-            .child(
-                icon_button_enabled(
-                    "visit-forward",
-                    FORWARD_LABEL,
-                    "chevron-right",
-                    !self.history.forward.is_empty(),
-                )
-                .debug_selector(|| "visit-forward".into())
-                .size(button_size)
-                .on_click(cx.listener(|this, _, window, cx| this.visit(1, window, cx))),
-            )
     }
     pub(super) fn titlebar(&mut self, window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
         // Same hierarchy as TitleBar.tsx's inset layout: window navigation and
@@ -274,7 +262,9 @@ impl Shell {
                                 .items_center()
                                 .justify_center()
                                 .rounded(px(radius::CONTROL))
-                                .when(!panel_off, |d| d.hover(|s| s.bg(content(0.1))))
+                                .when(!panel_off, |d| {
+                                    d.hover(|s| s.bg(vorkspace_ui::fluid::hover(0.1)))
+                                })
                                 .child(
                                     div()
                                         .relative()
@@ -340,7 +330,7 @@ impl Shell {
             crate::panel_kit::diff_stat(self.git.read(cx).stats.as_ref(), width)
                 .when(self.has_session_panes(), |d| {
                     d.cursor(CursorStyle::Arrow)
-                        .hover(|s| s.bg(content(0.1)))
+                        .hover(|s| s.bg(vorkspace_ui::fluid::hover(0.1)))
                         .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
                         .on_click(cx.listener(|this, _, window, cx| {
                             this.ensure_right_panel(window, cx);

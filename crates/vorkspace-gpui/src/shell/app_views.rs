@@ -145,7 +145,7 @@ impl Shell {
         }
         if let Some(notes) = &self.notes {
             let cwd = self.workspace.project.clone();
-            let projects = self.workspace.projects.clone();
+            let projects = self.workspace.vorkspace_projects();
             notes.update(cx, |notes, cx| {
                 notes.set_appearances(self.workspace.project_appearance.clone(), cx);
                 notes.set_context(cwd, projects, cx);
@@ -357,9 +357,16 @@ impl Shell {
     }
     pub(super) fn ensure_background_inbox(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if self.inbox.is_none() {
-            let projects = self.workspace.projects.iter().map(Into::into).collect();
+            let projects = self
+                .workspace
+                .vorkspace_projects()
+                .into_iter()
+                .map(Into::into)
+                .collect();
             let cwd = self.workspace.project.clone().into();
-            let view = cx.new(|cx| inbox::Inbox::new(self.store.clone(), projects, cwd, cx));
+            let poll_projects = self.inbox_poll_projects();
+            let view = cx
+                .new(|cx| inbox::Inbox::new(self.store.clone(), projects, cwd, poll_projects, cx));
             self.subscribe_connector(&view, window, cx);
             self.app_view_events
                 .push(cx.observe(&view, |this, inbox, cx| {
@@ -379,9 +386,8 @@ impl Shell {
                 }));
             self.inbox = Some(view);
         }
+        self.sync_inbox_scope(cx);
         if let Some(inbox) = &self.inbox {
-            let projects = self.workspace.projects.iter().map(Into::into).collect();
-            let cwd = self.workspace.project.clone().into();
             let bots = self
                 .bots
                 .as_ref()
@@ -391,7 +397,9 @@ impl Shell {
                         .roster
                         .bots
                         .iter()
-                        .filter(|bot| !bot.is_minion())
+                        .filter(|bot| {
+                            !bot.is_minion() && !self.workspace.bot_hidden_in_vorkspace(&bot.id)
+                        })
                         .map(|bot| (bot.id.clone(), bot.name.clone()))
                         .collect()
                 })
@@ -399,7 +407,34 @@ impl Shell {
             inbox.update(cx, |inbox, cx| {
                 inbox.set_bots(bots, cx);
                 inbox.set_appearances(self.workspace.project_appearance.clone(), cx);
-                inbox.set_context(projects, cwd, cx);
+            });
+        }
+    }
+
+    fn inbox_poll_projects(&self) -> Vec<std::path::PathBuf> {
+        self.workspace
+            .projects
+            .iter()
+            .filter(|p| !p.starts_with("remote://") && self.workspace.is_project_available(p))
+            .map(Into::into)
+            .collect()
+    }
+
+    pub(super) fn sync_inbox_scope(&self, cx: &mut Context<Self>) {
+        if let Some(inbox) = &self.inbox {
+            let visible = self
+                .workspace
+                .vorkspace_projects()
+                .into_iter()
+                .map(Into::into)
+                .collect();
+            inbox.update(cx, |inbox, cx| {
+                inbox.set_context(
+                    visible,
+                    self.workspace.project.clone().into(),
+                    self.inbox_poll_projects(),
+                    cx,
+                );
             });
         }
     }
@@ -416,9 +451,9 @@ impl Shell {
         );
         if self.automations.is_none() {
             let cwd = self.workspace.project.clone();
-            let projects = self.workspace.projects.clone();
+            let projects = self.workspace.vorkspace_projects();
             let view = cx.new(|cx| automations::Automations::new(service, cwd, projects, cx));
-            view.update(cx, |view, cx| view.set_database(self.store.clone(), cx));
+            view.update(cx, |view, _| view.set_database(self.store.clone()));
             self.app_view_events.push(cx.subscribe_in(
                 &view,
                 window,
@@ -445,7 +480,7 @@ impl Shell {
         }
         if let Some(view) = &self.automations {
             let cwd = self.workspace.project.clone();
-            let projects = self.workspace.projects.clone();
+            let projects = self.workspace.vorkspace_projects();
             view.update(cx, |view, cx| {
                 view.set_appearances(self.workspace.project_appearance.clone(), cx);
                 let connections = self

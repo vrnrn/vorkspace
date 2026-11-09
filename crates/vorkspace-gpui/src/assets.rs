@@ -195,10 +195,51 @@ fn icon_body(path: &str) -> Option<&'static str> {
         }
         "code" => "<path d='m8 7-5 5 5 5m8-10 5 5-5 5m-3-14-2 18'/>",
         "minus" => "<path d='M6 12h12'/>",
+        "shuffle" => {
+            "<path d='M2 18h1.4a4 4 0 0 0 3.3-1.8l5.6-8.4A4 4 0 0 1 15.6 6H22'/><path d='m18 2 4 4-4 4'/><path d='M2 6h1.9a4 4 0 0 1 3.2 1.6'/><path d='M22 18h-6.1a4 4 0 0 1-3.2-1.6'/><path d='m18 14 4 4-4 4'/>"
+        }
+        "wrench" => {
+            "<path d='M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z'/>"
+        }
+        "bell" => {
+            "<path d='M6 8a6 6 0 0 1 12 0c0 7 3 9 3 9H3s3-2 3-9'/><path d='M10.3 21a1.94 1.94 0 0 0 3.4 0'/>"
+        }
         "pencil-line" => "<path d='M12 20h9M16.5 3.5a2.12 2.12 0 0 1 3 3L9 17l-4 1 1-4Z'/>",
         "circle-dashed" => {
             "<path d='M12 3a9 9 0 0 1 4.5 1.2m3.3 3.3A9 9 0 0 1 21 12m-1.2 4.5a9 9 0 0 1-3.3 3.3M12 21a9 9 0 0 1-4.5-1.2m-3.3-3.3A9 9 0 0 1 3 12m1.2-4.5a9 9 0 0 1 3.3-3.3'/>"
         }
         _ => return None,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Every name the app asks for by a computed path (pane tabs, task
+    /// phases, menu items) must draw; a missing one paints an empty slot.
+    #[test]
+    fn named_icons_resolve() {
+        for name in [
+            "note",
+            "zap",
+            "check-circle",
+            "bot",
+            "file",
+            "terminal",
+            "search",
+            "message-multiple",
+            "inbox",
+            "pencil-line",
+            "wrench",
+            "minus",
+            "bell",
+            "x",
+        ] {
+            assert!(
+                Assets.load(name).unwrap().is_some(),
+                "icon {name} has no asset"
+            );
+        }
+    }
 }

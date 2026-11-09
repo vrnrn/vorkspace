@@ -82,7 +82,7 @@ impl SkillDocument {
                 .collect();
             return frame
                 .pt(px(if ix == 0 { 12. } else { 0. }))
-                .font_family(vorkspace_ui::fonts::FIXED_FONT)
+                .font_family(vorkspace_ui::fonts::MONO)
                 .text_size(px(13.))
                 .line_height(px(20.))
                 .text_color(content(0.85))
@@ -106,6 +106,7 @@ impl SkillDocument {
                                 .id("skill-metadata")
                                 .debug_selector(|| "skill-metadata".into())
                                 .role(Role::Button)
+                                .map(vorkspace_ui::theme::tab_reachable)
                                 .aria_label("Skill metadata")
                                 .flex()
                                 .items_center()
@@ -138,7 +139,7 @@ impl SkillDocument {
                                     .py_2()
                                     .border_t_1()
                                     .border_color(content(0.1))
-                                    .font_family(vorkspace_ui::fonts::FIXED_FONT)
+                                    .font_family(vorkspace_ui::fonts::MONO)
                                     .text_size(px(12.))
                                     .line_height(px(20.))
                                     .text_color(content(0.7))

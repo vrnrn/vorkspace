@@ -5,6 +5,16 @@ use vorkspace_ui::radius;
 impl Inbox {
     pub(super) fn detail_view(&self, window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
         let Some(item) = self.item() else {
+            // Until the account is connected the list already says what to
+            // do; a second "select an item" beside it has nothing to offer.
+            let connected = self
+                .snapshot
+                .connections
+                .get(&self.state.source)
+                .is_some_and(|status| status.connected);
+            if !connected {
+                return div().size_full().into_any_element();
+            }
             return page::empty(
                 provider_mark(&self.state.source)
                     .size(px(24.))
@@ -81,18 +91,10 @@ impl Inbox {
                                 "Issue"
                             })
                             .child(item.reference())
-                            .child(
-                                div()
-                                    .flex()
-                                    .items_center()
-                                    .gap(px(4.))
-                                    .text_color(status_color(&item))
-                                    .child(
-                                        icon(status_icon(&item), page::ICON_SIZE)
-                                            .text_color(status_color(&item)),
-                                    )
-                                    .child(item.status()),
-                            )
+                            .child(vorkspace_ui::fluid::badge(
+                                item.status(),
+                                status_color(&item),
+                            ))
                             .when(!item.attention_reason.is_empty(), |d| {
                                 d.child(
                                     div()
@@ -413,7 +415,7 @@ impl Inbox {
                         .items_stretch()
                         .rounded(px(radius::CONTROL))
                         .bg(content(1.))
-                        .text_color(shell_fill())
+                        .text_color(vorkspace_ui::fluid::on_ink())
                         .child(self.action_anchor.probe())
                         .child(
                             page::primary("inbox-pr-merge", merge_label, self.acting)
@@ -442,8 +444,9 @@ impl Inbox {
                             .border_l_1()
                             .border_color(shell_fill().opacity(0.2))
                             .when(!self.acting, |d| {
-                                d.cursor_pointer()
-                                    .hover(|s| s.bg(shell_fill().opacity(0.1)))
+                                d.cursor_pointer().hover(|s| {
+                                    s.bg(vorkspace_ui::fluid::wash(shell_fill().opacity(0.1)))
+                                })
                             })
                             .when(self.acting, |d| d.opacity(0.4))
                             .child(action_icon("chevron-down", shell_fill()))

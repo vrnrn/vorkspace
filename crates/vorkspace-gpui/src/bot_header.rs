@@ -150,7 +150,7 @@ impl Render for ChatHeader {
                                 d.debug_selector(|| "bot-face-open-island".into())
                                     .role(gpui::Role::Button)
                                     .aria_label("Show Bot sessions and documents")
-                                    .tab_stop(true)
+                                    .map(vorkspace_ui::theme::tab_reachable)
                                     .cursor_pointer()
                                     .on_click(move |_, window, cx| activate(window, cx))
                             })

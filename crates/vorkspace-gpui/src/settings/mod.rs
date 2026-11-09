@@ -847,6 +847,7 @@ impl SettingsView {
                             div()
                                 .id("restore-defaults")
                                 .role(Role::Button)
+                                .map(vorkspace_ui::theme::tab_reachable)
                                 .aria_label("Restore defaults")
                                 .flex()
                                 .flex_shrink_0()
@@ -859,7 +860,10 @@ impl SettingsView {
                                 .line_height(px(16.))
                                 .text_color(content(0.5))
                                 .cursor_pointer()
-                                .hover(|s| s.bg(content(0.1)).text_color(content(1.)))
+                                .hover(|s| {
+                                    s.bg(vorkspace_ui::fluid::hover(0.1))
+                                        .text_color(content(1.))
+                                })
                                 .child(
                                     icon("rotate-ccw", 14.)
                                         .text_color(gpui::transparent_black())
@@ -885,6 +889,7 @@ impl SettingsView {
                                             div()
                                                 .id("clear-settings-search")
                                                 .role(Role::Button)
+                                                .map(vorkspace_ui::theme::tab_reachable)
                                                 .aria_label("Clear settings search")
                                                 .size_4()
                                                 .flex_shrink_0()
@@ -996,7 +1001,13 @@ impl SettingsView {
                                                             if ix == active {
                                                                 d.bg(content(0.1))
                                                             } else {
-                                                                d.hover(|s| s.bg(content(0.05)))
+                                                                d.hover(|s| {
+                                                                    s.bg(
+                                                                        vorkspace_ui::fluid::hover(
+                                                                            0.05,
+                                                                        ),
+                                                                    )
+                                                                })
                                                             }
                                                         })
                                                         .child(
@@ -1044,49 +1055,55 @@ pub(crate) fn nav(
     select: impl Fn(Section, &mut Window, &mut App) + Clone + 'static,
     back: impl Fn(&mut Window, &mut App) + 'static,
 ) -> AnyElement {
-    let row = |id: SharedString, label: &'static str, path: &'static str, active: bool| {
-        div()
-            .id(id.clone())
-            .debug_selector(move || id.to_string())
-            .role(Role::Button)
-            .aria_label(label)
-            .aria_selected(active)
-            .relative()
-            .w_full()
-            .flex()
-            .items_center()
-            .gap_2()
-            .rounded(px(radius::CONTROL))
-            .px_2()
-            .py(px(6.))
-            .cursor_pointer()
-            .map(|d| {
-                if active {
-                    d.bg(content(0.1)).text_color(content(1.))
-                } else {
-                    d.text_color(content(0.5))
-                        .hover(|s| s.bg(content(0.08)).text_color(content(1.)))
-                }
-            })
-            .child(
-                gpui::svg()
-                    .path(path)
-                    .size(px(16.))
-                    .flex_shrink_0()
-                    .opacity(0.7)
-                    .text_color(if active { content(1.) } else { content(0.5) }),
-            )
-            .child(
-                div()
-                    .min_w_0()
-                    .flex_1()
-                    .truncate()
-                    .text_size(px(14.))
-                    .line_height(px(17.5))
-                    .font_weight(gpui::FontWeight::MEDIUM)
-                    .child(label),
-            )
-    };
+    let row =
+        |id: SharedString, label: &'static str, path: &'static str, active: bool, ready: bool| {
+            div()
+                .id(id.clone())
+                .debug_selector(move || id.to_string())
+                .role(Role::Button)
+                .aria_label(label)
+                .aria_selected(active)
+                .map(vorkspace_ui::theme::tab_reachable)
+                .relative()
+                .w_full()
+                .flex()
+                .items_center()
+                .gap_2()
+                .rounded(px(radius::CONTROL))
+                .px_2()
+                .py(px(6.))
+                .cursor_pointer()
+                .map(|d| {
+                    if active {
+                        // The glide's thumb draws the selection once measured.
+                        d.when(!ready, |d| d.bg(content(0.1)))
+                            .text_color(content(1.))
+                    } else {
+                        d.text_color(content(0.5)).hover(|s| {
+                            s.bg(vorkspace_ui::fluid::hover(0.08))
+                                .text_color(content(1.))
+                        })
+                    }
+                })
+                .child(
+                    gpui::svg()
+                        .path(path)
+                        .size(px(16.))
+                        .flex_shrink_0()
+                        .opacity(0.7)
+                        .text_color(if active { content(1.) } else { content(0.5) }),
+                )
+                .child(
+                    div()
+                        .min_w_0()
+                        .flex_1()
+                        .truncate()
+                        .text_size(px(14.))
+                        .line_height(px(17.5))
+                        .font_weight(gpui::FontWeight::MEDIUM)
+                        .child(label),
+                )
+        };
     div()
         .id("settings-nav")
         .debug_selector(|| "settings-nav".into())
@@ -1103,37 +1120,72 @@ pub(crate) fn nav(
                 .overflow_y_scroll()
                 .flex()
                 .flex_col()
-                .gap_5()
                 .px_2()
                 .py_3()
-                .children(model::GROUPS.iter().map(|(group, sections)| {
-                    div()
-                        .flex()
-                        .flex_col()
-                        .gap_px()
-                        .child(
-                            div()
-                                .px_2()
-                                .pb_1()
-                                .text_size(px(12.))
-                                .line_height(px(16.))
-                                .font_weight(gpui::FontWeight::SEMIBOLD)
-                                .text_color(content(0.35))
-                                .child(*group),
-                        )
-                        .children(sections.iter().filter(|item| visible.contains(item)).map(
-                            |&item| {
-                                let select = select.clone();
-                                row(
-                                    format!("settings-nav-{}", item.id()).into(),
-                                    item.label(),
-                                    item.icon(),
-                                    item == section,
-                                )
-                                .on_click(move |_, window, cx| select(item, window, cx))
-                            },
-                        ))
-                }))
+                .child({
+                    let order: Vec<Section> = model::GROUPS
+                        .iter()
+                        .flat_map(|(_, sections)| sections.iter())
+                        .filter(|item| visible.contains(item))
+                        .copied()
+                        .collect();
+                    let selected = order.iter().position(|item| *item == section);
+                    let visible = visible.to_vec();
+                    vorkspace_ui::glide::GlideList::new(
+                        "settings-nav-glide",
+                        selected,
+                        div().flex().flex_col().gap_5(),
+                        content(0.1),
+                        radius::CONTROL,
+                        move |glide| {
+                            let ready = glide.ready();
+                            model::GROUPS
+                                .iter()
+                                .map(|(group, sections)| {
+                                    div()
+                                        .flex()
+                                        .flex_col()
+                                        .gap_px()
+                                        .child(
+                                            div()
+                                                .px_2()
+                                                .pb_1()
+                                                .text_size(px(12.))
+                                                .line_height(px(16.))
+                                                .font_weight(gpui::FontWeight::SEMIBOLD)
+                                                .text_color(content(0.35))
+                                                .child(*group),
+                                        )
+                                        .children(
+                                            sections
+                                                .iter()
+                                                .filter(|item| visible.contains(item))
+                                                .map(|&item| {
+                                                    let select = select.clone();
+                                                    let index = order
+                                                        .iter()
+                                                        .position(|other| *other == item)
+                                                        .unwrap_or(usize::MAX);
+                                                    row(
+                                                        format!("settings-nav-{}", item.id())
+                                                            .into(),
+                                                        item.label(),
+                                                        item.icon(),
+                                                        item == section,
+                                                        ready,
+                                                    )
+                                                    .child(glide.probe(index))
+                                                    .on_click(move |_, window, cx| {
+                                                        select(item, window, cx)
+                                                    })
+                                                }),
+                                        )
+                                        .into_any_element()
+                                })
+                                .collect()
+                        },
+                    )
+                })
                 .into_any_element(),
         )
         .child(
@@ -1144,8 +1196,14 @@ pub(crate) fn nav(
                 .gap_px()
                 .p_2()
                 .child(
-                    row("settings-nav-back".into(), "Back", "arrow-left", false)
-                        .on_click(move |_, window, cx| back(window, cx)),
+                    row(
+                        "settings-nav-back".into(),
+                        "Back",
+                        "arrow-left",
+                        false,
+                        false,
+                    )
+                    .on_click(move |_, window, cx| back(window, cx)),
                 ),
         )
         .into_any_element()

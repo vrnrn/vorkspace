@@ -143,9 +143,9 @@ impl Bots {
                 .max(loaded.len() as f32 / memory::MAX_BYTES as f32)
                 .min(1.);
             let tone = if dropped > 0 {
-                gpui::Hsla::from(rgb(0xfb2c36)).opacity(0.7)
+                vorkspace_ui::theme::danger().opacity(0.7)
             } else if share >= 0.8 {
-                gpui::Hsla::from(rgb(0xffb900)).opacity(0.7)
+                vorkspace_ui::theme::warning().opacity(0.7)
             } else {
                 content(0.3)
             };
@@ -175,7 +175,7 @@ impl Bots {
                                 .h(px(4.))
                                 .rounded_full()
                                 .overflow_hidden()
-                                .bg(content(0.08))
+                                .bg(vorkspace_ui::fluid::track(0.08))
                                 .child(
                                     div()
                                         .h_full()
@@ -215,18 +215,15 @@ impl Bots {
             .flex_col()
             .child(
                 Self::settings_page_header("Memory").when(files.is_some(), |d| {
+                    let adding = self
+                        .memory_editor
+                        .as_ref()
+                        .is_some_and(|e| e.target.original.is_none());
                     d.child(
-                        icon_button_enabled(
-                            "bot-add-memory",
-                            "Add memory",
-                            "plus",
-                            !self
-                                .memory_editor
-                                .as_ref()
-                                .is_some_and(|e| e.target.original.is_none()),
-                        )
-                        .debug_selector(|| "bot-add-memory".into())
-                        .size(px(28.))
+                        // Worded like Habits' New habit, its sibling page.
+                        panels::button("bot-add-memory", "Add memory")
+                            .debug_selector(|| "bot-add-memory".into())
+                            .when(adding, |b| b.opacity(0.5))
                         .on_click(cx.listener({
                             let id = bot.id.clone();
                             move |this, _, window, cx| {
@@ -290,10 +287,21 @@ impl Bots {
                     .when(
                         files.is_some() && empty && !self.memory_loading && !failed,
                         |d| {
-                            d.child(Self::memory_status(
-                                "Nothing remembered yet",
-                                "bot-memory-empty",
-                            ))
+                            d.child(
+                                div()
+                                    .id("bot-memory-empty")
+                                    .debug_selector(|| "bot-memory-empty".into())
+                                    .flex_1()
+                                    .min_h(px(240.))
+                                    .flex()
+                                    .child(panels::empty_state(
+                                        "note",
+                                        &format!(
+                                            "Nothing remembered yet. {} keeps what it learns about you and your projects here.",
+                                            bot.label()
+                                        ),
+                                    )),
+                            )
                         },
                     )
                     .children(rows),
@@ -475,7 +483,7 @@ impl Bots {
                     .rounded(px(radius::CONTROL))
                     .flex()
                     .items_center()
-                    .hover(|s| s.bg(content(0.05)))
+                    .hover(|s| s.bg(vorkspace_ui::fluid::hover(0.05)))
                     .child(
                         div()
                             .id(SharedString::from(format!("memory-fact-body-{row_key}")))
@@ -484,6 +492,7 @@ impl Bots {
                                 move || format!("memory-fact-body-{key}")
                             })
                             .role(Role::Button)
+                            .map(vorkspace_ui::theme::tab_reachable)
                             .aria_label(format!("Edit memory: {fact}"))
                             .flex_1()
                             .min_w_0()

@@ -30,6 +30,7 @@ pub(super) fn render(
             })
         })
         .unwrap_or_else(|| cwd.to_owned());
+    let directory = elide_middle(&directory, 34);
     div()
         .px_3()
         .py_2p5()
@@ -57,7 +58,7 @@ pub(super) fn render(
                         .flex_shrink_0()
                         .text_size(px(11.))
                         .text_color(if done {
-                            gpui::rgb(0x34d399).into()
+                            vorkspace_ui::theme::success()
                         } else {
                             content(0.45)
                         })
@@ -108,9 +109,50 @@ pub(super) fn render(
                     div()
                         .flex_1()
                         .min_w_0()
+                        // Clip from the left so the project folder stays.
+                        .overflow_hidden()
+                        .whitespace_nowrap()
+                        .text_ellipsis_start()
                         .text_color(content(0.8))
                         .child(directory),
                 ),
         )
         .into_any_element()
+}
+
+/// A path short enough for one line: its root and its last folders, with
+/// the middle as "…". A path wrapped at its slashes reads as two paths.
+fn elide_middle(path: &str, max: usize) -> String {
+    if path.chars().count() <= max {
+        return path.to_owned();
+    }
+    let parts: Vec<&str> = path.split('/').collect();
+    let head = if path.starts_with('/') { "" } else { parts[0] };
+    let mut tail: Vec<&str> = Vec::new();
+    for part in parts.iter().skip(1).rev() {
+        let next = tail.iter().map(|p| p.len() + 1).sum::<usize>() + part.len() + 1;
+        if !tail.is_empty() && head.len() + 2 + next > max {
+            break;
+        }
+        tail.insert(0, part);
+    }
+    format!("{head}/…/{}", tail.join("/"))
+}
+
+#[cfg(test)]
+mod elide_tests {
+    use super::elide_middle;
+
+    #[test]
+    fn long_paths_keep_their_root_and_last_folders() {
+        assert_eq!(elide_middle("~/code/app", 34), "~/code/app");
+        assert_eq!(
+            elide_middle("~/Development/clients/acme/services/billing-api", 34),
+            "~/…/acme/services/billing-api"
+        );
+        assert_eq!(
+            elide_middle("/private/tmp/a-very-long-folder-name-that-overflows", 34),
+            "/…/a-very-long-folder-name-that-overflows"
+        );
+    }
 }

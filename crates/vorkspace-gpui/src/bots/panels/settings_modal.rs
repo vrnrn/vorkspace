@@ -67,7 +67,7 @@ impl Bots {
                                 div()
                                     .w(size.width)
                                     .h(size.height)
-                                    .bg(gpui::black().opacity(0.4))
+                                    .bg(vorkspace_ui::fluid::scrim(0.4))
                                     .occlude(),
                             ),
                     )
@@ -115,7 +115,7 @@ impl Bots {
                             .role(Role::Dialog)
                             .track_focus(&self.settings_focus)
                             .aria_label(if creating {
-                                "New Bot".into()
+                                "New bot".into()
                             } else {
                                 format!("{} settings", bot.label())
                             })
@@ -145,7 +145,7 @@ impl Bots {
                                             .pb_2()
                                             .text_size(px(11.))
                                             .text_color(content(0.45))
-                                            .child(if creating { "New Bot" } else { "Settings" }),
+                                            .child(if creating { "New bot" } else { "Settings" }),
                                     )
                                     .children(
                                         [
@@ -251,6 +251,7 @@ impl Bots {
                                                 .id("bot-delete")
                                                 .debug_selector(|| "bot-delete".into())
                                                 .role(Role::Button)
+                                                .map(vorkspace_ui::theme::tab_reachable)
                                                 .aria_label("Delete bot")
                                                 .relative()
                                                 .w_full()
@@ -263,10 +264,17 @@ impl Bots {
                                                 .rounded(px(radius::CONTROL))
                                                 .text_size(px(13.))
                                                 .line_height(px(20.))
-                                                .text_color(rgb(0xff6467))
-                                                .hover(|d| d.bg(rgb(0xff6467).opacity(0.08)))
+                                                .text_color(vorkspace_ui::theme::danger())
+                                                .hover(|d| {
+                                                    d.bg(vorkspace_ui::fluid::wash(
+                                                        vorkspace_ui::theme::danger().opacity(0.08),
+                                                    ))
+                                                })
                                                 .child(delete_anchor.probe())
-                                                .child(icon("trash", 14.).text_color(rgb(0xff6467)))
+                                                .child(
+                                                    icon("trash", 14.)
+                                                        .text_color(vorkspace_ui::theme::danger()),
+                                                )
                                                 .child("Delete bot…")
                                                 .on_click(cx.listener(
                                                     move |this, _, window, cx| {
@@ -348,6 +356,7 @@ impl Bots {
                         .id("bot-create")
                         .debug_selector(|| "bot-create".into())
                         .role(Role::Button)
+                        .map(vorkspace_ui::theme::tab_reachable)
                         .aria_label("Create")
                         .aria_description(if enabled {
                             "Create this named Bot"
@@ -386,7 +395,7 @@ impl Bots {
                 .child(
                     button("bot-reset", "Reset")
                         .debug_selector(|| "bot-reset".into())
-                        .text_color(rgb(0xff6467))
+                        .text_color(vorkspace_ui::theme::danger())
                         .on_click(cx.listener(move |this, _, window, cx| {
                             this.reset_conversation(&reset, window, cx)
                         })),
@@ -478,7 +487,7 @@ impl Bots {
                 .gap_2()
                 .text_size(px(12.))
                 .text_color(content(0.85))
-                .hover(|s| s.bg(content(0.06)))
+                .hover(|s| s.bg(vorkspace_ui::fluid::hover(0.06)))
                 .child(label)
         };
         let identity = div()
@@ -505,7 +514,7 @@ impl Bots {
                     .border_1()
                     .border_color(content(0.04))
                     .bg(content(0.04))
-                    .hover(|s| s.bg(content(0.08)))
+                    .hover(|s| s.bg(vorkspace_ui::fluid::hover(0.08)))
                     .child(self.settings_anchor.probe())
                     .child(avatar::settings_preview(
                         bot,
@@ -544,7 +553,7 @@ impl Bots {
                     .py_1p5()
                     .rounded(px(radius::CONTROL))
                     .font_weight(FontWeight::MEDIUM)
-                    .hover(|s| s.bg(content(0.05)))
+                    .hover(|s| s.bg(vorkspace_ui::fluid::hover(0.05)))
                     .child(name),
             );
         let compaction_anchor = AnchorSlot::default();
@@ -561,6 +570,7 @@ impl Bots {
                 div()
                     .id("bot-settings-model")
                     .role(Role::Button)
+                    .map(vorkspace_ui::theme::tab_reachable)
                     .aria_label(format!("Choose model, {model}"))
                     .h(px(28.))
                     .px_1p5()
@@ -571,7 +581,7 @@ impl Bots {
                     .gap_2()
                     .text_size(px(12.))
                     .text_color(content(0.85))
-                    .hover(|s| s.bg(content(0.06)))
+                    .hover(|s| s.bg(vorkspace_ui::fluid::hover(0.06)))
                     .child(self.model_anchor.probe())
                     .child(provider_icon(&provider, 14.))
                     .child(div().min_w_0().truncate().child(model))
@@ -654,6 +664,7 @@ impl Bots {
                     div()
                         .id("bot-settings-access")
                         .role(Role::Button)
+                        .map(vorkspace_ui::theme::tab_reachable)
                         .aria_label(format!("Permissions, {}", mode.label()))
                         .h(px(28.))
                         .max_w(px(208.))
@@ -665,11 +676,11 @@ impl Bots {
                         .gap_2()
                         .text_size(px(12.))
                         .text_color(content(0.85))
-                        .hover(|s| s.bg(content(0.06)))
+                        .hover(|s| s.bg(vorkspace_ui::fluid::hover(0.06)))
                         .child(self.access_anchor.probe())
                         .child(
                             icon(access_icon, 14.).when(mode == AccessMode::FullAccess, |i| {
-                                i.text_color(rgb(0xffb900))
+                                i.text_color(vorkspace_ui::theme::warning())
                             }),
                         )
                         .child(mode.label())
@@ -680,42 +691,165 @@ impl Bots {
                 .border_t_1()
                 .border_color(content(0.04)),
             );
-        div().id("bot-general-settings").debug_selector(|| "bot-general-settings".into())
-            .flex_1().min_h_0().overflow_y_scroll().when(narrow, |d| d.px_4()).when(!narrow, |d| d.px_8()).pt_6().pb_6()
-            .child(div().text_size(px(14.)).font_weight(FontWeight::MEDIUM).child("General"))
-            .child(div().id("bot-settings-header").debug_selector(|| "bot-settings-header".into()).mt_4().flex().gap_6()
-                .when(narrow, |d| d.flex_col()).when(!narrow, |d| d.items_center()).child(identity).child(model_controls))
-            .child(heading("Projects",Some("It can see every session, note and folder in these.")))
-            .child(card()
-                .children(bot.projects.iter().enumerate().map(|(ix,project)| {
-                    let remove=project.clone(); let owner=bot.id.clone();
-                    let appearance=self.owner.project_appearance(project,cx).unwrap_or_default();
-                    let label=appearance.label(project);
-                    let pretty=std::env::var("HOME").ok().and_then(|home|project.strip_prefix(&home).map(|rest|format!("~{rest}"))).unwrap_or_else(||project.clone());
-                    let group:SharedString=format!("bot-project-{ix}").into();
-                    div().id(("bot-project",ix)).group(group.clone()).min_h(px(48.)).flex().items_center().gap_3().px_3().py_2()
-                        .when(ix>0,|d|d.border_t_1().border_color(content(0.04)))
-                        .child(div().size(px(32.)).flex_shrink_0().rounded(px(radius::CONTAINER)).bg(content(0.05)).flex().items_center().justify_center()
-                            .child(crate::project_settings::project_icon(&appearance,project,16.)))
-                        .child(div().flex_1().min_w_0()
-                            .child(div().text_size(px(13.)).line_height(px(20.)).text_color(content(0.9)).truncate().child(label))
-                            .child(div().text_size(px(11.)).line_height(px(16.)).text_color(content(0.4)).truncate().child(pretty)))
-                        .child(icon_button("bot-remove-project","Remove project","close").opacity(0.).group_hover(group,|s|s.opacity(1.))
-                            .on_click(cx.listener(move |this,_,_,cx| { this.edit_settings_bot(&owner, |bot| bot.projects.retain(|path| path != &remove), cx);})))
-                }))
-                .child(div().id("bot-add-project").role(Role::Button).aria_label("Add project").h(px(44.)).px_3().flex().items_center().gap_3()
-                    .text_size(px(13.)).text_color(content(0.55)).hover(|s|s.bg(content(0.04)).text_color(content(1.)))
-                    .when(!bot.projects.is_empty(),|d|d.border_t_1().border_color(content(0.04)))
-                    .child(self.projects_anchor.probe())
-                    .child(div().size(px(32.)).rounded(px(radius::CONTAINER)).border_1().border_color(content(0.15)).flex().items_center().justify_center().child(icon("plus",14.)))
-                    .child("Add project").on_click(cx.listener(move |this,_,w,cx|this.pick_project(&add,w,cx)))))
-            .child(heading("Sessions it starts",None))
-            .child(card()
-                .child(switch_setting("Show sessions in sidebar","Sessions it starts appear in your project sidebar. Hidden ones stay saved and open from its overview.",false,
-                    self.switch("bot-show-started","Show sessions in sidebar",bot.show_started_sessions_in_sidebar,false,|m,on|m.show_started_sessions_in_sidebar=on,cx)))
-                .child(switch_setting("Group in a folder",&if creating && bot.name.is_empty() { "Sessions it starts go in a folder named after this Bot.".into() } else { format!("Sessions it starts go in a “{}” folder in your project sidebar.",bot.label()) },!bot.show_started_sessions_in_sidebar,
-                    self.switch("bot-group-started","Group in a folder",bot.show_started_sessions_in_sidebar&&bot.use_sidebar_folders,!bot.show_started_sessions_in_sidebar,|m,on|m.use_sidebar_folders=on,cx))
-                    .border_t_1().border_color(content(0.04))))
+        div()
+            .id("bot-general-settings")
+            .debug_selector(|| "bot-general-settings".into())
+            .flex_1()
+            .min_h_0()
+            .overflow_y_scroll()
+            .when(narrow, |d| d.px_4())
+            .when(!narrow, |d| d.px_8())
+            .pt_6()
+            .pb_6()
+            .child(
+                div()
+                    .text_size(px(14.))
+                    .font_weight(FontWeight::MEDIUM)
+                    .child("General"),
+            )
+            .child(
+                div()
+                    .id("bot-settings-header")
+                    .debug_selector(|| "bot-settings-header".into())
+                    .mt_4()
+                    .flex()
+                    .gap_6()
+                    .when(narrow, |d| d.flex_col())
+                    .when(!narrow, |d| d.items_center())
+                    .child(identity)
+                    .child(model_controls),
+            )
+            .child(heading(
+                "Projects",
+                Some("It can see every session, note and folder in these."),
+            ))
+            .child(
+                card()
+                    .children(bot.projects.iter().enumerate().map(|(ix, project)| {
+                        let remove = project.clone();
+                        let owner = bot.id.clone();
+                        let appearance = self
+                            .owner
+                            .project_appearance(project, cx)
+                            .unwrap_or_default();
+                        let label = appearance.label(project);
+                        let pretty = std::env::var("HOME")
+                            .ok()
+                            .and_then(|home| {
+                                project.strip_prefix(&home).map(|rest| format!("~{rest}"))
+                            })
+                            .unwrap_or_else(|| project.clone());
+                        let group: SharedString = format!("bot-project-{ix}").into();
+                        div()
+                            .id(("bot-project", ix))
+                            .group(group.clone())
+                            .min_h(px(48.))
+                            .flex()
+                            .items_center()
+                            .gap_3()
+                            .px_3()
+                            .py_2()
+                            .when(ix > 0, |d| d.border_t_1().border_color(content(0.04)))
+                            .child(
+                                div()
+                                    .size(px(32.))
+                                    .flex_shrink_0()
+                                    .rounded(px(radius::CONTAINER))
+                                    .bg(content(0.05))
+                                    .flex()
+                                    .items_center()
+                                    .justify_center()
+                                    .child(crate::project_settings::project_icon(
+                                        &appearance,
+                                        project,
+                                        16.,
+                                    )),
+                            )
+                            .child(
+                                div()
+                                    .flex_1()
+                                    .min_w_0()
+                                    .child(
+                                        div()
+                                            .text_size(px(13.))
+                                            .line_height(px(20.))
+                                            .text_color(content(0.9))
+                                            .truncate()
+                                            .child(label),
+                                    )
+                                    .child(
+                                        div()
+                                            .text_size(px(11.))
+                                            .line_height(px(16.))
+                                            .text_color(content(0.4))
+                                            .truncate()
+                                            .child(pretty),
+                                    ),
+                            )
+                            .child(
+                                icon_button("bot-remove-project", "Remove project", "close")
+                                    .opacity(0.)
+                                    .group_hover(group, |s| s.opacity(1.))
+                                    .on_click(cx.listener(move |this, _, _, cx| {
+                                        this.edit_settings_bot(
+                                            &owner,
+                                            |bot| bot.projects.retain(|path| path != &remove),
+                                            cx,
+                                        );
+                                    })),
+                            )
+                    }))
+                    .child(
+                        div()
+                            .id("bot-add-project")
+                            .role(Role::Button)
+                            .aria_label("Add project")
+                            .h(px(44.))
+                            .px_3()
+                            .flex()
+                            .items_center()
+                            .gap_3()
+                            .text_size(px(13.))
+                            .text_color(content(0.55))
+                            .hover(|s| {
+                                s.bg(vorkspace_ui::fluid::hover(0.04))
+                                    .text_color(content(1.))
+                            })
+                            .when(!bot.projects.is_empty(), |d| {
+                                d.border_t_1().border_color(content(0.04))
+                            })
+                            .child(self.projects_anchor.probe())
+                            .child(
+                                div()
+                                    .size(px(32.))
+                                    .rounded(px(radius::CONTAINER))
+                                    .border_1()
+                                    .border_color(content(0.15))
+                                    .flex()
+                                    .items_center()
+                                    .justify_center()
+                                    .child(icon("plus", 14.)),
+                            )
+                            .child("Add project")
+                            .on_click(
+                                cx.listener(move |this, _, w, cx| this.pick_project(&add, w, cx)),
+                            ),
+                    ),
+            )
+            .child(heading("Sessions it starts", None))
+            .child(card().child(switch_setting(
+                "Show sessions in sidebar",
+                "Sessions it starts appear in the Sessions list for its projects.",
+                false,
+                self.switch(
+                    "bot-show-started",
+                    "Show sessions in sidebar",
+                    bot.show_started_sessions_in_sidebar,
+                    false,
+                    |m, on| m.show_started_sessions_in_sidebar = on,
+                    cx,
+                ),
+            )))
             .into_any_element()
     }
     pub(super) fn switch(

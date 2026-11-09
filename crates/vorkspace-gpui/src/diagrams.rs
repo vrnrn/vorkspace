@@ -384,6 +384,16 @@ fn mix(inner: &str) -> Option<String> {
     ))
 }
 
+/// Names a sans family on every Pele label. Its root style asks only for the
+/// generic `sans-serif` through the `font` shorthand, which the native SVG
+/// renderer does not carry down to text, so labels fell back to a serif face;
+/// the system sans keeps them in the same voice as the chat.
+fn sans(svg: &str) -> String {
+    svg.replace("<text ", &format!("<text font-family=\"{LABEL_FONTS}\" "))
+}
+
+const LABEL_FONTS: &str = "Helvetica Neue,Arial,IBM Plex Sans,sans-serif";
+
 /// Gives a hand-written SVG's root the palette's text colour, so
 /// `currentColor` follows the theme. The rasterizer has no parent style to
 /// inherit from; a root `color` the author set, or any stylesheet, still wins.
@@ -464,7 +474,9 @@ pub(crate) fn prepare(
             validate_svg(source)?;
             Ok(with_default_color(source, palette))
         }
-        DiagramKind::Mermaid => Ok(themed(&mermaid_svg(source)?, palette)),
+        // Node surfaces stay flat: a printed fill behind a label costs it
+        // legibility at diagram sizes.
+        DiagramKind::Mermaid => Ok(sans(&themed(&mermaid_svg(source)?, palette))),
     }
 }
 
@@ -676,6 +688,7 @@ impl gpui::RenderOnce for Diagram {
         let click_target = target.clone();
         div()
             .id("diagram-frame")
+            .group("diagram-frame")
             .track_focus(&target)
             .relative()
             .w_full()
@@ -706,7 +719,16 @@ impl gpui::RenderOnce for Diagram {
                     .absolute()
                     .top(gpui::px(8.))
                     .right(gpui::px(8.))
-                    .bg(pane_fill())
+                    // Over the drawing only while the pointer is on it, so
+                    // it never sits on a node at rest.
+                    .bg({
+                        let mut fill = pane_fill();
+                        fill.a = 1.;
+                        fill
+                    })
+                    .opacity(0.)
+                    .group_hover("diagram-frame", |s| s.opacity(1.))
+                    .focus_visible(|s| s.opacity(1.))
                     .on_mouse_down(gpui::MouseButton::Left, |_, _, cx| cx.stop_propagation())
                     .on_click(move |_, window, cx| {
                         target.dispatch_action(&open, window, cx);

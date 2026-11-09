@@ -2,111 +2,79 @@ use super::*;
 use crate::settings::ProjectNotifications;
 use crate::{
     project_background::ProjectBackground,
-    project_settings::{AppearanceControls, BackgroundDialog, Event, project_icon},
+    project_settings::{BackgroundDialog, Event, project_icon},
 };
 use vorkspace_core::project_appearance::ProjectAppearance;
 
 pub(super) struct OpenBackground {
-    view: Entity<BackgroundDialog>,
+    pub(super) view: Entity<BackgroundDialog>,
+    /// The vorkspace whose background this edits; its dialog reopens after.
+    vorkspace: String,
     _events: Subscription,
 }
 impl Shell {
-    pub(super) fn appearance(&self, path: &str) -> ProjectAppearance {
-        self.workspace
-            .project_appearance
-            .get(path)
-            .cloned()
-            .unwrap_or_default()
+    /// A project's look: its folder name and hashed color, over the active
+    /// vorkspace's chat background. Projects have no customization.
+    pub(super) fn appearance(&self, _path: &str) -> ProjectAppearance {
+        ProjectAppearance {
+            background: self
+                .workspace
+                .active_vorkspace()
+                .and_then(|v| v.background.clone()),
+            ..Default::default()
+        }
     }
-    pub(super) fn project_label(&self, path: &str) -> String {
-        self.appearance(path).label(path)
-    }
-    pub(super) fn project_mark(&self, path: &str, side: f32) -> AnyElement {
-        project_icon(&self.appearance(path), path, side)
-    }
-    fn save_project_appearance(
+    /// Edits a vorkspace's chat background in the background editor, in
+    /// place of the vorkspace dialog, which comes back when it closes.
+    pub(super) fn open_vorkspace_background(
         &mut self,
-        path: String,
-        mut appearance: ProjectAppearance,
+        vorkspace: String,
+        window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        appearance.normalize();
-        for session in self.sessions.values() {
-            if session.read(cx).summary.cwd == path {
-                session.update(cx, |session, cx| {
-                    session.set_project_appearance(appearance.clone(), cx)
-                });
-            }
-        }
-        self.workspace.project_appearance.insert(path, appearance);
-        self.invalidate_chrome(cx);
-        self.persist(cx);
-        cx.notify();
-    }
-    pub(super) fn project_appearance_controls(
-        &self,
-        path: &str,
-        events: &mut Vec<Subscription>,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) -> Entity<AppearanceControls> {
-        let path = path.to_owned();
-        let controls =
-            cx.new(|cx| AppearanceControls::new(path.clone(), self.appearance(&path), cx));
-        events.push(cx.subscribe_in(
-            &controls,
-            window,
+        let Some(def) = self.workspace.vorkspaces.iter().find(|v| v.id == vorkspace) else {
+            return;
+        };
+        let appearance = ProjectAppearance {
+            name: def.name.clone(),
+            background: def.background.clone(),
+            ..Default::default()
+        };
+        let key = format!("vorkspace:{vorkspace}");
+        let view = cx.new(|cx| BackgroundDialog::new(key, appearance, cx));
+        let events = cx.subscribe_in(&view, window, {
+            let vorkspace = vorkspace.clone();
             move |this, _, event: &Event, window, cx| match event {
                 Event::Changed(appearance) => {
-                    this.save_project_appearance(path.clone(), appearance.clone(), cx)
+                    if let Some(v) = this.workspace.vorkspace_mut(&vorkspace) {
+                        v.background = appearance.background.clone();
+                    }
+                    this.backgrounds.clear();
+                    this.invalidate_chrome(cx);
+                    this.persist(cx);
+                    cx.notify();
                 }
-                Event::Close => {
-                    this.close_menu(cx);
-                    this.focus_workspace(window, cx);
-                }
-            },
-        ));
-        controls
+                Event::Close => this.close_background_dialog(window, cx),
+            }
+        });
+        let focus = view.focus_handle(cx);
+        self.vorkspace_dialog = None;
+        self.background_dialog = Some(OpenBackground {
+            view,
+            vorkspace,
+            _events: events,
+        });
+        window.focus(&focus, cx);
+        cx.notify();
     }
-    pub(super) fn project_settings_flyout(
-        &self,
-        events: &mut Vec<Subscription>,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) -> Flyout {
-        let target = MenuTarget::Project {
-            path: self.workspace.project.clone(),
-            rail: false,
-        };
-        let (label, items, width, style) = self.menu_items(&target, events, window, cx);
-        let menu = cx.new(|cx| Menu::embedded(label, items, cx).width(width).style(style));
-        let surface = menu.read(cx).surface_region();
-        let focus = menu.read(cx).content_focus();
-        events.push(cx.subscribe_in(
-            &menu,
-            window,
-            move |this, _, event: &MenuEvent, window, cx| {
-                this.close_menu(cx);
-                if let MenuEvent::Picked(action, row) = event {
-                    this.run_menu(target.clone(), action, *row, window, cx);
-                }
-                if this.background_dialog.is_none() {
-                    this.focus_workspace(window, cx);
-                }
-                cx.notify();
-            },
-        ));
-        Flyout {
-            view: menu.into(),
-            width,
-            padding: 8.,
-            height: None,
-            max_height: Some(640.),
-            focus: Some(focus),
-            surface: Some(surface),
-        }
+    pub(super) fn project_label(&self, path: &str) -> String {
+        ProjectAppearance::default().label(path)
     }
-    pub(super) fn open_background_dialog(
+    pub(super) fn project_mark(&self, path: &str, side: f32) -> AnyElement {
+        project_icon(&ProjectAppearance::default(), path, side)
+    }
+    /// A project's settings live in its vorkspace's dialog, on its own tab.
+    pub(super) fn open_project_settings(
         &mut self,
         path: String,
         window: &mut Window,
@@ -114,31 +82,179 @@ impl Shell {
     ) {
         self.close_menu(cx);
         self.close_preview(cx);
-        let view = cx.new(|cx| BackgroundDialog::new(path.clone(), self.appearance(&path), cx));
-        let events =
-            cx.subscribe_in(
-                &view,
-                window,
-                move |this, _, event: &Event, window, cx| match event {
-                    Event::Changed(appearance) => {
-                        this.save_project_appearance(path.clone(), appearance.clone(), cx)
-                    }
-                    Event::Close => this.close_background_dialog(window, cx),
-                },
-            );
-        window.focus(&view.focus_handle(cx), cx);
-        self.background_dialog = Some(OpenBackground {
-            view,
-            _events: events,
-        });
+        let key = vorkspace_core::files::path_key(&path);
+        let vorkspace = self
+            .workspace
+            .active_vorkspace()
+            .filter(|v| {
+                v.projects
+                    .iter()
+                    .any(|p| vorkspace_core::files::path_key(p) == key)
+            })
+            .or_else(|| {
+                self.workspace.vorkspaces.iter().find(|v| {
+                    v.projects
+                        .iter()
+                        .any(|p| vorkspace_core::files::path_key(p) == key)
+                })
+            })
+            .map(|v| v.id.clone());
+        self.open_vorkspace_dialog(vorkspace, window, cx);
+        if let Some(dialog) = self.vorkspace_dialog.as_mut() {
+            dialog.project = Some(path);
+        }
         cx.notify();
     }
-    fn close_background_dialog(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        self.background_dialog = None;
+
+    pub(super) fn project_codebase_section(
+        &self,
+        path: &str,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        let remote = vorkspace_core::files::remote::is_remote(std::path::Path::new(path));
+        let on = crate::codebase::enabled(path, cx);
+        let target = path.to_owned();
+        div()
+            .flex()
+            .flex_col()
+            .gap_3()
+            .child(
+                div()
+                    .flex()
+                    .items_start()
+                    .gap_4()
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_w_0()
+                            .child(
+                                div()
+                                    .text_size(px(13.))
+                                    .line_height(px(20.))
+                                    .child("Codebase Memory"),
+                            )
+                            .child(
+                                div()
+                                    .text_size(px(12.))
+                                    .line_height(px(18.))
+                                    .text_color(content(0.5))
+                                    .child(if remote {
+                                        "Not available for remote projects."
+                                    } else {
+                                        "A local index of this project's symbols and calls, for you and its agents. The first use downloads a 48 MB engine."
+                                    }),
+                            ),
+                    )
+                    .child(
+                        crate::controls::switch(
+                            "project-codebase-switch",
+                            "Codebase Memory",
+                            on,
+                            !remote,
+                        )
+                        .on_click(cx.listener(move |this, _, window, cx| {
+                            if !remote {
+                                this.configure_codebase(target.clone(), window, cx)
+                            }
+                        })),
+                    ),
+            )
+            .into_any_element()
+    }
+
+    pub(super) fn project_notifications_section(
+        &self,
+        path: &str,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        let now = vorkspace_core::time::now_ms();
+        let prefs = &self.workspace.preferences;
+        let until = prefs.known_notification_project_id(path).and_then(|id| {
+            let preference = &prefs.project_notifications[id];
+            if preference.get("mutedUntil") == Some(&serde_json::Value::Null) {
+                Some(None)
+            } else {
+                preference["mutedUntil"]
+                    .as_u64()
+                    .filter(|at| *at > now)
+                    .map(Some)
+            }
+        });
+        let status = match until {
+            None => "Notifications are on for this project.".to_owned(),
+            Some(None) => "Muted until you resume them.".to_owned(),
+            Some(Some(at)) => {
+                let minutes = at.saturating_sub(now).div_ceil(60_000);
+                if minutes >= 60 {
+                    format!("Muted for about {} more hours.", minutes.div_ceil(60))
+                } else {
+                    format!("Muted for {minutes} more minutes.")
+                }
+            }
+        };
+        let action = |id: &'static str, label: &'static str, cx: &mut Context<Self>| {
+            let target = path.to_owned();
+            crate::controls::secondary_button(
+                SharedString::from(format!("project-notifications-{id}")),
+                label,
+                false,
+                false,
+            )
+            .child(label)
+            .on_click(cx.listener(move |this, _, window, cx| {
+                this.run_project_notification_menu(&target, id, window, cx)
+            }))
+        };
+        div()
+            .flex()
+            .flex_col()
+            .gap_3()
+            .child(
+                div()
+                    .text_size(px(13.))
+                    .line_height(px(20.))
+                    .text_color(content(0.8))
+                    .child(status),
+            )
+            .child(div().flex().flex_wrap().gap_2().map(|row| {
+                if until.is_some() {
+                    row.child(action("mute:resume", "Resume notifications", cx))
+                } else {
+                    row.items_center()
+                        .child(
+                            div()
+                                .mr_1()
+                                .text_size(px(12.))
+                                .text_color(content(0.5))
+                                .child("Mute for"),
+                        )
+                        .child(action("mute:1h", "1 hour", cx))
+                        .child(action("mute:4h", "4 hours", cx))
+                        .child(action("mute:8h", "8 hours", cx))
+                        .child(action("mute:forever", "Until resumed", cx))
+                }
+            }))
+            .child(
+                div()
+                    .text_size(px(12.))
+                    .line_height(px(18.))
+                    .text_color(content(0.45))
+                    .child(
+                        "Which events notify you is set for every project in Settings → Plugins.",
+                    ),
+            )
+            .into_any_element()
+    }
+
+    pub(super) fn close_background_dialog(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let vorkspace = self.background_dialog.take().map(|open| open.vorkspace);
         if let Some(bots) = &self.bots {
             bots.update(cx, |bots, cx| bots.close_background(cx));
         }
-        self.focus_workspace(window, cx);
+        match vorkspace {
+            Some(id) => self.open_vorkspace_dialog(Some(id), window, cx),
+            None => self.focus_workspace(window, cx),
+        }
         cx.notify();
     }
     pub(super) fn background_modal(
@@ -169,7 +285,7 @@ impl Shell {
             div()
                 .absolute()
                 .size_full()
-                .bg(black(0.4))
+                .bg(vorkspace_ui::fluid::scrim(0.4))
                 .child(
                     popover("project-background-modal", anchor)
                         .modal_surface(self.workspace.classic_layout)

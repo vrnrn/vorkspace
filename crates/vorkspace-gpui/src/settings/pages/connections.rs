@@ -9,7 +9,7 @@ use crate::{
 };
 use gpui::{
     AnyElement, Context, Div, Focusable, FontWeight, Role, SharedString, Task, Window, div,
-    prelude::*, px, rgb,
+    prelude::*, px,
 };
 use serde_json::{Value, json};
 use std::{
@@ -768,8 +768,8 @@ impl SettingsView {
                             .child(paragraph(self.connections.status.get(&id).cloned().unwrap_or_else(|| "Checking connection…".into())).mt_1().text_color(content(0.5)))
                             .when(machine.ssh.is_some() && update, |d| d.child(paragraph("Updating restarts the host and interrupts active agent turns.").mt_1().text_size(px(11.)))))
                         .when(machine.ssh.is_some(), |d| d.child(div().flex().items_center().gap_2()
-                            .when(update, |d| d.child(secondary_button(SharedString::from(format!("update-host-{id}")), "Update Host", false, disabled)
-                                .child("Update Host").on_click(cx.listener(move |this, _, _, cx| this.begin_connection(Some(update_id.clone()), true, cx)))))
+                            .when(update, |d| d.child(secondary_button(SharedString::from(format!("update-host-{id}")), "Update host", false, disabled)
+                                .child("Update host").on_click(cx.listener(move |this, _, _, cx| this.begin_connection(Some(update_id.clone()), true, cx)))))
                             .child(secondary_button(SharedString::from(format!("reconnect-{id}")), "Reconnect", false, disabled)
                                 .child("Reconnect").on_click(cx.listener(move |this, _, _, cx| this.begin_connection(Some(reconnect_id.clone()), false, cx))))))
                         .child(secondary_button(SharedString::from(format!("remove-machine-{id}")), format!("Remove {}", machine.name), true, disabled)
@@ -782,18 +782,13 @@ impl SettingsView {
             page.push(list.into_any_element());
         } else if self.connections.loaded && !self.connections.adding {
             page.push(
-                div()
-                    .mt_5()
-                    .rounded(px(radius::SURFACE))
-                    .border_1()
-                    .border_color(content(0.15))
-                    .px_5()
-                    .py_8()
-                    .text_center()
-                    .text_size(px(13.))
-                    .text_color(content(0.45))
-                    .child("No machines connected.")
-                    .into_any_element(),
+                super::super::widgets::empty_card(
+                    "internet",
+                    "No machines connected",
+                    "Add a machine to run agents on it over SSH.",
+                )
+                .mt_5()
+                .into_any_element(),
             );
         }
         if self.connections.adding {
@@ -806,7 +801,9 @@ impl SettingsView {
                     .child(div().rounded(px(radius::SMALL)).bg(content(0.1)).px_2().py_1().text_size(px(11.)).text_color(content(0.6)).child("SSH")))
                 .child(target).child(name)
                 .child(div().id("ssh-advanced").role(Role::Button).aria_label("Advanced SSH settings").text_size(px(12.)).text_color(content(0.5)).cursor_pointer()
-                    .child(if self.connections.advanced { "▾ Advanced" } else { "▸ Advanced" })
+                    .flex().items_center().gap_1().aria_expanded(self.connections.advanced)
+                    .child(icon(if self.connections.advanced { "chevron-down" } else { "chevron-right" }, 12.).text_color(content(0.5)))
+                    .child("Advanced")
                     .on_click(cx.listener(|this, _, _, cx| { this.connections.advanced = !this.connections.advanced; cx.notify(); })))
                 .when(self.connections.advanced, |d| d.child(div().max_w(px(160.)).child(port)))
                 .child(paragraph("Enable SSH and sign in to an agent provider on the remote machine. Vorkspace uses your SSH keys and config to install its background host. Keep a Mac host awake with its desktop account signed in."))
@@ -922,7 +919,7 @@ impl SettingsView {
                     .role(Role::Status)
                     .mt_4()
                     .text_size(px(13.))
-                    .text_color(rgb(0x10b981))
+                    .text_color(vorkspace_ui::theme::success())
                     .child(self.connections.notice.clone())
                     .into_any_element(),
             );
@@ -931,16 +928,28 @@ impl SettingsView {
             div()
                 .id("existing-host-url")
                 .role(Role::Button)
+                .map(vorkspace_ui::theme::tab_reachable)
                 .aria_label("Connect to an existing host by URL")
                 .mt_5()
                 .text_size(px(12.))
                 .text_color(content(0.45))
                 .cursor_pointer()
-                .child(if self.connections.url {
-                    "▾ Connect to an existing host by URL"
-                } else {
-                    "▸ Connect to an existing host by URL"
-                })
+                .flex()
+                .items_center()
+                .gap_1()
+                .aria_expanded(self.connections.url)
+                .child(
+                    icon(
+                        if self.connections.url {
+                            "chevron-down"
+                        } else {
+                            "chevron-right"
+                        },
+                        12.,
+                    )
+                    .text_color(content(0.45)),
+                )
+                .child("Connect to an existing host by URL")
                 .on_click(cx.listener(|this, _, _, cx| {
                     this.connections.url = !this.connections.url;
                     cx.notify();

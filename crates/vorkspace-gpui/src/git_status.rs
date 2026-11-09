@@ -27,6 +27,17 @@ fn priority(status: &str) -> u8 {
         _ => 0,
     }
 }
+/// A file's change state, in the user's diff palette (default, colorblind
+/// or high contrast) for added and deleted, and the theme's warning ink for
+/// edits, all paired for light and dark.
+pub(crate) fn status_color(status: &str) -> gpui::Hsla {
+    match status {
+        "untracked" => vorkspace_ui::theme::accent_color(),
+        "added" => vorkspace_ui::theme::diff_foreground(true),
+        "deleted" => vorkspace_ui::theme::diff_foreground(false),
+        _ => vorkspace_ui::theme::warning(),
+    }
+}
 /// useGitFileStatuses's `buildStatusMaps`: each folder takes its most
 /// significant descendant status.
 pub(crate) fn status_maps(index: &DiffIndex, root: &str) -> StatusMap {

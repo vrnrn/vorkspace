@@ -75,7 +75,7 @@ impl ReviewTab {
                 .map_or_else(|| path.clone(), |p| p.to_string_lossy().into_owned()),
             Self::Changes { staged, .. } => {
                 if *staged == Some(true) {
-                    "Staged Changes".into()
+                    "Staged changes".into()
                 } else {
                     "Changes".into()
                 }
@@ -1641,7 +1641,10 @@ impl ReviewPane {
                         .rounded(px(radius::CONTROL))
                         .cursor(CursorStyle::OpenHand)
                         .text_color(content(0.35))
-                        .hover(|s| s.bg(content(0.05)).text_color(content(0.7)))
+                        .hover(|s| {
+                            s.bg(vorkspace_ui::fluid::hover(0.05))
+                                .text_color(content(0.7))
+                        })
                         .child(icon("grip-vertical", 14.))
                         .on_mouse_down(
                             MouseButton::Left,
@@ -1790,6 +1793,7 @@ impl ReviewPane {
                         div()
                             .id(("review-tab-close", ix))
                             .role(Role::Button)
+                            .map(vorkspace_ui::theme::tab_reachable)
                             .aria_label(SharedString::from(format!("Close {label}")))
                             .absolute()
                             .right_1()
@@ -1801,7 +1805,7 @@ impl ReviewPane {
                             .justify_center()
                             .rounded(px(radius::SMALL))
                             .when(!(active || hovered), |d| d.opacity(0.))
-                            .hover(|s| s.bg(content(0.1)))
+                            .hover(|s| s.bg(vorkspace_ui::fluid::hover(0.1)))
                             .child(icon("x", 12.))
                             .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
                             .on_click(cx.listener(move |this, _, _, cx| {

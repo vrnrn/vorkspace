@@ -75,11 +75,11 @@ impl Conversation {
                             .flex_shrink_0()
                             .text_size(px(11.))
                             .text_color(if self.needs_approval() {
-                                gpui::rgb(0xfbbf24).into()
+                                vorkspace_ui::theme::warning()
                             } else if self.responding() {
                                 accent_color()
                             } else if done {
-                                gpui::rgb(0x34d399).into()
+                                vorkspace_ui::theme::success()
                             } else {
                                 content(0.45)
                             })

@@ -566,3 +566,53 @@ fn flyouts_hang_off_the_right_flip_left_and_clamp() {
     );
     assert_eq!((low.top, low.max_height), (Some(292.), 300.));
 }
+
+#[gpui::test]
+fn a_lone_flyout_row_opens_at_once_and_a_fuller_menu_waits(cx: &mut gpui::TestAppContext) {
+    let window = cx.update(|cx| {
+        cx.open_window(Default::default(), |window, cx| {
+            let flyout = |window: &mut Window, cx: &mut App| {
+                let list = cx.new(|cx| {
+                    Menu::new("Models", vec![MenuAction::new("a", "A").into()], window, cx)
+                });
+                Flyout {
+                    view: list.into(),
+                    width: MENU_WIDTH,
+                    padding: 0.,
+                    height: None,
+                    max_height: None,
+                    focus: None,
+                    surface: None,
+                }
+            };
+            let lone = flyout(window, cx);
+            let lone = cx.new(|cx| {
+                Menu::new(
+                    "Model",
+                    vec![MenuAction::new("model", "Model").flyout(lone).into()],
+                    window,
+                    cx,
+                )
+            });
+            let full = flyout(window, cx);
+            let full = cx.new(|cx| {
+                Menu::new(
+                    "Model",
+                    vec![
+                        MenuAction::new("effort", "Effort").into(),
+                        MenuAction::new("model", "Model").flyout(full).into(),
+                    ],
+                    window,
+                    cx,
+                )
+            });
+            lone.update(cx, |menu, cx| menu.open_lone_flyout(window, cx));
+            full.update(cx, |menu, cx| menu.open_lone_flyout(window, cx));
+            assert!(lone.read(cx).flyout_open());
+            assert!(!full.read(cx).flyout_open());
+            cx.new(|_| gpui::Empty)
+        })
+        .unwrap()
+    });
+    let _ = window;
+}

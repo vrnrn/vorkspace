@@ -12,7 +12,6 @@ pub(crate) enum AppPane {
     Terminal { id: u64, cwd: String },
     Codebase,
     Search,
-    Channels,
     Review,
 }
 

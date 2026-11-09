@@ -126,6 +126,7 @@ impl Render for LinkedActivity {
                     .id("dismiss-linked-activity")
                     .debug_selector(move || format!("dismiss-linked-activity-{session}"))
                     .role(Role::Button)
+                    .map(vorkspace_ui::theme::tab_reachable)
                     .aria_label(format!("Dismiss updates for {kind} {number}"))
                     .cursor_pointer()
                     .size(px(24.))
@@ -146,6 +147,7 @@ impl Render for LinkedActivity {
                     div()
                         .id("open-linked-work-item")
                         .role(Role::Button)
+                        .map(vorkspace_ui::theme::tab_reachable)
                         .cursor_pointer()
                         .on_click(cx.listener(move |_, _, _, cx| {
                             cx.emit(LinkedActivityEvent::Acknowledge(session));
@@ -200,13 +202,14 @@ impl Render for LinkedActivity {
                 div()
                     .id(("linked-activity-entry", ix))
                     .role(Role::Button)
+                    .map(vorkspace_ui::theme::tab_reachable)
                     .px(px(12.))
                     .py(px(8.))
                     .border_t_1()
                     .border_color(content(0.1))
                     .when(!url.is_empty(), |d| {
                         d.cursor_pointer()
-                            .hover(|s| s.bg(content(0.05)))
+                            .hover(|s| s.bg(vorkspace_ui::fluid::hover(0.05)))
                             .on_click(cx.listener(move |_, _, _, cx| {
                                 cx.emit(LinkedActivityEvent::Acknowledge(session));
                                 cx.emit(LinkedActivityEvent::OpenUrl(url.clone()));
@@ -264,6 +267,7 @@ impl Render for LinkedActivity {
                                 div()
                                     .id("archive-linked-session")
                                     .role(Role::Button)
+                                    .map(vorkspace_ui::theme::tab_reachable)
                                     .rounded(px(radius::CONTROL))
                                     .px(px(8.))
                                     .py(px(4.))
@@ -289,11 +293,12 @@ impl Render for LinkedActivity {
                                 div()
                                     .id("delete-linked-session")
                                     .role(Role::Button)
+                                    .map(vorkspace_ui::theme::tab_reachable)
                                     .rounded(px(radius::CONTROL))
                                     .px(px(8.))
                                     .py(px(4.))
                                     .text_size(px(11.))
-                                    .text_color(gpui::rgb(0xfca5a5))
+                                    .text_color(vorkspace_ui::theme::danger())
                                     .opacity(if busy || !self.can_delete { 0.4 } else { 1. })
                                     .when(!busy && self.can_delete, |d| {
                                         d.cursor_pointer().on_click(cx.listener(
@@ -326,13 +331,14 @@ impl Render for LinkedActivity {
                     div()
                         .id("linked-activity-agent")
                         .role(Role::Button)
+                        .map(|d| vorkspace_ui::theme::tab_reachable_on_fill(d, true))
                         .cursor_pointer()
                         .flex_1()
                         .rounded(px(radius::CONTROL))
                         .px(px(8.))
                         .py(px(4.))
                         .bg(content(1.))
-                        .text_color(pane_fill())
+                        .text_color(vorkspace_ui::fluid::on_ink())
                         .on_click(cx.listener(move |_, _, _, cx| {
                             cx.emit(LinkedActivityEvent::Acknowledge(session));
                             cx.emit(LinkedActivityEvent::AddToChat(session, prompt.clone()));
@@ -343,6 +349,7 @@ impl Render for LinkedActivity {
                     div()
                         .id("linked-activity-open")
                         .role(Role::Button)
+                        .map(vorkspace_ui::theme::tab_reachable)
                         .cursor_pointer()
                         .flex_1()
                         .rounded(px(radius::CONTROL))

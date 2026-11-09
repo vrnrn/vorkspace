@@ -381,7 +381,7 @@ impl SettingsView {
                             .bg(content(0.03))
                             .text_size(px(10.))
                             .child(
-                                div().font_family(vorkspace_ui::fonts::FIXED_FONT).child(
+                                div().font_family(vorkspace_ui::fonts::MONO).child(
                                     inspection
                                         .as_ref()
                                         .map(|i| i.path.display().to_string())
@@ -628,14 +628,14 @@ impl SettingsView {
                 if tree.assessment.dirty != Some(false) {
                     consequences = consequences.child(
                         div()
-                            .text_color(gpui::rgb(0xfbbf24))
+                            .text_color(vorkspace_ui::theme::warning())
                             .child("All uncommitted and untracked changes here are discarded."),
                     );
                 }
                 if tree.assessment.safety_unknown() {
                     consequences = consequences.child(
                         div()
-                            .text_color(gpui::rgb(0xfbbf24))
+                            .text_color(vorkspace_ui::theme::warning())
                             .child("Deleting this worktree can discard files or changes Git could not inspect."),
                     );
                 }
@@ -696,7 +696,7 @@ impl SettingsView {
                     .id("management-error")
                     .role(Role::Alert)
                     .text_size(px(11.))
-                    .text_color(gpui::rgb(0xf87171))
+                    .text_color(vorkspace_ui::theme::danger())
                     .child(error)
                     .into_any_element(),
             );
@@ -949,7 +949,7 @@ fn form_field(label: &str, input: Entity<Input>, height: f32) -> AnyElement {
                 .border_color(content(0.1))
                 .bg(content(0.04))
                 .when(label == "JSON configuration", |d| {
-                    d.font_family(vorkspace_ui::fonts::FIXED_FONT)
+                    d.font_family(vorkspace_ui::fonts::MONO)
                 })
                 .child(input),
         )

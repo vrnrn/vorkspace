@@ -469,7 +469,7 @@ fn entries_put_staged_first_and_scope_to_one_side() {
         path: None,
         staged: Some(true),
     };
-    assert_eq!(changes.label(), "Staged Changes");
+    assert_eq!(changes.label(), "Staged changes");
     assert!(!changes.same_tab(&ReviewTab::Changes {
         cwd: "/r".into(),
         path: Some("a".into()),

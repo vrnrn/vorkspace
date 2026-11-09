@@ -1,5 +1,5 @@
 //! ProjectMascot / SubagentMascot: the React transcript's two-frame pixel faces.
-use gpui::{Animation, AnimationExt, AnyElement, canvas, div, prelude::*, px, rgb};
+use gpui::{Animation, AnimationExt, AnyElement, canvas, div, prelude::*, px};
 use std::time::Duration;
 use vorkspace_core::tool::ToolState;
 use vorkspace_ui::theme::content;
@@ -97,7 +97,7 @@ const TALK: [Frame; 10] = [
 /// Activity is independent of state: a pending run can already have settled.
 pub(super) fn subagent_mascot(name: &str, state: &ToolState, active: bool) -> AnyElement {
     let color = match state {
-        ToolState::Failed | ToolState::Cancelled => rgb(0xf87171).into(),
+        ToolState::Failed | ToolState::Cancelled => vorkspace_ui::theme::danger(),
         ToolState::Running => content(0.70),
         ToolState::Completed => content(0.45),
     };
@@ -124,7 +124,10 @@ fn project_mascot(name: &str, active: bool) -> AnyElement {
         // AnimationExt drives the repeating frame requests.
         slot.with_animation(
             "subagent-mascot",
-            Animation::new(Duration::from_millis(460)).repeat(),
+            // Two sprites a beat: a few frames a second shows every swap.
+            Animation::new(Duration::from_millis(460))
+                .repeat()
+                .with_max_fps(8.),
             move |slot, phase| slot.child(sprite(index, phase >= 0.5)),
         )
         .into_any_element()

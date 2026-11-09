@@ -1,8 +1,5 @@
 use super::*;
-use gpui::{
-    Animation, AnimationExt, AnyElement, FontWeight, Role, SharedString, Transformation, div,
-    percentage, px,
-};
+use gpui::{AnyElement, FontWeight, Role, SharedString, div, px};
 use vorkspace_ui::radius;
 use vorkspace_ui::theme::*;
 
@@ -49,8 +46,7 @@ impl Accounts {
         };
         let click_id = id.to_owned();
         let keyboard_id = id.to_owned();
-        let mut button_text = shell_fill();
-        button_text.a = 1.;
+        let button_text = vorkspace_ui::fluid::on_ink();
         div()
             .id("footer-provider-signin-panel")
             .role(Role::Status)
@@ -111,6 +107,7 @@ impl Accounts {
                 div()
                     .id("footer-provider-auth-action")
                     .role(Role::Button)
+                    .map(vorkspace_ui::theme::tab_reachable)
                     .aria_label(label.clone())
                     .track_focus(&self.dialog_focus)
                     .tab_index(0)
@@ -134,19 +131,11 @@ impl Accounts {
                         d.cursor_pointer().hover(|s| s.bg(content(0.85)))
                     })
                     .when(running, |d| {
-                        d.child(
-                            icon("refresh-cw", 14.)
-                                .text_color(button_text)
-                                .with_animation(
-                                    "footer-provider-auth-spinner",
-                                    Animation::new(Duration::from_secs(1)).repeat(),
-                                    |icon, delta| {
-                                        icon.with_transformation(Transformation::rotate(
-                                            percentage(delta),
-                                        ))
-                                    },
-                                ),
-                        )
+                        d.child(crate::panel_kit::spinner(
+                            "footer-provider-auth-spinner",
+                            "refresh-cw",
+                            14.,
+                        ))
                     })
                     .when(complete, |d| {
                         d.child(icon("check", 14.).text_color(button_text))
@@ -172,7 +161,7 @@ impl Accounts {
                     .max_w(px(240.))
                     .text_size(px(10.))
                     .line_height(px(16.))
-                    .text_color(gpui::rgb(0xf87171))
+                    .text_color(vorkspace_ui::theme::danger())
                     .text_center()
                     .child(error)
             }))

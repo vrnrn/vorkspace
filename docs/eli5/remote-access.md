@@ -13,6 +13,7 @@ For the full technical guide and manual commands, see [Remote access](../remote-
 1. In **Settings → Connections → Add machine**, you type the SSH address of your other computer (like `me@my-server`).
 2. Vorkspace logs in over SSH, downloads a small helper program (`vorkspace-host`) onto that computer, checks its security fingerprint (SHA-256), and starts it as a background service.
 3. Vorkspace opens a private tunnel through SSH (`127.0.0.1:3774`) so no outsider on the network can talk to your helper.
+4. Click the project name at the top of the sidebar and choose **Open folder on a machine…** to add a folder on that computer to the current vorkspace.
 
 ---
 

@@ -74,7 +74,7 @@ impl Conversation {
                 .absolute()
                 .inset_0()
                 .rounded(px(radius))
-                .bg(accent_color().opacity(0.08))
+                .bg(vorkspace_ui::fluid::wash(accent_color().opacity(0.08)))
                 .flex()
                 .items_center()
                 .justify_center()

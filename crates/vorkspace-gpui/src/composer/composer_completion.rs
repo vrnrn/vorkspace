@@ -31,13 +31,6 @@ pub(crate) fn bind(cx: &mut App) {
     ]);
 }
 pub(crate) struct ModePicked(pub &'static str);
-#[derive(Clone, PartialEq, Eq)]
-pub(crate) struct BotMention {
-    pub id: String,
-    pub name: String,
-    pub mascot: String,
-    pub color: u32,
-}
 #[derive(Clone)]
 struct Choice {
     label: String,
@@ -49,7 +42,6 @@ struct Choice {
 }
 pub(crate) struct Completion {
     input: Entity<input::Input>,
-    bots: Option<Vec<BotMention>>,
     bot_chat: bool,
     store: Option<vorkspace_runtime::runtime::Database>,
     notes: Vec<vorkspace_core::notes::Note>,
@@ -88,30 +80,13 @@ impl Drop for Completion {
 }
 impl Completion {
     pub(crate) fn new(input: Entity<input::Input>, cwd: String, cx: &mut Context<Self>) -> Self {
-        Self::create(input, cwd, None, cx)
+        Self::create(input, cwd, cx)
     }
-    pub(crate) fn bot_mentions(
-        input: Entity<input::Input>,
-        bots: Vec<BotMention>,
-        cx: &mut Context<Self>,
-    ) -> Self {
-        let mut view = Self::create(input, String::new(), Some(bots), cx);
-        view.sync(cx);
-        view
-    }
-    fn create(
-        input: Entity<input::Input>,
-        cwd: String,
-        bots: Option<Vec<BotMention>>,
-        cx: &mut Context<Self>,
-    ) -> Self {
-        if bots.is_none() {
-            input.update(cx, |input, cx| input.enable_inline_commands(cx));
-        }
+    fn create(input: Entity<input::Input>, cwd: String, cx: &mut Context<Self>) -> Self {
+        input.update(cx, |input, cx| input.enable_inline_commands(cx));
         let observe = cx.observe(&input, |this, _, cx| this.sync(cx));
         Self {
             input,
-            bots,
             bot_chat: false,
             store: None,
             notes: Vec::new(),
@@ -152,15 +127,6 @@ impl Completion {
             inline_field: false,
             _observe: observe,
         }
-    }
-    pub(crate) fn set_bots(&mut self, bots: Vec<BotMention>, cx: &mut Context<Self>) {
-        if self.bots.as_ref() == Some(&bots) {
-            return;
-        }
-        self.bots = Some(bots);
-        self.token = None;
-        self.dismissed = None;
-        self.sync(cx);
     }
     pub(crate) fn set_bot_chat(&mut self, cx: &mut Context<Self>) {
         if !self.bot_chat {
@@ -362,26 +328,6 @@ impl Completion {
         cx.notify();
     }
     fn sync(&mut self, cx: &mut Context<Self>) {
-        // Channel membership is already local. Mention completion never loads
-        // project files, provider catalogs, commands, skills or notes.
-        if self.bots.is_some() {
-            let token = self
-                .input
-                .read(cx)
-                .completion_token()
-                .filter(|t| t.trigger == Trigger::Mention);
-            if token.is_some() && token == self.dismissed {
-                return;
-            }
-            self.dismissed = None;
-            if token != self.token {
-                self.token = token;
-                self.active = 0;
-                self.rank();
-                cx.notify();
-            }
-            return;
-        }
         if self.cwd.starts_with("remote://") {
             self.choices.clear();
             self.token = None;
@@ -567,35 +513,6 @@ impl Completion {
         let Some(token) = &self.token else {
             return;
         };
-        if let Some(bots) = &self.bots {
-            let mut choices = bots
-                .iter()
-                .filter_map(|bot| {
-                    composer::score(&token.query, &bot.name).map(|score| {
-                        let unique = bots
-                            .iter()
-                            .filter(|b| b.name.eq_ignore_ascii_case(&bot.name))
-                            .count()
-                            == 1;
-                        (
-                            score,
-                            Choice {
-                                label: bot.name.clone(),
-                                detail: if unique { "Bot".into() } else { bot.id.clone() },
-                                insertion: format!("@{}", if unique { &bot.name } else { &bot.id }),
-                                mode: None,
-                                file: false,
-                                server: None,
-                            },
-                        )
-                    })
-                })
-                .collect::<Vec<_>>();
-            choices.sort_by(|(a, x), (b, y)| b.cmp(a).then_with(|| x.label.cmp(&y.label)));
-            self.choices = choices.into_iter().take(8).map(|(_, c)| c).collect();
-            self.scroll.scroll_to_item(self.active);
-            return;
-        }
         if self.mcp_open {
             let mut servers = self.mcp.clone();
             servers.sort_by_key(|server| {
@@ -677,16 +594,7 @@ impl Completion {
         } else {
             let mut choices = Vec::new();
             for (id, label, detail) in [
-                (
-                    "add-to-folder",
-                    "Add to folder",
-                    "Place this session in an existing or new sidebar folder",
-                ),
-                (
-                    "draft",
-                    "Draft",
-                    "Save this message without starting the agent",
-                ),
+                ("draft", "Draft", "Save it without starting the agent"),
                 (
                     "compact",
                     "Compact context",
@@ -970,7 +878,7 @@ impl Render for Completion {
                         } else {
                             content(0.)
                         })
-                        .hover(|s| s.bg(content(0.08)))
+                        .hover(|s| s.bg(vorkspace_ui::fluid::hover(0.08)))
                         .child(
                             div()
                                 .size(px(30.))
@@ -980,47 +888,29 @@ impl Render for Completion {
                                 .flex()
                                 .items_center()
                                 .justify_center()
-                                .child(
-                                    if let Some(bot) = self.bots.as_ref().and_then(|bots| {
-                                        bots.iter().find(|bot| {
-                                            format!("@{}", bot.name) == choice.insertion
-                                                || format!("@{}", bot.id) == choice.insertion
-                                        })
-                                    }) {
-                                        crate::avatar::avatar(
-                                            &bot.mascot,
-                                            bot.color,
-                                            "idle",
-                                            20.,
-                                            true,
-                                        )
-                                    } else if choice.file {
-                                        vorkspace_ui::file_icons::file_type_icon(
-                                            &choice.label,
-                                            false,
-                                            false,
-                                            16.,
-                                        )
-                                    } else {
-                                        icon(
-                                            command.map(input::Command::icon).unwrap_or_else(
-                                                || {
-                                                    if choice.insertion.starts_with("@note/") {
-                                                        "note"
-                                                    } else {
-                                                        "sparkles"
-                                                    }
-                                                },
-                                            ),
-                                            16.,
-                                        )
-                                        .text_color(
-                                            command
-                                                .map_or_else(accent_color, input::Command::color),
-                                        )
-                                        .into_any_element()
-                                    },
-                                ),
+                                .child(if choice.file {
+                                    vorkspace_ui::file_icons::file_type_icon(
+                                        &choice.label,
+                                        false,
+                                        false,
+                                        16.,
+                                    )
+                                } else {
+                                    icon(
+                                        command.map(input::Command::icon).unwrap_or_else(|| {
+                                            if choice.insertion.starts_with("@note/") {
+                                                "note"
+                                            } else {
+                                                "sparkles"
+                                            }
+                                        }),
+                                        16.,
+                                    )
+                                    .text_color(
+                                        command.map_or_else(accent_color, input::Command::color),
+                                    )
+                                    .into_any_element()
+                                }),
                         )
                         .child(
                             div()
@@ -1046,9 +936,7 @@ impl Render for Completion {
                 })
                 .collect();
             let weak = cx.weak_entity();
-            let title = if self.bots.is_some() {
-                "BOTS"
-            } else if self.mcp_open {
+            let title = if self.mcp_open {
                 "MCP SERVERS"
             } else if self
                 .token
@@ -1156,9 +1044,12 @@ impl Render for Completion {
                                     .pb_1()
                                     .border_t_1()
                                     .border_color(content(0.07))
-                                    .text_size(px(10.))
-                                    .text_color(content(0.35))
-                                    .child("↑ ↓ navigate    ↵ / Tab select    Esc dismiss"),
+                                    .child(vorkspace_ui::fluid::key_hints(&[
+                                        ("↑↓", "navigate"),
+                                        ("↵", "select"),
+                                        ("tab", "select"),
+                                        ("esc", "dismiss"),
+                                    ])),
                             ),
                     ),
             );

@@ -173,6 +173,34 @@ fn confirmed_empty_project_removal_survives_workspace_restore(cx: &mut gpui::Tes
         .unwrap();
 }
 #[gpui::test]
+fn archiving_selected_project_requires_an_assigned_destination(cx: &mut gpui::TestAppContext) {
+    let (window, _, _) = crate::shell::tests::window(cx);
+    window
+        .update(cx, |shell, window, cx| {
+            let current = shell.workspace.project.clone();
+            let vorkspace = shell.workspace.active_vorkspace.clone();
+            let other = "/work/another-project";
+            shell
+                .workspace
+                .remove_project_from_vorkspace(&vorkspace, other);
+            assert!(shell.workspace.is_project_available(other));
+            shell.archive_project(&current, window, cx);
+            assert_eq!(shell.workspace.project, current);
+            assert!(shell.workspace.is_project_available(&current));
+
+            let destination = shell.workspace.create_vorkspace("Destination");
+            shell
+                .workspace
+                .add_project_to_vorkspace(&destination, other);
+            shell.archive_project(&current, window, cx);
+            assert_eq!(shell.workspace.project, other);
+            assert_eq!(shell.workspace.active_vorkspace, destination);
+            assert!(!shell.workspace.is_project_available(&current));
+        })
+        .unwrap();
+}
+
+#[gpui::test]
 fn selected_project_and_open_session_need_release_before_delete(cx: &mut gpui::TestAppContext) {
     let (window, a, _) = crate::shell::tests::window(cx);
     window

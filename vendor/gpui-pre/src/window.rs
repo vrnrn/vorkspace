@@ -2478,6 +2478,38 @@ impl Window {
         }
     }
 
+    /// Move to the next or previous tab stop inside a modal's focus subtree.
+    pub fn focus_tab_within(&mut self, scope: &FocusHandle, reverse: bool, cx: &mut App) {
+        if !self.focus_enabled {
+            return;
+        }
+        let stops = &self.rendered_frame.tab_stops;
+        let step = |from: Option<&FocusId>| {
+            if reverse {
+                stops.prev(from)
+            } else {
+                stops.next(from)
+            }
+        };
+        let Some(first) = step(self.focus.as_ref()) else {
+            return;
+        };
+        let mut candidate = first.clone();
+        loop {
+            if scope.contains(&candidate, self) {
+                self.focus(&candidate, cx);
+                return;
+            }
+            let Some(next) = step(Some(&candidate.id)) else {
+                return;
+            };
+            if next.id == first.id {
+                return;
+            }
+            candidate = next;
+        }
+    }
+
     /// Accessor for the text system.
     pub fn text_system(&self) -> &Arc<WindowTextSystem> {
         &self.text_system
@@ -2512,7 +2544,6 @@ impl Window {
     pub fn set_exclusive_zone(&self, zone: Pixels) {
         self.platform_window.set_exclusive_zone(zone);
     }
-
 
     /// Start an interactive window resize operation if this window is resizable.
     pub fn start_window_resize(&self, edge: ResizeEdge) {
@@ -4381,7 +4412,11 @@ impl Window {
     pub fn transact<T, U>(&mut self, f: impl FnOnce(&mut Self) -> Result<T, U>) -> Result<T, U> {
         self.invalidator.debug_assert_prepaint();
         let index = self.prepaint_index();
+        let a11y_checkpoint = self.a11y.prepaint_checkpoint();
         let result = f(self);
+        if let Some(checkpoint) = a11y_checkpoint {
+            self.a11y.finish_prepaint(checkpoint, result.is_ok());
+        }
         if result.is_err() {
             self.next_frame.hitboxes.truncate(index.hitboxes_index);
             self.next_frame
@@ -4837,7 +4872,10 @@ impl Window {
             order: 0,
             bounds: snapped_bounds,
             content_mask: self.snapped_content_mask(),
-            background: quad.background.opacity(opacity),
+            background: quad
+                .background
+                .opacity(opacity)
+                .scale_pattern(self.scale_factor()),
             border_color: quad.border_color.opacity(opacity),
             corner_radii: quad.corner_radii.scale(self.scale_factor()),
             border_widths: snapped_border_widths,
@@ -4906,7 +4944,7 @@ impl Window {
         let opacity = self.element_opacity();
         path.content_mask = content_mask;
         let color: Background = color.into();
-        path.color = color.opacity(opacity);
+        path.color = color.opacity(opacity).scale_pattern(scale_factor);
         self.next_frame
             .scene
             .insert_primitive(path.scale(scale_factor));

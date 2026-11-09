@@ -11,6 +11,7 @@ impl Shell {
         &self,
         tab: &TitleTab,
         width: f32,
+        glide: (&vorkspace_ui::glide::Glide, usize),
         cx: &mut Context<Self>,
     ) -> Option<gpui::Stateful<gpui::Div>> {
         let (identity, label, description, mark) = match tab {
@@ -40,6 +41,7 @@ impl Shell {
         let menu_tab = tab.clone();
         let middle_tab = tab.clone();
         let close = active || width >= TAB_CLOSE_MIN_WIDTH;
+        let thumb = active && glide.0.ready();
         Some(
             div()
                 .id(SharedString::from(identity.clone()))
@@ -58,15 +60,23 @@ impl Shell {
                 .relative()
                 .child(
                     title_tab_plate(active, false)
+                        // The strip's gliding thumb draws the selection.
+                        .when(thumb, |d| d.bg(gpui::transparent_black()))
                         .relative()
+                        .child(glide.0.probe(glide.1))
                         .text_color(content(if active { 1. } else { 0.5 }))
                         .w_full()
                         .min_w_0()
                         .when(close && width >= TAB_CLOSE_MIN_WIDTH, |d| d.pr_7())
                         .when(width < 30., |d| d.px(px(((width - 14.) / 2.).max(0.))))
                         .gap(px(6.))
-                        .group_hover("simple-title-tab", |s| {
-                            s.bg(title_tab_fill(active, true)).text_color(content(1.))
+                        .group_hover("simple-title-tab", move |s| {
+                            let s = s.text_color(content(1.));
+                            if thumb {
+                                s
+                            } else {
+                                s.bg(vorkspace_ui::theme::title_tab_background(active, true))
+                            }
                         })
                         .child(mark)
                         .child(
@@ -84,6 +94,7 @@ impl Shell {
                             .id(SharedString::from(close_identity.clone()))
                             .debug_selector(move || close_identity.clone())
                             .role(Role::Button)
+                            .map(vorkspace_ui::theme::tab_reachable)
                             .aria_label(close_label)
                             .absolute()
                             .right_1()
@@ -95,7 +106,7 @@ impl Shell {
                             .justify_center()
                             .opacity(0.)
                             .group_hover("simple-title-tab", |s| s.opacity(1.))
-                            .hover(|s| s.bg(content(0.1)))
+                            .hover(|s| s.bg(vorkspace_ui::fluid::hover(0.1)))
                             .child(icon("close", 12.))
                             .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
                             .on_click(cx.listener(move |this, _, window, cx| {
@@ -221,11 +232,7 @@ impl Shell {
                 } => {
                     path_key(project) == path_key(&self.workspace.project)
                         && path_key(worktree) == path_key(self.working_copy())
-                        && self.workspace.preferences.bots
-                        && self
-                            .bots
-                            .as_ref()
-                            .is_some_and(|m| m.read(cx).roster.get(id).is_some())
+                        && self.app_pane_available(&crate::workspace::AppPane::Bot(id.clone()), cx)
                 }
                 TitleTab::Search | TitleTab::App(_) => false,
             })
@@ -287,6 +294,25 @@ impl Shell {
         self.workspace.active_tab().map(TitleTab::Workspace)
     }
 
+    pub(super) fn available_tab_focus(&self, tab: i64, cx: &App) -> Option<i64> {
+        let available = |id| {
+            self.workspace
+                .app_panes
+                .get(&id)
+                .is_none_or(|pane| self.app_pane_available(&pane.content, cx))
+        };
+        let focus = self.workspace.tab_focus(tab);
+        if available(focus) {
+            Some(focus)
+        } else {
+            self.workspace
+                .layout(tab)
+                .leaf_ids()
+                .into_iter()
+                .find(|&id| available(id))
+        }
+    }
+
     /// The active tab follows live focus; other tabs keep their last displayed
     /// pane instead of borrowing the currently selected tab's preview focus.
     pub(super) fn tab_review_focused(&self, tab: i64, cx: &App) -> bool {
@@ -306,21 +332,7 @@ impl Shell {
         if !self.workspace.title_order.contains(&tab) {
             self.workspace.title_order.push(tab.clone());
         }
-        if !self.is_standalone_channels_tab(&tab) {
-            self.workspace.scope_focus.insert(self.tab_scope(), tab);
-        }
-    }
-
-    /// The Channels browser has its own tab. Clicking a project resumes its
-    /// workspace unless Channels are tiled into that workspace's layout.
-    pub(super) fn is_standalone_channels_tab(&self, tab: &TitleTab) -> bool {
-        tab.session().is_some_and(|id| {
-            self.workspace
-                .app_panes
-                .get(&id)
-                .is_some_and(|pane| pane.content == crate::workspace::AppPane::Channels)
-                && !self.workspace.layout(id).is_split()
-        })
+        self.workspace.scope_focus.insert(self.tab_scope(), tab);
     }
 
     pub(super) fn bot_opened(&mut self, id: String, cx: &mut Context<Self>) {
@@ -366,7 +378,9 @@ impl Shell {
                 app_views::AppView::Todos => self.open_todos(window, cx),
             },
             TitleTab::Workspace(id) => {
-                let focus = self.workspace.tab_focus(*id);
+                let Some(focus) = self.available_tab_focus(*id, cx) else {
+                    return;
+                };
                 let review_focused = self.tab_review_focused(*id, cx);
                 self.open(focus, window, cx);
                 if review_focused
@@ -378,7 +392,9 @@ impl Shell {
                 }
             }
             TitleTab::Bot { id, .. } => {
-                if let Some(bots) = self.bots.clone() {
+                if self.app_pane_available(&crate::workspace::AppPane::Bot(id.clone()), cx)
+                    && let Some(bots) = self.bots.clone()
+                {
                     bots.update(cx, |m, cx| m.open(id, window, cx));
                 }
             }
@@ -386,12 +402,19 @@ impl Shell {
     }
     pub(super) fn restore_scope_tab(
         &mut self,
+        allow_bot: bool,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> bool {
         let tab = self.workspace.scope_focus.get(&self.tab_scope()).cloned();
         if let Some(tab) = tab.filter(|tab| {
-            !self.is_standalone_channels_tab(tab) && self.visible_tabs(cx).contains(tab)
+            (allow_bot
+                || !match tab {
+                    TitleTab::Bot { .. } => true,
+                    TitleTab::Workspace(id) => self.is_bot_pane(self.workspace.tab_focus(*id)),
+                    _ => false,
+                })
+                && self.visible_tabs(cx).contains(tab)
         }) {
             if matches!(tab, TitleTab::Bot { .. }) {
                 self.workspace.active = None;

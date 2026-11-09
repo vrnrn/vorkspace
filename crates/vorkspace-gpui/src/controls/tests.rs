@@ -73,7 +73,7 @@ impl Render for Surface {
         };
         div()
             .size_full()
-            .bg(shell_fill())
+            .bg(vorkspace_ui::theme::shell_fill())
             .p_4()
             .flex()
             .flex_col()
@@ -98,7 +98,7 @@ impl Render for Surface {
             .child(
                 icon_button("action", "Save draft", true)
                     .debug_selector(|| "action".into())
-                    .hover(|s| s.bg(content(0.08)))
+                    .hover(|s| s.bg(vorkspace_ui::fluid::hover(0.08)))
                     .child(vorkspace_ui::theme::icon("check", 14.))
                     .on_click(cx.listener(|this, _, _, cx| {
                         this.actions += 1;
@@ -250,10 +250,11 @@ fn switch_geometry_and_focus_feedback_follow_theme_and_state(cx: &mut TestAppCon
                             .painted_quads()
                             .into_iter()
                             .find(|q| {
-                                q.background == gpui::Background::from(gpui::white())
+                                q.background
+                                    == gpui::Background::from(vorkspace_ui::fluid::knob(on))
                                     && q.bounds.size.width.0 == knob * window.scale_factor()
                             })
-                            .expect("white switch knob");
+                            .expect("switch knob");
                         knob_quad.bounds
                     });
                     assert_eq!(
@@ -290,7 +291,8 @@ fn switch_geometry_and_focus_feedback_follow_theme_and_state(cx: &mut TestAppCon
                                 .painted_quads()
                                 .iter()
                                 .any(|q| q.bounds == knob_bounds
-                                    && q.background == gpui::Background::from(gpui::white())),
+                                    && q.background
+                                        == gpui::Background::from(vorkspace_ui::fluid::knob(on))),
                             "focus must not move the knob"
                         );
                     });

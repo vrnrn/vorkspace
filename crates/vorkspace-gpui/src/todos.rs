@@ -162,6 +162,13 @@ impl Focusable for TodoBoardView {
 }
 
 impl TodoBoardView {
+    /// Opens the first item's details, for captures.
+    #[cfg(test)]
+    pub(crate) fn open_first_details(&mut self, cx: &mut Context<Self>) {
+        if let Some(item) = self.items().first().cloned() {
+            self.open_details(&item, cx);
+        }
+    }
     pub(crate) fn new(store: Database, columns: bool, cx: &mut Context<Self>) -> Self {
         let draft =
             cx.new(|cx| Input::field("Task title", "Task title", page::secondary_ink(), cx));
@@ -1658,7 +1665,7 @@ impl TodoBoardView {
             .min_w_0()
             .min_h(px(64.))
             .rounded(px(radius::SURFACE))
-            .drag_over::<DraggedTodo>(|s, _, _, _| s.bg(content(0.04)))
+            .drag_over::<DraggedTodo>(|s, _, _, _| s.bg(vorkspace_ui::fluid::hint(0.04)))
             .on_drop(cx.listener(move |this, dragged: &DraggedTodo, _, cx| {
                 this.move_to(dragged, status, None, cx)
             }))
@@ -1751,7 +1758,7 @@ impl Render for TodoBoardView {
                     .px_3()
                     .py_2()
                     .text_size(px(12.))
-                    .text_color(gpui::rgb(0xe5484d))
+                    .text_color(vorkspace_ui::theme::danger())
                     .child(error)
             });
         root.children(error)
@@ -1803,6 +1810,13 @@ pub(crate) enum PageEvent {
 
 /// The left sidebar's To-dos page: the personal board or a project board,
 /// picked from a dropdown.
+#[cfg(test)]
+impl TodosPage {
+    pub(crate) fn board_for_capture(&self) -> Entity<TodoBoardView> {
+        self.board.clone()
+    }
+}
+
 pub(crate) struct TodosPage {
     store: Database,
     board: Entity<TodoBoardView>,
@@ -1994,7 +2008,7 @@ impl TodosPage {
                 .children(
                     self.assign_error
                         .clone()
-                        .map(|error| div().text_color(gpui::rgb(0xe5484d)).child(error)),
+                        .map(|error| div().text_color(vorkspace_ui::theme::danger()).child(error)),
                 )
                 .into_any_element(),
         )
@@ -2046,7 +2060,7 @@ impl TodosPage {
                     .gap_2()
                     .text_size(px(13.))
                     .when(current, |d| d.bg(content(0.08)))
-                    .hover(|s| s.bg(content(0.08)))
+                    .hover(|s| s.bg(vorkspace_ui::fluid::hover(0.08)))
                     .child(
                         div()
                             .flex_1()

@@ -801,14 +801,15 @@ impl Render for Btw {
                         div()
                             .id(format!("btw-remove-{remove_id}"))
                             .role(Role::Button)
+                            .map(vorkspace_ui::theme::tab_reachable)
                             .aria_label("Delete side question")
                             .size(px(20.))
                             .flex()
                             .items_center()
                             .justify_center()
                             .rounded(px(radius::CONTROL))
-                            .hover(|style| style.bg(content(0.1)))
-                            .child(icon("x-mark", 12.))
+                            .hover(|style| style.bg(vorkspace_ui::fluid::hover(0.1)))
+                            .child(icon("x", 12.))
                             .on_click(
                                 cx.listener(move |this, _, _, cx| this.remove(&remove_id, cx)),
                             ),

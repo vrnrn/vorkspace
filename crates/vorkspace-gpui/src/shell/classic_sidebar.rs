@@ -40,13 +40,10 @@ impl Shell {
         self.workspace
             .sidebar_tabs
             .insert(self.workspace.project.clone(), tab);
-        self.sidebar_auto_hidden = false;
         self.set_sidebar_visible(true, cx);
         self.ensure_right_panel(window, cx);
         self.sync_right_panel(cx);
-        if tab == SidebarTab::Sessions {
-            window.focus(&self.sidebar_focus, cx);
-        } else if tab == SidebarTab::Todos {
+        if tab == SidebarTab::Todos {
             if let Some(board) = &self.project_todos {
                 window.focus(&board.focus_handle(cx), cx);
             }
@@ -68,7 +65,8 @@ impl Shell {
             .flex()
             .items_center()
             .gap_1()
-            .px_3()
+            // The name's hover fill lines up with the tab pills below it.
+            .px_2()
             .border_b_1()
             .border_color(crate::panel_kit::stroke())
             .child(
@@ -77,23 +75,30 @@ impl Shell {
                     .debug_selector(|| "sidebar-project-button".into())
                     .role(Role::Button)
                     .aria_label("Switch project")
-                    .focusable()
-                    .tab_stop(true)
+                    .map(vorkspace_ui::theme::tab_reachable)
                     .min_w_0()
                     .flex_1()
                     .flex()
                     .items_center()
                     .gap_1()
                     .h(px(28.))
+                    .px_2()
                     .rounded(px(radius::CONTROL))
-                    .hover(|s| s.bg(content(0.08)))
+                    .hover(|s| s.bg(vorkspace_ui::fluid::hover(0.08)))
                     .text_size(px(13.))
                     .font_weight(FontWeight::SEMIBOLD)
                     .child(
                         div()
                             .min_w_0()
                             .truncate()
-                            .child(self.project_label(&self.workspace.project)),
+                            .when(self.workspace.project.is_empty(), |d| {
+                                d.text_color(content(0.5)).font_weight(FontWeight::NORMAL)
+                            })
+                            .child(if self.workspace.project.is_empty() {
+                                "No project".into()
+                            } else {
+                                self.project_label(&self.workspace.project)
+                            }),
                     )
                     .child(icon("chevron-down", 12.).text_color(content(0.45)))
                     .child(self.project_anchor.probe())
@@ -106,44 +111,38 @@ impl Shell {
                         );
                     })),
             )
-            // The project's diff stat lives here while the sidebar is open.
-            .children(self.project_diff_stat(cx))
-            .child(
-                icon_button("classic-find-file", "Search files", "search")
-                    .debug_selector(|| "sidebar-file-search".into())
-                    .on_click(
-                        cx.listener(|this, _, window, cx| this.open_quick_open(false, window, cx)),
-                    ),
-            )
-            .child(
-                icon_button("classic-new-session", "New session", "plus")
-                    .debug_selector(|| "classic-new-session".into())
-                    .on_click(cx.listener(|this, _, _, cx| this.create(this.default_kind(), cx))),
-            )
+            .when(!self.workspace.project.is_empty(), |d| {
+                d.child(
+                    icon_button(
+                        "sidebar-project-actions",
+                        "Project actions",
+                        "more-horizontal",
+                    )
+                    .on_click(cx.listener(|this, _, window, cx| {
+                        this.open_menu(
+                            MenuTarget::Project {
+                                path: this.workspace.project.clone(),
+                                rail: false,
+                            },
+                            Anchor::Slot(this.project_anchor.clone()),
+                            window,
+                            cx,
+                        );
+                    })),
+                )
+            })
             .into_any()
     }
 
     pub(super) fn classic_sidebar(&mut self, cx: &mut Context<Self>) -> AnyElement {
-        self.refresh_sidebar_structure(cx);
         let tab = self.workspace.sidebar_tab();
         let tabs = SidebarTab::normalize(&self.workspace.sidebar_tab_order);
         let todos_enabled = self.workspace.preferences.todos;
+        let compact = self.sidebar_content_width < 200.;
         let mut body = div()
             .id("classic-workspace-sidebar")
             .debug_selector(|| "sidebar-content".into())
-            .key_context("SessionSidebar")
-            .track_focus(&self.sidebar_focus)
-            .on_action(
-                cx.listener(|this, _: &session_groups::RenameSidebarItem, window, cx| {
-                    this.rename_sidebar_item(window, cx)
-                }),
-            )
-            .on_action(cx.listener(
-                |this, _: &session_groups::DeleteSidebarSelection, window, cx| {
-                    this.delete_sidebar_selection(window, cx)
-                },
-            ))
-            .w(px(self.workspace.right_panel_width))
+            .w_full()
             .h_full()
             .flex()
             .flex_col()
@@ -157,73 +156,147 @@ impl Shell {
                     .h(px(36.))
                     .flex_shrink_0()
                     .relative()
-                    .flex()
-                    .items_center()
-                    .gap_px()
-                    .px_2()
                     .border_b_1()
                     .border_color(crate::panel_kit::stroke())
-                    .children(
-                        tabs.into_iter()
+                    .child({
+                        let items: Vec<SidebarTab> = tabs
+                            .into_iter()
                             .filter(|item| *item != SidebarTab::Todos || todos_enabled)
-                            .map(|item| {
-                                let selected = tab == item
-                                    || (tab == SidebarTab::Graph && item == SidebarTab::Changes);
-                                let id: SharedString =
-                                    format!("classic-tab-{}", item.label().to_lowercase()).into();
-                                div()
-                                    .id(id.clone())
-                                    .debug_selector(move || id.to_string())
-                                    .role(Role::Tab)
-                                    .aria_label(item.label())
-                                    .aria_selected(selected)
-                                    .focusable()
-                                    .tab_stop(true)
-                                    .h(px(28.))
-                                    .flex_1()
-                                    .min_w_0()
-                                    .relative()
-                                    .flex()
-                                    .items_center()
-                                    .justify_center()
-                                    .rounded(px(radius::CONTROL))
-                                    .text_size(px(12.))
-                                    .font_weight(FontWeight::MEDIUM)
-                                    .text_color(content(if selected { 0.9 } else { 0.5 }))
-                                    .when(selected, |d| d.bg(content(0.1)))
-                                    .hover(|s| s.bg(content(0.08)).text_color(content(1.)))
-                                    .focus(|s| s.bg(content(0.1)).text_color(content(1.)))
-                                    .child(item.label())
-                                    // Keep the cached sidebar's hover fill current,
-                                    // including clicks that arrive without a mouse move.
-                                    .on_hover(cx.listener(|this, _, _, cx| {
-                                        this.sidebar_frame.update(cx, |_, cx| cx.notify())
-                                    }))
-                                    .on_click(cx.listener(move |this, _, window, cx| {
-                                        this.select_classic_sidebar(item, window, cx)
-                                    }))
-                            }),
-                    ),
+                            .collect();
+                        let selected_index = items.iter().position(|item| {
+                            tab == *item
+                                || (tab == SidebarTab::Graph && *item == SidebarTab::Changes)
+                        });
+                        let listener = cx.entity().downgrade();
+                        vorkspace_ui::glide::GlideList::new(
+                            "classic-workspace-tab-glide",
+                            selected_index,
+                            div().size_full().flex().items_center().gap_px().px_2(),
+                            content(0.1),
+                            radius::CONTROL,
+                            move |glide| {
+                                let ready = glide.ready();
+                                items
+                                    .into_iter()
+                                    .enumerate()
+                                    .map(|(index, item)| {
+                                        let selected = selected_index == Some(index);
+                                        let listener = listener.clone();
+                                        let hovered = listener.clone();
+                                        let id: SharedString =
+                                            format!("classic-tab-{}", item.label().to_lowercase())
+                                                .into();
+                                        div()
+                                            .id(id.clone())
+                                            .debug_selector(move || id.to_string())
+                                            .role(Role::Tab)
+                                            .aria_label(item.label())
+                                            .aria_selected(selected)
+                                            .map(vorkspace_ui::theme::tab_reachable)
+                                            .h(px(28.))
+                                            .flex_1()
+                                            .min_w_0()
+                                            .relative()
+                                            .flex()
+                                            .items_center()
+                                            .justify_center()
+                                            .rounded(px(radius::CONTROL))
+                                            .text_size(px(12.))
+                                            .font_weight(FontWeight::MEDIUM)
+                                            .text_color(content(if selected { 0.9 } else { 0.5 }))
+                                            // The glide's thumb draws the selection once it
+                                            // has measured the strip.
+                                            .when(selected && !ready, |d| d.bg(content(0.1)))
+                                            .when(!selected, |d| {
+                                                d.hover(|s| {
+                                                    s.bg(vorkspace_ui::fluid::hover(0.08))
+                                                        .text_color(content(1.))
+                                                })
+                                            })
+                                            .child(glide.probe(index))
+                                            .child(if compact {
+                                                let mark = match item {
+                                                    SidebarTab::Files => "folder",
+                                                    SidebarTab::Changes => "git-compare",
+                                                    SidebarTab::Todos => "check-circle",
+                                                    SidebarTab::Graph => "clock",
+                                                    SidebarTab::Sessions => "message-square",
+                                                };
+                                                icon(mark, 14.).into_any_element()
+                                            } else {
+                                                item.label().into_any_element()
+                                            })
+                                            .when(compact, |d| {
+                                                d.tooltip(move |_, cx| {
+                                                    cx.new(|_| {
+                                                        crate::controls::Tooltip(
+                                                            item.label().into(),
+                                                        )
+                                                    })
+                                                    .into()
+                                                })
+                                            })
+                                            // Keep the cached sidebar's hover fill current,
+                                            // including clicks that arrive without a mouse move.
+                                            .on_hover(move |_, _, cx| {
+                                                let _ =
+                                                    hovered.update(cx, |this: &mut Shell, cx| {
+                                                        this.sidebar_frame
+                                                            .update(cx, |_, cx| cx.notify())
+                                                    });
+                                            })
+                                            .on_click(move |_, window, cx| {
+                                                let _ =
+                                                    listener.update(cx, |this: &mut Shell, cx| {
+                                                        this.select_classic_sidebar(
+                                                            item, window, cx,
+                                                        )
+                                                    });
+                                            })
+                                            .into_any_element()
+                                    })
+                                    .collect()
+                            },
+                        )
+                    }),
             );
-        if tab == SidebarTab::Sessions {
-            body = body
-                .child(
-                    div()
-                        .id("classic-session-filter")
-                        .debug_selector(|| "classic-session-filter".into())
-                        .h(px(36.))
-                        .flex_shrink_0()
-                        .flex()
-                        .items_center()
-                        .gap_1()
-                        .px_2()
-                        .border_b_1()
-                        .border_color(crate::panel_kit::stroke())
-                        .child(icon("search", 12.).text_color(content(0.5)))
-                        .child(div().flex_1().min_w_0().child(self.sidebar_search.clone()))
-                        .child(self.sidebar_filter_button(cx)),
+        if self.workspace.project.is_empty() {
+            // Files, changes and a project board all belong to a project;
+            // without one, each tab offers the same way in.
+            body = body.child(
+                crate::controls::page::empty(
+                    icon("folder-open", 20.),
+                    "No project open",
+                    match tab {
+                        SidebarTab::Files => "Open a project to browse its files.",
+                        SidebarTab::Todos => "Open a project to plan its work.",
+                        _ => "Open a project to review and commit its changes.",
+                    },
                 )
-                .child(self.virtual_sidebar(cx));
+                .child(
+                    crate::controls::page::secondary(
+                        "sidebar-open-project",
+                        "Open project",
+                        false,
+                        false,
+                    )
+                    .debug_selector(|| "sidebar-open-project".into())
+                    .mt(px(12.))
+                    .child("Open project…")
+                    .on_click(cx.listener(|this, _, window, cx| {
+                        if this.workspace.vorkspace_projects().is_empty() {
+                            this.open_project(cx);
+                        } else {
+                            this.open_menu(
+                                MenuTarget::Header,
+                                Anchor::Slot(this.project_anchor.clone()),
+                                window,
+                                cx,
+                            );
+                        }
+                    })),
+                ),
+            );
         } else if tab == SidebarTab::Todos {
             body = body.child(self.project_todo_board(cx));
         } else if let Some(panel) = &self.right_panel {
@@ -238,11 +311,11 @@ impl Shell {
                         .px_2()
                         .children(
                             [
-                                (SidebarTab::Changes, "Changes"),
-                                (SidebarTab::Graph, "History"),
+                                (SidebarTab::Changes, "Changes", "git-compare"),
+                                (SidebarTab::Graph, "History", "clock"),
                             ]
                             .into_iter()
-                            .map(|(item, label)| {
+                            .map(|(item, label, mark)| {
                                 let id = format!("classic-source-{}", label.to_lowercase());
                                 div()
                                     .id(SharedString::from(id.clone()))
@@ -250,15 +323,20 @@ impl Shell {
                                     .role(Role::Tab)
                                     .aria_label(label)
                                     .aria_selected(tab == item)
-                                    .focusable()
-                                    .tab_stop(true)
+                                    .map(vorkspace_ui::theme::tab_reachable)
                                     .px_2()
                                     .py_1()
                                     .rounded(px(radius::CONTROL))
                                     .text_size(px(11.))
                                     .when(tab == item, |d| d.bg(content(0.1)))
-                                    .hover(|s| s.bg(content(0.08)))
-                                    .child(label)
+                                    .hover(|s| s.bg(vorkspace_ui::fluid::hover(0.08)))
+                                    .when(compact, |d| {
+                                        d.child(icon(mark, 14.)).tooltip(move |_, cx| {
+                                            cx.new(|_| crate::controls::Tooltip(label.into()))
+                                                .into()
+                                        })
+                                    })
+                                    .when(!compact, |d| d.child(label))
                                     .on_click(cx.listener(move |this, _, window, cx| {
                                         this.select_classic_sidebar(item, window, cx)
                                     }))
@@ -275,8 +353,9 @@ impl Shell {
         let preview = self.session_preview.as_ref()?;
         let id = preview.id;
         Some(
+            // Sessions are listed in the rail at the window's left edge.
             popover("session-preview", Anchor::Slot(preview.anchor.clone()))
-                .side(Side::Left)
+                .side(Side::Right)
                 .gap(8.)
                 .width(260.)
                 .max_height(440.)

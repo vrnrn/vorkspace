@@ -50,7 +50,6 @@ impl Shell {
                     return;
                 }
                 if let MenuEvent::Picked(id, _) = event
-                    && id != "archived"
                     && let Some(open) = this
                         .menu
                         .as_ref()
@@ -118,6 +117,34 @@ impl Shell {
         match target {
             // Answered by terminal_menu_items above.
             MenuTarget::TerminalTab(_) => ("".into(), Vec::new(), 160., MenuStyle::Explorer),
+            MenuTarget::Tabs(tabs) => {
+                let selected = self.active_title_tab(cx);
+                let mut items: Vec<MenuItem> = tabs
+                    .iter()
+                    .enumerate()
+                    .map(|(ix, tab)| {
+                        let title: SharedString = match tab {
+                            TitleTab::Workspace(id) => self.tab_copy(*id, cx).headline.into(),
+                            TitleTab::Terminal { cwd, .. } => {
+                                format!("Terminal · {}", project_name(cwd)).into()
+                            }
+                            TitleTab::Bot { id, .. } => self
+                                .bots
+                                .as_ref()
+                                .and_then(|bots| bots.read(cx).roster.get(id))
+                                .map_or_else(|| "Bot".into(), |bot| bot.label().into()),
+                            TitleTab::Search => "Search".into(),
+                            TitleTab::App(_) => "App".into(),
+                        };
+                        MenuAction::new(format!("tab:{ix}"), title)
+                            .checked(selected.as_ref() == Some(tab))
+                            .into()
+                    })
+                    .collect();
+                items.push(MenuItem::Separator);
+                items.push(MenuAction::new("new", "New session").icon("plus").into());
+                ("Open tabs".into(), items, 300., MenuStyle::Switcher)
+            }
             MenuTarget::Tab(_) | MenuTarget::TitleTab(_) => {
                 let (tab, label) = match target {
                     MenuTarget::Tab(id) => {
@@ -194,12 +221,6 @@ impl Shell {
                 228.,
                 MenuStyle::Explorer,
             ),
-            MenuTarget::Folder(folder) => (
-                "Folder actions".into(),
-                self.folder_menu_items(folder, events, cx),
-                228.,
-                MenuStyle::Explorer,
-            ),
             MenuTarget::TerminalDock => {
                 let side = self
                     .workspace
@@ -209,10 +230,10 @@ impl Shell {
                 (
                     "Move terminal".into(),
                     [
-                        ("bottom", "Dock Bottom", DockSide::Bottom),
-                        ("top", "Dock Top", DockSide::Top),
-                        ("left", "Dock Left", DockSide::Left),
-                        ("right", "Dock Right", DockSide::Right),
+                        ("bottom", "Dock bottom", DockSide::Bottom),
+                        ("top", "Dock top", DockSide::Top),
+                        ("left", "Dock left", DockSide::Left),
+                        ("right", "Dock right", DockSide::Right),
                     ]
                     .into_iter()
                     .map(|(id, label, s)| MenuAction::new(id, label).checked(s == side).into())
@@ -227,6 +248,7 @@ impl Shell {
                 228.,
                 MenuStyle::Filter,
             ),
+            MenuTarget::Vorkspace => self.vorkspace_menu_items(),
             MenuTarget::SidebarOptions => (
                 "Sidebar options".into(),
                 self.sidebar_options_menu_items(cx),
@@ -236,9 +258,13 @@ impl Shell {
             // SidebarWorktreeSwitcher's menu under the project header.
             MenuTarget::Header => {
                 let picker = cx.new(|cx| {
-                    ProjectPicker::new(&self.workspace.projects, &self.workspace.project, cx)
-                        .appearance(self.workspace.project_appearance.clone())
-                        .allow_remote()
+                    ProjectPicker::new(
+                        &self.workspace.vorkspace_projects(),
+                        &self.workspace.project,
+                        cx,
+                    )
+                    .appearance(self.workspace.project_appearance.clone())
+                    .allow_remote()
                 });
                 events.push(cx.subscribe_in(
                     &picker,
@@ -246,10 +272,9 @@ impl Shell {
                     |this, _, picked: &ProjectPicked, window, cx| {
                         this.close_menu(cx);
                         match picked {
-                            ProjectPicked::Project(path) if *path != this.workspace.project => {
-                                this.select_project(path.clone(), window, cx)
+                            ProjectPicked::Project(path) => {
+                                this.open_project_from_user(path.clone(), window, cx)
                             }
-                            ProjectPicked::Project(_) => {}
                             ProjectPicked::New => this.open_project(cx),
                             ProjectPicked::Remote => {
                                 this.open_remote_project(window, cx);
@@ -262,75 +287,48 @@ impl Shell {
                     },
                 ));
                 let focus = picker.read(cx).search_focus(cx);
-                let branch = self
-                    .worktree_focus
-                    .get(&self.workspace.project)
-                    .and_then(|focus| focus.branch.clone())
-                    .or_else(|| {
-                        crate::conversation::git_branch(std::path::Path::new(
-                            &self.workspace.project,
-                        ))
-                    });
-                let worktree = MenuAction::new("switch-worktree", "Switch worktree")
-                    .icon("folder-tree")
-                    .flyout(self.worktree_flyout(events, window, cx));
-                (
-                    format!("{} menu", self.project_label(&self.workspace.project)).into(),
-                    vec![
+                // The project name opens the vorkspace's project picker itself;
+                // the worktree Explorer and Changes show stays one row below.
+                let mut items = vec![MenuItem::Custom(picker.into(), focus)];
+                if !self.workspace.project.is_empty() {
+                    let branch = self
+                        .worktree_focus
+                        .get(&self.workspace.project)
+                        .and_then(|focus| focus.branch.clone())
+                        .or_else(|| {
+                            crate::conversation::git_branch(std::path::Path::new(
+                                &self.workspace.project,
+                            ))
+                        });
+                    let worktree = MenuAction::new("switch-worktree", "Switch worktree")
+                        .icon("folder-tree")
+                        .flyout(self.worktree_flyout(events, window, cx));
+                    items.push(MenuItem::Separator);
+                    items.push(
                         match branch {
                             Some(branch) => worktree.value(branch),
                             None => worktree,
                         }
                         .into(),
-                        MenuItem::Separator,
-                        MenuAction::new("switch-project", "Switch project")
-                            .icon("folder")
-                            .flyout(Flyout {
-                                view: picker.into(),
-                                width: 286.,
-                                padding: 0.,
-                                height: None,
-                                max_height: Some(380.),
-                                focus: Some(focus),
-                                surface: None,
-                            })
+                    );
+                    items.push(
+                        MenuAction::new("project-settings", "Project actions…")
+                            .icon("more-horizontal")
                             .into(),
-                        MenuAction::new("project-settings", "Project settings")
-                            .icon("sliders")
-                            .flyout(self.project_settings_flyout(events, window, cx))
-                            .into(),
-                        MenuAction::new("open-remote-project", "Open folder on a machine…")
-                            .icon("globe")
-                            .into(),
-                        MenuAction::new("settings", "Settings")
-                            .icon("settings")
-                            .shortcut(format!("{MOD},"))
-                            .into(),
-                    ],
-                    240.,
-                    MenuStyle::Switcher,
-                )
+                    );
+                }
+                ("Switch project".into(), items, 286., MenuStyle::Switcher)
             }
             // TabGroupMenu's appearance controls and project actions.
             MenuTarget::Project { path, rail } => {
-                let controls = self.project_appearance_controls(path, events, window, cx);
+                // Customization lives in Project settings; the menu keeps
+                // the actions you reach for from the sidebar.
                 let mut items: Vec<MenuItem> = vec![
-                    MenuItem::Custom(controls.clone().into(), controls.read(cx).focus(cx)),
+                    MenuAction::new("project-settings", "Project settings…")
+                        .icon("settings")
+                        .into(),
                     MenuItem::Separator,
-                    MenuAction::new("background", "Background image")
-                        .icon("image-add")
-                        .into(),
                 ];
-                items.push(
-                    MenuAction::new("codebase-enabled", "Codebase Memory")
-                        .description("Local code index. First use downloads a 48 MB engine.")
-                        .icon("network")
-                        .disabled(vorkspace_core::files::remote::is_remote(
-                            std::path::Path::new(path),
-                        ))
-                        .toggle(crate::codebase::enabled(path, cx))
-                        .into(),
-                );
                 if *rail {
                     let rail = self
                         .workspace
@@ -338,45 +336,6 @@ impl Shell {
                         .clone()
                         .unwrap_or_default();
                     let key = vorkspace_core::files::path_key(path);
-                    let mut groups = vec![
-                        MenuAction::new("project-group:new", "New group…"),
-                        MenuAction::new("project-group:set:", "No group")
-                            .checked(!rail.assignments.contains_key(&key)),
-                    ];
-                    groups.extend(rail.groups.iter().map(|g| {
-                        MenuAction::new(format!("project-group:set:{}", g.id), g.name.clone())
-                            .checked(rail.assignments.get(&key) == Some(&g.id))
-                    }));
-                    let manage = rail
-                        .groups
-                        .iter()
-                        .flat_map(|g| {
-                            [
-                                MenuAction::new(
-                                    format!("group-rename:{}", g.id),
-                                    format!("Rename {}…", g.name),
-                                ),
-                                MenuAction::new(
-                                    format!("group-remove:{}", g.id),
-                                    format!("Remove {}", g.name),
-                                ),
-                            ]
-                        })
-                        .collect::<Vec<_>>();
-                    items.push(
-                        MenuAction::new("project-group", "Move to group")
-                            .icon("folder-tree")
-                            .submenu(groups)
-                            .into(),
-                    );
-                    if !manage.is_empty() {
-                        items.push(
-                            MenuAction::new("manage-groups", "Manage groups")
-                                .icon("folder-tree")
-                                .submenu(manage)
-                                .into(),
-                        );
-                    }
                     items.push(
                         MenuAction::new(
                             "pin",
@@ -446,12 +405,24 @@ impl Shell {
             }
             MenuTarget::SessionFilter => self.change_session_filter(action, cx),
             MenuTarget::SidebarOptions => self.change_sidebar_option(action, cx),
+            MenuTarget::Vorkspace => self.run_vorkspace_menu(action, window, cx),
             MenuTarget::Tab(id) => {
                 self.run_title_tab_menu(TitleTab::Workspace(id), action, window, cx)
             }
             MenuTarget::TitleTab(tab) => self.run_title_tab_menu(tab, action, window, cx),
+            MenuTarget::Tabs(tabs) => {
+                if action == "new" {
+                    self.create(self.default_kind(), cx);
+                } else if let Some(tab) = action
+                    .strip_prefix("tab:")
+                    .and_then(|ix| ix.parse::<usize>().ok())
+                    .and_then(|ix| tabs.get(ix))
+                    .filter(|tab| self.visible_tabs(cx).contains(tab))
+                {
+                    self.open_title_tab(tab, window, cx);
+                }
+            }
             MenuTarget::Session(id) => self.run_session_menu(id, action, window, cx),
-            MenuTarget::Folder(folder) => self.run_folder_menu(folder, action, window, cx),
             MenuTarget::Header => {
                 // "Project settings" opens the project's menu beside its row.
                 if action == "settings" {
@@ -469,14 +440,11 @@ impl Shell {
                 }
             }
             MenuTarget::Project { path, .. } => {
-                if (action == "pin"
-                    || action.starts_with("project-group:")
-                    || action.starts_with("group-rename:")
-                    || action.starts_with("group-remove:"))
+                if action == "pin"
                     && let Err(error) = self.workspace.migrate_project_rail()
                 {
                     self.error = Some(format!(
-                        "Cannot change project groups: {error}. Existing preferences were kept."
+                        "Cannot change project rail state: {error}. Existing preferences were kept."
                     ));
                     cx.notify();
                     return;
@@ -498,68 +466,6 @@ impl Shell {
                     self.persist(cx);
                     self.invalidate_chrome(cx);
                     cx.notify();
-                } else if action == "project-group:new" {
-                    let rail = self.workspace.project_rail_mut();
-                    let id = format!("native-group-{}", vorkspace_core::bot::new_id());
-                    rail.groups.push(crate::workspace::ProjectRailGroup {
-                        id: id.clone(),
-                        name: "New group".into(),
-                        collapsed: false,
-                    });
-                    let key = vorkspace_core::files::path_key(&path);
-                    rail.assignments.insert(key.clone(), id.clone());
-                    if rail.awaiting_legacy_assignments {
-                        rail.assignment_overrides
-                            .insert(key.clone(), Some(id.clone()));
-                    }
-                    rail.pinned.remove(&key);
-                    if rail.awaiting_legacy_pins {
-                        rail.pin_overrides.insert(key, false);
-                    }
-                    self.persist(cx);
-                    self.start_rename(session_groups::RenameTarget::ProjectGroup(id), window, cx);
-                } else if let Some(id) = action.strip_prefix("group-rename:") {
-                    self.start_rename(
-                        session_groups::RenameTarget::ProjectGroup(id.into()),
-                        window,
-                        cx,
-                    );
-                } else if let Some(id) = action.strip_prefix("group-remove:") {
-                    let rail = self.workspace.project_rail_mut();
-                    rail.groups.retain(|g| g.id != id);
-                    if rail.awaiting_legacy_assignments {
-                        let removed: Vec<_> = rail
-                            .assignments
-                            .iter()
-                            .filter(|(_, g)| g.as_str() == id)
-                            .map(|(p, _)| p.clone())
-                            .collect();
-                        for path in removed {
-                            rail.assignment_overrides.insert(path, None);
-                        }
-                    }
-                    rail.assignments.retain(|_, g| g != id);
-                    self.workspace.project_group_collapsed.remove(id);
-                    self.persist(cx);
-                    self.invalidate_chrome(cx);
-                    cx.notify();
-                } else if let Some(id) = action.strip_prefix("project-group:set:") {
-                    let rail = self.workspace.project_rail_mut();
-                    let key = vorkspace_core::files::path_key(&path);
-                    if id.is_empty() {
-                        rail.assignments.remove(&key);
-                        if rail.awaiting_legacy_assignments {
-                            rail.assignment_overrides.insert(key, None);
-                        }
-                    } else if rail.groups.iter().any(|g| g.id == id) {
-                        rail.assignments.insert(key.clone(), id.into());
-                        if rail.awaiting_legacy_assignments {
-                            rail.assignment_overrides.insert(key, Some(id.into()));
-                        }
-                    }
-                    self.persist(cx);
-                    self.invalidate_chrome(cx);
-                    cx.notify();
                 } else if action == "archive" {
                     self.archive_project(&path, window, cx);
                 } else if action == "delete" {
@@ -573,8 +479,8 @@ impl Shell {
                     }
                 } else if let Some(editor) = action.strip_prefix("external-editor:") {
                     self.open_in_external_editor(editor, &path, cx);
-                } else if action == "background" {
-                    self.open_background_dialog(path, window, cx);
+                } else if action == "project-settings" {
+                    self.open_project_settings(path, window, cx);
                 } else if action.starts_with("mute:") {
                     self.run_project_notification_menu(&path, action, window, cx);
                 }
@@ -593,6 +499,7 @@ impl Shell {
         } else {
             *self.latest_state.lock().unwrap_or_else(|e| e.into_inner()) = state;
             self.workspace = next;
+            self.share_vorkspaces(cx);
             self.invalidate_chrome(cx);
         }
         cx.notify();
