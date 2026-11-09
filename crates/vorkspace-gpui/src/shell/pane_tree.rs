@@ -2,6 +2,8 @@
 use super::*;
 use vorkspace_ui::radius;
 
+const REVIEW_SIDE_BY_SIDE_MIN_WIDTH: f32 = 500.;
+
 impl Shell {
     /// The session pane's split header (SessionPane.tsx): grip, focus dot,
     /// title and a close button. The header moves the chat independently of
@@ -641,6 +643,12 @@ impl Shell {
                 .into_any_element();
         }
         let in_split = split.is_some();
+        let compact = self
+            .split_bounds
+            .get(&id)
+            .and_then(AnchorSlot::get)
+            .map_or_else(|| self.pane_available_width(), |b| b.size.width.as_f32())
+            < REVIEW_SIDE_BY_SIDE_MIN_WIDTH;
         let chat = self.sessions.get(&id).cloned();
         let now = vorkspace_ui::clock::Instant::now();
         let sliding = self
@@ -655,7 +663,7 @@ impl Shell {
         // Keeping the removed review here would retain its collapsing header
         // and change the layout again on the following redraw.
         let sliding = match sliding {
-            Some((_, true, _, _)) => {
+            Some((_, done, _, _)) if done || compact => {
                 self.review_slide = None;
                 None
             }
@@ -666,7 +674,7 @@ impl Shell {
             .map(|(_, _, _, review)| review.clone())
             .or_else(|| self.review_for(id, cx));
         if let Some(chat) = &chat {
-            let beside = in_split || review.is_some();
+            let beside = in_split || (review.is_some() && !compact);
             chat.update(cx, |session, cx| session.set_beside_pane(beside, cx));
         }
         let Some(review) = review else {
@@ -681,6 +689,82 @@ impl Shell {
                 .into_any_element();
         };
         let state = review.read(cx).state.clone();
+        let bounds = self.split_bounds.entry(id).or_default().clone();
+        if compact && !state.chat_hidden {
+            let show_review = self.workspace.active == Some(id) && self.review_focused;
+            review.update(cx, |r, cx| {
+                r.set_visible(show_review, cx);
+                r.set_deferred(false, cx);
+            });
+            let switcher = div()
+                .id("compact-review-switcher")
+                .debug_selector(|| "compact-review-switcher".into())
+                .role(Role::TabList)
+                .aria_label("Session panes")
+                .flex()
+                .items_center()
+                .flex_shrink_0()
+                .gap_1()
+                .px_2()
+                .h(px(34.))
+                .border_b_1()
+                .border_color(crate::panel_kit::stroke())
+                .children(
+                    [("Chat", false), ("Review", true)].map(|(label, to_review)| {
+                        div()
+                            .id((label, id as usize))
+                            .debug_selector(move || format!("compact-review-{label}"))
+                            .role(Role::Tab)
+                            .map(vorkspace_ui::theme::tab_reachable)
+                            .aria_label(label)
+                            .aria_selected(show_review == to_review)
+                            .px_3()
+                            .py_1()
+                            .rounded(px(radius::CONTROL))
+                            .text_size(px(12.))
+                            .when(show_review == to_review, |d| d.bg(content(0.1)))
+                            .hover(|d| d.bg(vorkspace_ui::fluid::hover(0.12)))
+                            .child(label)
+                            .on_click(cx.listener(move |this, _, window, cx| {
+                                this.focus_pane(id, window, cx);
+                                this.review_focused = to_review;
+                                if to_review && let Some(review) = this.review_for(id, cx) {
+                                    review.update(cx, |r, cx| r.focus_active(window, cx));
+                                } else {
+                                    this.focus_active(window, cx);
+                                }
+                                cx.notify();
+                            }))
+                    }),
+                );
+            return div()
+                .size_full()
+                .relative()
+                .flex()
+                .flex_col()
+                .child(bounds.layout_probe())
+                .when_some(split.filter(|p| *p > 0.), |d, p| {
+                    d.child(self.split_header(id, p, true, cx))
+                })
+                .child(switcher)
+                .child(
+                    div()
+                        .flex_1()
+                        .min_h_0()
+                        .min_w_0()
+                        .flex()
+                        .flex_col()
+                        .overflow_hidden()
+                        .child(if show_review {
+                            review
+                                .cached(StyleRefinement::default().size_full())
+                                .into_any_element()
+                        } else {
+                            self.chat_with_background(id, chat, cx).into_any_element()
+                        }),
+                )
+                .into_any_element();
+        }
         let (ratio, deferred) = match sliding {
             Some((width, _, opening, _)) => {
                 window.request_animation_frame();
@@ -704,7 +788,6 @@ impl Shell {
         };
         let header_shown = split.unwrap_or(header);
         let ratio = if chat_hidden { 1. } else { ratio.clamp(0., 1.) };
-        let bounds = self.split_bounds.entry(id).or_default().clone();
         let full_width = bounds
             .get()
             .map_or(600., |b| b.size.width.as_f32() * state.ratio);

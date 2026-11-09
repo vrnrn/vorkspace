@@ -215,9 +215,9 @@ impl Shell {
                                                 let mark = match item {
                                                     SidebarTab::Files => "folder",
                                                     SidebarTab::Changes => "git-compare",
-                                                    SidebarTab::Todos => "circle-check",
-                                                    SidebarTab::Graph => "history",
-                                                    SidebarTab::Sessions => "message-circle",
+                                                    SidebarTab::Todos => "check-circle",
+                                                    SidebarTab::Graph => "clock",
+                                                    SidebarTab::Sessions => "message-square",
                                                 };
                                                 icon(mark, 14.).into_any_element()
                                             } else {
@@ -308,11 +308,11 @@ impl Shell {
                         .px_2()
                         .children(
                             [
-                                (SidebarTab::Changes, "Changes"),
-                                (SidebarTab::Graph, "History"),
+                                (SidebarTab::Changes, "Changes", "git-compare"),
+                                (SidebarTab::Graph, "History", "clock"),
                             ]
                             .into_iter()
-                            .map(|(item, label)| {
+                            .map(|(item, label, mark)| {
                                 let id = format!("classic-source-{}", label.to_lowercase());
                                 div()
                                     .id(SharedString::from(id.clone()))
@@ -320,15 +320,20 @@ impl Shell {
                                     .role(Role::Tab)
                                     .aria_label(label)
                                     .aria_selected(tab == item)
-                                    .focusable()
-                                    .tab_stop(true)
+                                    .map(vorkspace_ui::theme::tab_reachable)
                                     .px_2()
                                     .py_1()
                                     .rounded(px(radius::CONTROL))
                                     .text_size(px(11.))
                                     .when(tab == item, |d| d.bg(content(0.1)))
                                     .hover(|s| s.bg(vorkspace_ui::fluid::hover(0.08)))
-                                    .child(label)
+                                    .when(compact, |d| {
+                                        d.child(icon(mark, 14.)).tooltip(move |_, cx| {
+                                            cx.new(|_| crate::controls::Tooltip(label.into()))
+                                                .into()
+                                        })
+                                    })
+                                    .when(!compact, |d| d.child(label))
                                     .on_click(cx.listener(move |this, _, window, cx| {
                                         this.select_classic_sidebar(item, window, cx)
                                     }))

@@ -997,6 +997,7 @@ impl Shell {
                         .on_click(cx.listener(move |this, _, _, cx| {
                             if let Some(d) = this.vorkspace_dialog.as_mut() {
                                 d.project = Some(target.clone());
+                                d.confirm_delete = false;
                             }
                             cx.notify();
                         }))
@@ -1060,6 +1061,10 @@ impl Shell {
                             "Remove from this vorkspace",
                             "close",
                         )
+                        .aria_label(format!(
+                            "Remove {} from this vorkspace",
+                            self.project_label(&path)
+                        ))
                         .on_click(cx.listener(
                             move |this, _, window, cx| {
                                 this.workspace
@@ -1171,6 +1176,7 @@ impl Shell {
                         "Remove from this vorkspace",
                         "close",
                     )
+                    .aria_label(format!("Remove {} from this vorkspace", bot.label()))
                     .on_click(cx.listener(move |this, _, _, cx| {
                         if let Some(v) = this.workspace.vorkspace_mut(&editing) {
                             v.bots.retain(|b| *b != id);
@@ -1272,54 +1278,59 @@ impl Shell {
                     .flex()
                     .items_center()
                     .gap_2()
-                    .child(
-                        crate::controls::page::secondary(
-                            "vorkspace-delete",
-                            if confirm {
+                    .when(open_project.is_none(), |d| {
+                        d.child(
+                            crate::controls::page::secondary(
+                                "vorkspace-delete",
+                                if confirm {
+                                    "Confirm delete"
+                                } else {
+                                    "Delete vorkspace"
+                                },
+                                true,
+                                only,
+                            )
+                            .debug_selector(|| "vorkspace-delete".into())
+                            .child(if confirm {
                                 "Confirm delete"
                             } else {
                                 "Delete vorkspace"
-                            },
-                            true,
-                            only,
-                        )
-                        .debug_selector(|| "vorkspace-delete".into())
-                        .child(if confirm {
-                            "Confirm delete"
-                        } else {
-                            "Delete vorkspace"
-                        })
-                        .on_click(cx.listener(
-                            move |this, _, window, cx| {
-                                if only {
-                                    return;
-                                }
-                                let Some(d) = this.vorkspace_dialog.as_mut() else {
-                                    return;
-                                };
-                                if !d.confirm_delete {
-                                    d.confirm_delete = true;
-                                    cx.notify();
-                                    return;
-                                }
-                                let was_active = delete_id == this.workspace.active_vorkspace;
-                                if this.workspace.delete_vorkspace(&delete_id) {
-                                    if was_active {
-                                        let landing = this.workspace.vorkspace_landing(
-                                            &this.workspace.active_vorkspace.clone(),
-                                        );
-                                        this.open_project_from_user(landing, window, cx);
+                            })
+                            .on_click(cx.listener(
+                                move |this, _, window, cx| {
+                                    if only {
+                                        return;
                                     }
-                                    let next = this.workspace.active_vorkspace.clone();
-                                    this.reconcile_vorkspace_bots(cx);
-                                    this.persist(cx);
-                                    this.open_vorkspace_dialog(Some(next), window, cx);
-                                }
-                            },
-                        )),
-                    )
+                                    let Some(d) = this.vorkspace_dialog.as_mut() else {
+                                        return;
+                                    };
+                                    if d.project.is_some() || d.editing != delete_id {
+                                        return;
+                                    }
+                                    if !d.confirm_delete {
+                                        d.confirm_delete = true;
+                                        cx.notify();
+                                        return;
+                                    }
+                                    let was_active = delete_id == this.workspace.active_vorkspace;
+                                    if this.workspace.delete_vorkspace(&delete_id) {
+                                        if was_active {
+                                            let landing = this.workspace.vorkspace_landing(
+                                                &this.workspace.active_vorkspace.clone(),
+                                            );
+                                            this.open_project_from_user(landing, window, cx);
+                                        }
+                                        let next = this.workspace.active_vorkspace.clone();
+                                        this.reconcile_vorkspace_bots(cx);
+                                        this.persist(cx);
+                                        this.open_vorkspace_dialog(Some(next), window, cx);
+                                    }
+                                },
+                            )),
+                        )
+                    })
                     .child(div().flex_1())
-                    .when(!is_active, |d| {
+                    .when(open_project.is_none() && !is_active, |d| {
                         d.child(
                             crate::controls::page::secondary(
                                 "vorkspace-switch-here",

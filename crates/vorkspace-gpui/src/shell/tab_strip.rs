@@ -599,15 +599,33 @@ impl Shell {
     }
     pub(super) fn tabs(&mut self, window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
         let viewport = self.tabs_width(window, cx);
-        let tabs = self.visible_tabs(cx);
-        let count = tabs.len();
+        let all_tabs = self.visible_tabs(cx);
+        let count = all_tabs.len();
+        let selected = self.active_title_tab(cx);
         let show_switcher = count > 0 && viewport - STRIP_PAD - STRIP_NEW_TAB < count as f32 * 88.;
         let show_new = !show_switcher || viewport >= 94.;
         let reserved = STRIP_PAD
             + if show_new { STRIP_NEW_TAB } else { 0. }
             + if show_switcher { STRIP_NEW_TAB } else { 0. };
+        // Move secondary tabs into the labeled switcher once they can no
+        // longer keep a 24px target alongside the selected tab.
+        let compact = count > 1
+            && viewport < reserved + SELECTED_TAB_MIN_WIDTH + 2. + (count - 1) as f32 * 26.;
+        let tabs = if compact {
+            selected
+                .as_ref()
+                .filter(|tab| all_tabs.contains(tab))
+                .or_else(|| all_tabs.first())
+                .cloned()
+                .into_iter()
+                .collect()
+        } else {
+            all_tabs.clone()
+        };
+        let count = tabs.len();
         let insert = self.pane_drag.as_ref().and_then(|d| d.insert);
-        let animate = self.workspace.preferences.tab_animations
+        let animate = !compact
+            && self.workspace.preferences.tab_animations
             && !self.tab_drag.as_ref().is_some_and(|d| d.active);
         let (slots, opening) = self.title_tab_motion.sync(
             tabs.iter().map(|tab| (tab.clone(), ())).collect(),
@@ -631,7 +649,6 @@ impl Shell {
             (avail / share).clamp(0., TITLE_TAB_MAX_WIDTH)
         };
         // The selected tab keeps a wider share; the others split the rest.
-        let selected = self.active_title_tab(cx);
         let now = vorkspace_ui::clock::Instant::now();
         let selection_changed = self.title_tab_selection.1 != selected;
         if selection_changed {
@@ -1112,6 +1129,7 @@ impl Shell {
             .when(show_switcher, |d| {
                 d.child(
                     icon_button("open-title-tabs", "Open tabs", "chevron-down")
+                        .debug_selector(|| "open-title-tabs".into())
                         .relative()
                         .flex_shrink_0()
                         .mr(px(2.))
@@ -1119,7 +1137,7 @@ impl Shell {
                         .child(self.tab_switcher_anchor.probe())
                         .on_click(cx.listener(move |this, _, window, cx| {
                             this.open_menu(
-                                MenuTarget::Tabs(tabs.clone()),
+                                MenuTarget::Tabs(all_tabs.clone()),
                                 Anchor::Slot(this.tab_switcher_anchor.clone()),
                                 window,
                                 cx,

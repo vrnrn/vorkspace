@@ -2755,6 +2755,104 @@ pub(super) fn window_with_scale(
     (window, ids.0, ids.1)
 }
 #[gpui::test]
+fn compact_review_switches_surfaces_without_changing_the_draft_or_split(cx: &mut TestAppContext) {
+    let (window, _, id) = window(cx);
+    let visual = &mut gpui::VisualTestContext::from_window(window.into(), cx);
+    visual.simulate_resize(gpui::size(px(1500.), px(850.)));
+    visual.run_until_parked();
+    let ratio = window
+        .update(visual, |shell, w, cx| {
+            shell.set_sidebar_visible(true, cx);
+            shell.open(id, w, cx);
+            let input = shell.sessions[&id].read(cx).input.clone();
+            input.update(cx, |input, cx| input.set_text("Keep my draft".into(), cx));
+            shell.open_review(
+                crate::git_tools::review::ReviewTab::Changes {
+                    cwd: "/work/vorkspace".into(),
+                    path: None,
+                    staged: None,
+                },
+                w,
+                cx,
+            );
+            shell.reviews[&id].read(cx).state.ratio
+        })
+        .unwrap();
+    vorkspace_ui::clock::settle_animations(window, visual);
+    visual.simulate_resize(gpui::size(px(600.), px(680.)));
+    vorkspace_ui::clock::settle_animations(window, visual);
+    let chat = visual.debug_bounds("compact-review-Chat").unwrap().center();
+    visual.simulate_click(chat, Default::default());
+    visual.run_until_parked();
+    assert!(visual.debug_bounds("composer-box").unwrap().size.height > px(20.));
+    window
+        .update(visual, |shell, w, cx| {
+            assert!(!shell.review_focused);
+            let input = shell.sessions[&id].read(cx).input.read(cx);
+            assert_eq!(input.content, "Keep my draft");
+            assert!(input.focus_handle(cx).is_focused(w));
+        })
+        .unwrap();
+    let review = visual
+        .debug_bounds("compact-review-Review")
+        .unwrap()
+        .center();
+    visual.simulate_click(review, Default::default());
+    visual.run_until_parked();
+    visual.simulate_resize(gpui::size(px(1500.), px(850.)));
+    vorkspace_ui::clock::settle_animations(window, visual);
+    assert!(visual.debug_bounds("compact-review-switcher").is_none());
+    assert!(visual.debug_bounds("review-frame").is_some());
+    window
+        .update(visual, |shell, _, cx| {
+            assert!(shell.review_focused);
+            assert_eq!(shell.reviews[&id].read(cx).state.ratio, ratio);
+            assert!(!shell.reviews[&id].read(cx).state.chat_hidden);
+        })
+        .unwrap();
+}
+
+#[gpui::test]
+fn compact_title_strip_keeps_every_open_tab_in_the_switcher(cx: &mut TestAppContext) {
+    let (window, _, _) = window(cx);
+    let visual = &mut gpui::VisualTestContext::from_window(window.into(), cx);
+    visual.simulate_resize(gpui::size(px(750.), px(680.)));
+    window
+        .update(visual, |shell, _, cx| {
+            shell.workspace.preferences.tab_animations = false;
+            for _ in 0..12 {
+                shell.create(Kind::Codex, cx);
+            }
+        })
+        .unwrap();
+    visual.run_until_parked();
+    let (tabs, active) = window
+        .update(visual, |shell, _, cx| {
+            (shell.visible_tabs(cx), shell.active_title_tab(cx).unwrap())
+        })
+        .unwrap();
+    let bounds = |visual: &mut gpui::VisualTestContext, tab: &TitleTab| {
+        let selector = format!("title-tab-{}", tab.session().unwrap());
+        visual.debug_bounds(Box::leak(selector.into_boxed_str()))
+    };
+    assert!(tabs.len() > 10);
+    assert!(bounds(visual, &active).unwrap().size.width >= px(112.));
+    for tab in tabs.iter().filter(|tab| **tab != active) {
+        assert!(bounds(visual, tab).is_none());
+    }
+    let menu = visual.debug_bounds("open-title-tabs").unwrap().center();
+    visual.simulate_click(menu, Default::default());
+    visual.run_until_parked();
+    window
+        .update(visual, |shell, _, _| {
+            assert!(shell.menu.as_ref().is_some_and(
+                |menu| matches!(&menu.target, MenuTarget::Tabs(listed) if *listed == tabs)
+            ));
+        })
+        .unwrap();
+}
+
+#[gpui::test]
 fn tab_delete_confirms_and_targets_the_original_session(cx: &mut TestAppContext) {
     let (window, a, b) = window(cx);
     window.update(cx, |shell, w, cx| {
