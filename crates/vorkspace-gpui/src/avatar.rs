@@ -591,6 +591,9 @@ pub(crate) fn minion_look(parent: &Bot, identity: &str) -> BotLookConfig {
     }
 }
 
+// Unused since projects lost their badge marks; the bot frame tests still
+// cover it. Remove together with those tests.
+#[allow(dead_code)]
 #[derive(Clone, PartialEq, Eq, Hash)]
 struct FrameCacheKey {
     is_bot: bool,
@@ -618,10 +621,19 @@ struct FrameCacheKey {
 
 /// About 3,000 sidebar poses or 250 header poses: every idle pose of a full
 /// sidebar stays warm, while working motion and pointer gaze recycle.
+// Unused since projects lost their badge marks; the bot frame tests still
+// cover it. Remove together with those tests.
+#[allow(dead_code)]
 const FRAME_CACHE_BYTES: usize = 16 * 1024 * 1024;
+// Unused since projects lost their badge marks; the bot frame tests still
+// cover it. Remove together with those tests.
+#[allow(dead_code)]
 static FRAME_CACHE: LazyLock<Mutex<ImageCache<FrameCacheKey>>> =
     LazyLock::new(|| Mutex::new(ImageCache::new(FRAME_CACHE_BYTES)));
 
+// Unused since projects lost their badge marks; the bot frame tests still
+// cover it. Remove together with those tests.
+#[allow(dead_code)]
 fn frame_cache_key(
     is_bot: bool,
     look: &BotLookConfig,
@@ -654,6 +666,9 @@ fn frame_cache_key(
     }
 }
 
+// Unused since projects lost their badge marks; the bot frame tests still
+// cover it. Remove together with those tests.
+#[allow(dead_code)]
 fn render_frame(key: &FrameCacheKey, look: &BotLookConfig, anim: BotAnimState) -> Arc<RenderImage> {
     to_render_image(render_badge_or_bot_with_eyes(
         key.is_bot,
@@ -882,6 +897,9 @@ pub(crate) fn paint_bot(
     }
 }
 
+// Unused since projects lost their badge marks; the bot frame tests still
+// cover it. Remove together with those tests.
+#[allow(dead_code)]
 pub(crate) fn cached_badge_or_bot_image(
     is_bot: bool,
     look: &BotLookConfig,

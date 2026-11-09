@@ -33,7 +33,8 @@ fn vorkspace_hue(id: &str) -> f32 {
     (hash % 360) as f32 / 360.
 }
 
-pub(crate) fn vorkspace_mark(id: &str, name: &str, side: f32) -> Div {
+pub(crate) fn vorkspace_mark(def: &crate::workspace::VorkspaceDef, side: f32) -> Div {
+    let (id, name) = (def.id.as_str(), def.name.as_str());
     let initial = name
         .chars()
         .find(|c| c.is_alphanumeric())
@@ -43,7 +44,10 @@ pub(crate) fn vorkspace_mark(id: &str, name: &str, side: f32) -> Div {
         .size(px(side))
         .flex_shrink_0()
         .rounded(px(vorkspace_ui::radius::CONTROL))
-        .bg(gpui::hsla(vorkspace_hue(id), 0.55, 0.5, 1.))
+        .bg(match def.color {
+            Some(color) => gpui::rgb(color).into(),
+            None => gpui::hsla(vorkspace_hue(id), 0.55, 0.5, 1.),
+        })
         .flex()
         .items_center()
         .justify_center()
@@ -218,7 +222,7 @@ impl Shell {
 
     /// The vorkspace switcher at the top of the rail.
     pub(super) fn vorkspace_switcher(&self, cx: &mut Context<Self>) -> AnyElement {
-        let (id, name) = self
+        let (_, name) = self
             .workspace
             .active_vorkspace()
             .map(|v| (v.id.clone(), v.name.clone()))
@@ -242,7 +246,14 @@ impl Shell {
                     .rounded(px(radius::CONTROL))
                     .cursor_pointer()
                     .hover(|s| s.bg(vorkspace_ui::fluid::hover(0.08)))
-                    .child(vorkspace_mark(&id, &name, 22.))
+                    .child(vorkspace_mark(
+                        &self
+                            .workspace
+                            .active_vorkspace()
+                            .cloned()
+                            .unwrap_or_default(),
+                        22.,
+                    ))
                     .child(
                         div()
                             .flex_1()
@@ -507,6 +518,7 @@ impl Shell {
         let height = 560f32.min(size.height.as_f32() - 32.);
         let weak = cx.weak_entity();
         let only = self.workspace.vorkspaces.len() <= 1;
+        let look = self.vorkspace_look(&def, cx);
         let nav = self.workspace.vorkspaces.iter().map(|v| {
             let id = v.id.clone();
             let selected = v.id == editing;
@@ -533,7 +545,7 @@ impl Shell {
                 .when(!selected, |d| {
                     d.hover(|s| s.bg(vorkspace_ui::fluid::hover(0.05)))
                 })
-                .child(vorkspace_mark(&v.id, &v.name, 18.))
+                .child(vorkspace_mark(v, 18.))
                 .child(div().flex_1().min_w_0().truncate().child(v.name.clone()))
                 .when(v.id == self.workspace.active_vorkspace, |d| {
                     d.child(icon("check-2", 12.).text_color(content(0.45)))
@@ -725,6 +737,8 @@ impl Shell {
                     .pb_4()
                     .child(section("Name").mt_0())
                     .child(crate::controls::page::field_frame().child(dialog.name.clone()))
+                    .child(section("Look"))
+                    .child(look)
                     .child(section("Folders"))
                     .child(
                         div()
@@ -950,6 +964,84 @@ impl Shell {
                 )
                 .into_any_element(),
         )
+    }
+
+    /// The vorkspace's own customization: its color and the chat background
+    /// every session in it shows. Projects carry none of their own.
+    fn vorkspace_look(
+        &self,
+        def: &crate::workspace::VorkspaceDef,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        let swatches = vorkspace_core::project_appearance::COLORS
+            .iter()
+            .skip(1)
+            .copied()
+            .map(|color| {
+                let selected = def.color == Some(color);
+                let editing = def.id.clone();
+                div()
+                    .id(SharedString::from(format!("vorkspace-color-{color:06x}")))
+                    .role(Role::Button)
+                    .aria_label(format!("Color #{color:06x}"))
+                    .aria_selected(selected)
+                    .map(vorkspace_ui::theme::tab_reachable)
+                    .size(px(26.))
+                    .rounded_full()
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .cursor_pointer()
+                    .when(selected, |d| d.border_2().border_color(content(0.7)))
+                    .child(crate::avatar::color_swatch_circle(color, None, 18.))
+                    .on_click(cx.listener(move |this, _, _, cx| {
+                        if let Some(v) = this.workspace.vorkspace_mut(&editing) {
+                            v.color = (v.color != Some(color)).then_some(color);
+                        }
+                        this.invalidate_chrome(cx);
+                        this.persist(cx);
+                        cx.notify();
+                    }))
+            });
+        let editing = def.id.clone();
+        let has_background = def.background.is_some();
+        div()
+            .flex()
+            .flex_col()
+            .gap_3()
+            .child(div().flex().flex_wrap().gap_1().children(swatches))
+            .child(
+                div()
+                    .flex()
+                    .items_center()
+                    .gap_2()
+                    .child(
+                        crate::controls::page::secondary(
+                            "vorkspace-background",
+                            "Chat background",
+                            false,
+                            false,
+                        )
+                        .debug_selector(|| "vorkspace-background".into())
+                        .child(if has_background {
+                            "Change chat background…"
+                        } else {
+                            "Chat background…"
+                        })
+                        .on_click(cx.listener(
+                            move |this, _, window, cx| {
+                                this.open_vorkspace_background(editing.clone(), window, cx)
+                            },
+                        )),
+                    )
+                    .child(
+                        div()
+                            .text_size(px(12.))
+                            .text_color(content(0.5))
+                            .child("Shown behind every session in this vorkspace."),
+                    ),
+            )
+            .into_any_element()
     }
 
     fn reconcile_after_bot_move(&mut self, cx: &mut Context<Self>) {

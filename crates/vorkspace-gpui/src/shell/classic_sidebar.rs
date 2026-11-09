@@ -40,7 +40,6 @@ impl Shell {
         self.workspace
             .sidebar_tabs
             .insert(self.workspace.project.clone(), tab);
-        self.sidebar_auto_hidden = false;
         self.set_sidebar_visible(true, cx);
         self.ensure_right_panel(window, cx);
         self.sync_right_panel(cx);

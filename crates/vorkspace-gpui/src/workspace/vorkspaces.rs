@@ -8,13 +8,19 @@ use super::Workspace;
 use serde::{Deserialize, Serialize};
 use vorkspace_core::files::path_key;
 
-#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub(crate) struct VorkspaceDef {
     pub id: String,
     pub name: String,
     pub projects: Vec<String>,
     pub bots: Vec<String>,
+    /// The vorkspace's color; unset, it is the hue its id hashes to.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub color: Option<u32>,
+    /// The chat background every session in this vorkspace shows.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub background: Option<vorkspace_core::project_appearance::Background>,
 }
 
 pub(crate) const FIRST_VORKSPACE_NAME: &str = "Main";
@@ -46,6 +52,7 @@ impl Workspace {
                 name: FIRST_VORKSPACE_NAME.into(),
                 projects,
                 bots: Vec::new(),
+                ..Default::default()
             });
         }
         if !self

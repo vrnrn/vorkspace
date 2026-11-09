@@ -763,7 +763,6 @@ impl Shell {
             self.slide_dock(true);
         }
         self.focus_terminal(window, cx);
-        self.fit_sidebar(cx);
         self.persist(cx);
         cx.notify();
     }
@@ -793,7 +792,6 @@ impl Shell {
         } else if self.dock_focused(window, cx).is_some() {
             self.focus_active(window, cx);
         }
-        self.fit_sidebar(cx);
         self.persist(cx);
         cx.notify();
     }
@@ -880,7 +878,6 @@ impl Shell {
             if had_focus {
                 self.focus_active(window, cx);
             }
-            self.fit_sidebar(cx);
         } else if had_focus {
             self.focus_terminal(window, cx);
         }
@@ -894,7 +891,6 @@ impl Shell {
             dock.size = side.clamp(dock.size, viewport);
         }
         self.dock_slide = None;
-        self.fit_sidebar(cx);
         self.persist(cx);
         cx.notify();
     }

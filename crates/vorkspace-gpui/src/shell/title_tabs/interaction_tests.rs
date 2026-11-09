@@ -85,12 +85,9 @@ fn sidebar_highlights_only_the_visible_bot_or_session(cx: &mut TestAppContext) {
     };
     click(&bot_row, cx);
     assert!(sidebar_highlight(window, bot_row.clone(), cx));
-    assert!(
-        gpui::VisualTestContext::from_window(window.into(), cx)
-            .debug_bounds(Box::leak(session_row.clone().into_boxed_str()))
-            .is_none(),
-        "the original Bot view hides the parked session pane"
-    );
+    // The sidebar is a persistent toggle: it stays open over a Bot, and the
+    // parked session's row is no longer the highlighted one.
+    assert!(!sidebar_highlight(window, session_row.clone(), cx));
     window
         .update(cx, |shell, _, _| {
             assert_eq!(shell.workspace.active, bot.session());
@@ -174,10 +171,8 @@ fn sidebar_highlights_only_the_visible_bot_or_session(cx: &mut TestAppContext) {
     assert!(sidebar_highlight(window, bot_row.clone(), cx));
     for selector in [&session_row, &format!("sidebar-session-{other}")] {
         assert!(
-            gpui::VisualTestContext::from_window(window.into(), cx)
-                .debug_bounds(Box::leak(selector.clone().into_boxed_str()))
-                .is_none(),
-            "the Bot surface hides session row {selector}"
+            !sidebar_highlight(window, selector.clone(), cx),
+            "over a Bot, session row {selector} stays listed but unhighlighted"
         );
     }
     click(&session_tab, cx);

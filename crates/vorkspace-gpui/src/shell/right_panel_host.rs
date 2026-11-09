@@ -16,8 +16,10 @@ impl Shell {
             && self.workspace.sidebar_visible
             && self.workspace.sidebar_tab() != crate::workspace::SidebarTab::Sessions;
         let shown = (classic_tools
-            || (!self.workspace.classic_layout && self.workspace.right_panel_open && !opening))
-            && self.has_session_panes()
+            || (!self.workspace.classic_layout
+                && self.workspace.right_panel_open
+                && !opening
+                && self.has_session_panes()))
             && self.settings.is_none();
         let tab = if self.workspace.classic_layout {
             self.classic_tool_tab()
@@ -84,7 +86,6 @@ impl Shell {
         if open && let Some(panel) = self.right_panel.clone() {
             panel.update(cx, |p, cx| p.focus_pane(window, cx));
         }
-        self.fit_sidebar(cx);
         self.persist(cx);
         cx.notify();
     }

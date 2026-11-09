@@ -71,7 +71,6 @@ impl Shell {
         self.workspace.project_rail_open = !self.workspace.project_rail_open;
         self.project_rail_drag = None;
         self.close_menu(cx);
-        self.fit_sidebar(cx);
         self.invalidate_chrome(cx);
         self.persist(cx);
         cx.notify();
@@ -328,7 +327,7 @@ impl Shell {
         let tab = self.workspace.sidebar_tab();
         let tabs = SidebarTab::normalize(&self.workspace.sidebar_tab_order);
         let hidden_bots = self.workspace.hidden_bots();
-        let (vorkspace_id, vorkspace_name) = self
+        let (_, vorkspace_name) = self
             .workspace
             .active_vorkspace()
             .map(|v| (v.id.clone(), v.name.clone()))
@@ -412,8 +411,11 @@ impl Shell {
                         .justify_center()
                         .hover(|s| s.bg(vorkspace_ui::fluid::hover(0.08)))
                         .child(super::vorkspaces::vorkspace_mark(
-                            &vorkspace_id,
-                            &vorkspace_name,
+                            &self
+                                .workspace
+                                .active_vorkspace()
+                                .cloned()
+                                .unwrap_or_default(),
                             20.,
                         ))
                         .on_click(cx.listener(|this, event: &gpui::ClickEvent, window, cx| {

@@ -2,38 +2,27 @@ use super::*;
 use crate::settings::ProjectNotifications;
 use crate::{
     project_background::ProjectBackground,
-    project_settings::{AppearanceControls, BackgroundDialog, Event, project_icon},
+    project_settings::{BackgroundDialog, Event, project_icon},
 };
 use vorkspace_core::project_appearance::ProjectAppearance;
 
 /// A section of Project settings.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum ProjectSection {
-    Appearance,
-    Background,
     Codebase,
     Notifications,
 }
 
 impl ProjectSection {
-    const ALL: [Self; 4] = [
-        Self::Appearance,
-        Self::Background,
-        Self::Codebase,
-        Self::Notifications,
-    ];
+    const ALL: [Self; 2] = [Self::Codebase, Self::Notifications];
     fn label(self) -> &'static str {
         match self {
-            Self::Appearance => "Appearance",
-            Self::Background => "Background",
             Self::Codebase => "Codebase",
             Self::Notifications => "Notifications",
         }
     }
     fn icon(self) -> &'static str {
         match self {
-            Self::Appearance => "palette",
-            Self::Background => "image-add",
             Self::Codebase => "network",
             Self::Notifications => "bell",
         }
@@ -47,47 +36,74 @@ impl ProjectSection {
 pub(crate) struct ProjectDialog {
     path: String,
     section: ProjectSection,
-    body: Option<gpui::AnyView>,
     focus: FocusHandle,
-    _events: Option<Subscription>,
 }
 
 pub(super) struct OpenBackground {
     view: Entity<BackgroundDialog>,
+    /// The vorkspace whose background this edits; its dialog reopens after.
+    vorkspace: String,
     _events: Subscription,
 }
 impl Shell {
-    pub(super) fn appearance(&self, path: &str) -> ProjectAppearance {
-        self.workspace
-            .project_appearance
-            .get(path)
-            .cloned()
-            .unwrap_or_default()
+    /// A project's look: its folder name and hashed color, over the active
+    /// vorkspace's chat background. Projects have no customization.
+    pub(super) fn appearance(&self, _path: &str) -> ProjectAppearance {
+        ProjectAppearance {
+            background: self
+                .workspace
+                .active_vorkspace()
+                .and_then(|v| v.background.clone()),
+            ..Default::default()
+        }
+    }
+    /// Edits a vorkspace's chat background in the background editor, in
+    /// place of the vorkspace dialog, which comes back when it closes.
+    pub(super) fn open_vorkspace_background(
+        &mut self,
+        vorkspace: String,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(def) = self.workspace.vorkspaces.iter().find(|v| v.id == vorkspace) else {
+            return;
+        };
+        let appearance = ProjectAppearance {
+            background: def.background.clone(),
+            ..Default::default()
+        };
+        let key = format!("vorkspace:{vorkspace}");
+        let view = cx.new(|cx| BackgroundDialog::new(key, appearance, cx));
+        let events = cx.subscribe_in(&view, window, {
+            let vorkspace = vorkspace.clone();
+            move |this, _, event: &Event, window, cx| match event {
+                Event::Changed(appearance) => {
+                    if let Some(v) = this.workspace.vorkspace_mut(&vorkspace) {
+                        v.background = appearance.background.clone();
+                    }
+                    this.backgrounds.clear();
+                    this.invalidate_chrome(cx);
+                    this.persist(cx);
+                    cx.notify();
+                }
+                Event::Close => this.close_background_dialog(window, cx),
+            }
+        });
+        let focus = view.focus_handle(cx);
+        self.vorkspace_dialog = None;
+        self.background_dialog = Some(OpenBackground {
+            view,
+            vorkspace,
+            _events: events,
+        });
+        window.focus(&focus, cx);
+        cx.notify();
     }
     pub(super) fn project_label(&self, path: &str) -> String {
         self.appearance(path).label(path)
     }
     pub(super) fn project_mark(&self, path: &str, side: f32) -> AnyElement {
         project_icon(&self.appearance(path), path, side)
-    }
-    fn save_project_appearance(
-        &mut self,
-        path: String,
-        mut appearance: ProjectAppearance,
-        cx: &mut Context<Self>,
-    ) {
-        appearance.normalize();
-        for session in self.sessions.values() {
-            if session.read(cx).summary.cwd == path {
-                session.update(cx, |session, cx| {
-                    session.set_project_appearance(appearance.clone(), cx)
-                });
-            }
-        }
-        self.workspace.project_appearance.insert(path, appearance);
-        self.invalidate_chrome(cx);
-        self.persist(cx);
-        cx.notify();
     }
     pub(super) fn open_project_settings(
         &mut self,
@@ -101,9 +117,7 @@ impl Shell {
         self.project_dialog = Some(ProjectDialog {
             path,
             section,
-            body: None,
             focus: cx.focus_handle(),
-            _events: None,
         });
         self.show_project_section(section, window, cx);
     }
@@ -114,46 +128,9 @@ impl Shell {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let Some(path) = self.project_dialog.as_ref().map(|d| d.path.clone()) else {
-            return;
-        };
-        let appearance = self.appearance(&path);
-        let on_event = {
-            let path = path.clone();
-            move |this: &mut Shell, event: &Event, window: &mut Window, cx: &mut Context<Shell>| {
-                match event {
-                    Event::Changed(appearance) => {
-                        this.save_project_appearance(path.clone(), appearance.clone(), cx)
-                    }
-                    Event::Close => this.close_project_settings(window, cx),
-                }
-            }
-        };
-        let (body, focus, events): (Option<gpui::AnyView>, Option<FocusHandle>, _) = match section {
-            ProjectSection::Appearance => {
-                let view = cx.new(|cx| AppearanceControls::new(path.clone(), appearance, cx));
-                let focus = view.read(cx).focus(cx);
-                let events = cx.subscribe_in(&view, window, move |this, _, event, window, cx| {
-                    on_event(this, event, window, cx)
-                });
-                (Some(view.into()), Some(focus), Some(events))
-            }
-            ProjectSection::Background => {
-                let view =
-                    cx.new(|cx| BackgroundDialog::new(path.clone(), appearance, cx).embedded());
-                let focus = view.focus_handle(cx);
-                let events = cx.subscribe_in(&view, window, move |this, _, event, window, cx| {
-                    on_event(this, event, window, cx)
-                });
-                (Some(view.into()), Some(focus), Some(events))
-            }
-            ProjectSection::Codebase | ProjectSection::Notifications => (None, None, None),
-        };
         if let Some(dialog) = self.project_dialog.as_mut() {
             dialog.section = section;
-            dialog.body = body;
-            dialog._events = events;
-            window.focus(focus.as_ref().unwrap_or(&dialog.focus), cx);
+            window.focus(&dialog.focus, cx);
         }
         cx.notify();
     }
@@ -181,11 +158,6 @@ impl Shell {
         let body = match section {
             ProjectSection::Codebase => self.project_codebase_section(&path, cx),
             ProjectSection::Notifications => self.project_notifications_section(&path, cx),
-            _ => dialog
-                .body
-                .clone()
-                .map(|view| view.into_any_element())
-                .unwrap_or_else(|| div().into_any_element()),
         };
         let nav = ProjectSection::ALL.map(|tab| {
             let label = tab.label();
@@ -339,10 +311,8 @@ impl Shell {
                                             .flex_1()
                                             .min_h_0()
                                             .overflow_y_scroll()
-                                            // The background editor pads itself.
-                                            .when(section != ProjectSection::Background, |d| {
-                                                d.px_5().py_4()
-                                            })
+                                            .px_5()
+                                            .py_4()
                                             .child(div().max_w(px(480.)).child(body)),
                                     ),
                             )
@@ -539,11 +509,14 @@ impl Shell {
         }
     }
     fn close_background_dialog(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        self.background_dialog = None;
+        let vorkspace = self.background_dialog.take().map(|open| open.vorkspace);
         if let Some(bots) = &self.bots {
             bots.update(cx, |bots, cx| bots.close_background(cx));
         }
-        self.focus_workspace(window, cx);
+        match vorkspace {
+            Some(id) => self.open_vorkspace_dialog(Some(id), window, cx),
+            None => self.focus_workspace(window, cx),
+        }
         cx.notify();
     }
     pub(super) fn background_modal(

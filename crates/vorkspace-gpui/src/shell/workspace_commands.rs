@@ -419,7 +419,6 @@ impl Shell {
     ) {
         self.fit_active_pane_width();
         self.begin_pane_motion(before);
-        self.fit_sidebar(cx);
         self.open(id, window, cx);
     }
 

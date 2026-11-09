@@ -26,7 +26,7 @@ impl Shell {
     pub(super) fn navigation_width(&self, window: &Window) -> f32 {
         let scale = window.scale_factor();
         let minimum = self.traffic_lights(window)
-            + 3. * Self::navigation_button_size(window)
+            + 4. * Self::navigation_button_size(window)
             + self.navigation_padding();
         let minimum = (minimum * scale).ceil() / scale;
         self.classic_rail_width().max(minimum)
@@ -73,6 +73,16 @@ impl Shell {
                         cx.stop_propagation();
                     })
                     .on_click(cx.listener(|this, _, _, cx| this.toggle_project_rail(cx))),
+            )
+            .child(
+                // The explorer sidebar is its own persistent toggle: it stays
+                // as the user leaves it, whatever the main pane shows.
+                icon_button("toggle-explorer", TOGGLE_EXPLORER_LABEL, "explorer-panel")
+                    .debug_selector(|| "toggle-explorer".into())
+                    .size(button_size)
+                    .when(self.workspace.sidebar_visible, |b| b.bg(content(0.08)))
+                    .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+                    .on_click(cx.listener(|this, _, window, cx| this.toggle_sidebar(window, cx))),
             )
             .child(titlebar_drag_area().flex_1())
             .child(

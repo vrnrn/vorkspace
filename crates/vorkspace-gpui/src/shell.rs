@@ -325,7 +325,8 @@ const CORNER_TABS_LEAD: f32 = 7.;
 const CORNER_CONTROL_GAP: f32 = 4.;
 const CORNER_BUTTONS_WIDTH: f32 = 48. + 2. * CORNER_CONTROL_GAP;
 // TitleBar.tsx's labels, with their shortcuts.
-const TOGGLE_SIDEBAR_LABEL: &str = "Toggle Sidebar (⌘B)";
+const TOGGLE_SIDEBAR_LABEL: &str = "Toggle Rail (⌘B)";
+const TOGGLE_EXPLORER_LABEL: &str = "Toggle Sidebar (⇧⌘B)";
 const BACK_LABEL: &str = "Back (⌘[)";
 const FORWARD_LABEL: &str = "Forward (⌘])";
 const TOGGLE_RIGHT_PANEL_LABEL: &str = "Toggle right sidebar (⌘⇧B)";
@@ -685,7 +686,6 @@ pub(crate) struct Shell {
     dock_tab_scroll: ScrollHandle,
     move_terminal_anchor: AnchorSlot,
     /// The sidebar collapsed itself to make room; it returns with the room.
-    sidebar_auto_hidden: bool,
     viewport_width: f32,
     viewport_height: f32,
     observations: Vec<Subscription>,
@@ -1043,7 +1043,6 @@ impl Shell {
             pane_sash: None,
             pane_motion: None,
             skip_session_click: false,
-            sidebar_auto_hidden: false,
             terminals: HashMap::new(),
             dock_slide: None,
             dock_resize: None,
@@ -1738,25 +1737,6 @@ impl Shell {
             });
         }
     }
-    /// A panel or pane that would squeeze a chat below a readable width
-    /// collapses the sidebar as it opens. A sidebar collapsed that way comes
-    /// back once there is room again; one the user hid stays hidden.
-    fn fit_sidebar(&mut self, cx: &mut Context<Self>) {
-        // These surfaces replace project tools rather than competing with them
-        // for space. Preserve the session sidebar's own visibility preference.
-        if !self.has_session_panes() || self.settings.is_some() {
-            return;
-        }
-        if self.workspace.sidebar_visible {
-            if self.narrowest_chat(true, cx) < MIN_CHAT_WIDTH {
-                self.set_sidebar_visible(false, cx);
-                self.sidebar_auto_hidden = true;
-            }
-        } else if self.sidebar_auto_hidden && self.narrowest_chat(true, cx) >= MIN_CHAT_WIDTH {
-            self.set_sidebar_visible(true, cx);
-            self.sidebar_auto_hidden = false;
-        }
-    }
     fn resume_git(&mut self, cx: &mut Context<Self>) {
         self.git.update(cx, |git, cx| git.resume(cx));
         if let Some(panel) = &self.right_panel {
@@ -2056,7 +2036,6 @@ impl Shell {
         if self.workspace.sidebar_visible && self.sidebar_focus.contains_focused(window, cx) {
             self.focus_workspace(window, cx);
         }
-        self.sidebar_auto_hidden = false;
         self.set_sidebar_visible(!self.workspace.sidebar_visible, cx);
         self.persist(cx);
         cx.notify();
@@ -2510,7 +2489,7 @@ impl Render for Shell {
                 }
             }
         };
-        if self.settings.is_some() || !self.has_session_panes() {
+        if self.settings.is_some() {
             self.sidebar_fraction = 0.;
         }
         let sidebar_width = self.workspace.right_panel_width * self.sidebar_fraction;

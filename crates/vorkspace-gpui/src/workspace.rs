@@ -625,9 +625,9 @@ impl Workspace {
         {
             state.project = cwd.into();
         }
-        for appearance in state.project_appearance.values_mut() {
-            appearance.normalize();
-        }
+        // Projects are no longer customized: each is a folder in the color
+        // its path hashes to, with its folder name. Old customizations go.
+        state.project_appearance.clear();
         let mut known: HashSet<_> = sessions.iter().map(|s| s.0).collect();
         state.review_owners.retain(|id, owner| {
             *id < 0

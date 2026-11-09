@@ -44,7 +44,6 @@ impl Shell {
             .prune(&self.workspace.open_sessions(), self.workspace.active);
         self.navigation_revision += 1;
         self.begin_pane_motion(before);
-        self.fit_sidebar(cx);
         if self.workspace.active != active {
             if let Some(active) = self.workspace.active {
                 self.open(active, window, cx);
@@ -56,7 +55,7 @@ impl Shell {
         }
     }
     pub(super) fn pane_available_width(&self) -> f32 {
-        let sidebar = if self.workspace.sidebar_visible && self.has_session_panes() {
+        let sidebar = if self.workspace.sidebar_visible && self.settings.is_none() {
             self.workspace.right_panel_width
         } else {
             0.
@@ -80,15 +79,10 @@ impl Shell {
             .map_or(expected, |bounds| bounds.size.width.as_f32().min(expected))
     }
 
-    /// `fit_sidebar` automatically hides the session sidebar when a split
-    /// needs its room and restores it when it fits again.
+    /// The sidebar is a persistent user toggle, so a split only gets the
+    /// room left beside it.
     pub(super) fn pane_admission_width(&self) -> f32 {
         self.pane_available_width()
-            + if self.workspace.sidebar_visible && self.has_session_panes() {
-                self.workspace.right_panel_width
-            } else {
-                0.
-            }
     }
 
     pub(super) fn pane_layout_allowed(&self, before: &PaneNode, after: &PaneNode) -> bool {
@@ -322,7 +316,6 @@ impl Shell {
         if let Some(before) = before {
             self.fit_active_pane_width();
             self.begin_pane_motion(before);
-            self.fit_sidebar(cx);
         }
         self.activate_session(id, window, cx);
         if !compatible {
@@ -620,7 +613,6 @@ impl Shell {
         self.fit_active_pane_width();
         self.history
             .prune(&self.workspace.open_sessions(), self.workspace.active);
-        self.fit_sidebar(cx);
         if let Some(active) = self.workspace.active {
             self.open(active, window, cx);
         }

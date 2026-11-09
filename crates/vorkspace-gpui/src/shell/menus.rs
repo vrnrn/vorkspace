@@ -572,14 +572,7 @@ impl Shell {
                 } else if action == "project-settings" {
                     self.open_project_settings(
                         path,
-                        super::project_settings::ProjectSection::Appearance,
-                        window,
-                        cx,
-                    );
-                } else if action == "background" {
-                    self.open_project_settings(
-                        path,
-                        super::project_settings::ProjectSection::Background,
+                        super::project_settings::ProjectSection::Codebase,
                         window,
                         cx,
                     );

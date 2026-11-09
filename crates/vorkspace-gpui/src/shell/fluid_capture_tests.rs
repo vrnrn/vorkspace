@@ -73,8 +73,6 @@ const SHOTS: &[(&str, Option<usize>, (f32, f32))] = &[
     ("settings-narrow", None, (850., 610.)),
     ("project-appearance-narrow", Some(0), (850., 610.)),
     ("palette-narrow", Some(0), (850., 610.)),
-    ("project-appearance", Some(0), (1390., 890.)),
-    ("project-background", Some(0), (1390., 890.)),
     ("project-codebase", Some(0), (1390., 890.)),
     ("project-notifications", Some(0), (1390., 890.)),
     // Bots persist in the shared store, so their scenes run last.
@@ -575,16 +573,11 @@ fn fluid_capture() {
                             view.update(cx, |view, cx| view.begin_first_template(cx));
                         }
                     }
-                    "project-appearance"
-                    | "project-background"
-                    | "project-codebase"
-                    | "project-notifications" => {
+                    "project-codebase" | "project-notifications" => {
                         use super::project_settings::ProjectSection;
                         let section = match *name {
-                            "project-background" => ProjectSection::Background,
-                            "project-codebase" => ProjectSection::Codebase,
                             "project-notifications" => ProjectSection::Notifications,
-                            _ => ProjectSection::Appearance,
+                            _ => ProjectSection::Codebase,
                         };
                         shell.open_project_settings(PROJECT.into(), section, window, cx)
                     }

@@ -151,7 +151,6 @@ impl Shell {
             self.workspace.place(id, target, edge);
             self.fit_active_pane_width();
             self.begin_pane_motion(before);
-            self.fit_sidebar(cx);
             self.activate_session(id, window, cx);
         } else if reveal {
             self.open(id, window, cx);
