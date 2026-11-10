@@ -142,7 +142,7 @@ fn recover_unresolved(conn: &Connection, source: Option<&str>) -> rusqlite::Resu
         "SELECT attempt_id,owner_pid,owner_instance FROM local_submissions
          WHERE phase IN ('reserved','dispatching')"
     };
-    let mut statement = conn.prepare_cached(sql)?;
+    let mut statement = conn.prepare(sql)?;
     let owners = statement
         .query_map(rusqlite::params_from_iter(source), |row| {
             Ok((
