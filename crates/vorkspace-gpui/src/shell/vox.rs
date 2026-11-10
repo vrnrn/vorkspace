@@ -21,7 +21,7 @@ impl Shell {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Result<Value, String> {
-        validate_voice_input(action, input)?;
+        let session_id = validate_voice_input(action, input)?;
         let projects = self
             .workspace
             .projects
@@ -135,14 +135,14 @@ impl Shell {
                 .then(|| input["to"].as_str())
                 .flatten()
         });
-        if bot_query.is_some() && input.get("sessionId").is_some() {
+        if bot_query.is_some() && session_id.is_some() {
             return Err("Choose one Bot or session".into());
         }
         let mut bot = bot_query
             .map(|q| vorkspace_core::bot::peers::resolve(&bots, q).cloned())
             .transpose()?;
         if bot.is_none()
-            && input.get("sessionId").is_none()
+            && session_id.is_none()
             && matches!(action, "composer.read" | "composer.write")
             && self.bot_active(cx)
         {
@@ -153,7 +153,7 @@ impl Shell {
                 .and_then(|id| bots.get(id))
                 .cloned();
         }
-        if action == "workspace.open" && bot.is_none() && input.get("sessionId").is_none() {
+        if action == "workspace.open" && bot.is_none() && session_id.is_none() {
             return Err("Choose a Bot or session to open".into());
         }
         if action == "bots.send" {
@@ -172,9 +172,7 @@ impl Shell {
                 .update(cx, |m, cx| m.chat_for_vox(&bot.id, cx))
                 .ok_or("Bot conversation is opening; try again")?
         } else {
-            let id = input["sessionId"]
-                .as_i64()
-                .or_else(|| input["sessionId"].as_str()?.parse().ok())
+            let id = session_id
                 .or_else(|| {
                     self.workspace
                         .active
@@ -320,7 +318,7 @@ fn voice_draft(
         _ => Err("Mode must be append or replace".into()),
     }
 }
-fn validate_voice_input(action: &str, input: &Value) -> Result<(), String> {
+fn validate_voice_input(action: &str, input: &Value) -> Result<Option<i64>, String> {
     let fields = match action {
         "workspace.current" | "bots.list" | "models.list" => "",
         "sessions.list" => "project",
@@ -344,7 +342,7 @@ fn validate_voice_input(action: &str, input: &Value) -> Result<(), String> {
             return Err(format!("{action} does not take {key}"));
         }
         let valid = match key.as_str() {
-            "sessionId" => value.as_i64().is_some() || value.is_string(),
+            "sessionId" => continue,
             "before" | "limit" | "maxChars" => value.as_u64().is_some(),
             "reveal" | "notifyOnComplete" | "expectReply" => value.is_boolean(),
             _ => value.is_string(),
@@ -367,7 +365,15 @@ fn validate_voice_input(action: &str, input: &Value) -> Result<(), String> {
             return Err(format!("{action} requires {key}"));
         }
     }
-    Ok(())
+    input
+        .get("sessionId")
+        .map(|value| {
+            value
+                .as_i64()
+                .or_else(|| value.as_str()?.parse().ok())
+                .ok_or_else(|| "Invalid sessionId".into())
+        })
+        .transpose()
 }
 
 impl crate::vox::VoxHost for gpui::WeakEntity<Shell> {
@@ -549,5 +555,18 @@ mod tests {
                 "{action}"
             );
         }
+        for id in [
+            json!("unknown"),
+            json!("9223372036854775808"),
+            json!(1.5),
+            json!(null),
+        ] {
+            assert!(validate_voice_input("composer.read", &json!({"sessionId": id})).is_err());
+        }
+        assert_eq!(
+            validate_voice_input("composer.read", &json!({"sessionId": "123"})),
+            Ok(Some(123))
+        );
+        assert_eq!(validate_voice_input("composer.read", &json!({})), Ok(None));
     }
 }
