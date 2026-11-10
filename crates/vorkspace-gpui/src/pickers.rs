@@ -76,7 +76,7 @@ pub(crate) fn cached_model_name(kind: Kind, id: Option<&str>) -> SharedString {
 }
 /// saveRecentModelChoice: the pick moves to the front of the six recents.
 pub(crate) fn remember_model(kind: Kind, model: Option<String>, cx: &mut gpui::App) {
-    crate::shell::remember_preferences(cx, |prefs| {
+    crate::preference_writes::remember(cx, |prefs| {
         let choice = vorkspace_ui::preferences::ModelChoice {
             provider: kind.id().into(),
             model,
@@ -520,7 +520,7 @@ impl ModelList {
             return;
         }
         self.tab = tab;
-        crate::shell::remember_preferences(cx, |prefs| {
+        crate::preference_writes::remember(cx, |prefs| {
             prefs.model_picker_tab = Some(
                 match tab {
                     ModelTab::Favorites => "favorites",

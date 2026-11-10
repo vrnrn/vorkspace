@@ -35,6 +35,7 @@ mod notifications;
 mod panel_kit;
 mod pickers;
 mod popover;
+mod preference_writes;
 mod project_background;
 mod project_settings;
 mod resource_pressure;

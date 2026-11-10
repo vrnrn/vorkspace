@@ -11,7 +11,7 @@ mod titlebar;
 mod workspace_commands;
 pub(crate) use crate::bots::host_api::AppStart;
 mod app_core;
-pub(crate) use app_core::{AppCore, PreparedCore, bot_write_barriers, remember_preferences};
+pub(crate) use app_core::{AppCore, PreparedCore, bot_write_barriers};
 mod app_panes;
 mod app_views;
 mod automation_runs;

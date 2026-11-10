@@ -2,35 +2,6 @@
 use super::*;
 use vorkspace_ui::preferences::Preferences;
 
-struct PreferenceOwner(WeakEntity<AppCore>);
-impl gpui::Global for PreferenceOwner {}
-
-/// Record a preference picked outside the settings window.
-pub(crate) fn remember_preferences(cx: &mut App, edit: impl FnOnce(&mut Preferences)) {
-    if let Some(owner) = cx
-        .try_global::<PreferenceOwner>()
-        .and_then(|owner| owner.0.upgrade())
-    {
-        owner.update(cx, |core, cx| {
-            let Some(shared) = &mut core.layouts.shared else {
-                return;
-            };
-            let mut preferences = shared.preferences.clone();
-            edit(&mut preferences);
-            if preferences == shared.preferences {
-                return;
-            }
-            Arc::make_mut(shared).preferences = preferences;
-            let shared = shared.clone();
-            core.stage_layouts(cx);
-            core.publish_preferences(&shared.preferences, false, cx);
-            cx.notify();
-        });
-    } else if cx.has_global::<Preferences>() {
-        cx.update_global::<Preferences, _>(|prefs, _| edit(prefs));
-    }
-}
-
 impl AppCore {
     pub(in crate::shell) fn initialize_preferences(
         &mut self,
@@ -43,16 +14,34 @@ impl AppCore {
             .get_or_insert_with(|| Arc::new(WindowShared::from_workspace(workspace)))
             .clone();
         let owner = cx.weak_entity();
-        if cx
-            .try_global::<PreferenceOwner>()
-            .is_none_or(|old| old.0 != owner)
-        {
-            cx.set_global(PreferenceOwner(owner));
+        if crate::preference_writes::install(
+            cx.entity_id(),
+            move |cx, edit| {
+                let _ = owner.update(cx, |core, cx| core.remember_preference(edit, cx));
+            },
+            cx,
+        ) {
             vorkspace_core::cli::initialize(&shared.preferences.binary_paths);
             crate::meetings::capture::init(cx);
             self.publish_preferences(&shared.preferences, true, cx);
         }
         shared
+    }
+
+    fn remember_preference(&mut self, edit: impl FnOnce(&mut Preferences), cx: &mut Context<Self>) {
+        let Some(shared) = &mut self.layouts.shared else {
+            return;
+        };
+        let mut preferences = shared.preferences.clone();
+        edit(&mut preferences);
+        if preferences == shared.preferences {
+            return;
+        }
+        Arc::make_mut(shared).preferences = preferences;
+        let shared = shared.clone();
+        self.stage_layouts(cx);
+        self.publish_preferences(&shared.preferences, false, cx);
+        cx.notify();
     }
 
     pub(super) fn publish_preferences(

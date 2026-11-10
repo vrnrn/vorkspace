@@ -218,7 +218,7 @@ impl Conversation {
             .retain(|key, _| !is_effort_key(key));
         self.settings.effort = (!effort.is_empty()).then(|| effort.to_owned());
         let provider = self.summary.provider.clone();
-        crate::shell::remember_preferences(cx, |prefs| {
+        crate::preference_writes::remember(cx, |prefs| {
             if effort.is_empty() {
                 prefs.provider_efforts.remove(&provider);
             } else {

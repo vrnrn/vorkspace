@@ -820,7 +820,7 @@ impl FileEditor {
     fn toggle_preview(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.selection.dismiss();
         self.preview = !self.preview;
-        crate::shell::remember_preferences(cx, |prefs| {
+        crate::preference_writes::remember(cx, |prefs| {
             prefs.file_view_mode = if self.preview { "preview" } else { "source" }.into();
         });
         self.update_preview(cx);

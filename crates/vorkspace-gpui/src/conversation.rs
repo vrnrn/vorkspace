@@ -651,7 +651,7 @@ pub(crate) fn default_access(cx: &gpui::App) -> AccessMode {
         .unwrap_or_default()
 }
 pub(crate) fn remember_access(mode: AccessMode, cx: &mut gpui::App) {
-    crate::shell::remember_preferences(cx, |prefs| {
+    crate::preference_writes::remember(cx, |prefs| {
         prefs.default_access = Some(mode.id().into());
     });
 }
