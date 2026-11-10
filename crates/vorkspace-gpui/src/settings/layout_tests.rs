@@ -226,6 +226,7 @@ fn bot_mascot_is_beside_name_and_sidebar_switch_stays_visible(cx: &mut TestAppCo
 #[gpui::test]
 fn models_menu_hides_and_restores_individual_models(cx: &mut TestAppContext) {
     use vorkspace_core::provider::Kind;
+    cx.update(input::bind);
     let window = window(Section::Providers, cx);
     window
         .update(cx, |view, _, cx| {

@@ -1,12 +1,13 @@
-//! SettingsView.tsx's building blocks: PageHeader, Group, Row, Toggle,
-//! Segmented, Slider, Select and SecondaryButton, at their Tailwind metrics.
+//! Shared layout and controls for the native Settings pages.
 use super::{SettingsView, SliderKind, SliderTrack};
 pub(crate) use crate::controls::{primary_button, secondary_button};
+use crate::input;
 use crate::popover::{Align, Anchor, AnchorSlot, Side, popover};
 use gpui::{
     AnyElement, Context, Div, ElementId, FontWeight, Hsla, MouseButton, MouseDownEvent, Role,
     SharedString, Stateful, div, prelude::*, px, relative,
 };
+use std::rc::Rc;
 use vorkspace_ui::radius;
 use vorkspace_ui::theme::*;
 
@@ -897,6 +898,22 @@ impl SettingsView {
         });
     }
 
+    fn step_model_visibility(&mut self, ids: &[String], step: isize, cx: &mut Context<Self>) {
+        if ids.is_empty() || self.model_filter.read(cx).is_composing() {
+            return;
+        }
+        let last = ids.len() - 1;
+        let active = ids.iter().position(|id| self.model_active.as_ref() == Some(id));
+        let next = active.map_or_else(
+            || if step < 0 { last } else { 0 },
+            |at| at.saturating_add_signed(step).min(last),
+        );
+        self.model_active = Some(ids[next].clone());
+        self.model_scroll.scroll_to_item(next);
+        cx.stop_propagation();
+        cx.notify();
+    }
+
     /// Choose which of a provider's models the picker offers. The full catalog
     /// stays listed here so a hidden model can always be restored.
     pub(super) fn models_menu(
@@ -960,7 +977,9 @@ impl SettingsView {
                 let ids = filtered
                     .iter()
                     .map(|(_, (id, _))| id.clone())
-                    .collect::<Vec<_>>();
+                    .collect::<Rc<[_]>>();
+                let up_ids = ids.clone();
+                let down_ids = ids.clone();
                 let rows = filtered
                     .into_iter()
                     .map(|(ix, (id, name))| {
@@ -1030,39 +1049,25 @@ impl SettingsView {
                             .id(SharedString::from(format!("models-list-{provider}")))
                             .role(Role::Group)
                             .aria_label(format!("{} model visibility", kind.label()))
-                            .capture_key_down(cx.listener(
-                                move |this, event: &gpui::KeyDownEvent, _, cx| {
-                                    if ids.is_empty()
-                                        || event.keystroke.modifiers != gpui::Modifiers::none()
-                                        || this.model_filter.read(cx).is_composing()
-                                    {
-                                        return;
-                                    }
-                                    let active = this
-                                        .model_active
-                                        .as_ref()
-                                        .and_then(|id| ids.iter().position(|model| model == id));
-                                    let last = ids.len() - 1;
-                                    let next = match event.keystroke.key.as_str() {
-                                        "down" => active.map_or(0, |at| (at + 1).min(last)),
-                                        "up" => active.map_or(last, |at| at.saturating_sub(1)),
-                                        "enter" if active.is_some() || last == 0 => {
-                                            this.toggle_model_visibility(
-                                                provider,
-                                                &ids[active.unwrap_or(0)],
-                                                cx,
-                                            );
-                                            cx.stop_propagation();
-                                            return;
-                                        }
-                                        _ => return,
-                                    };
-                                    this.model_active = Some(ids[next].clone());
-                                    this.model_scroll.scroll_to_item(next);
+                            .capture_action(cx.listener(move |this, _: &input::Up, _, cx| {
+                                this.step_model_visibility(&up_ids, -1, cx);
+                            }))
+                            .capture_action(cx.listener(move |this, _: &input::Down, _, cx| {
+                                this.step_model_visibility(&down_ids, 1, cx);
+                            }))
+                            .capture_action(cx.listener(move |this, _: &input::Submit, _, cx| {
+                                if this.model_filter.read(cx).is_composing() {
+                                    return;
+                                }
+                                let selected = ids
+                                    .iter()
+                                    .find(|id| this.model_active.as_ref() == Some(*id))
+                                    .or_else(|| (ids.len() == 1).then(|| &ids[0]));
+                                if let Some(id) = selected {
+                                    this.toggle_model_visibility(provider, id, cx);
                                     cx.stop_propagation();
-                                    cx.notify();
-                                },
-                            ))
+                                }
+                            }))
                             .flex()
                             .flex_col()
                             .gap_1()
