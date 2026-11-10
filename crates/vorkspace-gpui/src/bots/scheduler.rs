@@ -1509,13 +1509,13 @@ impl Bots {
             view.install_transfer(settings, None, cx);
             view.configure_bot(bot, root, env, cx);
         });
-        self.observations
-            .push(cx.subscribe(&view, move |this, _, _: &SessionChanged, cx| {
-                this.habit_changed(session, cx);
-            }));
+        let changed = cx.subscribe(&view, move |this, _, _: &SessionChanged, cx| {
+            this.habit_changed(session, cx);
+        });
         self.running.insert(
             session,
             RunningHabit {
+                _changed: changed,
                 bot: target,
                 habit: habit.id.clone(),
                 view: view.clone(),

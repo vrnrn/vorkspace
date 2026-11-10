@@ -217,6 +217,38 @@ fn confirming_reset_does_not_replace_a_chat_that_opened_in_another_window(cx: &m
 }
 
 #[gpui::test]
+fn detaching_a_chat_drops_its_subscriptions_even_if_a_pane_still_holds_it(cx: &mut TestAppContext) {
+    let s = setup(cx);
+    close_bot_pane(&s, cx);
+    let old = s.manager.read_with(cx, |bots, _| bots.chats[&s.id].clone());
+    let weak = old.downgrade();
+    s.manager.update(cx, |bots, cx| {
+        bots.stop_chat(&s.id, cx);
+        bots.ensure_chat(&s.id, cx);
+    });
+    cx.run_until_parked();
+    let new = s.manager.read_with(cx, |bots, _| bots.chats[&s.id].clone());
+    assert_ne!(old.entity_id(), new.entity_id());
+
+    let transcript = old.read_with(cx, |chat, _| chat.transcript.clone());
+    transcript.update(cx, |_, cx| {
+        cx.emit(crate::transcript::BotResponseAction::Quote {
+            text: "Stale quote".into(),
+            window: s.window.into(),
+        });
+    });
+    cx.run_until_parked();
+    for chat in [&old, &new] {
+        chat.read_with(cx, |chat, cx| {
+            assert!(chat.input.read(cx).content.is_empty())
+        });
+    }
+    drop(old);
+    cx.run_until_parked();
+    assert!(weak.upgrade().is_none());
+}
+
+#[gpui::test]
 fn retiring_a_minion_revokes_the_permit_and_stops_its_chat_in_the_peer_window(
     cx: &mut TestAppContext,
 ) {
@@ -383,8 +415,8 @@ fn paged_chat(s: &Setup, cx: &mut TestAppContext, card: bool) -> Database {
     });
     cx.run_until_parked();
     assert!(chat.read_with(cx, |v, cx| v.bot_row_origin(cx) > 0));
-    s.manager.update(cx, |m, _| {
-        m.chats.insert(s.id.clone(), chat);
+    s.manager.update(cx, |m, cx| {
+        m.attach_chat(s.id.clone(), chat, cx);
     });
     store
 }
