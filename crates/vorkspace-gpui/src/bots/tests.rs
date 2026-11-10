@@ -96,6 +96,33 @@ fn vox_reads_and_edits_the_live_bot_composer_from_a_peer_window(cx: &mut TestApp
         .unwrap()
         .unwrap();
     assert_eq!(read["text"], "A draft from Vox");
+    let other = peer
+        .update(cx, |shell, window, cx| {
+            let other = shell.workspace.create_vorkspace("Other");
+            shell.workspace.active_vorkspace = other.clone();
+            assert!(shell.workspace.bot_hidden_in_vorkspace(&s.id));
+            let result = shell
+                .vox_action("workspace.open", &json!({"bot":s.id}), window, cx)
+                .unwrap();
+            assert_eq!(result["sessionId"], s.session);
+            other
+        })
+        .unwrap();
+    cx.run_until_parked();
+    s.window
+        .update(cx, |shell, _, _| {
+            assert!(
+                shell
+                    .workspace
+                    .active
+                    .is_some_and(|id| shell.is_bot_pane(id))
+            );
+        })
+        .unwrap();
+    peer.update(cx, |shell, _, _| {
+        assert_eq!(shell.workspace.active_vorkspace, other)
+    })
+    .unwrap();
 }
 
 #[gpui::test]

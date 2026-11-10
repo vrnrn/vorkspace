@@ -199,7 +199,15 @@ impl Shell {
         match action {
             "workspace.open" => {
                 if let Some(bot) = bot {
-                    self.click_bot_tab(&bot.id, window, cx);
+                    if !self.workspace.preferences.bots {
+                        return Err("Bots are disabled".into());
+                    }
+                    let routed = self.bots.as_ref().is_some_and(|bots| {
+                        bots.update(cx, |bots, cx| bots.focus_chat_window(&bot.id, cx))
+                    });
+                    if !routed {
+                        self.open_owned_bot(&bot.id, window, cx);
+                    }
                 } else {
                     self.open(id, window, cx);
                 }
