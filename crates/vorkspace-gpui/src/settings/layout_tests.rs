@@ -322,7 +322,7 @@ fn providers_without_an_open_conversation_list_their_loaded_models(cx: &mut Test
                     Default::default(),
                     vorkspace_core::catalog::generation(Kind::Codex, &Default::default()),
                 ),
-                vec![catalog_model("a", "Alpha")],
+                vec![catalog_model("a", "Alpha")].into(),
             );
             cx.notify();
         })
@@ -370,7 +370,7 @@ fn discovered_catalog_follows_the_selected_account_and_keeps_profiles_separate(
                     default.clone(),
                     vorkspace_core::catalog::generation(Kind::Codex, &default),
                 ),
-                vec![catalog_model("default-model", "Default model")],
+                vec![catalog_model("default-model", "Default model")].into(),
             );
             view.discovered_catalogs.insert(
                 (
@@ -378,7 +378,7 @@ fn discovered_catalog_follows_the_selected_account_and_keeps_profiles_separate(
                     work.clone(),
                     vorkspace_core::catalog::generation(Kind::Codex, &work),
                 ),
-                vec![catalog_model("work-model", "Work model")],
+                vec![catalog_model("work-model", "Work model")].into(),
             );
             assert_eq!(
                 view.discovered_models(Kind::Codex, cx).unwrap()[0].id,
@@ -392,7 +392,7 @@ fn discovered_catalog_follows_the_selected_account_and_keeps_profiles_separate(
                     default.clone(),
                     vorkspace_core::catalog::generation(Kind::Codex, &default),
                 ),
-                vec![catalog_model("new-default-model", "New default model")],
+                vec![catalog_model("new-default-model", "New default model")].into(),
             );
             center.update(cx, |center, cx| {
                 center
@@ -503,7 +503,7 @@ fn summary_picker_saves_effort_and_clears_it_when_changing_models(cx: &mut TestA
                     Default::default(),
                     vorkspace_core::catalog::generation(Kind::Codex, &Default::default()),
                 ),
-                vec![catalog_model("alpha", "Alpha"), beta],
+                vec![catalog_model("alpha", "Alpha"), beta].into(),
             );
             cx.notify();
         })
@@ -723,7 +723,7 @@ fn native_settings_captures() {
                                         &Default::default(),
                                     ),
                                 ),
-                                vec![catalog_model("gpt-6.1-terra", "GPT-6.1 Terra")],
+                                vec![catalog_model("gpt-6.1-terra", "GPT-6.1 Terra")].into(),
                             );
                             view
                         });

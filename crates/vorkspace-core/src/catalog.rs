@@ -19,33 +19,24 @@ use std::{
     time::{Duration, Instant},
 };
 
-pub(crate) use crate::model_cache::{cache, model};
+pub(crate) use crate::model_cache::model;
 pub use crate::model_cache::{
     cached_models_for, cached_name, generation, invalidate, Model, ModelControl, ModelRows,
 };
 
 const CATALOG_BYTES: usize = 2 * 1024 * 1024;
 
-pub fn models(kind: Kind) -> Result<Vec<Model>, String> {
+pub fn models(kind: Kind) -> Result<ModelRows, String> {
     models_for(kind, &crate::accounts::Profile::default())
 }
-pub fn models_for(kind: Kind, account: &crate::accounts::Profile) -> Result<Vec<Model>, String> {
+pub fn models_for(kind: Kind, account: &crate::accounts::Profile) -> Result<ModelRows, String> {
     if !kind.is_supported() {
         return Err("This provider is no longer supported".into());
     }
-    let cache = cache();
-    let guard = cache.lock().unwrap_or_else(|e| e.into_inner());
-    if let Some((_, _, rows, _)) = guard.entries.iter().find(|(k, profile, _, at)| {
-        *k == kind && profile == account && at.elapsed() < Duration::from_secs(300)
-    }) {
-        return Ok(rows.clone());
-    }
-    let generation = guard
-        .generation
-        .get(&(kind, account.clone()))
-        .copied()
-        .unwrap_or(0);
-    drop(guard);
+    crate::model_cache::discover(kind, account, || read_models(kind, account))
+}
+
+fn read_models(kind: Kind, account: &crate::accounts::Profile) -> Result<Vec<Model>, String> {
     let value = if kind.is_acp() || kind.is_pi() {
         provider::catalog_for(kind, account.clone())?
     } else {
@@ -137,21 +128,6 @@ pub fn models_for(kind: Kind, account: &crate::accounts::Profile) -> Result<Vec<
     };
     if models.is_empty() {
         return Err(format!("{} returned an empty model catalog", kind.label()));
-    }
-    let mut cache = cache.lock().unwrap();
-    if cache
-        .generation
-        .get(&(kind, account.clone()))
-        .copied()
-        .unwrap_or(0)
-        == generation
-    {
-        cache
-            .entries
-            .retain(|(k, profile, _, _)| *k != kind || profile != account);
-        cache
-            .entries
-            .push((kind, account.clone(), models.clone(), Instant::now()));
     }
     Ok(models)
 }
@@ -610,32 +586,6 @@ fn query_provider(
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn cached_catalogs_are_account_scoped_and_invalidated_together() {
-        let account = crate::accounts::Profile {
-            id: "catalog-cache-test".into(),
-            root: None,
-        };
-        let other = crate::accounts::Profile {
-            id: "catalog-cache-other".into(),
-            root: None,
-        };
-        cache().lock().unwrap().entries.push((
-            Kind::Claude,
-            account.clone(),
-            vec![model("opus", "Opus test")],
-            Instant::now() - Duration::from_secs(301),
-        ));
-        assert_eq!(
-            cached_models_for(Kind::Claude, &account).unwrap()[0].id,
-            "opus"
-        );
-        assert!(cached_models_for(Kind::Claude, &other).is_none());
-        assert!(cached_models_for(Kind::Codex, &account).is_none());
-        invalidate(Kind::Claude, &account);
-        assert!(cached_models_for(Kind::Claude, &account).is_none());
-    }
 
     #[test]
     fn acp_catalogs_accept_grouped_options_and_legacy_models() {

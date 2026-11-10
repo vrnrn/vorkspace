@@ -2,7 +2,7 @@
 use super::*;
 use vorkspace_core::{
     bot::InitialConfiguration,
-    catalog::{self, Model},
+    catalog::{self, Model, ModelRows},
 };
 
 pub(super) struct Creation {
@@ -10,7 +10,7 @@ pub(super) struct Creation {
     pub provider: Kind,
     pub settings: Settings,
     pub soul: String,
-    pub catalog: Vec<Model>,
+    pub catalog: ModelRows,
     pub generation: u64,
     pub window: gpui::AnyWindowHandle,
     pub previous_focus: Option<gpui::FocusHandle>,
@@ -162,7 +162,7 @@ impl Bots {
             provider,
             settings,
             soul: bot::DEFAULT_SOUL.into(),
-            catalog: Vec::new(),
+            catalog: Default::default(),
             generation: 0,
             window: window.window_handle(),
             previous_focus: window.focused(cx),

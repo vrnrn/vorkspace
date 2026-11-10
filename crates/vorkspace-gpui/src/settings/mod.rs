@@ -238,7 +238,7 @@ pub(crate) struct SettingsView {
             vorkspace_core::accounts::Profile,
             u64,
         ),
-        Vec<vorkspace_core::catalog::Model>,
+        vorkspace_core::catalog::ModelRows,
     >,
     catalogs_loading: Vec<(
         vorkspace_core::provider::Kind,
@@ -574,10 +574,12 @@ impl SettingsView {
         &self,
         kind: vorkspace_core::provider::Kind,
         cx: &App,
-    ) -> Option<&Vec<vorkspace_core::catalog::Model>> {
+    ) -> Option<&[vorkspace_core::catalog::Model]> {
         let profile = self.catalog_profile(kind, cx);
         let generation = vorkspace_core::catalog::generation(kind, &profile);
-        self.discovered_catalogs.get(&(kind, profile, generation))
+        self.discovered_catalogs
+            .get(&(kind, profile, generation))
+            .map(AsRef::as_ref)
     }
     /// Load every installed provider's model list off the render path.
     fn load_catalogs(&mut self, force: bool, cx: &mut Context<Self>) {

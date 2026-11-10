@@ -524,7 +524,7 @@ impl Automations {
             if let Some(host) = host {
                 host.read()?.models_for(kind)
             } else {
-                vorkspace_core::catalog::models_for(kind, &profile).map(Into::into)
+                vorkspace_core::catalog::models_for(kind, &profile)
             }
         });
         cx.spawn(async move |this, cx| {

@@ -24,7 +24,7 @@ impl Conversation {
             if let Some(host) = host {
                 host.read()?.models_for(kind)
             } else {
-                catalog::models_for(kind, &account).map(Into::into)
+                catalog::models_for(kind, &account)
             }
         });
         cx.spawn(async move |this, cx| {

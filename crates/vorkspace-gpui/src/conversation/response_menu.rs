@@ -135,7 +135,7 @@ impl Conversation {
                 (!self.is_remote())
                     .then(|| catalog::cached_models_for(provider, &profile))
                     .flatten()
-                    .map(|rows| Ok(rows.into()))
+                    .map(Ok)
             });
             let options = cached
                 .map(|result| self.response_model_items(turn, kind, provider, result, cx))
@@ -229,7 +229,7 @@ impl Conversation {
         let request = self.response_request;
         let work = cx
             .background_executor()
-            .spawn(async move { catalog::models_for(provider, &profile).map(Into::into) });
+            .spawn(async move { catalog::models_for(provider, &profile) });
         cx.spawn(async move |this, cx| {
             let result = work.await;
             let _ = this.update(cx, |this, cx| {

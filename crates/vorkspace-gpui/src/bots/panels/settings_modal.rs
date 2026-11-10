@@ -985,7 +985,7 @@ impl Bots {
                 draft.settings.thinking = None;
                 draft.settings.service_tier = None;
                 draft.settings.model_settings.clear();
-                draft.catalog.clear();
+                draft.catalog = Default::default();
                 this.load_creation_catalog(cx);
             } else if let Some(view) = this.chat()
                 && let Err(e) = view.update(cx, |v, cx| {

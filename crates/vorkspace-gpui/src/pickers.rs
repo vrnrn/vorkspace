@@ -328,7 +328,7 @@ impl ModelList {
                 match result {
                     Ok(models) => {
                         this.catalogs.retain(|(k, _)| *k != kind);
-                        this.catalogs.push((kind, models.into()));
+                        this.catalogs.push((kind, models));
                     }
                     Err(error) => this.errors.push((kind, error)),
                 }
