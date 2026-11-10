@@ -171,7 +171,8 @@ fn all_picker_modes_start_with_cached_choices_and_keep_them_after_refresh_failur
                 branch: Some("main".into()),
                 main: true,
                 ..Default::default()
-            }],
+            }]
+            .into(),
             ..Default::default()
         },
     );

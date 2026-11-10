@@ -26,7 +26,7 @@ fn managed_reuse_waits_for_the_cold_composer_and_history(cx: &mut TestAppContext
             assert!(chat.managed_availability(cx) == ManagedAvailability::Pending);
             chat.load_complete(cx);
         });
-        let executor = cx.executor();
+        let executor = cx.foreground_executor().clone();
         executor.block_test(cx.condition(&chat, |chat, _| {
             !chat.composer_draft.is_hydrating() && chat.history_ready()
         }));
