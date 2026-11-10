@@ -22,8 +22,8 @@ use crate::{
     context::Usage,
     transcript::{Row, Transcript},
 };
-use rusqlite::{Connection, OpenFlags, OptionalExtension, params};
-use serde_json::{Value, json};
+use rusqlite::{params, Connection, OpenFlags, OptionalExtension};
+use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 use std::{
     cell::RefCell,
@@ -1110,11 +1110,9 @@ impl Store {
                 ),
                 (
                     "is_draft",
-                    json!(
-                        blocks
-                            .iter()
-                            .any(|b| b["role"] == "user" && b["draft"] == true)
-                    ),
+                    json!(blocks
+                        .iter()
+                        .any(|b| b["role"] == "user" && b["draft"] == true)),
                 ),
             ],
         )

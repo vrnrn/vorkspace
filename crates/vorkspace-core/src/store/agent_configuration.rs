@@ -219,11 +219,9 @@ mod tests {
         store.shared_history_schema().unwrap();
         store.conn.execute_batch("CREATE TRIGGER reject_configuration BEFORE INSERT ON native_agent_settings BEGIN SELECT RAISE(ABORT,'forced failure'); END;").unwrap();
 
-        assert!(
-            store
-                .select_local_provider(id, "codex", Kind::Claude, selection(Kind::Codex, 2))
-                .is_err()
-        );
+        assert!(store
+            .select_local_provider(id, "codex", Kind::Claude, selection(Kind::Codex, 2))
+            .is_err());
         let peer = Store::read_vorkspace(&path).unwrap();
         assert_eq!(
             peer.local_agent_binding(id).unwrap(),
@@ -296,11 +294,9 @@ mod tests {
         store
             .select_local_provider(id, "claude", Kind::Pi, selection(Kind::Claude, 2))
             .unwrap();
-        assert!(
-            !store
-                .settle_local_provider_handoff(id, "claude", &selected.account.id, &ready, None)
-                .unwrap()
-        );
+        assert!(!store
+            .settle_local_provider_handoff(id, "claude", &selected.account.id, &ready, None)
+            .unwrap());
         let successor = store.agent_preferences(id).unwrap().unwrap();
         assert_eq!(successor.revision, 2);
         assert_eq!(successor.pending_provider_switch.unwrap().from, "claude");
