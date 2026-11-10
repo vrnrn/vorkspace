@@ -5,6 +5,7 @@ use std::{
     collections::HashMap,
     sync::{Arc, Mutex},
 };
+use vorkspace_core::store::Store;
 
 #[derive(Clone, Serialize, Deserialize)]
 pub(super) struct Thread {
@@ -50,68 +51,29 @@ struct SavedRevision {
     revision: u64,
 }
 
+#[derive(Default)]
+enum Revision {
+    #[default]
+    Unloaded,
+    Loaded(Option<u64>),
+}
+
 #[derive(Clone, Default)]
-pub(super) struct Writes(Arc<Mutex<Option<u64>>>);
+pub(super) struct Writes(Arc<Mutex<Revision>>);
 
 impl Writes {
     pub(super) fn read(&self, store: Database, session: i64) -> Result<Saved, String> {
+        let mut revision = self.0.lock().unwrap_or_else(|e| e.into_inner());
         let store = locked(&store)?;
-        if let Some(value) = store.setting(&format!("btw:{session}"))? {
+        let value = store.setting(&format!("btw:{session}"))?;
+        let saved = if let Some(value) = &value {
             drop(store);
-            let saved: Saved = serde_json::from_str(&value)
-                .map_err(|error| format!("Could not restore side questions: {error}"))?;
-            *self.0.lock().unwrap_or_else(|e| e.into_inner()) = Some(saved.revision);
-            return Ok(saved);
-        }
-        let imported = store.desktop_side_threads(session)?;
-        let accounts = store.provider_accounts()?;
-        let root = store.data_dir().map(std::path::Path::to_path_buf);
-        let threads = imported
-            .into_iter()
-            .map(|thread| {
-                let kind = Kind::from_id(&thread.provider);
-                let account = vorkspace_core::accounts::Profile {
-                    id: accounts.selected(kind, &thread.cwd),
-                    root: root.clone(),
-                };
-                let effort = [
-                    "effort",
-                    "reasoning",
-                    "reasoningEffort",
-                    "reasoning_effort",
-                    "variant",
-                ]
-                .into_iter()
-                .find_map(|key| thread.model_settings.get(key).cloned());
-                Thread {
-                    id: thread.id,
-                    source_turn: thread.source_turn,
-                    snapshot: thread.snapshot,
-                    provider: thread.provider,
-                    model: thread.model,
-                    cwd: thread.cwd,
-                    account,
-                    effort,
-                    model_settings: thread.model_settings,
-                    environment: HashMap::new(),
-                    rows: thread.rows,
-                    draft: String::new(),
-                    status: match thread.status.as_str() {
-                        "ready" => "completed",
-                        "running" => "stopped",
-                        status => status,
-                    }
-                    .into(),
-                    error: thread.error,
-                    desktop: Some(thread.original),
-                }
-            })
-            .collect();
-        Ok(Saved {
-            revision: 0,
-            active: None,
-            threads,
-        })
+            decode(value)?
+        } else {
+            import(&store, session)?
+        };
+        *revision = Revision::Loaded(value.is_some().then_some(saved.revision));
+        Ok(saved)
     }
 
     pub(super) fn publish(
@@ -121,9 +83,11 @@ impl Writes {
         snapshot: Saved,
     ) -> Result<(), String> {
         let key = format!("btw:{session}");
-        let revision = snapshot.revision;
-        let mut published = self.0.lock().unwrap_or_else(|e| e.into_inner());
-        if published.is_some_and(|published| revision <= published) {
+        let mut revision = self.0.lock().unwrap_or_else(|e| e.into_inner());
+        let Revision::Loaded(published) = &mut *revision else {
+            return Err("The saved side questions could not be loaded.".into());
+        };
+        if published.is_some_and(|published| snapshot.revision <= published) {
             return Ok(());
         }
         let value = serde_json::to_string(&snapshot).map_err(|error| error.to_string())?;
@@ -139,7 +103,102 @@ impl Writes {
             return Err("Side questions changed in another window.".into());
         }
         store.compare_swap_setting(&key, existing.as_deref(), &value)?;
-        *published = Some(revision);
+        *published = Some(snapshot.revision);
         Ok(())
     }
+
+    /// Before hydration, the view can only create threads. Merge those drafts
+    /// against durable history when quit cannot wait for a view publication.
+    pub(super) fn append_new_threads(
+        &self,
+        store: Database,
+        session: i64,
+        mut pending: Saved,
+    ) -> Result<(), String> {
+        pending.threads.retain(|thread| !thread.empty());
+        if pending.threads.is_empty() {
+            return Ok(());
+        }
+        let key = format!("btw:{session}");
+        let mut revision = self.0.lock().unwrap_or_else(|e| e.into_inner());
+        let store = locked(&store)?;
+        let existing = store.setting(&key)?;
+        let mut saved = match existing.as_deref() {
+            Some(value) => decode(value)?,
+            None => import(&store, session)?,
+        };
+        pending
+            .threads
+            .retain(|thread| !saved.threads.iter().any(|old| old.id == thread.id));
+        if pending.threads.is_empty() {
+            return Ok(());
+        }
+        saved.active = pending
+            .active
+            .filter(|id| pending.threads.iter().any(|thread| &thread.id == id))
+            .or(saved.active);
+        saved.threads.append(&mut pending.threads);
+        saved.revision = saved.revision.saturating_add(1).max(pending.revision);
+        let value = serde_json::to_string(&saved).map_err(|error| error.to_string())?;
+        store.compare_swap_setting(&key, existing.as_deref(), &value)?;
+        *revision = Revision::Loaded(Some(saved.revision));
+        Ok(())
+    }
+}
+
+fn decode(value: &str) -> Result<Saved, String> {
+    serde_json::from_str(value)
+        .map_err(|error| format!("Could not restore side questions: {error}"))
+}
+
+fn import(store: &Store, session: i64) -> Result<Saved, String> {
+    let imported = store.desktop_side_threads(session)?;
+    let accounts = store.provider_accounts()?;
+    let root = store.data_dir().map(std::path::Path::to_path_buf);
+    let threads = imported
+        .into_iter()
+        .map(|thread| {
+            let kind = Kind::from_id(&thread.provider);
+            let account = vorkspace_core::accounts::Profile {
+                id: accounts.selected(kind, &thread.cwd),
+                root: root.clone(),
+            };
+            let effort = [
+                "effort",
+                "reasoning",
+                "reasoningEffort",
+                "reasoning_effort",
+                "variant",
+            ]
+            .into_iter()
+            .find_map(|key| thread.model_settings.get(key).cloned());
+            Thread {
+                id: thread.id,
+                source_turn: thread.source_turn,
+                snapshot: thread.snapshot,
+                provider: thread.provider,
+                model: thread.model,
+                cwd: thread.cwd,
+                account,
+                effort,
+                model_settings: thread.model_settings,
+                environment: HashMap::new(),
+                rows: thread.rows,
+                draft: String::new(),
+                status: match thread.status.as_str() {
+                    "ready" => "completed",
+                    "running" => "stopped",
+                    status => status,
+                }
+                .into(),
+                error: thread.error,
+                desktop: Some(thread.original),
+            }
+        })
+        .collect();
+    Ok(Saved {
+        revision: 0,
+        active: None,
+        threads,
+    })
 }

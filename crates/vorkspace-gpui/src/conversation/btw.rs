@@ -83,7 +83,7 @@ pub(super) struct Btw {
     active: Option<String>,
     open: bool,
     focus_pending: bool,
-    loading: bool,
+    initial_load: Option<gpui::Task<()>>,
     error: Option<String>,
     revision: u64,
     writes: Writes,
@@ -101,9 +101,7 @@ pub(super) struct Btw {
 }
 impl Drop for Btw {
     fn drop(&mut self) {
-        for cancel in self.cancel.values() {
-            cancel.store(true, Ordering::Relaxed);
-        }
+        self.stop_replies();
     }
 }
 impl Btw {
@@ -138,10 +136,10 @@ impl Btw {
         let work = cx
             .background_executor()
             .spawn(async move { load.read(load_store, session) });
-        cx.spawn(async move |this, cx| {
+        let initial_load = cx.spawn(async move |this, cx| {
             let result = work.await;
             let _ = this.update(cx, |this, cx| {
-                this.loading = false;
+                this.initial_load = None;
                 let after_load = this.after_load.take();
                 match result {
                     Ok(mut saved) => {
@@ -191,11 +189,9 @@ impl Btw {
                 }
                 this.refresh(cx);
             });
-        })
-        .detach();
+        });
         let quit = cx.on_app_quit(|this, cx| {
-            this.capture_draft(cx);
-            let save = this.start_save(cx);
+            let save = this.save_on_quit(cx);
             async move {
                 if let Some(save) = save
                     && let Err(error) = save.await
@@ -215,7 +211,7 @@ impl Btw {
             active: None,
             open: false,
             focus_pending: false,
-            loading: true,
+            initial_load: Some(initial_load),
             error: None,
             revision: vorkspace_core::time::now_ms(),
             writes,
@@ -270,7 +266,7 @@ impl Btw {
             return;
         }
         self.new_thread(cx);
-        if self.loading
+        if self.initial_load.is_some()
             && let Some(thread) = self.active.clone()
         {
             self.after_load = if !has_text {
@@ -287,7 +283,7 @@ impl Btw {
             };
         }
         self.input.update(cx, |input, cx| input.set_text(text, cx));
-        if !draft && !self.loading {
+        if !draft && self.initial_load.is_none() {
             self.submit(cx);
         }
         cx.notify();
@@ -478,20 +474,11 @@ impl Btw {
 
     fn start_save(&mut self, cx: &mut Context<Self>) -> Option<gpui::Task<Result<(), String>>> {
         self.save_delay = None;
-        if self.loading {
+        if self.initial_load.is_some() {
             self.save_after_load = true;
             return None;
         }
-        self.revision = self
-            .revision
-            .saturating_add(1)
-            .max(vorkspace_core::time::now_ms());
-        let revision = self.revision;
-        let snapshot = Saved {
-            revision,
-            active: self.active.clone(),
-            threads: self.threads.clone(),
-        };
+        let snapshot = self.save_snapshot();
         let store = self.store.clone();
         let session = self.session;
         let writes = self.writes.clone();
@@ -499,6 +486,42 @@ impl Btw {
             cx.background_executor()
                 .spawn(async move { writes.publish(store, session, snapshot) }),
         )
+    }
+
+    fn save_snapshot(&mut self) -> Saved {
+        self.revision = self
+            .revision
+            .saturating_add(1)
+            .max(vorkspace_core::time::now_ms());
+        Saved {
+            revision: self.revision,
+            active: self.active.clone(),
+            threads: self.threads.clone(),
+        }
+    }
+
+    fn save_on_quit(&mut self, cx: &mut Context<Self>) -> Option<gpui::Task<Result<(), String>>> {
+        self.capture_draft(cx);
+        self.stop_replies();
+        self.save_delay = None;
+        if self.initial_load.take().is_none() {
+            return self.start_save(cx);
+        }
+        self.after_load = None;
+        let pending = self.save_snapshot();
+        let store = self.store.clone();
+        let session = self.session;
+        let writes = self.writes.clone();
+        Some(
+            cx.background_executor()
+                .spawn(async move { writes.append_new_threads(store, session, pending) }),
+        )
+    }
+
+    fn stop_replies(&mut self) {
+        for (_, cancel) in self.cancel.drain() {
+            cancel.store(true, Ordering::Relaxed);
+        }
     }
 
     fn prompt(thread: &Thread) -> String {
@@ -523,7 +546,7 @@ impl Btw {
         )
     }
     fn submit(&mut self, cx: &mut Context<Self>) -> bool {
-        if self.loading
+        if self.initial_load.is_some()
             || self.input.read(cx).is_composing()
             || self
                 .active()
@@ -658,6 +681,9 @@ impl Btw {
         .detach();
     }
     fn append_reply(&mut self, id: &str, text: &str, cx: &mut Context<Self>) {
+        if !self.cancel.contains_key(id) {
+            return;
+        }
         let visible = self.open && self.active.as_deref() == Some(id);
         let Some(thread) = self.threads.iter_mut().find(|thread| thread.id == id) else {
             return;
@@ -828,8 +854,9 @@ impl Render for Btw {
         let running = self
             .active()
             .is_some_and(|thread| thread.status == "running");
-        let can_submit =
-            !self.loading && !running && !self.input.read(cx).content.trim().is_empty();
+        let can_submit = self.initial_load.is_none()
+            && !running
+            && !self.input.read(cx).content.trim().is_empty();
         let failure = self
             .active()
             .and_then(|thread| thread.error.clone())
@@ -1238,8 +1265,8 @@ mod tests {
             cx.open_window(Default::default(), |_, cx| {
                 let parent = cx.new(input::Input::side_question);
                 cx.new(|cx| {
-                    let mut sheet = Btw::new(session, store, parent, target.clone(), cx);
-                    sheet.open_with(target, String::new(), false, cx);
+                    let mut sheet = Btw::new(session, store.clone(), parent, target.clone(), cx);
+                    sheet.open_with(target.clone(), String::new(), false, cx);
                     sheet
                 })
             })
@@ -1257,6 +1284,28 @@ mod tests {
                 assert_eq!(sheet.input.read(cx).content, "Unsent side draft");
             })
             .unwrap();
+
+        let early_draft = cx.update(|cx| {
+            let parent = cx.new(input::Input::side_question);
+            let sheet = cx.new(|cx| Btw::new(session, store.clone(), parent, target.clone(), cx));
+            sheet.update(cx, |sheet, cx| {
+                sheet.open_with(target, "Draft before hydration".into(), true, cx);
+                assert!(sheet.initial_load.is_some());
+                let id = sheet.active.clone().unwrap();
+                sheet.save_on_quit(cx).unwrap().detach();
+                id
+            })
+        });
+        cx.run_until_parked();
+        let saved = Writes::default().read(store, session).unwrap();
+        assert_eq!(saved.active.as_deref(), Some(early_draft.as_str()));
+        assert_eq!(saved.threads.len(), 3);
+        assert_eq!(saved.threads[0].id, long);
+        assert_eq!(saved.threads[0].rows[1].text, "Old answer");
+        assert_eq!(saved.threads[1].id, draft);
+        assert_eq!(saved.threads[1].draft, "Unsent side draft");
+        assert_eq!(saved.threads[2].id, early_draft);
+        assert_eq!(saved.threads[2].draft, "Draft before hydration");
     }
 
     #[gpui::test]
