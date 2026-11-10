@@ -58,6 +58,8 @@ impl Inbox {
             &details.head_ref_name
         };
         let title = div()
+            .id("inbox-detail-header")
+            .debug_selector(|| "inbox-detail-header".into())
             .w_full()
             .flex_shrink_0()
             .border_b_1()
@@ -66,7 +68,6 @@ impl Inbox {
                 div()
                     .w_full()
                     .max_w(px(page::DETAIL_MAX))
-                    .mx_auto()
                     .px(inset)
                     .pt(inset)
                     .pb(px(if is_pr { 4. } else { 16. }))
@@ -75,6 +76,8 @@ impl Inbox {
                     .gap(px(8.))
                     .child(
                         page::meta()
+                            .id("inbox-detail-meta")
+                            .debug_selector(|| "inbox-detail-meta".into())
                             .min_w_0()
                             .flex()
                             .flex_wrap()

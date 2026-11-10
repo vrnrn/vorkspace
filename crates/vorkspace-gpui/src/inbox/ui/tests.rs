@@ -109,6 +109,52 @@ fn inbox_window_at_width(cx: &mut TestAppContext, width: f32) -> WindowHandle<In
 }
 
 #[gpui::test]
+fn connector_detail_headers_start_at_the_pane_inset_at_every_zoom(cx: &mut TestAppContext) {
+    let window = inbox_window_at_width(cx, 1920.);
+    let visual = &mut gpui::VisualTestContext::from_window(window.into(), cx);
+    for (provider, kind) in [("github", "pr"), ("gitlab", "pr"), ("jira", "issue")] {
+        window
+            .update(visual, |inbox, _, cx| {
+                let item = Item {
+                    provider: provider.into(),
+                    kind: kind.into(),
+                    number: 137,
+                    repo: "example/project".into(),
+                    title: "Connector detail alignment".into(),
+                    state: "open".into(),
+                    ..Default::default()
+                };
+                inbox.state.source = provider.into();
+                inbox.selected = Some(item.key());
+                inbox.snapshot.items = vec![item];
+                inbox.details = Some(Details::default());
+                inbox.narrow_detail = true;
+                cx.notify();
+            })
+            .unwrap();
+
+        for (width, zoom) in [(1920., 1.), (1600., 0.85), (860., 1.3)] {
+            visual.simulate_resize(size(px(width), px(700.)));
+            window
+                .update(visual, |_, window, cx| window.set_ui_scale(zoom, cx))
+                .unwrap();
+            visual.run_until_parked();
+            visual.refresh().unwrap();
+            let header = visual.debug_bounds("inbox-detail-header").unwrap();
+            let meta = visual.debug_bounds("inbox-detail-meta").unwrap();
+            let inset = window
+                .update(visual, |inbox, window, _| inbox.detail_inset(window))
+                .unwrap();
+            let offset = meta.left() - header.left();
+            assert!(
+                (offset - inset).abs() <= px(1. / zoom),
+                "{provider} at {width}px and {zoom}×: {offset:?} instead of {inset:?}"
+            );
+        }
+    }
+}
+
+#[gpui::test]
 fn narrow_navigation_preserves_the_open_item_and_comment_draft(cx: &mut TestAppContext) {
     let window = inbox_window_at_width(cx, 720.);
     let key = window
