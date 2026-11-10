@@ -903,7 +903,9 @@ impl SettingsView {
             return;
         }
         let last = ids.len() - 1;
-        let active = ids.iter().position(|id| self.model_active.as_ref() == Some(id));
+        let active = ids
+            .iter()
+            .position(|id| self.model_active.as_ref() == Some(id));
         let next = active.map_or_else(
             || if step < 0 { last } else { 0 },
             |at| at.saturating_add_signed(step).min(last),
