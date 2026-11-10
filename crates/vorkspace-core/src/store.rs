@@ -1,4 +1,5 @@
 //! Session storage. Desktop launches use vorkspace's existing schema directly.
+mod agent_configuration;
 mod app_commands;
 pub use app_commands::AppCommandAdmission;
 mod attachments;
@@ -38,13 +39,13 @@ mod native_history;
 mod side_threads;
 mod turn_history;
 pub use native_history::{NativeHistoryRequest, NativeHistoryResult};
-pub use turn_history::{recovery_text, RecoveredTurn, TurnHistory};
+pub use turn_history::{RecoveredTurn, TurnHistory, recovery_text};
 pub(crate) mod todos;
 pub use crate::compatibility::vorkspace_database;
 pub use crate::session::native_model;
 use crate::transcript::{Row, Transcript};
 pub use edit::EditSnapshot;
-use rusqlite::{params, Connection};
+use rusqlite::{Connection, params};
 pub use side_threads::DesktopSideThread;
 use std::collections::BTreeMap;
 use std::path::Path;
@@ -609,21 +610,6 @@ impl Store {
         self.save_agent_settings(id, preferences)
     }
 
-    pub fn configure_agent(
-        &self,
-        id: i64,
-        provider: &str,
-        settings: &crate::agent::Settings,
-    ) -> Result<(), String> {
-        if self
-            .agent_preferences(id)?
-            .is_some_and(|saved| saved.revision > settings.revision)
-        {
-            return Ok(());
-        }
-        self.change_provider(id, provider)?;
-        self.save_agent_settings(id, settings)
-    }
     pub fn change_provider(&self, id: i64, provider: &str) -> Result<(), String> {
         if let Some(remote) = self.remote_session(id)? {
             return self.change_remote_provider(&remote, provider);

@@ -18,4 +18,6 @@ After the remote host saves a chat in separate blocks, keep using host software 
 
 Before sending locally, the app saves a record of the message. If the connection breaks or the app stops, it does not assume the agent did nothing and send the message again. Unconfirmed messages stay available to review. You can explicitly put a copy back in an empty composer. Dismissing the notice does not permit an automatic repeat.
 
+When you pick a different provider, the app saves the choice and the old provider’s conversation together. You can switch back to the same conversation before the handoff starts. If you pick another provider while a reply is finishing, that reply can only finish its own handoff. Your previous model settings are read from the existing settings file until the app saves them with the conversation.
+
 Pasted pictures stay in a private attachment folder. The app makes sure a file is saved before sharing its path. A background check can remove old pictures that no saved message or draft uses. If another app process is using the folder, saved data changes, or the check cannot finish safely, it leaves the pictures alone. A read-only data check never cleans attachments.

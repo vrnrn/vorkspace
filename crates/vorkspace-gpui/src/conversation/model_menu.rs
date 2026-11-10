@@ -1,6 +1,14 @@
 //! Model and effort choices, and the composer's menus that offer them.
 use super::*;
 
+fn next_settings_revision(current: u64) -> u64 {
+    let wall = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_nanos() as u64;
+    wall.max(current.saturating_add(1))
+}
+
 impl Conversation {
     pub(super) fn refresh_catalog(&mut self, cx: &mut Context<Self>) {
         if cfg!(test) {
@@ -72,10 +80,7 @@ impl Conversation {
             self.defer_history_action(|this, cx| this.save_settings(cx), cx);
             return;
         }
-        self.settings.revision = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_nanos() as u64;
+        self.settings.revision = next_settings_revision(self.settings.revision);
         let mut settings = self.settings.clone();
         settings.model = self.model.clone();
         let store = self.store.clone();
@@ -342,115 +347,111 @@ impl Conversation {
         if self.editing_last_turn.pending() || self.status == "Preparing handoff…" {
             return false;
         }
-        let changed_model = self.summary.provider != picked.0.id() || self.model != picked.1;
-        if std::env::var_os("VORKSPACE_NATIVE_TRACE").is_some() {
-            eprintln!(
-                "native model session={} provider={} model={:?}",
-                self.summary.id,
-                picked.0.id(),
-                picked.1
+        let provider = picked.0.id();
+        let changes_provider = self.summary.provider != provider;
+        let changed_model = changes_provider || self.model != picked.1;
+        let local_switch = changes_provider && !self.is_remote();
+        if local_switch && self.needs_history_restore() {
+            let picked = ModelPicked(picked.0, picked.1.clone());
+            self.defer_history_action(
+                move |this, cx| {
+                    if this.apply_model_pick(&picked, cx) {
+                        remember_model(picked.0, picked.1, cx);
+                    }
+                },
+                cx,
             );
+            return false;
         }
-        if self.summary.provider != picked.0.id() {
-            let reverting = self
-                .settings
-                .pending_provider_switch
-                .as_ref()
-                .is_some_and(|pending| pending.from == picked.0.id());
-            let restored = reverting
-                .then(|| self.settings.pending_provider_switch.clone())
-                .flatten();
-            let changed = locked(&self.store).and_then(|store| {
-                store.change_provider(self.summary.id, picked.0.id())?;
-                if let Some(id) = restored
-                    .as_ref()
-                    .and_then(|pending| pending.provider_id.as_deref())
+
+        let mut next = self.settings.clone();
+        next.model = picked.1.clone();
+        next.effort = preferred_effort(provider, cx);
+        next.fast = false;
+        next.thinking = None;
+        next.service_tier = None;
+        next.model_settings.clear();
+        if changes_provider {
+            next.account = crate::accounts::get(cx)
+                .map(|center| center.read(cx).selected(picked.0, &self.summary.cwd))
+                .unwrap_or_default();
+            let id = self.summary.id;
+            let saved = if local_switch {
+                let transcript = self.transcript.read(cx).source_rows();
+                if next.pending_provider_switch.is_none()
+                    && (self.busy
+                        || self.summary.provider_id.is_some()
+                        || transcript.iter().any(|row| row.is_prompt()))
                 {
-                    store.provider_id(self.summary.id, id)?;
-                }
-                Ok(())
-            });
-            if let Err(error) = changed {
-                self.status = error;
-                cx.notify();
-                return false;
-            }
-            if let Some(pending) = restored {
-                self.settings.account = pending.account;
-                self.summary.provider_id = pending.provider_id;
-                self.settings.pending_provider_switch = None;
-                self.settings.handoff = None;
-            } else {
-                let has_history = self.busy
-                    || self
-                        .transcript
-                        .read(cx)
-                        .source_rows()
-                        .iter()
-                        .any(|row| row.is_prompt());
-                if has_history && self.settings.pending_provider_switch.is_none() {
-                    self.settings.pending_provider_switch =
-                        Some(vorkspace_core::agent::ProviderSwitch {
-                            from: self.summary.provider.clone(),
-                            cwd: self.execution_cwd().to_owned(),
-                            model: self.model.clone(),
-                            model_settings: self.settings.model_settings.clone(),
-                            effort: self.settings.effort.clone(),
-                            fast: self.settings.fast,
-                            service_tier: self.settings.service_tier.clone(),
-                            thinking: self.settings.thinking,
-                            skip_outgoing_recap: self.settings.usage_limit.is_some(),
-                            account: self.settings.account.clone(),
-                            provider_id: self.summary.provider_id.clone(),
-                        });
-                }
-                self.settings.account = crate::accounts::get(cx)
-                    .map(|center| center.read(cx).selected(picked.0, &self.summary.cwd))
-                    .unwrap_or_default();
-                self.summary.provider_id = None;
-                if let Some(pending) = &self.settings.pending_provider_switch {
-                    self.settings.handoff = Some(vorkspace_core::agent::Handoff {
-                        from: pending.from.clone(),
-                        brief: vorkspace_core::response::handoff(
-                            self.transcript.read(cx).source_rows(),
-                        ),
+                    next.pending_provider_switch = Some(vorkspace_core::agent::ProviderSwitch {
+                        from: self.summary.provider.clone(),
+                        cwd: self.execution_cwd().to_owned(),
+                        model: self.model.clone(),
+                        model_settings: self.settings.model_settings.clone(),
+                        effort: self.settings.effort.clone(),
+                        fast: self.settings.fast,
+                        service_tier: self.settings.service_tier.clone(),
+                        thinking: self.settings.thinking,
+                        skip_outgoing_recap: self.settings.usage_limit.is_some(),
+                        account: self.settings.account.clone(),
+                        provider_id: self.summary.provider_id.clone(),
                     });
                 }
-            }
-            self.summary.provider = picked.0.id().into();
-            self.completion.update(cx, |completion, cx| {
-                completion.set_provider(picked.0.id(), cx)
-            });
+                next.handoff = None;
+                next.revision = next_settings_revision(next.revision);
+                locked(&self.store).and_then(|store| {
+                    store.select_local_provider(id, &self.summary.provider, picked.0, next)
+                })
+            } else {
+                locked(&self.store).and_then(|store| {
+                    store.change_provider(id, provider)?;
+                    Ok((next, None))
+                })
+            };
+            let (settings, binding) = match saved {
+                Ok(saved) => saved,
+                Err(error) => {
+                    self.status = error;
+                    cx.notify();
+                    return false;
+                }
+            };
+            next = settings;
+            self.summary.provider_id = binding;
+            self.summary.provider = provider.into();
+            self.completion
+                .update(cx, |completion, cx| completion.set_provider(provider, cx));
             self.catalog.clear();
             if !self.summary.has_messages {
                 self.summary.title = format!("New {} session", picked.0.label());
             }
         }
+        self.settings = next;
         self.model = picked.1.clone();
+        self.resolved_model = None;
         if let Some(context) = &mut self.context {
             context.window = None;
+            let context = *context;
+            let store = self.store.clone();
+            let id = self.summary.id;
+            let account = self.settings.account.id.clone();
+            cx.background_executor()
+                .spawn(async move {
+                    let _ = locked(&store).and_then(|s| {
+                        s.save_context_usage_if_owner(id, &context, provider, &account)
+                    });
+                })
+                .detach();
         }
-        let store = self.store.clone();
-        let id = self.summary.id;
-        let context = self.context;
-        cx.background_executor()
-            .spawn(async move {
-                if let Some(context) = context {
-                    let _ = locked(&store).and_then(|s| s.save_context_usage(id, &context));
-                }
-            })
-            .detach();
-        self.resolved_model = None;
-        self.settings.effort = preferred_effort(&self.summary.provider, cx);
-        self.settings.fast = false;
-        self.settings.thinking = None;
-        self.settings.service_tier = None;
-        self.settings.model_settings.clear();
         if changed_model && self.settings.usage_limit.is_some() && !self.busy {
             self.recover_usage_after_model_change(cx);
         }
         self.refresh_catalog(cx);
-        self.save_settings(cx);
+        // The local provider and its handoff are already durable. Blanks
+        // also save their descriptive title through the ordinary settings path.
+        if !local_switch || !self.summary.has_messages {
+            self.save_settings(cx);
+        }
         cx.emit(SessionChanged::Configuration);
         true
     }

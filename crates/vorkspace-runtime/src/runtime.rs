@@ -128,6 +128,7 @@ fn run_turn_using(
     let mut visual_introduction = None;
     let mut prepared_handoff = None;
     let mut handoff_accepted = false;
+    let mut handoff_retired = false;
     // SessionReview's recorded turn: its project and id, once the baseline is taken.
     let mut checkpoint: Option<(String, String)> = None;
     let mut created_worktree = None;
@@ -429,17 +430,16 @@ fn run_turn_using(
                 root,
                 cancel.clone(),
             );
+            locked(&store)?.prepare_local_provider_handoff(
+                summary.id,
+                &summary.provider,
+                &source_account,
+                &source,
+                &prepared,
+            )?;
             settings.handoff = Some(prepared.clone());
             prepared_handoff = Some(prepared.clone());
             provider_id = None;
-            {
-                let store = locked(&store)?;
-                store.reset_provider_id(summary.id)?;
-                let mut persisted = store.agent_preferences(summary.id)?.unwrap_or_default();
-                persisted.pending_provider_switch = None;
-                persisted.handoff = Some(prepared.clone());
-                store.save_agent_preferences(summary.id, &persisted)?;
-            }
             publish(
                 &tx,
                 &cancel,
@@ -616,14 +616,20 @@ fn run_turn_using(
                         Event::Ready => {
                             turn_ready = true;
                             boundary = true;
-                            if prepared_handoff.is_some() && !handoff_accepted {
+                            if let Some(prepared) =
+                                prepared_handoff.as_ref().filter(|_| !handoff_accepted)
+                            {
                                 handoff_accepted = true;
-                                handoff = Some(None);
-                                let store = locked(&store)?;
-                                let mut persisted =
-                                    store.agent_preferences(summary.id)?.unwrap_or_default();
-                                persisted.handoff = None;
-                                store.save_agent_preferences(summary.id, &persisted)?;
+                                handoff_retired = locked(&store)?.settle_local_provider_handoff(
+                                    summary.id,
+                                    &summary.provider,
+                                    &source_account,
+                                    prepared,
+                                    None,
+                                )?;
+                                if handoff_retired {
+                                    handoff = Some(None);
+                                }
                             }
                         }
                         Event::FollowUpDispatch(message) => {
@@ -958,21 +964,23 @@ fn run_turn_using(
     } else {
         TurnOutcome::Failed
     };
-    let handoff = prepared_handoff.map(|mut ready| {
-        if handoff_accepted {
-            None
-        } else {
-            // This accepted user message never reached the incoming provider.
-            // Carry it with the ready packet when the user continues later.
-            if !user_request.trim().is_empty() {
+    let mut handoff = handoff_retired.then_some(None);
+    let retained_handoff =
+        prepared_handoff
+            .as_ref()
+            .filter(|_| !handoff_accepted)
+            .map(|prepared| {
+                let mut ready = prepared.clone();
+                // This accepted user message never reached the incoming provider.
+                // Carry it with the ready packet when the user continues later.
+                if !user_request.trim().is_empty() {
+                    ready.brief.push_str(
+                        "\n\nAfter the switch, before this message, the user also sent:\n\n",
+                    );
+                    ready.brief.push_str(&user_request);
+                }
                 ready
-                    .brief
-                    .push_str("\n\nAfter the switch, before this message, the user also sent:\n\n");
-                ready.brief.push_str(&user_request);
-            }
-            Some(ready)
-        }
-    });
+            });
     // A storage error or cancelled publish can leave this turn's latest rows
     // unseen by the UI. Replay the turn on failure before sending an error or
     // settled tools; starting after those missing rows would abort in patch().
@@ -1115,23 +1123,29 @@ fn run_turn_using(
     }
     let submission_save = submissions.finish(&result, provider_completion_confirmed);
     drop(submissions);
-    let handoff_save = if let Some(ready) = handoff.as_ref().filter(|_| !pending.overlap) {
-        locked(&store).and_then(|store| {
-            let mut persisted = store.agent_preferences(summary.id)?.unwrap_or_default();
-            persisted.pending_provider_switch = None;
-            persisted.handoff = ready.clone();
-            store.save_agent_preferences(summary.id, &persisted)
-        })
-    } else {
-        Ok(())
-    };
+    if let (Some(prepared), Some(ready)) = (prepared_handoff.as_ref(), retained_handoff)
+        && !pending.overlap
+    {
+        match locked(&store).and_then(|store| {
+            store.settle_local_provider_handoff(
+                summary.id,
+                &summary.provider,
+                &source_account,
+                prepared,
+                Some(&ready),
+            )
+        }) {
+            Ok(true) => handoff = Some(Some(ready)),
+            Ok(false) => (),
+            Err(error) => {
+                outcome = TurnOutcome::Failed;
+                status = format!("{status} · Saving handoff failed: {error}");
+            }
+        }
+    }
     if let Err(error) = submission_save {
         outcome = TurnOutcome::Failed;
         status = format!("{status} · Saving local send receipt failed: {error}");
-    }
-    if let Err(error) = handoff_save {
-        outcome = TurnOutcome::Failed;
-        status = format!("{status} · Saving handoff failed: {error}");
     }
     let bot_snapshot = history_loaded && !pending.overlap && bot_home.is_some();
     let ordinary_unsaved_recovery =

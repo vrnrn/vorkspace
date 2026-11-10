@@ -1,6 +1,6 @@
 //! Composer settings and approval decisions shared by the native view and transports.
 use serde::{Deserialize, Serialize};
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
@@ -209,7 +209,7 @@ impl TurnInfo {
         self.duration_known || self.duration_ms > 0
     }
 }
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Handoff {
     pub from: String,
     pub brief: String,

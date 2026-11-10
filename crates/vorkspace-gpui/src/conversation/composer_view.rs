@@ -112,7 +112,8 @@ impl Conversation {
             .child(self.message_queue(window, cx))
             .children(if self.is_remote() { None } else { self.auth_notice(cx) })
             .when(self.settings.worktree_removed,|d|d.child(div().mb_2().p_3().rounded(px(radius::CONTAINER)).border_1().border_color(content(0.1)).flex().items_center().gap_3().text_size(px(12.)).child(div().flex_1().child("Worktree deleted. Select a branch or worktree to continue this conversation.")).child(tool_pill("reattach-worktree","Select worktree").child("Select worktree").on_click(cx.listener(|this,_,window,cx|this.open_git(GitMode::Worktree,window,cx))))))
-            .when_some(self.settings.handoff.clone(), |d, handoff| {
+            .when_some(self.settings.pending_provider_switch.as_ref().map(|switch| switch.from.as_str())
+                .or_else(|| self.settings.handoff.as_ref().map(|handoff| handoff.from.as_str())), |d, from| {
                 d.child(
                     div()
                         .mb(px(6.))
@@ -128,17 +129,21 @@ impl Conversation {
                         .child(icon("response-handoff", 14.))
                         .child(div().min_w_0().flex_1().child(format!(
                             "Handoff from {} · Add your next instruction below",
-                            Kind::display_label(&handoff.from)
+                            Kind::display_label(from)
                         )))
-                        .child(
+                        .when(!self.busy, |d| d.child(
                             tool_pill("dismiss-handoff", "Dismiss handoff")
                                 .child(icon("close", 12.))
                                 .on_click(cx.listener(|this, _, _, cx| {
+                                    if this.busy {
+                                        return;
+                                    }
+                                    this.settings.pending_provider_switch = None;
                                     this.settings.handoff = None;
                                     this.save_settings(cx);
                                     cx.notify();
                                 })),
-                        ),
+                        )),
                 )
             })
             .when_some(self.git_picker.clone(), |d, picker| {

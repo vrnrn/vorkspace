@@ -109,10 +109,9 @@ impl TurnProjection {
                 this.summary.provider_id = Some(id);
             }
         }
-        if let Some(handoff) = update.handoff {
+        if let Some(handoff) = update.handoff.filter(|_| source_selected) {
             this.settings.pending_provider_switch = None;
             this.settings.handoff = handoff;
-            this.save_settings(cx);
         }
         if let Some(model) = update.config_model {
             if let Some(pending) = this.settings.pending_provider_switch.as_mut()

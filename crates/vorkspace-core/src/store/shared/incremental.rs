@@ -10,6 +10,7 @@ const CHANGED: &str =
 /// Writers also call this inside their own transactions for databases that have
 /// not saved history yet. Once a guard exists, bookkeeping must never add DDL.
 pub(super) fn ensure_bookkeeping_schema(conn: &Connection) -> Result<(), String> {
+    super::agent::ensure_schema(conn)?;
     sql(conn.execute_batch(
         "CREATE TABLE IF NOT EXISTS native_bot_dispatch_claims(
             bot_id TEXT NOT NULL,message_id TEXT NOT NULL,token TEXT NOT NULL,

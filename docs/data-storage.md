@@ -38,6 +38,10 @@ The host reads both complete JSON snapshots and normalized block storage, conver
 
 Local sends reserve their stable message identity before provider admission. The durable receipt advances before provider input, then records completion or an uncertain outcome. Startup reconciles receipts whose process owner has exited; it never automatically replays a send whose external effects are unknown. An unconfirmed send remains visible for review. Restoring its text to an empty composer requires an explicit action, and dismissing the notice retains its no-replay identity. Session deletion retains receipt tombstones so delayed send work cannot recreate deleted state.
 
+## Local provider selection
+
+The selected provider, model, thread binding, and native handoff preferences commit together in SQLite. A pending switch retains the outgoing thread ID, including an ID learned by the previous worker before selection commits. Selecting that provider again before the handoff starts restores its saved binding. A worker settles only the handoff it prepared, so a later selection retains its own state. Existing native agent settings remain readable from the sidecar until the first successful preference write for that conversation creates its SQLite record.
+
 ## Private composer attachments
 
 Pasted images are cached under `composer-attachments/` in the selected data directory. Publication follows exclusive file creation, file flush and directory flush; Unix directories and files use owner-only permissions. Drafts, queued messages, history and receipts retain references to those files.
