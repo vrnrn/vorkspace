@@ -1,7 +1,7 @@
 //! Bounded, expiring provider processes. Each parked process belongs to one
 //! conversation, account, directory and launch configuration.
 use super::*;
-use std::sync::{atomic::AtomicUsize, OnceLock};
+use std::sync::{atomic::AtomicUsize, Condvar, OnceLock};
 type WriteRequest = (Vec<u8>, mpsc::Sender<std::io::Result<()>>);
 pub(super) struct Input {
     sender: Option<mpsc::Sender<WriteRequest>>,
@@ -151,10 +151,25 @@ impl Drop for Wire {
 }
 pub(super) struct Parked {
     pub wire: Wire,
-    pub protocol: Protocol,
-    pub key: String,
+    pub continuation: Continuation,
+    binding: Binding,
+    key: String,
     at: Instant,
     owner: Option<i64>,
+}
+
+pub(super) struct Continuation {
+    acp: acp::State,
+    pi: pi::State,
+    previous_turn: Option<String>,
+}
+
+impl Continuation {
+    pub(super) fn restore(self, protocol: &mut Protocol) {
+        protocol.acp = self.acp;
+        protocol.pi = self.pi;
+        protocol.previous_turn = self.previous_turn;
+    }
 }
 static LIMIT: AtomicUsize = AtomicUsize::new(0);
 fn selected_sessions() -> &'static Mutex<std::collections::HashSet<i64>> {
@@ -175,9 +190,19 @@ pub fn keep(ids: Vec<i64>) {
     // Selection runs on the UI thread; child reaping belongs to a worker.
     thread::spawn(enforce_idle_limit);
 }
-fn idle_pool() -> &'static Mutex<Vec<Parked>> {
-    static POOL: OnceLock<Mutex<Vec<Parked>>> = OnceLock::new();
+#[derive(Default)]
+struct IdlePool {
+    entries: Mutex<Vec<Parked>>,
+    wake: Condvar,
+}
+
+fn pool() -> &'static IdlePool {
+    static POOL: OnceLock<IdlePool> = OnceLock::new();
     POOL.get_or_init(Default::default)
+}
+
+fn idle_pool() -> &'static Mutex<Vec<Parked>> {
+    &pool().entries
 }
 
 /// Removing a lease transfers its ownership to the caller. Reaping a child
@@ -207,8 +232,10 @@ fn epochs() -> &'static Mutex<HashMap<Binding, u64>> {
     EPOCHS.get_or_init(Default::default)
 }
 pub fn configure(limit: usize) {
-    LIMIT.store(limit.min(5), Ordering::Relaxed);
-    thread::spawn(enforce_idle_limit);
+    let limit = limit.min(5);
+    if LIMIT.swap(limit, Ordering::Relaxed) != limit {
+        thread::spawn(enforce_idle_limit);
+    }
 }
 
 /// The desktop registry applies one idle-child budget across every provider.
@@ -242,12 +269,27 @@ pub(super) fn enforce_idle_limit() {
     drop(retired);
 }
 pub(super) fn key(request: &Request) -> String {
-    let mut settings = request.settings.clone();
-    settings.turns.clear();
-    settings.attachments.clear();
-    settings.revision = 0;
-    settings.handoff = None;
-    settings.pending_provider_switch = None;
+    let settings = &request.settings;
+    // Only launch and turn options belong to the warm key. A provider's
+    // transcript, draft, and transient turn inputs can be arbitrarily large.
+    let config = json!({
+        "account": settings.account,
+        "usage_limit": settings.usage_limit,
+        "model": settings.model,
+        "effort": settings.effort,
+        "access": settings.access,
+        "fast": settings.fast,
+        "service_tier": settings.service_tier,
+        "thinking": settings.thinking,
+        "model_settings": settings.model_settings,
+        "plan": settings.plan,
+        "operator": settings.operator,
+        "orchestrator": settings.orchestrator,
+        "new_worktree": settings.new_worktree,
+        "worktree_base": settings.worktree_base,
+        "worktree_cwd": settings.worktree_cwd,
+        "worktree_removed": settings.worktree_removed,
+    });
     json!([
         process::owner(),
         request.kind.id(),
@@ -255,13 +297,13 @@ pub(super) fn key(request: &Request) -> String {
         request.cwd,
         request.provider_id,
         request.model,
-        settings,
+        config,
         request.settings.environment,
         request
             .settings
             .bot
             .as_ref()
-            .map(|bot| (&bot.root, &bot.bot.id)),
+            .map(|bot| (&bot.root, &bot.bot.id, &bot.bot.projects)),
         request.settings.disable_claude_hooks
     ])
     .to_string()
@@ -287,18 +329,17 @@ pub(super) fn put(wire: Wire, protocol: Protocol) {
     put_if_current(wire, protocol, None);
 }
 
-fn put_if_current(wire: Wire, mut protocol: Protocol, expected: Option<(&Binding, u64)>) {
+fn put_if_current(wire: Wire, protocol: Protocol, expected: Option<(&Binding, u64)>) {
     if LIMIT.load(Ordering::Relaxed) == 0 || protocol.request.provider_id.is_none() {
         return;
     }
     let key = key(&protocol.request);
-    protocol.emitted.clear();
-    protocol.tools.clear();
-    protocol.active_compaction = None;
-    protocol.claude_tools.clear();
-    protocol.request.prompt.clear();
-    protocol.request.settings.attachments.clear();
-    protocol.request.settings.turns.clear();
+    let binding = Binding::request(&protocol.request);
+    let continuation = Continuation {
+        acp: protocol.acp,
+        pi: protocol.pi,
+        previous_turn: protocol.active_turn,
+    };
     process::mark_idle(wire.child.id(), true);
     {
         // Serialize a cancelled lease's publication with binding invalidation,
@@ -317,17 +358,29 @@ fn put_if_current(wire: Wire, mut protocol: Protocol, expected: Option<(&Binding
         }
         idle_pool().lock().unwrap().push(Parked {
             wire,
-            protocol,
+            continuation,
+            binding,
             key,
             at: Instant::now(),
             owner: process::owner(),
         });
     }
     enforce_idle_limit();
+    pool().wake.notify_one();
     static WATCH: OnceLock<()> = OnceLock::new();
     WATCH.get_or_init(|| {
         thread::spawn(|| loop {
-            thread::sleep(Duration::from_secs(1));
+            let idle = pool();
+            let guard = idle.entries.lock().unwrap();
+            let guard = idle
+                .wake
+                .wait_while(guard, |entries| entries.is_empty())
+                .unwrap();
+            let (guard, _) = idle
+                .wake
+                .wait_timeout(guard, Duration::from_secs(1))
+                .unwrap();
+            drop(guard);
             let limit = LIMIT.load(Ordering::Relaxed);
             let retired = remove_matching(idle_pool(), |entry| {
                 limit == 0
@@ -406,7 +459,9 @@ pub(super) fn settle_cancelled(mut wire: Wire, mut protocol: Protocol) {
                         }
                         // A stopped tool may still ask for input while it
                         // unwinds. Resolve it without resurfacing a UI card.
-                        if let Ok(events) = protocol.frame(value, &mut wire.stdin) {
+                        if let Ok(DecodedFrame::Events(events)) =
+                            protocol.decode_frame(value, &mut wire.stdin)
+                        {
                             for event in events {
                                 let id = match event {
                                     Event::Approval(approval) => Some(approval.id),
@@ -471,7 +526,7 @@ pub fn discard_worktree(path: &Path) {
             }
         }
         remove_matching(idle_pool(), |entry| {
-            crate::files::is_equal_or_inside(&entry.protocol.request.cwd.to_string_lossy(), &root)
+            crate::files::is_equal_or_inside(&entry.binding.cwd.to_string_lossy(), &root)
         })
     };
     drop(retired);
@@ -487,9 +542,7 @@ pub(super) fn forget_session(kind: Kind, session: &str, account: &str, cwd: &Pat
     let retired = {
         let mut epochs = epochs().lock().unwrap();
         *epochs.entry(binding.clone()).or_default() += 1;
-        remove_matching(idle_pool(), |entry| {
-            Binding::request(&entry.protocol.request) == binding
-        })
+        remove_matching(idle_pool(), |entry| entry.binding == binding)
     };
     if !retired.is_empty() {
         thread::spawn(move || drop(retired));
@@ -504,9 +557,7 @@ pub(super) fn discard_session(request: &Request) {
     let retired = {
         let mut epochs = epochs().lock().unwrap();
         *epochs.entry(binding.clone()).or_default() += 1;
-        remove_matching(idle_pool(), |entry| {
-            Binding::request(&entry.protocol.request) == binding
-        })
+        remove_matching(idle_pool(), |entry| entry.binding == binding)
     };
     drop(retired);
 }

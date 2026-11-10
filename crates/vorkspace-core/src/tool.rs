@@ -4,6 +4,9 @@ mod presentation;
 pub mod tasks;
 pub use presentation::{CommandStep, ToolPresentation};
 
+pub(crate) const OUTPUT_LIMIT: usize = 64 * 1024;
+pub(crate) const OUTPUT_OMISSION: &str = "… earlier output omitted …\n";
+
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ToolState {
@@ -47,13 +50,12 @@ impl ToolCall {
     }
     pub fn bound_output(&mut self) {
         // Keep a useful tail without retaining unbounded command output in the UI.
-        const LIMIT: usize = 64 * 1024;
-        if self.output.len() > LIMIT {
-            let mut at = self.output.len() - LIMIT;
+        if self.output.len() > OUTPUT_LIMIT {
+            let mut at = self.output.len() - OUTPUT_LIMIT;
             while !self.output.is_char_boundary(at) {
                 at += 1;
             }
-            self.output = format!("… earlier output omitted …\n{}", &self.output[at..]);
+            self.output = format!("{OUTPUT_OMISSION}{}", &self.output[at..]);
         }
     }
     pub fn summary(&self) -> (String, String) {
