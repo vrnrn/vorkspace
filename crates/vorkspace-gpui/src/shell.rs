@@ -497,9 +497,7 @@ pub(crate) struct Shell {
     store: Database,
     remote: Arc<vorkspace_core::remote::Connections>,
     remote_project_picker: Option<remote_projects::Open>,
-    remote_refresh_cursor: usize,
     remote_marks: HashMap<i64, (bool, bool)>,
-    _remote_clock: gpui::Task<()>,
     sessions: HashMap<i64, Entity<Conversation>>,
     /// Lightweight history index; only opened or previewed chats own GPUI entities.
     session_summaries: HashMap<i64, Session>,
@@ -755,19 +753,6 @@ impl Shell {
             .detach();
         }
         let remote = app_core.read(cx).remote.clone();
-        let remote_clock = cx.spawn(async move |this, cx| {
-            loop {
-                cx.background_executor()
-                    .timer(std::time::Duration::from_secs(3))
-                    .await;
-                if this
-                    .update(cx, |this, cx| this.refresh_remote_projects(cx))
-                    .is_err()
-                {
-                    break;
-                }
-            }
-        });
         let metadata: Vec<_> = summaries.iter().map(|s| (s.id, s.cwd.clone())).collect();
         let mut workspace = Workspace::restore(saved.as_deref(), &metadata, &cwd);
         let layouts = &app_core.read(cx).layouts;
@@ -879,9 +864,7 @@ impl Shell {
             store,
             remote,
             remote_project_picker: None,
-            remote_refresh_cursor: 0,
             remote_marks: HashMap::new(),
-            _remote_clock: remote_clock,
             sessions: HashMap::new(),
             session_summaries: HashMap::new(),
             draft_sessions: sidebar_metadata.drafts,

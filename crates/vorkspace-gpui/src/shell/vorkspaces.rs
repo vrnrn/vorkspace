@@ -123,6 +123,7 @@ impl Shell {
                 .insert(from, self.workspace.project.clone());
         }
         self.workspace.active_vorkspace = id.to_owned();
+        self.sync_remote_scope(cx);
         self.rail_sessions_expanded = false;
         self.rail_search_open = false;
         self.query.clear();

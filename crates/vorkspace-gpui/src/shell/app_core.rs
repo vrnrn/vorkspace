@@ -51,7 +51,7 @@ pub(crate) struct AppCore {
     next_window_id: u64,
     pub(super) checkouts: Entity<crate::git_status::CheckoutCatalog>,
     pub(super) remote: Arc<vorkspace_core::remote::Connections>,
-    pub(super) remote_refreshes: HashMap<String, Option<std::time::Instant>>,
+    pub(super) remote_poll: super::remote_sessions::RemotePoll,
     pub(super) quick_shortcut: crate::composer::quick_composer::Shortcut,
     scheduler: Option<WeakEntity<Shell>>,
     pub(super) automation_cutoff: i64,
@@ -182,7 +182,7 @@ impl AppCore {
                 next_window_id,
                 checkouts,
                 remote,
-                remote_refreshes: HashMap::new(),
+                remote_poll: Default::default(),
                 quick_shortcut: Default::default(),
                 scheduler: None,
                 automation_cutoff: vorkspace_core::time::now_ms().min(i64::MAX as u64) as i64,
@@ -283,6 +283,7 @@ impl AppCore {
         })
         .expect("vorkspace definitions serialize to JSON");
         self.stage_settings([(STORE_KEY, json)], cx);
+        self.reconcile_remote_projects(cx);
         cx.notify();
     }
 
@@ -439,12 +440,14 @@ impl Shell {
         let release = core.downgrade();
         let window = self.window_layout;
         cx.on_release(move |_, cx| {
-            let _ = release.update(cx, |core, _| {
-                core.keep_visible_agents(window, HashSet::new())
+            let _ = release.update(cx, |core, cx| {
+                core.keep_visible_agents(window, HashSet::new());
+                core.set_remote_scope(window, None, cx);
             });
         })
         .detach();
         self.app_core = Some(core);
+        self.sync_remote_scope(cx);
     }
 
     pub(super) fn pending_last_window_bot_writes(&self, cx: &App) -> bool {
@@ -576,6 +579,7 @@ impl Shell {
             }
         }
         self.sync_vorkspace_bot_visibility(cx);
+        self.sync_remote_scope(cx);
         self.invalidate_chrome(cx);
         cx.notify();
     }

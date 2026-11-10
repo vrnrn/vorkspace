@@ -48,6 +48,8 @@ The desktop keeps the earlier messages it already loaded and updates the portion
 
 When a remote chat stays the same, the app keeps the messages already on screen. If the machine is offline, you can still restore a rejected message and its attachments into an empty composer. Retry uses the same request ID for a message the app is waiting to confirm.
 
+Open windows share one refresh for the same remote chat list. The refresh stops when no open window is looking at a vorkspace with a remote project.
+
 Stop and approval buttons belong to the reply you see. If another computer has already started a new reply, the app refreshes before it can control that reply. A separate message awaiting Retry stays queued.
 
 Temporary downloads share a size budget. If it is busy, retry after another download finishes; active downloads are kept intact. A chat that exceeds the download size limit gets a clear error and stays saved on the host. Download limits do not delete conversation data.

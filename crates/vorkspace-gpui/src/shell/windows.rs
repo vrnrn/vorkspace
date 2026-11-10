@@ -399,6 +399,11 @@ pub(super) struct WindowShared {
 }
 
 impl WindowShared {
+    pub(super) fn is_project_available(&self, path: &str) -> bool {
+        let key = vorkspace_core::files::path_key(path);
+        !self.deleted.contains(&key) && self.archived.get(&key) != Some(&true)
+    }
+
     pub(super) fn from_workspace(workspace: &Workspace) -> Self {
         let mut preferences = workspace.preferences.clone();
         preferences.ui_scale = 100;

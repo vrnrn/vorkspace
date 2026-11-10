@@ -111,6 +111,8 @@ When a live poll confirms the same revision, the desktop keeps its existing proj
 
 An idle poll borrows the last observation for that machine and session without duplicating its transcript. A matching revision leaves the projected transcript in place. The local command journal stays available even if the desktop cannot connect to the Host. **Restore message** recovers text and attachments from a rejected request into an empty composer, and **Retry** checks the connection or resends a pending request with its original command ID.
 
+The application polls project session lists on one clock across all open windows. It rotates through remote projects in the open windows' vorkspaces and admits at most two listing requests at a time. With no such projects, the catalog clock stops. Opening a conversation observes its history independently of the project list.
+
 Send and compaction receipts from current hosts identify the accepted run. An older receipt can be associated with a live run through its accepted prompt block. Stop, approvals, and answers target the run the desktop attached to. If another desktop has already started the next turn, the view refreshes and attaches to that turn separately. Controlling a running turn leaves unrelated commands awaiting their own Retry.
 
 Stream batches can reuse block identities from their exact committed revision. When block order stays stable, the store checks that revision and writes changed or appended blocks without rereading the previous block index. Edits that remove or reorder blocks still reconcile against the durable index.
