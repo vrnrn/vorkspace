@@ -1044,7 +1044,7 @@ fn own_successful_revision_is_read_suppressed_and_later_remote_revision_can_chim
                 cx,
             );
             item.updated_at = "2026-10-22T11:00:00Z".into();
-            inbox.record_self_activity(item.key(), item.updated_ms(), cx);
+            inbox.record_self_activity(item.detail_key(), item.updated_ms(), cx);
             let generation = inbox.stage_fixture_poll(cx);
             inbox.finish_fixture_poll(
                 generation,
@@ -1056,7 +1056,7 @@ fn own_successful_revision_is_read_suppressed_and_later_remote_revision_can_chim
             );
             assert!(!inbox.state.seen.unseen(&item));
             assert!(
-                inbox.feed.read(cx).mutation_revision(&item.key()).is_none(),
+                inbox.feed.read(cx).mutation_revision(&item.detail_key()).is_none(),
                 "coalesced own mutations are consumed by one remote revision"
             );
             item.updated_at = "2026-10-22T12:00:00Z".into();
@@ -1142,6 +1142,7 @@ fn a_coalesced_external_revision_is_never_consumed_as_own_activity(cx: &mut Test
                 kind: "jira".into(),
                 id: "42".into(),
                 identifier: "ENG-42".into(),
+                url: "https://current.example.test/browse/ENG-42".into(),
                 updated_at: "2026-10-22T10:00:00Z".into(),
                 ..Default::default()
             };
@@ -1155,15 +1156,18 @@ fn a_coalesced_external_revision_is_never_consumed_as_own_activity(cx: &mut Test
                 cx,
             );
             let own = model::timestamp_ms("2026-10-22T11:00:00Z");
-            inbox.record_self_activity(item.key(), 0, cx);
+            let mut previous = item.clone();
+            previous.url = "https://previous.example.test/browse/ENG-42".into();
+            inbox.record_self_activity(previous.detail_key(), own, cx);
+            inbox.record_self_activity(item.detail_key(), 0, cx);
             assert!(
-                inbox.feed.read(cx).mutation_revision(&item.key()).is_none(),
+                inbox.feed.read(cx).mutation_revision(&item.detail_key()).is_none(),
                 "an uncertain receipt cannot suppress anything"
             );
-            inbox.record_self_activity(item.key(), own, cx);
-            inbox.record_self_activity(item.key(), own - 1, cx);
+            inbox.record_self_activity(item.detail_key(), own, cx);
+            inbox.record_self_activity(item.detail_key(), own - 1, cx);
             assert_eq!(
-                inbox.feed.read(cx).mutation_revision(&item.key()),
+                inbox.feed.read(cx).mutation_revision(&item.detail_key()),
                 Some(own),
                 "older completions cannot overwrite the newer receipt"
             );
@@ -1178,7 +1182,7 @@ fn a_coalesced_external_revision_is_never_consumed_as_own_activity(cx: &mut Test
                 cx,
             );
             assert_eq!(
-                inbox.feed.read(cx).mutation_revision(&item.key()),
+                inbox.feed.read(cx).mutation_revision(&item.detail_key()),
                 Some(own)
             );
             // The own revision is never polled: another person's update arrives first.
@@ -1193,7 +1197,12 @@ fn a_coalesced_external_revision_is_never_consumed_as_own_activity(cx: &mut Test
                 cx,
             );
             assert!(inbox.state.seen.unseen(&item));
-            assert!(inbox.feed.read(cx).mutation_revision(&item.key()).is_none());
+            assert!(inbox.feed.read(cx).mutation_revision(&item.detail_key()).is_none());
+            assert_eq!(
+                inbox.feed.read(cx).mutation_revision(&previous.detail_key()),
+                Some(own),
+                "a revision from a replacement server cannot consume another server's receipt"
+            );
             subscription
         })
         .unwrap();

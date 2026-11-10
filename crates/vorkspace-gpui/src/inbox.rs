@@ -1492,7 +1492,7 @@ impl Inbox {
             .spawn(async move { service.connect(&source, url, email, token) });
         cx.spawn(async move |this, cx| {
             let result = task.await;
-            let _ = feed.update(cx, |feed, cx| {
+            feed.update(cx, |feed, cx| {
                 feed.finish_connection(&provider, result.as_ref().ok().cloned(), cx);
             });
             let _ = this.update(cx, |this, cx| {
