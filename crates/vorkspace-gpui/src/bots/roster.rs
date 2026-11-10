@@ -157,6 +157,29 @@ impl SharedRoster {
         })
     }
 
+    pub(super) fn delete_bot(
+        &mut self,
+        id: String,
+        cx: &mut Context<Self>,
+    ) -> async_channel::Receiver<Result<(), String>> {
+        self.write(None, cx, move |db| {
+            let mut roster = Roster::load(db)?;
+            if roster.get(&id).is_none() {
+                return Ok((None, Ok(())));
+            }
+            roster.bots.retain(|bot| bot.id != id);
+            roster.sanitize_team_queues();
+            let live: HashSet<_> = roster
+                .bots
+                .iter()
+                .flat_map(|bot| bot.outbox.iter().map(|message| &message.id))
+                .collect();
+            roster.held_messages.retain(|id| live.contains(id));
+            roster.message_modes.retain(|id, _| live.contains(id));
+            Ok((Some(roster.save_snapshot(db)?), Ok(())))
+        })
+    }
+
     fn ids(roster: &Roster) -> Vec<String> {
         roster
             .bots

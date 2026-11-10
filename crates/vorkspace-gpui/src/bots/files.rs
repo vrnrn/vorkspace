@@ -336,6 +336,8 @@ impl Bots {
 
     pub(super) fn stop_deleted_bot(&mut self, id: &str, cx: &mut Context<Self>) {
         self.stop_chat(id, cx);
+        self.open_islands.remove(id);
+        self.expanded_islands.remove(id);
         for run in self.running.values_mut().filter(|run| run.bot == id) {
             run.mailbox.clear();
             run.failure.get_or_insert_with(|| "Bot was deleted".into());
@@ -356,18 +358,22 @@ impl Bots {
             if prompt.await.ok() != Some(1) {
                 return;
             }
-            let _ = this.update(cx, |this, cx| {
-                this.stop_deleted_bot(&id, cx);
-                this.roster.bots.retain(|m| m.id != id);
-                this.open_islands.remove(&id);
-                this.expanded_islands.remove(&id);
-                if this.active.as_ref() == Some(&id) {
-                    this.active = None;
-                    this.settings = None;
-                    this.picker = None;
-                }
-                this.save(cx);
-            });
+            let Ok(saved) = this.update(cx, |this, cx| {
+                this.shared_roster
+                    .update(cx, |shared, cx| shared.delete_bot(id, cx))
+            }) else {
+                return;
+            };
+            let result = saved
+                .recv()
+                .await
+                .unwrap_or_else(|_| Err("Bot deletion was interrupted".into()));
+            if let Err(error) = result {
+                let _ = this.update(cx, |this, cx| {
+                    this.error = Some(format!("Could not delete the Bot: {error}"));
+                    this.changed(cx);
+                });
+            }
         })
         .detach();
     }
