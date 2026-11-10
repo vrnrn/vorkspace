@@ -26,6 +26,73 @@ impl Metadata<'_> {
 }
 
 impl Shell {
+    pub(super) fn session_changed(
+        &mut self,
+        id: i64,
+        change: SessionChanged,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(view) = self.sessions.get(&id) else {
+            return;
+        };
+        let view = view.read(cx);
+        let previous = self.session_summaries.get(&id);
+        let summary_changed = previous != Some(&view.summary);
+        let provider_changed =
+            previous.is_none_or(|summary| summary.provider != view.summary.provider);
+        let project_changed = previous.is_none_or(|summary| summary.cwd != view.summary.cwd);
+        let worktree = &view.settings.worktree_cwd;
+        let checkout_changed = self.session_worktrees.get(&id) != Some(worktree);
+        let draft = view.has_saved_draft();
+        let draft_changed = self.draft_sessions.contains(&id) != draft;
+        let needs_approval = view.needs_approval();
+        if summary_changed || checkout_changed || draft_changed {
+            self.session_summaries.insert(id, view.summary.clone());
+            self.session_worktrees.insert(id, worktree.clone());
+            if draft {
+                self.draft_sessions.insert(id);
+            } else {
+                self.draft_sessions.remove(&id);
+            }
+            self.publish_session_summary(id, cx);
+        }
+
+        use SessionChanged::*;
+        let run_changed = matches!(change, Turn | Settled | Loaded);
+        let refresh_checkout = matches!(change, Checkout | Settled | Loaded)
+            || matches!(change, Attention) && needs_approval;
+        if self.workspace.active == Some(id)
+            && (checkout_changed || refresh_checkout || provider_changed || project_changed)
+        {
+            self.sync_git(cx);
+            if refresh_checkout {
+                self.git.update(cx, |git, cx| git.reload(cx));
+            }
+        }
+        if summary_changed || checkout_changed || run_changed || matches!(change, History) {
+            self.sync_search_session(id, cx);
+        }
+        if run_changed {
+            self.orchestration_session_changed(id, cx);
+            self.automation_session_changed(id, cx);
+        }
+        if run_changed || checkout_changed || matches!(change, Checkout) {
+            self.sync_review_locks(cx);
+        }
+        self.refresh_session_mark(id, cx);
+        if change.affects_attention() {
+            self.notification_session_changed(id, cx);
+        }
+        if run_changed || summary_changed || matches!(change, Configuration) {
+            self.update_usage_provider(cx);
+        }
+        if run_changed || checkout_changed || project_changed || matches!(change, Checkout) {
+            self.update_chat_visibility(cx);
+        }
+        self.invalidate_chrome(cx);
+        cx.notify();
+    }
+
     pub(super) fn session_metadata<'a>(&'a self, id: i64, cx: &'a App) -> Metadata<'a> {
         let live = self.sessions.get(&id).map(|view| view.read(cx));
         Metadata {

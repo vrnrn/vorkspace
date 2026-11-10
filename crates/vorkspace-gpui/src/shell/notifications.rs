@@ -785,13 +785,17 @@ impl Shell {
                 .insert(id, cx.new(|_| SessionMark::new(summary.provider.clone())));
             self.tab_marks
                 .insert(id, cx.new(|_| SessionMark::tab(summary.provider.clone())));
-            self.observations
-                .push(cx.subscribe(&view, move |this, _, _: &SessionChanged, cx| {
+            self.observations.push(cx.subscribe(
+                &view,
+                move |this, _, change: &SessionChanged, cx| {
                     this.refresh_session_mark(id, cx);
-                    this.notification_session_changed(id, cx);
+                    if change.affects_attention() {
+                        this.notification_session_changed(id, cx);
+                    }
                     this.invalidate_chrome(cx);
                     cx.notify();
-                }));
+                },
+            ));
             self.sessions.insert(id, view);
             if !self.order.contains(&id) {
                 self.order.push(id);

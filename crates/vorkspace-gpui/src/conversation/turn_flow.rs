@@ -451,7 +451,7 @@ impl Conversation {
             turn_model_id,
             cx,
         );
-        cx.emit(SessionChanged);
+        cx.emit(SessionChanged::Turn);
         cx.notify();
     }
     pub(super) fn receive_turn_updates(
@@ -482,6 +482,7 @@ impl Conversation {
                         }
                         let source_selected = this.summary.provider == source_provider
                             && this.settings.account.id == source_account;
+                        let mut checkout_changed = false;
                         if let Some(cwd) = update.worktree_cwd
                             && (this.settings.worktree_cwd.as_ref() != Some(&cwd)
                                 || this.settings.new_worktree)
@@ -491,6 +492,7 @@ impl Conversation {
                             this.settings.new_worktree = false;
                             this.save_settings(cx);
                             this.refresh_git(cx);
+                            checkout_changed = true;
                         }
                         if let Some(commands) = update.commands.filter(|_| source_selected) {
                             this.completion.update(cx, |completion, cx| {
@@ -503,18 +505,30 @@ impl Conversation {
                         let needed_approval = this.needs_approval();
                         let incoming_notification_input = !stopping
                             && (!update.approvals.is_empty() || !update.questions.is_empty());
-                        this.transcript.update(cx, |v, cx| {
-                            if let Some(turn_start) = update.bot_turn_start {
-                                v.patch_bot_turn_snapshot(turn_start, update.rows, cx);
-                            } else if let Some(len) = update.source_len {
-                                v.patch_snapshot(update.start, update.rows, len, cx);
-                            } else {
-                                v.patch(update.start, update.rows, cx);
-                            }
-                            if stopping && update.bot_turn_start.is_none() {
-                                v.stop_streaming(cx);
-                            }
-                        });
+                        use vorkspace_runtime::runtime::TranscriptPatch;
+                        let patch = update.transcript;
+                        let stop_stream =
+                            stopping && !matches!(&patch, TranscriptPatch::BotSnapshot { .. });
+                        if stop_stream || !matches!(&patch, TranscriptPatch::Unchanged) {
+                            this.transcript.update(cx, |view, cx| {
+                                match patch {
+                                    TranscriptPatch::Unchanged => {}
+                                    TranscriptPatch::Tail { start, rows } => {
+                                        view.patch(start, rows, cx)
+                                    }
+                                    TranscriptPatch::Snapshot { start, rows } => {
+                                        let end = start + rows.len();
+                                        view.patch_snapshot(start, rows, end, cx);
+                                    }
+                                    TranscriptPatch::BotSnapshot { turn_start, rows } => {
+                                        view.patch_bot_turn_snapshot(turn_start, rows, cx);
+                                    }
+                                }
+                                if stop_stream {
+                                    view.stop_streaming(cx);
+                                }
+                            });
+                        }
                         if let Some(id) = update.provider_turn_id {
                             this.transcript
                                 .update(cx, |view, _| view.record_provider_turn(id));
@@ -655,7 +669,7 @@ impl Conversation {
                                     }
                                     .into();
                                     if before != this.needs_approval() {
-                                        cx.emit(SessionChanged);
+                                        cx.emit(SessionChanged::Attention);
                                     }
                                     cx.notify();
                                 },
@@ -669,7 +683,7 @@ impl Conversation {
                                             decision: Decision::KeepOpen,
                                         });
                                     }
-                                    cx.emit(SessionChanged);
+                                    cx.emit(SessionChanged::Attention);
                                     cx.notify();
                                 },
                             );
@@ -755,11 +769,16 @@ impl Conversation {
                                 this.run_history_actions(cx);
                             }
                             this.refresh_git(cx);
-                            cx.emit(SessionChanged);
-                        } else if incoming_notification_input
-                            || needed_approval != this.needs_approval()
-                        {
-                            cx.emit(SessionChanged);
+                            cx.emit(SessionChanged::Settled);
+                        } else {
+                            if checkout_changed {
+                                cx.emit(SessionChanged::Checkout);
+                            }
+                            if incoming_notification_input
+                                || needed_approval != this.needs_approval()
+                            {
+                                cx.emit(SessionChanged::Attention);
+                            }
                         }
                         if activity_changed {
                             cx.emit(SessionActivityChanged);
@@ -861,7 +880,7 @@ impl Conversation {
             self.remote_state.refreshing = false;
             self.refresh_remote_snapshot(cx);
         }
-        cx.emit(SessionChanged);
+        cx.emit(SessionChanged::Settled);
         cx.notify();
     }
     pub(super) fn begin_turn(&mut self, cx: &mut Context<Self>) {

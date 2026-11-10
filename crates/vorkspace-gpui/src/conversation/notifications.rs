@@ -91,7 +91,7 @@ impl Conversation {
         }
         .into();
         // Request-level observers need an update even if another request remains.
-        cx.emit(SessionChanged);
+        cx.emit(SessionChanged::Attention);
         cx.notify();
         true
     }

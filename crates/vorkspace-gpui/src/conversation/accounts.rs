@@ -99,7 +99,7 @@ impl Conversation {
         self.resolved_model = None;
         self.refresh_catalog(cx);
         self.save_settings(cx);
-        cx.emit(SessionChanged);
+        cx.emit(SessionChanged::Configuration);
         cx.notify();
     }
     pub(super) fn detect_usage_limit(&mut self, cx: &mut Context<Self>) {
@@ -204,12 +204,12 @@ impl Conversation {
         self.save_settings(cx);
         if self.settings.bot.is_some() {
             cx.emit(UsageResumed);
-            cx.emit(SessionChanged);
+            cx.emit(SessionChanged::Configuration);
             cx.notify();
             return;
         }
         self.launch_prompt("Continue from where you left off.".into(), cx);
-        cx.emit(SessionChanged);
+        cx.emit(SessionChanged::Turn);
         cx.notify();
     }
     pub(super) fn recover_usage_after_model_change(&mut self, cx: &mut Context<Self>) {
@@ -226,7 +226,7 @@ impl Conversation {
         if self.settings.bot.is_some() {
             cx.emit(UsageResumed);
         }
-        cx.emit(SessionChanged);
+        cx.emit(SessionChanged::Configuration);
         cx.notify();
     }
     pub(crate) fn switch_usage_account(&mut self, profile: Profile, cx: &mut Context<Self>) {

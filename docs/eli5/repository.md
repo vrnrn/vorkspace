@@ -18,6 +18,8 @@ A finished turn tells the composer whether it completed, stopped, or failed. Cha
 
 Windows share one place for their saved layouts, which chats they have open, and which window handles scheduled work. One background writer saves the newest layouts and a copy of the focused window that older versions can read. Before an action that needs a saved layout, the app waits for that save. Notes keeps the code that saves your writing separate from the code that draws the list and editor.
 
+Renaming a chat or editing a draft updates its entry in the list. The app checks project files when an action can change them, such as a reply finishing or a chat moving to another worktree. The chat can update a status label while keeping the messages already on screen.
+
 The launch code picks the data folder and reads saved state before the first window opens. Quit and restart use the same shutdown code and give pending Bot saves time to finish.
 
 Tests sit near the code they check. Extra pretend clients used by host tests live under `host/test-support`. `docs` explains the app, and `docs/eli5` explains the same topics in simpler language. Temporary build output, personal data, and work logs are kept separate from the maintained source.

@@ -37,7 +37,7 @@ impl Conversation {
                             this.settings.model = this.model.clone();
                             this.save_settings(cx);
                         }
-                        cx.emit(SessionChanged);
+                        cx.emit(SessionChanged::Configuration);
                         cx.notify();
                     }
                 });
@@ -451,7 +451,7 @@ impl Conversation {
         }
         self.refresh_catalog(cx);
         self.save_settings(cx);
-        cx.emit(SessionChanged);
+        cx.emit(SessionChanged::Configuration);
         true
     }
     pub(super) fn menu_is(&self, kind: ComposerMenu) -> bool {

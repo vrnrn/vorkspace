@@ -175,7 +175,7 @@ impl Conversation {
                     }
                     Err(error) => this.status = error,
                 }
-                cx.emit(SessionChanged);
+                cx.emit(SessionChanged::Loaded);
                 cx.notify();
             });
         })

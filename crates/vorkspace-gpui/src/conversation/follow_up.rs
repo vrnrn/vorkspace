@@ -121,7 +121,7 @@ impl Conversation {
             self.follow_ups.requested = Some(id);
         }
         self.pump_follow_ups(cx);
-        cx.emit(SessionChanged);
+        cx.emit(SessionChanged::Draft);
         cx.notify();
         Ok(())
     }
@@ -195,7 +195,7 @@ impl Conversation {
                     }
                     Err(_) => {}
                 }
-                cx.emit(SessionChanged);
+                cx.emit(SessionChanged::Draft);
                 cx.notify();
             });
         })
@@ -343,7 +343,7 @@ impl Conversation {
         if self.settings.bot.is_none() {
             self.save_follow_ups(cx);
         }
-        cx.emit(SessionChanged);
+        cx.emit(SessionChanged::Draft);
     }
     pub(super) fn draft_action(&mut self, send: bool, cx: &mut Context<Self>) {
         if self.reject_user_entry(cx) {
@@ -420,7 +420,7 @@ impl Conversation {
             self.transcript
                 .update(cx, |view, cx| view.set_saved_draft(None, cx));
             self.bot_ui.draft_error = None;
-            cx.emit(SessionChanged);
+            cx.emit(SessionChanged::Draft);
             cx.notify();
             return;
         }
@@ -446,7 +446,7 @@ impl Conversation {
         self.transcript
             .update(cx, |view, cx| view.set_saved_draft(None, cx));
         self.save_follow_ups(cx);
-        cx.emit(SessionChanged);
+        cx.emit(SessionChanged::Draft);
     }
     pub(super) fn edit_saved_draft(
         &mut self,
@@ -549,7 +549,7 @@ impl Conversation {
                         view.update_saved_draft_edit(draft);
                     }
                 });
-                cx.emit(SessionChanged);
+                cx.emit(SessionChanged::Draft);
             }
             Err(error) => {
                 let end = text.encode_utf16().count();

@@ -13,7 +13,7 @@ impl Conversation {
         self.context = None;
         self.status = "Worktree deleted".into();
         self.refresh_git(cx);
-        cx.emit(SessionChanged);
+        cx.emit(SessionChanged::Checkout);
         cx.notify();
     }
     pub(super) fn execution_cwd(&self) -> &str {

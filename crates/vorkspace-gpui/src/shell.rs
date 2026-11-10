@@ -1428,44 +1428,11 @@ impl Shell {
                 transcript.apply_preferences(&self.workspace.preferences, cx)
             });
         });
-        self.observations
-            .push(cx.subscribe(&view, move |this, _, _: &SessionChanged, cx| {
-                let Some(view) = this.sessions.get(&id) else {
-                    return;
-                };
-                let view = view.read(cx);
-                let summary = view.summary.clone();
-                let worktree = view.settings.worktree_cwd.clone();
-                let draft = view.has_saved_draft();
-                let summary_changed = this.session_summaries.get(&id) != Some(&summary);
-                let tree_changed = this.session_worktrees.get(&id) != Some(&worktree);
-                let draft_changed = this.draft_sessions.contains(&id) != draft;
-                if summary_changed || tree_changed || draft_changed {
-                    this.session_summaries.insert(id, summary);
-                    this.session_worktrees.insert(id, worktree);
-                    if draft {
-                        this.draft_sessions.insert(id);
-                    } else {
-                        this.draft_sessions.remove(&id);
-                    }
-                    this.publish_session_summary(id, cx);
-                }
-                // A finished turn may have edited files or moved to a worktree.
-                if this.workspace.active == Some(id) {
-                    this.sync_git(cx);
-                    this.git.update(cx, |git, cx| git.reload(cx));
-                }
-                this.sync_search_session(id, cx);
-                this.orchestration_session_changed(id, cx);
-                this.automation_session_changed(id, cx);
-                this.sync_review_locks(cx);
-                this.refresh_session_mark(id, cx);
-                this.notification_session_changed(id, cx);
-                this.update_usage_provider(cx);
-                this.update_chat_visibility(cx);
-                this.invalidate_chrome(cx);
-                cx.notify();
-            }));
+        self.observations.push(
+            cx.subscribe(&view, move |this, _, event: &SessionChanged, cx| {
+                this.session_changed(id, *event, cx);
+            }),
+        );
         self.observations.push(cx.subscribe(
             &view,
             move |this, view, _: &crate::conversation::SessionActivityChanged, cx| {

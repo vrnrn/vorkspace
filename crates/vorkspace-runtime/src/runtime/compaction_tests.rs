@@ -134,13 +134,20 @@ for line in sys.stdin:
     let updates: Vec<_> = std::iter::from_fn(|| rx.try_recv().ok()).collect();
     let finished = updates.last().unwrap();
     assert_eq!(finished.status, "Ready");
-    assert_eq!(finished.start, 0);
-    assert_eq!(finished.source_len, Some(finished.rows.len()));
-    assert_eq!(finished.bot_turn_start, Some(2));
+    assert!(matches!(
+        &finished.transcript,
+        TranscriptPatch::BotSnapshot { turn_start: 2, .. }
+    ));
     assert_eq!(finished.provider_turn_id.as_deref(), Some("managed"));
-    let first = updates.iter().find(|u| !u.rows.is_empty()).unwrap();
-    assert_eq!(first.start, 0);
-    assert_eq!(first.rows[0].text, "From the terminal");
+    let first = updates
+        .iter()
+        .find(|u| !u.transcript.rows().is_empty())
+        .unwrap();
+    assert!(matches!(
+        &first.transcript,
+        TranscriptPatch::BotSnapshot { turn_start: 2, .. }
+    ));
+    assert_eq!(first.transcript.rows()[0].text, "From the terminal");
     let store = locked(&store).unwrap();
     assert_eq!(
         store.bot_session(summary.id).unwrap().unwrap().provider_id,
@@ -270,22 +277,26 @@ fn bot_final_snapshot_includes_imports_when_initial_publication_is_stopped_or_sk
             rx.try_recv().unwrap()
         };
         assert!(finished.finished() && rx.is_empty());
-        assert_eq!(finished.start, 0);
-        assert_eq!(finished.source_len, Some(finished.rows.len()));
-        assert_eq!(finished.bot_turn_start, Some(4));
+        assert!(matches!(
+            &finished.transcript,
+            TranscriptPatch::BotSnapshot { turn_start: 4, .. }
+        ));
         assert_eq!(finished.provider_id, summary.provider_id);
         assert_eq!(finished.delivered.as_deref(), Some(message));
-        assert_eq!(finished.rows[..visible.rows.len()], visible.rows);
-        assert_eq!(finished.rows[2].text, "Terminal prompt");
-        assert_eq!(finished.rows[3].text, "Terminal answer");
-        assert_eq!(finished.rows[4].text, "Managed prompt");
+        assert_eq!(
+            finished.transcript.rows()[..visible.rows.len()],
+            visible.rows
+        );
+        assert_eq!(finished.transcript.rows()[2].text, "Terminal prompt");
+        assert_eq!(finished.transcript.rows()[3].text, "Terminal answer");
+        assert_eq!(finished.transcript.rows()[4].text, "Managed prompt");
         if stopped {
             assert_eq!(finished.outcome, Some(TurnOutcome::Cancelled));
             assert_eq!(finished.status, "Ready");
         } else {
             assert_eq!(finished.outcome, Some(TurnOutcome::Failed));
             assert!(finished.status.contains("CLI not found"));
-            assert_eq!(finished.rows.last().unwrap().role, "error");
+            assert_eq!(finished.transcript.rows().last().unwrap().role, "error");
         }
         let owner = locked(&store).unwrap();
         assert_eq!(owner.composer_draft(id).unwrap().unwrap().payload, draft);

@@ -42,6 +42,8 @@ In GPUI, `conversation` connects the session runtime to input and transcript vie
 
 `shell/app_core/` owns shared window layouts, session leases, scheduled work and settings publication. The settings writer coalesces immutable window snapshots, encodes the multi-window setting and its focused-window compatibility projection on a worker, and commits the pair together. A synchronous durability barrier uses the same writer when a window or project transition requires the layout to be saved first. `notes/` separates editing and revision-checked saves from library and document rendering.
 
+Conversation changes carry their cause to the shell. Catalog and draft edits update the relevant summaries. Run transitions also update scheduled work and visibility. Checkout changes, settled runs, and requests that pause the active agent for input can refresh project files. The turn protocol distinguishes incremental rows, authoritative Host history, and a Bot's admitted history. Status-only updates skip transcript projection.
+
 The host's top-level modules own server, service, store, engine, and sync lifecycles. `host/runtime/models/` contains domain records and validation; `providers/` contains provider-specific adapters; `protocol/` contains their shared stream and RPC machinery; `platform/` owns Node filesystem/platform helpers; `lib/` contains small pure utilities. These modules run on the remote machine.
 
 ## Sources, generated files, and tests

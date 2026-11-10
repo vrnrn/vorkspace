@@ -3,6 +3,25 @@ use gpui::TestAppContext;
 use vorkspace_core::{agent::Settings, store::Store};
 
 #[gpui::test]
+fn a_title_change_updates_the_catalog_without_revisiting_chat_visibility(cx: &mut TestAppContext) {
+    let (window, _, id) = crate::shell::tests::window(cx);
+    cx.run_until_parked();
+    let before = window
+        .update(cx, |shell, _, cx| {
+            shell.sessions[&id].update(cx, |view, cx| view.rename("New title".into(), cx));
+            shell.history_clock
+        })
+        .unwrap();
+    cx.run_until_parked();
+    window
+        .update(cx, |shell, _, _| {
+            assert_eq!(shell.session_summaries[&id].title, "New title");
+            assert_eq!(shell.history_clock, before);
+        })
+        .unwrap();
+}
+
+#[gpui::test]
 fn whole_project_sidebar_keeps_seven_today_sessions_across_worktrees_lazy(cx: &mut TestAppContext) {
     let store = Store::open_vorkspace(std::path::Path::new(":memory:")).unwrap();
     let mut summaries = Vec::new();

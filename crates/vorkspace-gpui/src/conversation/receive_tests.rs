@@ -2,41 +2,26 @@ use super::*;
 use gpui::{TestAppContext, WindowHandle};
 use vorkspace_core::{store::Store, transcript::Row};
 
-fn update(index: usize, finished: bool) -> vorkspace_runtime::runtime::Update {
-    vorkspace_runtime::runtime::Update {
-        source_len: None,
-        bot_turn_start: None,
-        activity: None,
-        worktree_cwd: None,
-        commands: None,
-        provider_turn_id: None,
-        turn_ready: false,
-        follow_up_delivered: vec![],
-        follow_up_errors: vec![],
-        delivered: None,
-        start: index,
-        rows: vec![Row {
-            role: "assistant".into(),
-            text: format!("Synthetic update {index}"),
-            first: true,
-            sent_at: None,
-        }],
-        provider_id: None,
-        provider_reset: false,
-        model: None,
-        config_model: None,
-        config_settings: None,
-        context: None,
-        metrics: None,
-        usage_limit: None,
-        approvals: vec![],
-        approvals_resolved: vec![],
-        questions: vec![],
-        questions_resolved: vec![],
-        handoff: None,
+use vorkspace_runtime::runtime::{TranscriptPatch, TurnOutcome, Update};
+
+fn synthetic_row(index: usize) -> Row {
+    Row {
+        role: "assistant".into(),
+        text: format!("Synthetic update {index}"),
+        first: true,
+        sent_at: None,
+    }
+}
+
+fn update(index: usize, finished: bool) -> Update {
+    Update {
+        transcript: TranscriptPatch::Tail {
+            start: index,
+            rows: vec![synthetic_row(index)],
+        },
         status: format!("Synthetic status {index}"),
-        outcome: finished.then_some(vorkspace_runtime::runtime::TurnOutcome::Completed),
-        history_recovery: None,
+        outcome: finished.then_some(TurnOutcome::Completed),
+        ..Default::default()
     }
 }
 
@@ -205,7 +190,10 @@ fn stop_between_updates_skips_streaming_but_accepts_the_final_replay(cx: &mut Te
     // The worker replays the whole accepted turn on cancellation, rather than
     // depending on intermediate patches which the stopping UI must ignore.
     let mut final_update = update(0, true);
-    final_update.rows.extend(update(1, false).rows);
+    let TranscriptPatch::Tail { rows, .. } = &mut final_update.transcript else {
+        unreachable!();
+    };
+    rows.push(synthetic_row(1));
     final_update.status = "Ready".into();
     final_update.provider_reset = true;
     final_update.context = Some(Default::default());
@@ -285,15 +273,17 @@ fn stopped_bot_accepts_a_settled_snapshot_without_its_initial_imported_rows(
         })
         .unwrap();
     let mut skipped = update(0, false);
-    skipped.rows = rows[..7].to_vec();
-    skipped.source_len = Some(skipped.rows.len());
-    skipped.bot_turn_start = Some(6);
+    skipped.transcript = TranscriptPatch::BotSnapshot {
+        turn_start: 6,
+        rows: rows[..7].to_vec(),
+    };
     skipped.provider_id = Some("wrong-skipped-thread".into());
     tx.try_send(skipped).unwrap();
     tx.try_send(vorkspace_runtime::runtime::Update {
-        rows: rows.clone(),
-        source_len: Some(rows.len()),
-        bot_turn_start: Some(6),
+        transcript: TranscriptPatch::BotSnapshot {
+            turn_start: 6,
+            rows: rows.clone(),
+        },
         provider_turn_id: Some("managed-turn".into()),
         provider_id: Some("saved-thread".into()),
         status: "Ready".into(),
@@ -338,14 +328,14 @@ impl Conversation {
             None,
             cx,
         );
-        cx.emit(SessionChanged);
+        cx.emit(SessionChanged::Loaded);
         tx
     }
 }
 
 pub(crate) fn sidebar_tool_update(label: Option<&str>) -> vorkspace_runtime::runtime::Update {
     let mut update = update(0, false);
-    update.rows.clear();
+    update.transcript = TranscriptPatch::Unchanged;
     update.activity = label.map(str::to_owned);
     update
 }

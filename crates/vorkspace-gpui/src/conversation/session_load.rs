@@ -342,7 +342,7 @@ impl Conversation {
                     }
                     Err(e) => this.status = e,
                 }
-                cx.emit(SessionChanged);
+                cx.emit(SessionChanged::Loaded);
                 cx.notify();
             });
         })
@@ -477,7 +477,7 @@ impl Conversation {
                         this.run_history_actions(cx);
                     }
                     this.sync_review(cx);
-                    cx.emit(SessionChanged);
+                    cx.emit(SessionChanged::Loaded);
                     cx.notify();
                 }
             });

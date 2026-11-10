@@ -11,7 +11,7 @@ impl Conversation {
     pub(crate) fn rename(&mut self, title: String, cx: &mut Context<Self>) {
         self.cancel_title_generation();
         self.summary.title = title;
-        cx.emit(SessionChanged);
+        cx.emit(SessionChanged::Catalog);
         cx.notify();
     }
     pub(super) fn cancel_title_generation(&mut self) {
@@ -110,7 +110,7 @@ impl Conversation {
                 let _ = locked(&store).and_then(|s| s.replace_title(id, &seed, &title));
             })
             .detach();
-        cx.emit(SessionChanged);
+        cx.emit(SessionChanged::Catalog);
         cx.notify();
     }
 }

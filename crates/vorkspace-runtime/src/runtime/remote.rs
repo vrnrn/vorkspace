@@ -7,7 +7,7 @@ use std::{
     io::Read,
 };
 use vorkspace_core::{
-    agent::{Decision, Question, QuestionItem, QuestionOption},
+    agent::{Approval, Decision, Question, QuestionItem, QuestionOption},
     store::{RemoteSession, RemoteUpload},
 };
 fn require_ticket_context(descriptor: &Value) -> Result<(), String> {
@@ -712,7 +712,6 @@ pub fn run_with_client(
                 } else {
                     update("Ready", Some(TurnOutcome::Completed))
                 };
-                next.start = latest_rows.len();
                 if snapshot_changed(known.as_ref(), &snapshot) {
                     let mut projected = snapshot.clone();
                     vorkspace_core::remote::attachments::qualify_snapshot(
@@ -727,9 +726,10 @@ pub fn run_with_client(
                         .zip(&history.rows)
                         .take_while(|(known, next)| known == next)
                         .count();
-                    next.start = prefix;
-                    next.source_len = Some(history.rows.len());
-                    next.rows = history.rows[prefix..].to_vec();
+                    next.transcript = TranscriptPatch::Snapshot {
+                        start: prefix,
+                        rows: history.rows[prefix..].to_vec(),
+                    };
                     activity.snapshot(&history.rows, prefix, &binding.project.cwd);
                     latest_rows = history.rows;
                 }
@@ -844,11 +844,8 @@ pub fn run_with_client(
         Ok(())
     })();
     if let Err(error) = result {
-        let mut next = update(error, Some(TurnOutcome::Failed));
-        // Every valid snapshot was already published. An empty error patch
-        // preserves any optimistic prompt awaiting a host receipt.
-        next.start = latest_rows.len();
-        let _ = tx.send_blocking(next);
+        // An error preserves optimistic prompts still awaiting a host receipt.
+        let _ = tx.send_blocking(update(error, Some(TurnOutcome::Failed)));
     }
 }
 

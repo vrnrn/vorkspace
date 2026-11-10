@@ -3,7 +3,7 @@ use std::sync::{
     atomic::{AtomicBool, Ordering},
 };
 use std::time::Duration;
-use vorkspace_core::agent::{Approval, Control, Settings};
+use vorkspace_core::agent::{Control, Settings};
 use vorkspace_core::{
     provider::{self, Event, Kind, Request},
     store::{Session, Store},
@@ -21,6 +21,8 @@ pub mod native_history;
 mod persistence;
 pub mod remote;
 mod submissions;
+mod updates;
+pub use updates::{HistoryRecovery, TranscriptPatch, TurnOutcome, Update};
 #[cfg(test)]
 mod ticket_context_tests;
 mod visual_discovery;
@@ -32,61 +34,6 @@ struct TurnInput {
     summary: Session,
     prompt: String,
     settings: Settings,
-}
-#[derive(Default)]
-pub struct Update {
-    /// Full, bounded latest-tool label for this run; None means no known tool.
-    pub activity: Option<String>,
-    /// Present only when rows describe the complete authoritative snapshot tail.
-    pub source_len: Option<usize>,
-    /// A local Bot snapshot includes any imported history before this prompt.
-    pub bot_turn_start: Option<usize>,
-    pub worktree_cwd: Option<String>,
-    pub commands: Option<Vec<provider::NativeCommand>>,
-    pub provider_turn_id: Option<String>,
-    pub turn_ready: bool,
-    pub follow_up_delivered: Vec<String>,
-    pub follow_up_errors: Vec<(String, String)>,
-    pub delivered: Option<String>,
-    pub start: usize,
-    pub rows: Vec<Row>,
-    pub provider_id: Option<String>,
-    pub provider_reset: bool,
-    pub model: Option<String>,
-    pub config_model: Option<String>,
-    pub config_settings: Option<std::collections::HashMap<String, String>>,
-    pub context: Option<vorkspace_core::context::Usage>,
-    pub metrics: Option<vorkspace_core::agent::TurnMetrics>,
-    pub usage_limit: Option<vorkspace_core::usage::Limit>,
-    pub approvals: Vec<Approval>,
-    pub approvals_resolved: Vec<String>,
-    pub questions: Vec<vorkspace_core::agent::Question>,
-    pub questions_resolved: Vec<String>,
-    pub handoff: Option<Option<vorkspace_core::agent::Handoff>>,
-    pub status: String,
-    pub outcome: Option<TurnOutcome>,
-    /// The losing turn has a separate owner in the same chat. Replace the projected
-    /// transcript from storage instead of applying the losing row offsets.
-    pub history_recovery: Option<HistoryRecovery>,
-}
-
-impl Update {
-    pub fn finished(&self) -> bool {
-        self.outcome.is_some()
-    }
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum TurnOutcome {
-    Completed,
-    Cancelled,
-    Failed,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum HistoryRecovery {
-    Saved,
-    Unsaved,
 }
 
 fn publish(
@@ -379,7 +326,6 @@ fn run_turn_using(
         initial_delivery = settings.bot_message_id.clone();
         let creating_worktree = settings.new_worktree && settings.worktree_cwd.is_none();
         let bot_snapshot = bot_home.is_some();
-        let update_start = if bot_snapshot { 0 } else { start };
         publish(
             &tx,
             &cancel,
@@ -389,10 +335,14 @@ fn run_turn_using(
                 // A native import may have committed while its idle UI refresh
                 // was superseded by this submission. Publish the admitted Bot
                 // baseline together with its prompt, never a tail over stale rows.
-                start: update_start,
-                rows: transcript.rows[update_start..].to_vec(),
-                source_len: bot_snapshot.then_some(transcript.rows.len()),
-                bot_turn_start: bot_snapshot.then_some(turn_start),
+                transcript: if bot_snapshot {
+                    TranscriptPatch::BotSnapshot {
+                        turn_start,
+                        rows: transcript.rows.clone(),
+                    }
+                } else {
+                    TranscriptPatch::tail(start, transcript.rows[start..].to_vec())
+                },
                 provider_reset,
                 provider_id: provider_reset.then(|| provider_id.clone()).flatten(),
                 context: provider_reset.then_some(context),
@@ -430,7 +380,6 @@ fn run_turn_using(
                 Update {
                     activity: activity.label(),
                     worktree_cwd: Some(cwd),
-                    start: transcript.rows.len(),
                     status: "Connecting…".into(),
                     ..Default::default()
                 },
@@ -450,7 +399,6 @@ fn run_turn_using(
                 &cancel,
                 Update {
                     activity: activity.label(),
-                    start: transcript.rows.len(),
                     status: "Preparing worktree…".into(),
                     ..Default::default()
                 },
@@ -495,7 +443,6 @@ fn run_turn_using(
                 &cancel,
                 Update {
                     activity: activity.label(),
-                    start: transcript.rows.len(),
                     handoff: Some(Some(prepared)),
                     status: "Connecting…".into(),
                     ..Default::default()
@@ -949,8 +896,6 @@ fn run_turn_using(
                         &tx,
                         &cancel,
                         Update {
-                            source_len: None,
-                            bot_turn_start: None,
                             activity: activity.label(),
                             worktree_cwd: None,
                             commands,
@@ -959,8 +904,10 @@ fn run_turn_using(
                             follow_up_delivered,
                             follow_up_errors,
                             delivered: None,
-                            start,
-                            rows: transcript.rows[start..].to_vec(),
+                            transcript: TranscriptPatch::tail(
+                                start,
+                                transcript.rows[start..].to_vec(),
+                            ),
                             provider_id: changed_id,
                             provider_reset: changed_provider_reset,
                             model,
@@ -1230,7 +1177,6 @@ fn run_turn_using(
     // Stop can discard the initial snapshot even after the worker enqueues it.
     // Send the whole admitted Bot transcript at settlement. Durable writes above
     // still start at the changed suffix; the final snapshot takes the owned rows.
-    let source_len = bot_snapshot.then_some(transcript.rows.len());
     if bot_snapshot {
         start = 0;
     }
@@ -1250,10 +1196,11 @@ fn run_turn_using(
         worktree_cwd: created_worktree,
         follow_up_delivered: accepted_messages,
         delivered: initial_delivery,
-        start,
-        rows,
-        source_len,
-        bot_turn_start: bot_snapshot.then_some(turn_start),
+        transcript: if bot_snapshot {
+            TranscriptPatch::BotSnapshot { turn_start, rows }
+        } else {
+            TranscriptPatch::tail(start, rows)
+        },
         provider_turn_id: settled_provider_turn_id.filter(|_| bot_snapshot),
         provider_id: if pending.overlap { None } else { provider_id },
         provider_reset: provider_reset && !pending.overlap,
@@ -1555,7 +1502,7 @@ mod unsupported_history_tests {
             let update = rx.recv_blocking().unwrap();
             assert!(update.finished());
             assert!(update.status.contains("no longer supported"));
-            assert!(update.rows.is_empty());
+            assert!(update.transcript.rows().is_empty());
             let store = locked(&store).unwrap();
             let after = store.sessions().unwrap().remove(0);
             assert_eq!(after.provider, provider);

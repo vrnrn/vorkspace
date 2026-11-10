@@ -2330,7 +2330,7 @@ fn selected_working_session(s: &Setup, cx: &mut TestAppContext) -> i64 {
                 .update(cx, |view, cx| {
                     // Exercise activity projection without starting a provider.
                     view.busy = true;
-                    cx.emit(SessionChanged);
+                    cx.emit(SessionChanged::Loaded);
                     cx.notify();
                 });
         })

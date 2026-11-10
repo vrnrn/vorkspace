@@ -122,7 +122,7 @@ fn working_marks_animate_independently_and_completed_replies_clear_when_seen(
                 session.busy = true;
                 session.summary.cwd = "/work/vorkspace".into();
                 session.summary.has_messages = true;
-                cx.emit(SessionChanged);
+                cx.emit(SessionChanged::Loaded);
             });
             shell.sessions[&b].read(cx).transcript.clone()
         })
@@ -141,7 +141,7 @@ fn working_marks_animate_independently_and_completed_replies_clear_when_seen(
         .update(cx, |shell, _, cx| {
             shell.sessions[&a].update(cx, |session, cx| {
                 session.busy = false;
-                cx.emit(SessionChanged);
+                cx.emit(SessionChanged::Loaded);
             });
         })
         .unwrap();
@@ -359,7 +359,7 @@ fn usage_footer_follows_active_tabs_and_provider_changes(cx: &mut TestAppContext
             assert_eq!(shell.usage_footer.read(cx).kind(), Kind::Claude);
             shell.sessions[&b].update(cx, |conversation, cx| {
                 conversation.summary.provider = "codex".into();
-                cx.emit(SessionChanged);
+                cx.emit(SessionChanged::Loaded);
             });
         })
         .unwrap();
@@ -992,7 +992,7 @@ fn title_tabs_draw_their_own_session_marks(cx: &mut TestAppContext) {
         .update(cx, |shell, _, cx| {
             shell.sessions[&a].update(cx, |session, cx| {
                 session.busy = true;
-                cx.emit(SessionChanged);
+                cx.emit(SessionChanged::Loaded);
             });
         })
         .unwrap();
@@ -1025,12 +1025,12 @@ fn resizing_project_rail_with_working_session_marks_keeps_cached_paint_valid(
                 shell.sessions[&id].update(cx, |session, cx| {
                     session.summary.cwd = "/work/vorkspace".into();
                     session.summary.has_messages = true;
-                    cx.emit(SessionChanged);
+                    cx.emit(SessionChanged::Loaded);
                 });
             }
             shell.sessions[&a].update(cx, |session, cx| {
                 session.busy = true;
-                cx.emit(SessionChanged);
+                cx.emit(SessionChanged::Loaded);
             });
             shell.focus_active(w, cx);
             shell.toggle_right_panel(w, cx);
@@ -2135,7 +2135,7 @@ fn typing_in_the_session_filter_matches_titles_without_case_and_keeps_session_st
                 shell.sessions[&id].update(cx, |session, cx| {
                     session.summary.title = title.into();
                     session.summary.has_messages = true;
-                    cx.emit(SessionChanged);
+                    cx.emit(SessionChanged::Loaded);
                 });
             }
             shell.sessions[&b].update(cx, |session, cx| {

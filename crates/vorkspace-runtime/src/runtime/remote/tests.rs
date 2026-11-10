@@ -231,11 +231,12 @@ fn unchanged_versioned_snapshots_skip_publication_and_empty_history_has_an_end()
         2,
         "an unchanged revision needs no view update"
     );
-    assert_eq!(updates[0].source_len, Some(updates[0].rows.len()));
-    assert!(!updates[0].rows.is_empty());
-    assert!(updates[1].rows.is_empty());
-    assert_eq!(updates[1].source_len, Some(0));
-    assert_eq!(updates[1].start, 0);
+    assert!(
+        matches!(&updates[0].transcript, TranscriptPatch::Snapshot { start: 0, rows } if !rows.is_empty())
+    );
+    assert!(
+        matches!(&updates[1].transcript, TranscriptPatch::Snapshot { start: 0, rows } if rows.is_empty())
+    );
 }
 
 #[test]
@@ -258,9 +259,25 @@ fn unversioned_snapshots_project_initial_and_changed_rows_then_remove_a_stale_ta
     empty["session"]["blocks"] = json!([]);
     let updates = observe_snapshots(vec![first, changed, prefix, empty]);
     assert_eq!(updates.len(), 4);
-    assert!(updates[0].rows.iter().any(|r| r.text == "First answer"));
-    assert!(updates[1].rows.iter().any(|r| r.text == "Changed answer"));
-    assert!(updates.iter().all(|u| u.source_len.is_some()));
+    assert!(
+        updates[0]
+            .transcript
+            .rows()
+            .iter()
+            .any(|r| r.text == "First answer")
+    );
+    assert!(
+        updates[1]
+            .transcript
+            .rows()
+            .iter()
+            .any(|r| r.text == "Changed answer")
+    );
+    assert!(
+        updates
+            .iter()
+            .all(|u| matches!(u.transcript, TranscriptPatch::Snapshot { .. }))
+    );
 }
 
 #[test]
@@ -487,7 +504,7 @@ fn attaching_never_replays_pending_sends_or_stops_a_run_when_receiver_closes() {
     });
     let next = receive(&rx);
     assert!(!next.finished());
-    assert_eq!(next.rows[0].text, "Original message");
+    assert_eq!(next.transcript.rows()[0].text, "Original message");
     drop(rx);
     worker.join().unwrap();
     assert!(
@@ -745,8 +762,8 @@ require('node:readline').createInterface({input:process.stdin}).on('line', line 
         loop {
             let update = receive(&rx);
             let finished = update.finished();
-            if !update.rows.is_empty() {
-                rows = update.rows;
+            if !update.transcript.rows().is_empty() {
+                rows = update.transcript.into_rows();
             }
             if finished {
                 assert_eq!(update.status, "Ready");

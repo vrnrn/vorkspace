@@ -181,7 +181,7 @@ impl Conversation {
                     this.run_history_actions(cx);
                     this.pump_follow_ups(cx);
                 }
-                cx.emit(SessionChanged);
+                cx.emit(SessionChanged::Loaded);
                 cx.notify();
             });
         })

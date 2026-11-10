@@ -10,7 +10,7 @@ fn busy(window: WindowHandle<Shell>, id: i64, running: bool, cx: &mut TestAppCon
         .update(cx, |shell, _, cx| {
             shell.sessions[&id].update(cx, |view, cx| {
                 view.busy = running;
-                cx.emit(SessionChanged);
+                cx.emit(SessionChanged::Loaded);
                 cx.notify();
             });
         })
@@ -144,7 +144,7 @@ fn fast_completion_archive_and_cancellation_follow_semantic_notifications(cx: &m
             // Publish both changes before painting another frame.
             shell.sessions[&a].update(cx, |view, cx| {
                 view.busy = true;
-                cx.emit(SessionChanged);
+                cx.emit(SessionChanged::Loaded);
             });
         })
         .unwrap();
@@ -153,7 +153,7 @@ fn fast_completion_archive_and_cancellation_follow_semantic_notifications(cx: &m
         .update(cx, |shell, _, cx| {
             shell.sessions[&a].update(cx, |view, cx| {
                 view.busy = false;
-                cx.emit(SessionChanged);
+                cx.emit(SessionChanged::Loaded);
             });
         })
         .unwrap();
@@ -163,7 +163,7 @@ fn fast_completion_archive_and_cancellation_follow_semantic_notifications(cx: &m
         .update(cx, |shell, _, cx| {
             shell.sessions[&a].update(cx, |view, cx| {
                 view.summary.archived = true;
-                cx.emit(SessionChanged);
+                cx.emit(SessionChanged::Loaded);
             });
         })
         .unwrap();
@@ -326,7 +326,7 @@ fn native_activity_capture() {
                                     .into(),
                                 )
                             };
-                            cx.emit(SessionChanged);
+                            cx.emit(SessionChanged::Loaded);
                         });
                     }
                     shell
@@ -344,14 +344,14 @@ fn native_activity_capture() {
                         let id = shell.order[1];
                         shell.sessions[&id].update(cx, |view, cx| {
                             view.busy = false;
-                            cx.emit(SessionChanged);
+                            cx.emit(SessionChanged::Loaded);
                         });
                     }
                     if name == "done" {
                         let id = shell.order[2];
                         shell.sessions[&id].update(cx, |view, cx| {
                             view.busy = false;
-                            cx.emit(SessionChanged);
+                            cx.emit(SessionChanged::Loaded);
                         });
                     }
                     shell.workspace.preferences.theme =

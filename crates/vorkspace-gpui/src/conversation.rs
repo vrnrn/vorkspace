@@ -145,7 +145,27 @@ struct OpenMenu {
     _events: Vec<Subscription>,
 }
 use response_menu::ResponseMenu;
-pub(crate) struct SessionChanged;
+#[derive(Clone, Copy)]
+pub(crate) enum SessionChanged {
+    Catalog,
+    Draft,
+    Configuration,
+    Checkout,
+    History,
+    Turn,
+    Settled,
+    Attention,
+    Loaded,
+}
+
+impl SessionChanged {
+    pub(crate) fn affects_attention(self) -> bool {
+        matches!(
+            self,
+            Self::Attention | Self::Turn | Self::Settled | Self::Loaded
+        )
+    }
+}
 /// A tool label changed; token/output changes do not wake session discovery.
 pub(crate) struct SessionActivityChanged;
 /// The review card asked to open the session's recorded changes.
@@ -440,7 +460,7 @@ impl Conversation {
             // Undo and Keep may rewrite files; the checkout's views reread.
             crate::git_tools::session_review::SessionReviewEvent::Changed => {
                 this.refresh_git(cx);
-                cx.emit(SessionChanged);
+                cx.emit(SessionChanged::Checkout);
             }
         });
         let review_observation = cx.observe(&review, |this, review, cx| {

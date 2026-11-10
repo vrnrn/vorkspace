@@ -147,12 +147,15 @@ fn cancelled_initial_delivery_replays_accepted_rows_in_the_final_update() {
     let result = rx.try_recv().unwrap();
     assert!(result.finished());
     assert_eq!(result.status, "Ready");
-    assert_eq!(result.start, history.rows.len());
-    assert_eq!(result.rows.len(), 2);
-    assert_eq!(result.rows[0].text, "Accepted before stopping");
-    assert_eq!(result.rows[1].role, "assistant");
+    let TranscriptPatch::Tail { start, rows } = result.transcript else {
+        panic!("the final update must replay the accepted tail");
+    };
+    assert_eq!(start, history.rows.len());
+    assert_eq!(rows.len(), 2);
+    assert_eq!(rows[0].text, "Accepted before stopping");
+    assert_eq!(rows[1].role, "assistant");
     let mut visible = history.rows;
-    visible.extend(result.rows);
+    visible.extend(rows);
     assert_eq!(visible, locked(&store).unwrap().load(id).unwrap().rows);
     assert!(rx.try_recv().is_err());
 }
@@ -179,7 +182,7 @@ fn rejected_preflight_preserves_existing_history_without_a_provider_launch() {
     let result = rx.try_recv().unwrap();
     assert!(result.finished());
     assert!(result.status.contains("worktree"));
-    assert!(result.rows.is_empty());
+    assert!(matches!(result.transcript, TranscriptPatch::Unchanged));
     assert!(
         result.delivered.is_none(),
         "Rejected messages must stay queued"
@@ -246,7 +249,7 @@ fn worktree_creation_follows_message_acceptance_and_reports_the_checkout_in_the_
     let first = rx.try_recv().unwrap();
     assert!(!first.finished());
     assert_eq!(first.status, "Creating worktree…");
-    assert_eq!(first.rows[0].text, "Create the checkout");
+    assert_eq!(first.transcript.rows()[0].text, "Create the checkout");
     assert!(first.worktree_cwd.is_none());
     let created = rx.try_recv().unwrap();
     let cwd = created.worktree_cwd.unwrap();
@@ -481,7 +484,7 @@ for line in sys.stdin:
         "{}",
         finished.status
     );
-    assert!(finished.rows.is_empty());
+    assert!(matches!(finished.transcript, TranscriptPatch::Unchanged));
     let reopened = Store::read_vorkspace(&path).unwrap();
     let saved = reopened.load(id).unwrap();
     assert!(

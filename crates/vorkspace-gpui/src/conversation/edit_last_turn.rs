@@ -159,7 +159,7 @@ impl Conversation {
                 if !this.editing_last_turn.pending() {
                     this.run_history_actions(cx);
                 }
-                cx.emit(SessionChanged);
+                cx.emit(SessionChanged::Loaded);
                 cx.notify();
             });
         })
@@ -361,7 +361,7 @@ impl Conversation {
                         }
                     }
                 }
-                cx.emit(SessionChanged); cx.notify();
+                cx.emit(SessionChanged::Loaded); cx.notify();
             });
         }).detach();
         cx.notify();

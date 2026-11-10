@@ -272,7 +272,7 @@ impl Conversation {
             }
             Err(error) => self.remote_connection_error(&error, cx),
         }
-        cx.emit(SessionChanged);
+        cx.emit(SessionChanged::Loaded);
         cx.notify();
     }
     fn install_remote_draft(&mut self, snapshot: &Value, cx: &mut Context<Self>) {

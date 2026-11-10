@@ -306,7 +306,7 @@ fn titlebar_zoom_paths_restore_and_keep_real_controls_live(cx: &mut TestAppConte
             // that scope while exercising actual tab and history clicks.
             shell.sessions[&a].update(cx, |session, cx| {
                 session.summary.cwd = "/work/vorkspace".into();
-                cx.emit(SessionChanged);
+                cx.emit(SessionChanged::Loaded);
             });
             shell.invalidate_chrome(cx);
             cx.notify();

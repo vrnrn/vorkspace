@@ -179,7 +179,7 @@ impl Conversation {
             self.transcript
                 .update(cx, |view, cx| view.set_saved_draft(None, cx));
             self.sync_bot_pending(cx);
-            cx.emit(SessionChanged);
+            cx.emit(SessionChanged::Draft);
         }
         if self.bot_ui.draft_sending.as_deref() == Some(id.as_str()) {
             self.bot_ui.draft_sending = None;
@@ -606,7 +606,7 @@ impl Conversation {
         // cancellation receipt, not the provider's status text, must win.
         assert!(self.stopping);
         self.stopping = false;
-        cx.emit(SessionChanged);
+        cx.emit(SessionChanged::Settled);
         cx.notify();
     }
     pub(crate) fn app_flush_draft(&mut self, cx: &mut Context<Self>) -> Result<(), String> {
@@ -637,7 +637,7 @@ impl Conversation {
         self.follow_ups.state = snapshot;
         self.follow_ups.persisted = self.follow_ups.state.revision;
         self.composer_draft.flush()?;
-        cx.emit(SessionChanged);
+        cx.emit(SessionChanged::Draft);
         cx.notify();
         Ok(())
     }
@@ -668,7 +668,7 @@ impl Conversation {
         self.transcript
             .update(cx, |t, cx| t.patch(at, vec![row], cx));
         self.summary.has_messages = true;
-        cx.emit(SessionChanged);
+        cx.emit(SessionChanged::History);
         cx.notify();
         Ok(())
     }
@@ -708,7 +708,7 @@ impl Conversation {
             return Err("Wait for the current reply before changing model settings".into());
         }
         self.menu_choice(id, cx);
-        cx.emit(SessionChanged);
+        cx.emit(SessionChanged::Configuration);
         Ok(())
     }
     pub(crate) fn bot_config(
@@ -738,7 +738,7 @@ impl Conversation {
         self.resolved_model = None;
         self.refresh_catalog(cx);
         self.save_settings(cx);
-        cx.emit(SessionChanged);
+        cx.emit(SessionChanged::Configuration);
         cx.notify();
         Ok(())
     }

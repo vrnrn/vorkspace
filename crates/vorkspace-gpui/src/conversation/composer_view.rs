@@ -42,7 +42,7 @@ impl Conversation {
             .update(cx, |view, cx| view.stop_streaming(cx));
         self.review
             .update(cx, |review, cx| review.set_busy(false, cx));
-        cx.emit(SessionChanged);
+        cx.emit(SessionChanged::Turn);
         cx.notify();
     }
     // Composer.tsx in the inset layout: a frosted, rounded box holding the
