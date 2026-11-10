@@ -475,7 +475,11 @@ impl Shell {
         };
         let id = summary.id;
         let linked = automation_work_item(&launch.due.run);
-        let verified = self.verify_prepared_checkout(id, checkout, cx);
+        let verified = if self.project_is_deleting(&automation.cwd, cx) {
+            Err("The automation's project is being removed.".into())
+        } else {
+            self.verify_prepared_checkout(id, checkout, cx)
+        };
         if reuse.is_some() && verified.is_err() {
             self.prepare_automation(launch, None, cx);
             return;
@@ -587,14 +591,14 @@ impl Shell {
         install: Option<&mut crate::session_install::Install>,
         error: String,
     ) -> String {
-        match (install, locked(&self.store)) {
-            (Some(install), Ok(mut store)) => {
-                discard_failed_session(&mut store, install, id, error)
-            }
-            (Some(_), Err(cleanup)) => {
+        let Some(install) = install else {
+            return error;
+        };
+        match locked(&self.store) {
+            Ok(mut store) => discard_failed_session(&mut store, install, id, error),
+            Err(cleanup) => {
                 format!("{error}. Could not remove prepared session: {cleanup}")
             }
-            (None, _) => error,
         }
     }
 
