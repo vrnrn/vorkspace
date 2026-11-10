@@ -364,13 +364,20 @@ impl Shell {
     }
 
     pub(in crate::shell) fn publish_session_summary(&self, id: i64, cx: &mut Context<Self>) {
-        if !self.directory.read(cx).rows.contains_key(&id) {
-            return;
-        }
+        self.publish_session_summaries(&[id], cx);
+    }
+
+    pub(in crate::shell) fn publish_session_summaries(&self, ids: &[i64], cx: &mut Context<Self>) {
         if let Some(core) = &self.app_core {
+            let directory = self.directory.read(cx);
+            let saved = ids
+                .iter()
+                .copied()
+                .filter(|id| directory.rows.contains_key(id))
+                .collect();
             let source = cx.weak_entity();
             core.update(cx, |core, cx| {
-                core.session_catalog_changed(Some(source), vec![id], vec![], cx)
+                core.session_catalog_changed(Some(source), saved, vec![], cx)
             });
         }
     }

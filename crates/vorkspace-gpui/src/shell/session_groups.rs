@@ -7,7 +7,9 @@ use vorkspace_core::session_groups::{
 use vorkspace_ui::radius;
 
 mod folders;
+mod metadata;
 pub(super) use folders::FolderIndex;
+use metadata::SessionEdit;
 
 actions!(
     session_groups,
@@ -144,41 +146,6 @@ impl Shell {
         })
         .detach();
     }
-    pub(super) fn write_session_group(
-        &mut self,
-        what: &'static str,
-        changed: Vec<i64>,
-        cx: &mut Context<Self>,
-        write: impl FnOnce(&mut vorkspace_core::store::Store) -> Result<(), String> + Send + 'static,
-    ) {
-        let store = self.store.clone();
-        self.begin_session_metadata(&changed, cx);
-        let previous = self.group_writes.take();
-        self.group_writes = Some(cx.spawn(async move |this, cx| {
-            if let Some(previous) = previous {
-                previous.await;
-            }
-            let work = cx
-                .background_executor()
-                .spawn(async move { write(&mut *locked(&store)?) });
-            let result = work.await;
-            let _ = this.update(cx, |this, cx| {
-                this.finish_session_metadata(&changed, cx);
-                match result {
-                    Ok(()) => {
-                        for id in changed {
-                            this.publish_session_summary(id, cx);
-                        }
-                    }
-                    Err(error) => {
-                        this.error = Some(format!("Could not {what}: {error}"));
-                        cx.notify();
-                    }
-                }
-            });
-        }));
-    }
-
     /// The sessions in the order the rail shows them, for stepping.
     pub(super) fn sidebar_navigation_ids(&self, cx: &App) -> Vec<i64> {
         self.rail_session_ids(cx)
@@ -362,15 +329,7 @@ impl Shell {
                 let pinned = !ids
                     .iter()
                     .all(|id| self.session_metadata(*id, cx).summary.pinned);
-                for id in &ids {
-                    self.edit_session_record(*id, cx, |row| row.summary.pinned = pinned);
-                    if let Some(view) = self.sessions.get(id) {
-                        view.update(cx, |s, _| s.summary.pinned = pinned);
-                    }
-                }
-                self.write_session_group("pin the session", ids.clone(), cx, move |s| {
-                    s.set_pinned(&ids, pinned)
-                });
+                self.edit_session_metadata(ids, SessionEdit::Pin(pinned), cx);
                 self.invalidate_chrome(cx);
             }
             "rename" => self.start_rename(RenameTarget::Session(id), window, cx),
@@ -655,17 +614,7 @@ impl Shell {
                     if self.has_session(id, cx)
                         && self.session_metadata(id, cx).summary.title != name
                     {
-                        self.edit_session_record(id, cx, |row| row.summary.title = name.clone());
-                        if let Some(session) = self.sessions.get(&id) {
-                            session.update(cx, |s, cx| {
-                                s.rename(name.clone(), cx);
-                            });
-                        } else {
-                            self.sync_search_session(id, cx);
-                        }
-                        self.write_session_group("rename the session", vec![id], cx, move |s| {
-                            s.title(id, &name)
-                        });
+                        self.edit_session_metadata(vec![id], SessionEdit::Rename(name), cx);
                     }
                 }
                 RenameTarget::NewFolder {
@@ -832,13 +781,7 @@ impl Shell {
         } else {
             None
         };
-        self.edit_session_record(id, cx, |row| row.summary.work_item = item.clone());
-        if let Some(session) = self.sessions.get(&id) {
-            session.update(cx, |s, _| s.summary.work_item = item.clone());
-        }
-        self.write_session_group("link the session", vec![id], cx, move |s| {
-            s.set_work_item(id, item.as_ref())
-        });
+        self.edit_session_metadata(vec![id], SessionEdit::Link(item), cx);
         self.invalidate_chrome(cx);
         self.close_link_dialog(window, cx);
     }

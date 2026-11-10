@@ -1,6 +1,72 @@
 use super::*;
 
 #[gpui::test]
+fn a_partial_pin_failure_reconciles_both_windows_with_durable_values(
+    cx: &mut gpui::TestAppContext,
+) {
+    let directory = tempfile::tempdir().unwrap();
+    let project = directory.path().to_str().unwrap();
+    let file = directory.path().join("history.db");
+    let store = vorkspace_core::store::Store::open(&file).unwrap();
+    let first = store.create("codex", project).unwrap();
+    let second = store.create("codex", project).unwrap();
+    let ids = [first.id, second.id];
+    let store = Arc::new(Mutex::new(store));
+    let open = |cx: &mut gpui::TestAppContext| {
+        cx.update(|cx| {
+            cx.open_window(Default::default(), |_, cx| {
+                cx.new(|cx| {
+                    Shell::new(
+                        store.clone(),
+                        vec![first.clone(), second.clone()],
+                        project.into(),
+                        None,
+                        cx,
+                    )
+                })
+            })
+            .unwrap()
+        })
+    };
+    let source = open(cx);
+    let peer = open(cx);
+    let inject = rusqlite::Connection::open(file).unwrap();
+    inject
+        .execute_batch(&format!(
+            "CREATE TRIGGER reject_pin BEFORE UPDATE OF pinned ON native_sessions
+         WHEN OLD.id={} BEGIN SELECT RAISE(ABORT,'injected pin failure'); END;",
+            second.id
+        ))
+        .unwrap();
+    source
+        .update(cx, |shell, _, cx| {
+            shell.edit_session_metadata(ids.to_vec(), SessionEdit::Pin(true), cx);
+            assert!(shell.session_metadata(second.id, cx).summary.pinned);
+        })
+        .unwrap();
+    cx.run_until_parked();
+    for window in [source, peer] {
+        window
+            .update(cx, |shell, _, cx| {
+                assert!(shell.session_metadata(first.id, cx).summary.pinned);
+                assert!(!shell.session_metadata(second.id, cx).summary.pinned);
+            })
+            .unwrap();
+    }
+    source
+        .update(cx, |shell, _, _| {
+            assert!(
+                shell
+                    .error
+                    .as_deref()
+                    .unwrap()
+                    .contains("injected pin failure")
+            );
+        })
+        .unwrap();
+}
+
+#[gpui::test]
 fn a_reminder_survives_a_refused_open_until_its_project_is_reassigned(
     cx: &mut gpui::TestAppContext,
 ) {

@@ -269,12 +269,9 @@ impl Shell {
         };
         if self.orchestration_summaries.get(&lead) != Some(&summary) {
             let saved = summary.clone();
-            self.write_session_group(
-                "save orchestration progress",
-                Vec::new(),
-                cx,
-                move |store| store.save_orchestration_summary(lead, &saved),
-            );
+            self.write_session_group("save orchestration progress", cx, move |store| {
+                store.save_orchestration_summary(lead, &saved)
+            });
             self.orchestration_summaries.insert(lead, summary);
             self.invalidate_chrome(cx);
         }
