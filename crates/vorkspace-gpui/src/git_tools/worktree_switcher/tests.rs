@@ -31,7 +31,8 @@ fn snapshot() -> Snapshot {
                 missing: true,
                 ..Default::default()
             },
-        ],
+        ]
+        .into(),
         ..Default::default()
     }
 }
@@ -76,7 +77,8 @@ fn cached_worktrees_show_before_metadata_and_membership_never_loads_full_setting
                     branch: Some("feature".into()),
                     ..Default::default()
                 },
-            ],
+            ]
+            .into(),
             ..Default::default()
         },
     );

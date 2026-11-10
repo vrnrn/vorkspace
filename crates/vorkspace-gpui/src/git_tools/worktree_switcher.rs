@@ -57,7 +57,7 @@ fn rows(cwd: &str, state: Option<&Snapshot>, query: &str) -> Vec<Row> {
     rows.extend(
         state
             .into_iter()
-            .flat_map(|s| &s.worktrees)
+            .flat_map(|s| s.worktrees.iter())
             .filter(|t| !t.main && !t.missing)
             .map(|t| Row {
                 path: t.path.clone(),

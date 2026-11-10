@@ -78,7 +78,7 @@ fn composer_toolbar_selects_one_row_during_resize_and_preserves_draft(cx: &mut T
                             .model_controls = if beside { "beside" } else { "combined" }.into();
                         view.summary.has_messages = started;
                         view.branch = Some("feature/a-very-long-branch-name".into());
-                        view.git = Some(vorkspace_core::git::Snapshot::default());
+                        view.git = Some(git_context::Head::default());
                         view.model = Some("gpt-6.1-sol".into());
                         view.settings.effort = Some("xhigh".into());
                         view.settings.access = AccessMode::FullAccess;
@@ -159,7 +159,7 @@ fn compact_settings_keep_existing_actions_focus_and_anchor_on_resize(cx: &mut Te
     let window = window(cx, 360.);
     window
         .update(cx, |c, _, cx| {
-            c.git = Some(vorkspace_core::git::Snapshot::default());
+            c.git = Some(git_context::Head::default());
             c.branch = Some("main".into());
             c.settings.access = AccessMode::FullAccess;
             c.model = Some("test-model".into());
@@ -222,7 +222,7 @@ fn compact_settings_keep_existing_actions_focus_and_anchor_on_resize(cx: &mut Te
         .unwrap();
     window
         .update(visual, |c, _, cx| {
-            c.git = Some(vorkspace_core::git::Snapshot::default());
+            c.git = Some(git_context::Head::default());
             c.branch = Some("main".into());
             c.settings.worktree_base = Some("refs/remotes/origin/main".into());
             cx.notify();
@@ -463,7 +463,7 @@ fn native_narrow_composer_capture() {
                 cx.update_window(window.into(), |root, window, cx| {
                     let conversation = root.downcast::<Capture>().unwrap().read(cx).0.clone();
                     conversation.update(cx, |view, cx| {
-                        view.git = Some(vorkspace_core::git::Snapshot::default());
+                        view.git = Some(git_context::Head::default());
                         view.toggle_menu(ComposerMenu::CompactSettings, window, cx);
                     });
                 })

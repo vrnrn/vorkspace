@@ -1,5 +1,26 @@
 //! The session's checkout: worktrees, tool paths and Git state.
 use super::*;
+use vorkspace_core::git::Snapshot;
+
+#[derive(Default)]
+pub(super) struct Head {
+    pub(super) detached: bool,
+    pub(super) linked: bool,
+}
+
+impl Head {
+    pub(super) fn split(snapshot: Option<Snapshot>) -> (Option<String>, Option<Self>) {
+        match snapshot {
+            Some(Snapshot {
+                current,
+                detached,
+                linked,
+                ..
+            }) => (current, Some(Self { detached, linked })),
+            None => (None, None),
+        }
+    }
+}
 
 impl Conversation {
     pub(crate) fn worktree_deleted(
@@ -52,21 +73,27 @@ impl Conversation {
     pub(super) fn refresh_git(&mut self, cx: &mut Context<Self>) {
         self.sync_review(cx);
         let cwd = self.execution_cwd().to_owned();
+        if self.git_cwd != cwd {
+            self.seed_git();
+        }
         let work_cwd = cwd.clone();
         let work = cx
             .background_executor()
             .spawn(async move { vorkspace_model::git_cache::load(Path::new(&work_cwd)).ok() });
-        cx.spawn(async move |this, cx| {
+        self.git_refresh = Some(cx.spawn(async move |this, cx| {
             let git = work.await;
             let _ = this.update(cx, |this, cx| {
                 if this.execution_cwd() == cwd {
-                    this.branch = git.as_ref().and_then(|s| s.current.clone());
-                    this.git = git;
+                    (this.branch, this.git) = Head::split(git);
                     cx.notify();
                 }
             });
-        })
-        .detach();
+        }));
+    }
+    pub(super) fn seed_git(&mut self) {
+        self.git_refresh = None;
+        self.git_cwd = self.execution_cwd().to_owned();
+        (self.branch, self.git) = Head::split(vorkspace_model::git_cache::get(&self.git_cwd));
     }
     pub(super) fn prepare_worktree(&mut self, cx: &mut Context<Self>) {
         self.preparing_worktree = true;

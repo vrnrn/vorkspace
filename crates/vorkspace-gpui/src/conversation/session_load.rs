@@ -177,7 +177,6 @@ impl Conversation {
         self.refresh_catalog(cx);
         let store = self.store.clone();
         let id = self.summary.id;
-        let cwd = self.summary.cwd.clone();
         let bot = self.settings.bot.is_some();
         let page_bot = bot && self.allow_storage_paging && !complete;
         let bot_root = self.settings.bot.as_ref().map(|bot| bot.root.clone());
@@ -197,13 +196,6 @@ impl Conversation {
                 settings,
                 revision,
             } = history::InitialRead::read(&store, id, page_bot);
-            let execution_cwd = settings
-                .as_ref()
-                .ok()
-                .and_then(|s| s.as_ref())
-                .and_then(|s| s.worktree_cwd.as_deref())
-                .unwrap_or(&cwd);
-            let git = vorkspace_model::git_cache::load(Path::new(execution_cwd)).ok();
             (
                 rows.map(|rows| match rows {
                     history::InitialRows::Complete(rows) => history::InitialHistory::Complete(
@@ -217,7 +209,6 @@ impl Conversation {
                         history::InitialHistory::Window(page, prepared)
                     }
                 }),
-                git,
                 settings,
                 locked(&store).and_then(|s| {
                     if bot && !s.bot_session(id)?.is_some_and(|s| s.provider_id.is_some()) {
@@ -233,12 +224,10 @@ impl Conversation {
             )
         });
         cx.spawn(async move |this, cx| {
-            let (result, git, settings, context, follow_ups, unconfirmed, rev) = work.await;
+            let (result, settings, context, follow_ups, unconfirmed, rev) = work.await;
             let _ = this.update(cx, |this, cx| {
                 let complete_requested = std::mem::take(&mut this.complete_history_requested);
                 this.loading = false;
-                this.branch = git.as_ref().and_then(|s| s.current.clone());
-                this.git = git;
                 this.context = context.ok().flatten();
                 if this.submission_recovery_epoch == recovery_epoch {
                     match unconfirmed {
@@ -344,7 +333,7 @@ impl Conversation {
                         if let Some((row, query)) = this.pending_search.take() {
                             this.reveal_search(row, query, cx);
                         }
-                        this.sync_review(cx);
+                        this.refresh_git(cx);
                         this.run_history_actions(cx);
                         this.pump_follow_ups(cx);
                         if this.history_partial

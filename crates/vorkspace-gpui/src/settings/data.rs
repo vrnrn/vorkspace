@@ -1,5 +1,8 @@
 //! Settings discovery runs on a worker; rendering never probes CLIs or Git.
-use std::path::{Path, PathBuf};
+use std::{
+    path::{Path, PathBuf},
+    sync::Arc,
+};
 use vorkspace_core::{
     git,
     provider::{self, Kind},
@@ -37,7 +40,7 @@ pub(super) struct Tree {
 #[derive(Default)]
 pub(super) struct ResultTrees {
     pub trees: Vec<Tree>,
-    pub branches: Vec<git::Branch>,
+    pub branches: Arc<[git::Branch]>,
     pub default_root: PathBuf,
     pub main: String,
     pub error: Option<String>,
@@ -111,7 +114,7 @@ fn worktrees(cwd: &str) -> ResultTrees {
     if cwd.is_empty() {
         return trees;
     }
-    match git::snapshot(Path::new(cwd)) {
+    match vorkspace_model::git_cache::load(Path::new(cwd)) {
         Ok(snapshot) => {
             if let Some(main) = snapshot.worktrees.first() {
                 trees.main = main.path.clone();
@@ -121,8 +124,9 @@ fn worktrees(cwd: &str) -> ResultTrees {
             trees.branches = snapshot.branches;
             trees.trees = snapshot
                 .worktrees
-                .into_iter()
+                .iter()
                 .filter(|tree| !tree.main)
+                .cloned()
                 .map(|tree| {
                     let assessment =
                         vorkspace_core::worktree_management::assess(Path::new(cwd), &tree);

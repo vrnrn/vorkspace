@@ -393,7 +393,8 @@ fn workspace_existing_worktrees_open_as_a_submenu_and_preserve_the_draft(cx: &mu
                     head: "123456789abc".into(),
                     ..Default::default()
                 },
-            ],
+            ]
+            .into(),
             ..Default::default()
         },
     );

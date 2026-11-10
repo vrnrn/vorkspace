@@ -5,6 +5,7 @@ use serde::Deserialize;
 use std::{
     path::{Path, PathBuf},
     process::Command,
+    sync::Arc,
 };
 
 #[derive(Clone, Debug, Deserialize)]
@@ -27,8 +28,8 @@ pub struct Snapshot {
     pub current: Option<String>,
     pub detached: bool,
     pub linked: bool,
-    pub branches: Vec<Branch>,
-    pub worktrees: Vec<Worktree>,
+    pub branches: Arc<[Branch]>,
+    pub worktrees: Arc<[Worktree]>,
 }
 pub(crate) fn git(cwd: &Path, args: &[&str]) -> Result<String, String> {
     if crate::files::remote::is_remote(cwd) {
@@ -116,7 +117,7 @@ pub fn snapshot(cwd: &Path) -> Result<Snapshot, String> {
         detached,
         linked,
         branches,
-        worktrees: trees,
+        worktrees: trees.into(),
     })
 }
 

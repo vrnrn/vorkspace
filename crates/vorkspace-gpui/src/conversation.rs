@@ -271,7 +271,9 @@ pub(crate) struct Conversation {
     )>,
     controls: Option<std::sync::mpsc::Sender<Control>>,
     branch: Option<String>,
-    git: Option<vorkspace_core::git::Snapshot>,
+    git: Option<git_context::Head>,
+    git_cwd: String,
+    git_refresh: Option<gpui::Task<()>>,
     git_picker: Option<Entity<GitPicker>>,
     git_events: Option<Subscription>,
     preparing_worktree: bool,
@@ -324,12 +326,8 @@ impl Conversation {
     ) -> Option<String> {
         if !self.loaded && self.settings.revision == 0 && self.settings.worktree_cwd != path {
             self.settings.worktree_cwd = path;
-            self.git = self
-                .settings
-                .worktree_cwd
-                .as_deref()
-                .and_then(vorkspace_model::git_cache::get);
-            self.branch = branch.or_else(|| self.git.as_ref().and_then(|s| s.current.clone()));
+            self.seed_git();
+            self.branch = branch.or(self.branch.take());
             self.sync_tool_paths(cx);
             cx.notify();
         } else if !self.loaded && branch.is_some() && self.branch != branch {
@@ -412,9 +410,11 @@ impl Conversation {
         let input = cx.new(input::Input::composer);
         // A new tab shows its folder's checkout from the first frame; the
         // load below confirms it rather than popping it in.
-        let git = (!summary.has_messages)
-            .then(|| vorkspace_model::git_cache::get(&summary.cwd))
-            .flatten();
+        let (branch, git) = git_context::Head::split(
+            (!summary.has_messages)
+                .then(|| vorkspace_model::git_cache::get(&summary.cwd))
+                .flatten(),
+        );
         let completion = cx.new(|cx| {
             crate::composer::composer_completion::Completion::new(
                 input.clone(),
@@ -602,8 +602,10 @@ impl Conversation {
             approval_ui: Default::default(),
             questions: Default::default(),
             controls: None,
-            branch: git.as_ref().and_then(|s| s.current.clone()),
+            branch,
             git,
+            git_cwd: summary.cwd.clone(),
+            git_refresh: None,
             git_picker: None,
             git_events: None,
             preparing_worktree: false,
@@ -659,8 +661,6 @@ impl EventEmitter<OpenSessionChanges> for Conversation {}
 impl EventEmitter<Transfer> for Conversation {}
 impl EventEmitter<composer_features::StartOrchestration> for Conversation {}
 impl EventEmitter<composer_features::StopOrchestration> for Conversation {}
-
-impl Conversation {}
 
 /// The access mode the last composer pick left as the default for new chats.
 pub(crate) fn default_access(cx: &gpui::App) -> AccessMode {

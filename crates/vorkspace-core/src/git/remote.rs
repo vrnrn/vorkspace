@@ -114,7 +114,7 @@ pub(super) fn snapshot(cwd: &Path) -> Result<Snapshot, String> {
                 remote: Some(branch.remote),
             }))
             .collect(),
-        worktrees: trees,
+        worktrees: trees.into(),
     })
 }
 pub(super) fn worktrees(cwd: &Path) -> Result<Vec<Worktree>, String> {
