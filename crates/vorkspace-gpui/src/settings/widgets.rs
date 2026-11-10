@@ -1,6 +1,6 @@
 //! SettingsView.tsx's building blocks: PageHeader, Group, Row, Toggle,
 //! Segmented, Slider, Select and SecondaryButton, at their Tailwind metrics.
-use super::{SettingsView, SliderKind};
+use super::{SettingsView, SliderKind, SliderTrack};
 pub(crate) use crate::controls::{primary_button, secondary_button};
 use crate::popover::{Align, Anchor, AnchorSlot, Side, popover};
 use gpui::{
@@ -494,11 +494,14 @@ impl SettingsView {
         } else {
             0.
         };
-        let slot = self
+        let track = self
             .slider_tracks
             .borrow_mut()
             .entry(kind)
-            .or_default()
+            .or_insert_with(|| SliderTrack {
+                bounds: AnchorSlot::default(),
+                focus: cx.focus_handle(),
+            })
             .clone();
         div()
             .w(px(224.))
@@ -525,7 +528,7 @@ impl SettingsView {
                     .relative()
                     .flex()
                     .items_center()
-                    .child(slot.layout_probe())
+                    .child(track.bounds.layout_probe())
                     .child(
                         div()
                             .w_full()
@@ -552,6 +555,7 @@ impl SettingsView {
                     )
                     .when(!disabled, |d| {
                         d.map(tab_reachable)
+                            .track_focus(&track.focus)
                             .cursor_pointer()
                             .on_key_down(cx.listener(
                                 move |this, event: &gpui::KeyDownEvent, _, cx| {
@@ -579,7 +583,8 @@ impl SettingsView {
                             ))
                             .on_mouse_down(
                                 MouseButton::Left,
-                                cx.listener(move |this, event: &MouseDownEvent, _, cx| {
+                                cx.listener(move |this, event: &MouseDownEvent, window, cx| {
+                                    window.focus(&track.focus, cx);
                                     this.slider_drag = Some(kind);
                                     this.slide(kind, event.position.x, cx);
                                     cx.stop_propagation();
@@ -600,7 +605,12 @@ impl SettingsView {
             .into_any_element()
     }
     pub(super) fn slide(&mut self, kind: SliderKind, x: gpui::Pixels, cx: &mut Context<Self>) {
-        let Some(bounds) = self.slider_tracks.borrow().get(&kind).and_then(|s| s.get()) else {
+        let Some(bounds) = self
+            .slider_tracks
+            .borrow()
+            .get(&kind)
+            .and_then(|track| track.bounds.get())
+        else {
             return;
         };
         let (min, max) = kind.range();

@@ -205,6 +205,12 @@ impl SliderKind {
     }
 }
 
+#[derive(Clone)]
+struct SliderTrack {
+    bounds: AnchorSlot,
+    focus: FocusHandle,
+}
+
 pub(crate) struct SettingsView {
     pub(crate) section: Section,
     prefs: Preferences,
@@ -217,7 +223,7 @@ pub(crate) struct SettingsView {
     pending_scroll: bool,
     _reveal: Option<Task<()>>,
     targets: RefCell<HashMap<&'static str, AnchorSlot>>,
-    slider_tracks: RefCell<HashMap<SliderKind, AnchorSlot>>,
+    slider_tracks: RefCell<HashMap<SliderKind, SliderTrack>>,
     slider_drag: Option<SliderKind>,
     select_open: Option<&'static str>,
     select_active: usize,
