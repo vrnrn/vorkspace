@@ -285,15 +285,9 @@ impl Inbox {
                             .child(page::title().flex_1().min_w_0().child(title))
                             .child(
                                 icon_button("inbox-close-connect", "Close connection", "close")
-                                    .on_click(cx.listener(|this, _, _, cx| {
-                                        if !this.connecting {
-                                            this.connect_provider = None;
-                                            this.connect_token.update(cx, |input, cx| {
-                                                input.set_text(String::new(), cx)
-                                            });
-                                            cx.notify();
-                                        }
-                                    })),
+                                    .on_click(
+                                        cx.listener(|this, _, _, cx| this.dismiss_connection(cx)),
+                                    ),
                             ),
                     )
                     .child(page::body().child(hint))

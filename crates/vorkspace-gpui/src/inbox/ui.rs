@@ -644,7 +644,7 @@ impl gpui::Render for Inbox {
             .on_key_down(cx.listener(|this, event: &gpui::KeyDownEvent, window, cx| {
                 if event.keystroke.key == "escape" {
                     if this.connect_provider.is_some() && !this.connecting {
-                        this.connect_provider = None;
+                        this.dismiss_connection(cx);
                     } else if this.confirm_action.is_some() && !this.acting {
                         this.confirm_action = None;
                     } else if this.filters_open

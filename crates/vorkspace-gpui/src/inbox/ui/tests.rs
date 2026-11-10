@@ -1040,6 +1040,56 @@ fn own_successful_revision_is_read_suppressed_and_later_remote_revision_can_chim
     cx.run_until_parked();
     assert_eq!(*changes.borrow(), vec![0, 0, 1]);
 }
+
+#[gpui::test]
+fn a_comment_receipt_only_clears_the_submitted_draft(cx: &mut TestAppContext) {
+    let window = inbox_window(cx);
+    window
+        .update(cx, |inbox, _, cx| {
+            inbox.selected = Some("selected-item".into());
+            inbox.loading = true;
+            inbox.release_pending = true;
+            inbox
+                .comment
+                .update(cx, |input, cx| input.set_text("First comment".into(), cx));
+        })
+        .unwrap();
+    let posted = window
+        .update(cx, |inbox, _, cx| {
+            let posted = PostedComment {
+                key: inbox.selected.clone().unwrap(),
+                revision: inbox.comment_revision,
+                reply: inbox.reply.clone(),
+            };
+            inbox
+                .comment
+                .update(cx, |input, cx| input.set_text("New draft".into(), cx));
+            posted
+        })
+        .unwrap();
+    let receipt = || {
+        Ok(model::CommentReceipt {
+            url: "https://example.test/comment".into(),
+            revision: None,
+        })
+    };
+    window
+        .update(cx, |inbox, _, cx| {
+            inbox.finish_comment(posted, receipt(), cx);
+            assert_eq!(inbox.comment.read(cx).content.as_ref(), "New draft");
+            inbox.finish_comment(
+                PostedComment {
+                    key: inbox.selected.clone().unwrap(),
+                    revision: inbox.comment_revision,
+                    reply: inbox.reply.clone(),
+                },
+                receipt(),
+                cx,
+            );
+            assert!(inbox.comment.read(cx).content.is_empty());
+        })
+        .unwrap();
+}
 #[gpui::test]
 fn a_coalesced_external_revision_is_never_consumed_as_own_activity(cx: &mut TestAppContext) {
     let window = inbox_window(cx);

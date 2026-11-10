@@ -47,6 +47,12 @@ enum Tab {
     Checks,
 }
 
+struct PostedComment {
+    key: String,
+    revision: u64,
+    reply: Option<(String, String)>,
+}
+
 pub(crate) struct Inbox {
     /// Only the root owns list polling, observation and durable shared state.
     /// Pages retain their own async detail work and inputs for their lifetime.
@@ -66,6 +72,7 @@ pub(crate) struct Inbox {
     focus: FocusHandle,
     search: Entity<Input>,
     comment: Entity<Input>,
+    comment_revision: u64,
     summary_scroll: ListState,
     list_scroll: ScrollHandle,
     summary_width: std::rc::Rc<std::cell::Cell<Pixels>>,
@@ -189,12 +196,16 @@ impl Inbox {
         let comment = cx.new(Input::inbox_comment);
         let connect_url = cx.new(|cx| Input::field("Instance URL", "https://", placeholder, cx));
         let connect_email = cx.new(|cx| Input::field("Email", "you@example.com", placeholder, cx));
-        let connect_token =
-            cx.new(|cx| Input::field("API token", "Personal access token", placeholder, cx));
+        let connect_token = cx.new(|cx| {
+            let mut input = Input::field("API token", "Personal access token", placeholder, cx);
+            input.set_secret(true);
+            input
+        });
         let diff_view = cx.new(DiffView::new);
         let subscriptions = vec![
             cx.subscribe(&search, |_, _, _: &input::Changed, cx| cx.notify()),
             cx.subscribe(&comment, |this, _, _: &input::Changed, cx| {
+                this.comment_revision = this.comment_revision.wrapping_add(1);
                 let count = this.summary_scroll.item_count();
                 this.summary_scroll
                     .remeasure_items(count.saturating_sub(1)..count);
@@ -286,6 +297,7 @@ impl Inbox {
             focus: cx.focus_handle(),
             search,
             comment,
+            comment_revision: 0,
             summary_scroll: ListState::new(0, ListAlignment::Top, px(200.)),
             list_scroll: ScrollHandle::new(),
             summary_width: Default::default(),
@@ -557,6 +569,8 @@ impl Inbox {
             .is_some_and(|key| !self.state.connectors.enabled(key))
         {
             self.connect_provider = None;
+            self.connect_token
+                .update(cx, |input, cx| input.set_text(String::new(), cx));
         }
         self.save(cx);
         self.publish_pages(cx);
@@ -1402,50 +1416,58 @@ impl Inbox {
         }
         self.posting = true;
         self.post_error = None;
-        let key = item.key();
+        let posted = PostedComment {
+            key: item.key(),
+            revision: self.comment_revision,
+            reply: self.reply.clone(),
+        };
         let service = self.service.clone();
-        let reply = self.reply.as_ref().map(|r| r.0.clone()).unwrap_or_default();
+        let reply_id = posted
+            .reply
+            .as_ref()
+            .map(|r| r.0.clone())
+            .unwrap_or_default();
         let task = cx
             .background_executor()
-            .spawn(async move { service.comment(&item, body, reply) });
+            .spawn(async move { service.comment(&item, body, reply_id) });
         cx.spawn(async move |this, cx| {
             let result = task.await;
             let _ = this.update(cx, |this, cx| {
-                this.posting = false;
-                if let Ok(receipt) = &result {
-                    let revision = receipt
-                        .revision
-                        .as_deref()
-                        .map(model::timestamp_ms)
-                        .unwrap_or(0);
-                    this.record_self_activity(key.clone(), revision, cx);
-                }
-                if this.selected.as_ref() != Some(&key) {
-                    if result.is_ok() {
-                        this.refresh(cx);
-                    }
-                    cx.notify();
-                    this.finish_pending_release(cx);
-                    return;
-                }
-                match result {
-                    Ok(_) => {
-                        this.comment
-                            .update(cx, |input, cx| input.set_text(String::new(), cx));
-                        this.reply = None;
-                        if !this.release_pending {
-                            this.load_detail(false, cx);
-                        }
-                        this.refresh(cx);
-                    }
-                    Err(error) => this.post_error = Some(error),
-                }
-                cx.notify();
-                this.finish_pending_release(cx);
+                this.finish_comment(posted, result, cx);
             });
         })
         .detach();
         cx.notify();
+    }
+    fn finish_comment(
+        &mut self,
+        posted: PostedComment,
+        result: Result<model::CommentReceipt, String>,
+        cx: &mut Context<Self>,
+    ) {
+        self.posting = false;
+        let selected = self.selected.as_ref() == Some(&posted.key);
+        match result {
+            Ok(receipt) => {
+                let revision = receipt.revision.as_deref().map_or(0, model::timestamp_ms);
+                self.record_self_activity(posted.key, revision, cx);
+                if selected {
+                    if self.comment_revision == posted.revision && self.reply == posted.reply {
+                        self.comment
+                            .update(cx, |input, cx| input.set_text(String::new(), cx));
+                        self.reply = None;
+                    }
+                    if !self.release_pending {
+                        self.load_detail(false, cx);
+                    }
+                }
+                self.refresh(cx);
+            }
+            Err(error) if selected => self.post_error = Some(error),
+            Err(_) => {}
+        }
+        cx.notify();
+        self.finish_pending_release(cx);
     }
     fn document_cwd(&self) -> PathBuf {
         self.item()
@@ -1474,7 +1496,7 @@ impl Inbox {
         }
     }
     pub(crate) fn open_connection(&mut self, provider: String, cx: &mut Context<Self>) {
-        if !self.state.connectors.enabled(&provider) {
+        if self.connecting || !self.state.connectors.enabled(&provider) {
             return;
         }
         self.connections_open = false;
@@ -1502,6 +1524,13 @@ impl Inbox {
             .update(cx, |input, cx| input.set_text(String::new(), cx));
         self.connect_provider = Some(provider);
         cx.notify();
+    }
+    fn dismiss_connection(&mut self, cx: &mut Context<Self>) {
+        if !self.connecting && self.connect_provider.take().is_some() {
+            self.connect_token
+                .update(cx, |input, cx| input.set_text(String::new(), cx));
+            cx.notify();
+        }
     }
     fn connect(&mut self, disconnect: bool, cx: &mut Context<Self>) {
         if self.connecting {
