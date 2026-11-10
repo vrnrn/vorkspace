@@ -744,10 +744,11 @@ require('node:readline').createInterface({input:process.stdin}).on('line', line 
         let mut rows = Vec::new();
         loop {
             let update = receive(&rx);
+            let finished = update.finished();
             if !update.rows.is_empty() {
                 rows = update.rows;
             }
-            if update.finished() {
+            if finished {
                 assert_eq!(update.status, "Ready");
                 break;
             }
