@@ -140,6 +140,7 @@ pub(crate) struct TodoBoardView {
     /// Side-by-side columns; otherwise stacked.
     columns: bool,
     draft: Entity<Input>,
+    board_drafts: HashMap<TodoBoard, String>,
     create_open: bool,
     create_anchor: AnchorSlot,
     create_focus: FocusHandle,
@@ -221,6 +222,7 @@ impl TodoBoardView {
             pending_changes: 0,
             columns,
             draft,
+            board_drafts: HashMap::new(),
             create_open: false,
             create_anchor: AnchorSlot::default(),
             create_focus: cx.focus_handle(),
@@ -256,6 +258,19 @@ impl TodoBoardView {
             && let Some(old_board) = self.board.as_ref()
         {
             self.board_errors.insert(old_board.key(), error);
+        }
+        if let Some(previous) = self.board.take()
+            && !self.draft.read(cx).content.is_empty()
+        {
+            self.board_drafts
+                .insert(previous, self.draft.read(cx).content.to_string());
+        }
+        let text = board
+            .as_ref()
+            .and_then(|board| self.board_drafts.remove(board))
+            .unwrap_or_default();
+        if self.draft.read(cx).content.as_ref() != text {
+            self.draft.update(cx, |input, cx| input.set_text(text, cx));
         }
         self.board = board;
         self.items.clear();
@@ -380,16 +395,20 @@ impl TodoBoardView {
             }
         }
         if let Err(error) = result {
-            if self.board.as_ref() == Some(board) {
+            let current = self.board.as_ref() == Some(board);
+            if current {
                 self.change_error = Some(error);
             } else {
                 self.board_errors.insert(board.key(), error);
             }
-            // Put the submission back unless something newer was typed.
-            if let Some(title) = draft
-                && self.draft.read(cx).content.is_empty()
-            {
-                self.draft.update(cx, |input, cx| input.set_text(title, cx));
+            if let Some(title) = draft {
+                if current {
+                    if self.draft.read(cx).content.is_empty() {
+                        self.draft.update(cx, |input, cx| input.set_text(title, cx));
+                    }
+                } else {
+                    self.board_drafts.entry(board.clone()).or_insert(title);
+                }
             }
             cx.notify();
         }

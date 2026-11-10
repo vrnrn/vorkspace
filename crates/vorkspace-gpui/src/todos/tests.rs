@@ -94,6 +94,50 @@ fn columns_wrap_at_tile_width_and_stay_four_across_when_space_fits(cx: &mut Test
 }
 
 #[gpui::test]
+fn board_switches_keep_quick_add_text_and_failed_submissions_separate(cx: &mut TestAppContext) {
+    let tile = tile_window(cx, 800., true, 700.);
+    tile.update(cx, |tile, _, cx| {
+        tile.board.update(cx, |board, cx| {
+            let personal = TodoBoard::Personal;
+            let other = TodoBoard::Bot("other".into());
+            board
+                .draft
+                .update(cx, |input, cx| input.set_text("Personal draft".into(), cx));
+            board.set_board(Some(other.clone()), cx);
+            assert!(board.draft.read(cx).content.is_empty());
+            board
+                .draft
+                .update(cx, |input, cx| input.set_text("Other draft".into(), cx));
+            board.finish_change(
+                Err("Failed".into()),
+                Some("Older submission".into()),
+                &personal,
+                None,
+                cx,
+            );
+            assert_eq!(board.draft.read(cx).content.as_ref(), "Other draft");
+            board.set_board(Some(personal.clone()), cx);
+            assert_eq!(board.draft.read(cx).content.as_ref(), "Personal draft");
+            board
+                .draft
+                .update(cx, |input, cx| input.set_text(String::new(), cx));
+            board.set_board(Some(other), cx);
+            board.finish_change(
+                Err("Failed".into()),
+                Some("Failed submission".into()),
+                &personal,
+                None,
+                cx,
+            );
+            assert_eq!(board.draft.read(cx).content.as_ref(), "Other draft");
+            board.set_board(Some(personal), cx);
+            assert_eq!(board.draft.read(cx).content.as_ref(), "Failed submission");
+        });
+    })
+    .unwrap();
+}
+
+#[gpui::test]
 fn floating_create_keeps_its_draft_and_submits_from_the_popover(cx: &mut TestAppContext) {
     let tile = tile_window(cx, 420., true, 600.);
     let visual = &mut gpui::VisualTestContext::from_window(tile.into(), cx);
