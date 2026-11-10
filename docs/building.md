@@ -36,10 +36,10 @@ The profile and data selection are independent. Everything after `--` goes to th
 
 ### The background helper
 
-The `vorkspace-helper` process handles clipboard history, ⌘⇧C, dictation and meeting capture. The bundle includes it at `Contents/Helpers/vorkspace helper.app`. It stays available after the development app exits while **Keep recent copies** or **Dictation** is on.
+The `vorkspace-helper` process handles clipboard history, ⌘⇧C, dictation and meeting capture. The bundle includes it at `Contents/Helpers/vorkspace helper.app`. A helper launched by `npm run dev` finalizes any active recording and exits when its app disconnects. For regular launches, **Keep recent copies** or **Dictation** can keep the helper available after the app quits.
 
-- Rebuilding replaces it on the next launch, which clears its history.
-- Each bundle path gets its own helper, so a development build and the installed app can run side by side. You'll see two menu bar icons, and only the first gets ⌘⇧C. The other reports that in Settings.
+- Rebuilding starts a fresh helper and clears its in-memory clipboard history.
+- Development and regular launches use separate sockets, so the runner can close its helper while an installed app keeps recording. When both helpers are active, only the first gets ⌘⇧C. The other reports that in Settings.
 - Quit in the clipboard menu stops the helper. When no note is recording, turning off both **Keep recent copies** and **Dictation** also stops it. See the [dictation guide](dictation.md) for permissions and custom words.
 
 `cargo run` builds only the app, and the app looks for the helper beside its own binary. To include it, build both in the same profile:

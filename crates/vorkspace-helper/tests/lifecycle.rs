@@ -11,7 +11,9 @@ use std::{
     sync::{Arc, Mutex},
     time::{Duration, Instant},
 };
-use vorkspace_helper::{Action, Command, Notice, Supervisor, receive, send};
+use vorkspace_helper::{
+    Action, Command, EXIT_WITH_CLIENT_ENV, Lifetime, Notice, Supervisor, receive, send,
+};
 
 const HELPER: &str = env!("CARGO_BIN_EXE_vorkspace-helper");
 const TIMEOUT: Duration = Duration::from_secs(20);
@@ -29,6 +31,7 @@ fn start(helper: &Path, socket: &Path) -> Running {
         Process::new(helper)
             .arg("--socket")
             .arg(socket)
+            .env_remove(EXIT_WITH_CLIENT_ENV)
             .spawn()
             .unwrap(),
     )
@@ -120,6 +123,33 @@ fn the_helper_outlives_the_app_while_recording_and_exits_when_turned_off() {
 }
 
 #[test]
+fn development_helper_exits_when_its_client_quits_with_history_enabled() {
+    let directory = tempfile::tempdir().unwrap();
+    let socket = socket(&directory);
+    let mut helper = Running(
+        Process::new(HELPER)
+            .arg("--socket")
+            .arg(&socket)
+            .env(EXIT_WITH_CLIENT_ENV, "1")
+            .spawn()
+            .unwrap(),
+    );
+    let (app, _) = connect(&socket);
+    send(
+        &app,
+        &Command::Configure {
+            recording: true,
+            icon: false,
+            dictation: Default::default(),
+        },
+    )
+    .unwrap();
+    drop(app);
+    exits(&mut helper);
+    assert!(helper.0.wait().unwrap().success());
+}
+
+#[test]
 fn dictation_keeps_the_helper_alive_with_history_off_and_survives_reconnect() {
     use vorkspace_helper::{DictationConfig, DictationPhase};
     let directory = tempfile::tempdir().unwrap();
@@ -190,7 +220,13 @@ fn turning_recording_off_stops_a_helper_the_app_never_connected_to() {
     )
     .unwrap();
     drop(app);
-    let supervisor = Supervisor::start(HELPER.into(), socket, relaunch(), |_| {});
+    let supervisor = Supervisor::start(
+        HELPER.into(),
+        socket,
+        Lifetime::Background,
+        relaunch(),
+        |_| {},
+    );
     supervisor.configure(false, true, Default::default());
     exits(&mut helper);
     assert!(!supervisor.connected());
@@ -200,7 +236,13 @@ fn turning_recording_off_stops_a_helper_the_app_never_connected_to() {
 fn with_recording_off_the_supervisor_never_starts_a_helper() {
     let directory = tempfile::tempdir().unwrap();
     let socket = socket(&directory);
-    let supervisor = Supervisor::start(HELPER.into(), socket.clone(), relaunch(), |_| {});
+    let supervisor = Supervisor::start(
+        HELPER.into(),
+        socket.clone(),
+        Lifetime::Background,
+        relaunch(),
+        |_| {},
+    );
     supervisor.configure(false, true, Default::default());
     std::thread::sleep(Duration::from_millis(300));
     assert!(!supervisor.connected());
@@ -246,9 +288,13 @@ fn the_supervisor_restarts_a_lost_helper_and_replaces_an_outdated_one() {
     std::fs::rename(&replacement, &installed).unwrap();
     let notices = Arc::new(Mutex::new(Vec::new()));
     let seen = notices.clone();
-    let supervisor = Supervisor::start(installed, socket, relaunch(), move |notice| {
-        seen.lock().unwrap().push(notice)
-    });
+    let supervisor = Supervisor::start(
+        installed,
+        socket,
+        Lifetime::Background,
+        relaunch(),
+        move |notice| seen.lock().unwrap().push(notice),
+    );
     supervisor.configure(true, false, Default::default());
     until(|| supervisor.connected());
     exits(&mut outdated);
@@ -272,7 +318,13 @@ fn a_clear_during_a_reconnect_reaches_the_helper() {
     let directory = tempfile::tempdir().unwrap();
     let socket = socket(&directory);
     let listener = UnixListener::bind(&socket).unwrap();
-    let supervisor = Supervisor::start(HELPER.into(), socket, relaunch(), |_| {});
+    let supervisor = Supervisor::start(
+        HELPER.into(),
+        socket,
+        Lifetime::Background,
+        relaunch(),
+        |_| {},
+    );
     supervisor.clear();
     supervisor.configure(true, false, Default::default());
     let (helper, _) = listener.accept().unwrap();
@@ -296,7 +348,13 @@ fn turning_recording_off_cancels_a_waiting_clear() {
     let directory = tempfile::tempdir().unwrap();
     let socket = socket(&directory);
     let listener = UnixListener::bind(&socket).unwrap();
-    let supervisor = Supervisor::start(HELPER.into(), socket, relaunch(), |_| {});
+    let supervisor = Supervisor::start(
+        HELPER.into(),
+        socket,
+        Lifetime::Background,
+        relaunch(),
+        |_| {},
+    );
     supervisor.clear();
     supervisor.configure(false, false, Default::default());
     supervisor.configure(true, false, Default::default());
@@ -330,9 +388,13 @@ fn a_panel_action_survives_replacing_its_outdated_helper() {
     let listener = UnixListener::bind(&socket).unwrap();
     let notices = Arc::new(Mutex::new(Vec::new()));
     let seen = notices.clone();
-    let supervisor = Supervisor::start(HELPER.into(), socket, relaunch(), move |notice| {
-        seen.lock().unwrap().push(notice)
-    });
+    let supervisor = Supervisor::start(
+        HELPER.into(),
+        socket,
+        Lifetime::Background,
+        relaunch(),
+        move |notice| seen.lock().unwrap().push(notice),
+    );
     supervisor.configure(true, false, Default::default());
     let (helper, _) = listener.accept().unwrap();
     send(&helper, &Notice::hello(Path::new("/no/such/helper"))).unwrap();
@@ -356,7 +418,13 @@ fn a_panel_action_survives_replacing_its_outdated_helper() {
 fn a_panel_quit_is_not_undone_by_the_supervisor() {
     let directory = tempfile::tempdir().unwrap();
     let socket = socket(&directory);
-    let supervisor = Supervisor::start(HELPER.into(), socket.clone(), relaunch(), |_| {});
+    let supervisor = Supervisor::start(
+        HELPER.into(),
+        socket.clone(),
+        Lifetime::Background,
+        relaunch(),
+        |_| {},
+    );
     supervisor.configure(true, false, Default::default());
     until(|| supervisor.connected());
     supervisor.configure(false, false, Default::default());

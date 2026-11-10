@@ -32,7 +32,7 @@ use std::{
 };
 #[cfg(not(test))]
 use vorkspace_helper::Action;
-use vorkspace_helper::{Command, Control, Notice, Step, receive, send};
+use vorkspace_helper::{Command, Control, EXIT_WITH_CLIENT_ENV, Notice, Step, receive, send};
 
 /// How long a helper waits for the app that started it.
 const FIRST_CLIENT_TIMEOUT: Duration = Duration::from_secs(10);
@@ -45,6 +45,7 @@ enum Event {
 
 #[derive(Default)]
 struct Helper {
+    exit_with_client: bool,
     exit_requested: bool,
     media_requested: bool,
     background_enabled: bool,
@@ -233,6 +234,11 @@ fn handle(event: Event, hello: &Notice, cx: &mut App) {
             run(step, cx);
         }
         Event::Disconnected => {
+            if cx.global::<Helper>().exit_with_client {
+                cx.global_mut::<Helper>().client = None;
+                run(Some(Step::Exit), cx);
+                return;
+            }
             transcription::finish(cx);
             cx.global_mut::<Helper>().media_requested = false;
             let helper = cx.global_mut::<Helper>();
@@ -313,11 +319,15 @@ fn main() {
     let hello = Notice::hello(&std::env::current_exe().unwrap_or_default());
     let (events, received) = async_channel::unbounded();
     std::thread::spawn(move || accept(listener, events));
+    let exit_with_client = std::env::var(EXIT_WITH_CLIENT_ENV).as_deref() == Ok("1");
     gpui::Application::with_platform(std::rc::Rc::new(gpui_macos::MacPlatform::new(false)))
         // No Dock icon or menu bar, even for an unbundled build without LSUIElement.
         .with_windowing(gpui::WindowingRequest::Headless)
         .run(move |cx: &mut App| {
-            cx.set_global(Helper::default());
+            cx.set_global(Helper {
+                exit_with_client,
+                ..Helper::default()
+            });
             dictation::init(cx);
             transcription::init(cx);
             service::configure(false, cx);

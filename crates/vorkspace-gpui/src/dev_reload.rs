@@ -2,8 +2,12 @@
 //! Enabled only by VORKSPACE_DEV_RELOAD=1, independently of the build profile.
 use gpui::App;
 
+pub(crate) fn enabled() -> bool {
+    std::env::var("VORKSPACE_DEV_RELOAD").as_deref() == Ok("1")
+}
+
 pub fn install(cx: &mut App) {
-    if std::env::var("VORKSPACE_DEV_RELOAD").as_deref() != Ok("1") {
+    if !enabled() {
         return;
     }
     let receiver = shutdown_request(std::io::BufReader::new(std::io::stdin()));

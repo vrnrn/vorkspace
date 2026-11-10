@@ -120,9 +120,16 @@ pub fn helper_executable(app: &Path) -> PathBuf {
         .unwrap_or_else(|_| directory.join("vorkspace-helper"))
 }
 
-/// Each install gets its own helper, so a development build running beside the
-/// installed app never replaces the other's helper.
-pub fn socket_path(helper: &Path) -> PathBuf {
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Lifetime {
+    Background,
+    Client,
+}
+
+pub const EXIT_WITH_CLIENT_ENV: &str = "VORKSPACE_HELPER_EXIT_WITH_CLIENT";
+
+/// Each bundle has a stable background socket and a separate development socket.
+pub fn socket_path(helper: &Path, lifetime: Lifetime) -> PathBuf {
     // Preserve install identity across the rename, so an update can find and
     // replace its old helper instead of leaving an orphaned background process.
     let identity = helper.to_string_lossy().replace(
@@ -133,8 +140,13 @@ pub fn socket_path(helper: &Path) -> PathBuf {
         .strip_suffix("/vorkspace-helper")
         .map(|prefix| format!("{prefix}/vorkspace-clipboard"))
         .unwrap_or(identity);
+    let scope = match lifetime {
+        Lifetime::Background => "",
+        Lifetime::Client => ":development-client",
+    };
     let hash = identity
         .bytes()
+        .chain(scope.bytes())
         .fold(0xcbf2_9ce4_8422_2325_u64, |hash, byte| {
             (hash ^ u64::from(byte)).wrapping_mul(0x0000_0100_0000_01b3)
         });
@@ -198,6 +210,7 @@ impl Supervisor {
     pub fn start(
         helper: PathBuf,
         socket: PathBuf,
+        lifetime: Lifetime,
         relaunch: Command,
         notify: impl Fn(Notice) + Send + 'static,
     ) -> Self {
@@ -207,7 +220,7 @@ impl Supervisor {
             .name("clipboard-helper".into())
             .spawn({
                 let socket = socket.clone();
-                move || supervise(&owned, &helper, &socket, &relaunch, notify)
+                move || supervise(&owned, &helper, &socket, lifetime, &relaunch, notify)
             })
             .expect("start the clipboard helper supervisor");
         Self { shared, socket }
@@ -298,6 +311,7 @@ fn supervise(
     shared: &Shared,
     helper: &Path,
     socket: &Path,
+    lifetime: Lifetime,
     relaunch: &Command,
     notify: impl Fn(Notice),
 ) {
@@ -308,7 +322,7 @@ fn supervise(
                 .wait_while(shared.desired.lock().unwrap(), |desired| !desired.active())
                 .unwrap(),
         );
-        let Some(stream) = connect(helper, socket) else {
+        let Some(stream) = connect(helper, socket, lifetime) else {
             notify(Notice::Error(Some(
                 "The clipboard helper did not start.".into(),
             )));
@@ -374,22 +388,26 @@ fn supervise(
     }
 }
 
-fn connect(helper: &Path, socket: &Path) -> Option<UnixStream> {
+fn connect(helper: &Path, socket: &Path, lifetime: Lifetime) -> Option<UnixStream> {
     if let Ok(stream) = UnixStream::connect(socket) {
         return Some(stream);
     }
-    let mut child = Process::new(helper)
+    let mut command = Process::new(helper);
+    command
         .arg("--socket")
         .arg(socket)
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::null())
-        // It outlives this app, so the runner's stdin hook can't apply to a relaunch.
+        // The helper can reopen the app without the runner's stdin hook.
         .env_remove("VORKSPACE_DEV_RELOAD")
-        // Its own group keeps it alive when the app's terminal group is signalled.
-        .process_group(0)
-        .spawn()
-        .ok()?;
+        // Keep capture finalization independent of the app's terminal group.
+        .process_group(0);
+    match lifetime {
+        Lifetime::Background => command.env_remove(EXIT_WITH_CLIENT_ENV),
+        Lifetime::Client => command.env(EXIT_WITH_CLIENT_ENV, "1"),
+    };
+    let mut child = command.spawn().ok()?;
     std::thread::spawn(move || child.wait());
     (0..CONNECT_ATTEMPTS).find_map(|_| {
         std::thread::sleep(CONNECT_DELAY);
@@ -456,10 +474,16 @@ mod tests {
         let after = std::path::Path::new(
             "/Applications/vorkspace.app/Contents/Helpers/vorkspace helper.app/Contents/MacOS/vorkspace-helper",
         );
-        assert_eq!(super::socket_path(before), super::socket_path(after));
+        assert_eq!(
+            socket_path(before, Lifetime::Background),
+            socket_path(after, Lifetime::Background)
+        );
         assert_ne!(
-            super::socket_path(after),
-            super::socket_path(std::path::Path::new("/tmp/other/vorkspace-helper"))
+            socket_path(after, Lifetime::Background),
+            socket_path(
+                Path::new("/tmp/other/vorkspace-helper"),
+                Lifetime::Background
+            )
         );
     }
 
@@ -576,13 +600,17 @@ mod tests {
 
     #[test]
     fn each_install_gets_its_own_socket() {
-        let first = socket_path(Path::new("/Applications/vorkspace.app/helper"));
-        assert_eq!(
+        let installed = Path::new("/Applications/vorkspace.app/helper");
+        let first = socket_path(installed, Lifetime::Background);
+        assert_eq!(first, socket_path(installed, Lifetime::Background));
+        assert_ne!(
             first,
-            socket_path(Path::new("/Applications/vorkspace.app/helper"))
+            socket_path(Path::new("/tmp/vorkspace.app/helper"), Lifetime::Background)
         );
-        assert_ne!(first, socket_path(Path::new("/tmp/vorkspace.app/helper")));
+        let development = socket_path(installed, Lifetime::Client);
+        assert_ne!(first, development);
         assert!(first.to_string_lossy().len() < 104);
+        assert!(development.to_string_lossy().len() < 104);
     }
 }
 
