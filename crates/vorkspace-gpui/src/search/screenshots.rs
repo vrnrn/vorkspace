@@ -100,6 +100,9 @@ fn native_search_capture() {
                                 input
                             });
                             view.query = QUERY.into();
+                            view.catalog_hits = search::titles(&view.summaries, QUERY);
+                            view.catalog_hits
+                                .extend(search::projects(&view.projects, QUERY));
                             view.remote = vec![message.clone()];
                             view.content = file.clone();
                             view.rank(cx);
