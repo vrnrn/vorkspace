@@ -680,8 +680,30 @@ fn recording_link_ids_are_validated_before_any_schema_write() {
         "0123456789abcdef0123456789abcdeg",
         "0123456789abcdef0123456789abcdef0",
     ] {
-        assert!(store.attach_note_recording("note", invalid).is_err());
-        assert!(store.import_recording_note(invalid, "Title", 0).is_err());
+        assert!(
+            store.attach_note_recording("note", invalid).is_err(),
+            "{invalid:?}"
+        );
+    }
+    // Discovery also imports legacy filename keys. Exercise malformed keys
+    // that neither the recording catalog nor Notes can accept.
+    let oversized_key = "a".repeat(81);
+    for invalid in [
+        "",
+        "../escape",
+        "bad/identity",
+        "bad\\identity",
+        ".hidden",
+        "trailing.",
+        "double..dot",
+        "space here",
+        "nöté",
+        oversized_key.as_str(),
+    ] {
+        assert!(
+            store.import_recording_note(invalid, "Title", 0).is_err(),
+            "{invalid:?}"
+        );
     }
     assert!(!super::super::shared::has_table(&store.conn, "notes").unwrap());
     assert!(!super::super::shared::has_table(&store.conn, "note_recordings").unwrap());
