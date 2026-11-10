@@ -1,7 +1,7 @@
 //! Host-owned sessions keep only their desktop identity and command receipts here.
 //! Transcripts remain on the host and use the same lossless block projection as
 //! desktop conversations; no remote row is inserted into the local session table.
-use super::{remote_legacy::OWNERS, shared, Session, Store};
+use super::{remote_legacy::OWNERS, shared, RemoteProject, Session, Store};
 use crate::{
     agent::{Settings, TurnInfo},
     remote::{Connections, Machine},
@@ -36,15 +36,6 @@ fn decode_hidden(raw: Option<&str>) -> Result<HashSet<i64>, String> {
         .transpose()
         .map(Option::unwrap_or_default)
         .map_err(|error| format!("Cannot read hidden remote sessions: {error}"))
-}
-
-#[derive(Clone, Debug, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct RemoteProject {
-    pub key: String,
-    pub environment_id: String,
-    pub project_id: String,
-    pub cwd: String,
 }
 
 /// Local bytes needed to retry the same journaled attachment references.

@@ -1,6 +1,9 @@
 //! Project model discovery and bounded, connection-scoped shared observations.
-use super::{model, Kind, Model, ModelControl, ModelRows};
-use crate::remote::SshTarget;
+use super::SshTarget;
+use crate::{
+    kind::Kind,
+    model_cache::{model, Model, ModelControl, ModelRows},
+};
 use serde_json::Value;
 use std::{
     collections::HashMap,

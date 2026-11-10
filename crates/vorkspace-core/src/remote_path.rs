@@ -1,10 +1,22 @@
 //! `remote://` paths: how a project on another machine is named everywhere.
+use serde::{Deserialize, Serialize};
+
 pub const REMOTE_PATH_PREFIX: &str = "remote://";
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct RemotePath {
     pub environment_id: String,
     pub host_path: String,
+}
+
+/// A saved binding from a desktop project to the Host's project identity.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RemoteProject {
+    pub key: String,
+    pub environment_id: String,
+    pub project_id: String,
+    pub cwd: String,
 }
 
 /// Qualifies a host path without losing Windows drive letters or UNC roots.

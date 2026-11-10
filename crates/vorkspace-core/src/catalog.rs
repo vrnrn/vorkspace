@@ -1,14 +1,9 @@
-//! The same live model catalogs the React model picker queries. No inference.
+//! Discover the models a local provider offers without starting an inference turn.
 mod claude;
-mod remote;
 use crate::{
     kind::Kind,
     process,
     provider::{self},
-};
-pub use remote::RemoteCatalog;
-pub(crate) use remote::{
-    remote_catalog_response, CatalogCache as RemoteCatalogCache, ConnectionStamp,
 };
 use serde_json::{json, Value};
 use std::{

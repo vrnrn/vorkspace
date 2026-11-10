@@ -1,6 +1,7 @@
 //! Remote host connections. The renderer receives machine metadata, never the
 //! saved bearer credential. Workspace requests never fall back to local calls.
 pub mod attachments;
+mod model_catalog;
 pub mod protocol;
 mod ssh;
 pub mod ssh_askpass;
@@ -12,8 +13,9 @@ use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, OnceLock, RwLock};
 
-use crate::catalog::{remote_catalog_response, ConnectionStamp, RemoteCatalog, RemoteCatalogCache};
-use crate::store::RemoteProject;
+use crate::remote_path::RemoteProject;
+pub use model_catalog::RemoteCatalog;
+use model_catalog::{remote_catalog_response, CatalogCache, ConnectionStamp};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
@@ -23,7 +25,7 @@ pub struct Connections {
     store: Mutex<()>,
     tunnels: Tunnels,
     jobs: Mutex<HashMap<String, Arc<Job>>>,
-    model_catalogs: RemoteCatalogCache,
+    model_catalogs: CatalogCache,
 }
 
 impl Connections {
@@ -34,7 +36,7 @@ impl Connections {
             store: Mutex::new(()),
             tunnels: Tunnels::default(),
             jobs: Mutex::new(HashMap::new()),
-            model_catalogs: RemoteCatalogCache::default(),
+            model_catalogs: CatalogCache::default(),
         }
     }
 

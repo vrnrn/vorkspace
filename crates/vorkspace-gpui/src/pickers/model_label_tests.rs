@@ -1,5 +1,4 @@
 use super::*;
-use vorkspace_core::catalog::Model;
 
 #[gpui::test]
 fn local_inventory_hides_missing_tabs_but_preserves_current_and_successful_catalogs(

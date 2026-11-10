@@ -1,8 +1,7 @@
 //! Resolve model discovery through a saved Host project or session binding.
 use std::sync::Arc;
 use vorkspace_core::{
-    catalog::RemoteCatalog,
-    remote::{Connections, default_connections},
+    remote::{Connections, RemoteCatalog, default_connections},
     store::RemoteProject,
 };
 use vorkspace_runtime::runtime::{Database, locked};
