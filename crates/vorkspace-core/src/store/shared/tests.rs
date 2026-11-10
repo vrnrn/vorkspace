@@ -1108,7 +1108,7 @@ fn local_history_load_merges_saved_receipts_and_keeps_rows_when_preferences_fail
 }
 
 #[test]
-fn queue_only_writes_do_not_read_or_rehash_indexed_history() {
+fn queue_io_does_not_materialize_or_rehash_indexed_history() {
     use crate::follow_up::Message;
     let mut store = Store::open_vorkspace(std::path::Path::new(":memory:")).unwrap();
     let session = store.create("codex", "/project").unwrap();

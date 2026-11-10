@@ -10,6 +10,42 @@ struct QueueRevision {
 }
 
 impl Store {
+    /// Older writers may leave a delivered message in the queue. Match all
+    /// visible IDs in one query without copying or projecting their history.
+    pub(super) fn shared_message_receipts(
+        &self,
+        source: &str,
+        ids: &[&str],
+    ) -> Result<HashSet<String>, String> {
+        if ids.is_empty() {
+            return Ok(HashSet::new());
+        }
+        let table = if let Some(bot) = self.shared_bot_tables(source)? {
+            Some(bot.blocks)
+        } else if self.shared_ordinary_indexed(source)? {
+            Some("ordinary_blocks".into())
+        } else {
+            None
+        };
+        let query = if let Some(table) = table {
+            format!(
+                "SELECT DISTINCT json_extract(block_json,'$.appRequestId') AS receipt
+                 FROM {table} WHERE session_id=?1 AND receipt IN (SELECT value FROM json_each(?2))"
+            )
+        } else {
+            "SELECT DISTINCT CASE WHEN history.type='object'
+               THEN json_extract(history.value,'$.appRequestId') END AS receipt
+             FROM sessions, json_each(sessions.blocks_json) history
+             WHERE sessions.id=?1 AND receipt IN (SELECT value FROM json_each(?2))"
+                .into()
+        };
+        let mut query = sql(self.conn.prepare(&query))?;
+        let receipts = sql(query.query_map(params![source, encode(&ids)?], |row| row.get(0)))?
+            .collect::<rusqlite::Result<_>>()
+            .map_err(|error| error.to_string());
+        receipts
+    }
+
     fn shared_follow_up_revision(&self, id: i64, source: &str) -> Result<u64, String> {
         let mut raw = None;
         if has_table(&self.conn, "native_follow_up_metadata")? {
@@ -58,18 +94,14 @@ impl Store {
             .transpose()
             .map_err(|error| error.to_string())?;
         let source = self.persisted_session_id(id)?;
-        let fields = format!(
-            "{},{}",
-            self.shared_field("queued_messages_json", "'[]'"),
-            self.shared_field("queue_status", "NULL")
-        );
-        let (raw, status) = sql(self.conn.query_row(
-            &format!("SELECT {fields} FROM sessions WHERE id=?1"),
+        let field = self.shared_field("queued_messages_json", "'[]'");
+        let raw: String = sql(self.conn.query_row(
+            &format!("SELECT {field} FROM sessions WHERE id=?1"),
             [&source],
-            |r| Ok((r.get::<_, String>(0)?, r.get::<_, Option<String>>(1)?)),
+            |row| row.get(0),
         ))?;
         let revision = self.shared_follow_up_revision(id, &source)?;
-        let messages: Vec<_> = parse::<Vec<Value>>(&raw)?.iter().map(follow_up).collect();
+        let mut messages: Vec<_> = parse::<Vec<Value>>(&raw)?.iter().map(follow_up).collect();
         let mut draft = None;
         if self.shared_has_saved_draft(&source)? {
             let blocks = self.shared_blocks(id)?;
@@ -77,6 +109,29 @@ impl Store {
                 let mut message = follow_up(block);
                 message.at = blocks::project(&blocks[..at])?.len();
                 draft = Some(message);
+            }
+        }
+        let candidates: Vec<_> = messages
+            .iter()
+            .chain(draft.iter())
+            .map(|message| message.id.as_str())
+            .collect();
+        if !candidates.is_empty() {
+            let mut delivered = self.shared_message_receipts(&source, &candidates)?;
+            let prefix = format!("bot-delivered:{id}:");
+            self.shared.as_ref().unwrap().settings.read(|settings| {
+                for candidate in candidates {
+                    if settings.contains_key(&format!("{prefix}{candidate}")) {
+                        delivered.insert(candidate.to_owned());
+                    }
+                }
+            })?;
+            messages.retain(|message| !delivered.contains(&message.id));
+            if draft
+                .as_ref()
+                .is_some_and(|message| delivered.contains(&message.id))
+            {
+                draft = None;
             }
         }
         if let Some(transaction) = transaction {
@@ -90,7 +145,9 @@ impl Store {
             .insert(id, raw);
         Ok(State {
             revision,
-            paused: status.as_deref() == Some("paused") || !messages.is_empty(),
+            // Recovery requires an explicit resume even if an older writer
+            // left the queue status active.
+            paused: !messages.is_empty(),
             messages,
             draft,
         })

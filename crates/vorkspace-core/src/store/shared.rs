@@ -569,9 +569,8 @@ impl Store {
         {
             if let Ok(id) = id.parse::<i64>() {
                 if self
-                    .shared_blocks(id)?
-                    .iter()
-                    .any(|b| b["appRequestId"].as_str() == Some(message))
+                    .shared_message_receipts(&self.persisted_session_id(id)?, &[message])?
+                    .contains(message)
                 {
                     return Ok(Some("1".into()));
                 }

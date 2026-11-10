@@ -142,8 +142,7 @@ impl Message {
             let target = parent.join(name);
             if *source != target && !target.exists() {
                 std::fs::create_dir_all(&parent).map_err(|error| error.to_string())?;
-                let temporary = parent.join(format!(".copy-{}", crate::session::new_id()));
-                let copy = || -> std::io::Result<()> {
+                crate::private_file::replace(&target, |output| {
                     let mut input = std::fs::OpenOptions::new();
                     input.read(true);
                     #[cfg(unix)]
@@ -155,22 +154,10 @@ impl Message {
                     if !input.metadata()?.is_file() {
                         return Err(std::io::Error::other("Attachment is not a regular file"));
                     }
-                    let mut options = std::fs::OpenOptions::new();
-                    options.create_new(true).write(true);
-                    #[cfg(unix)]
-                    {
-                        use std::os::unix::fs::OpenOptionsExt;
-                        options.mode(0o600);
-                    }
-                    let mut output = options.open(&temporary)?;
-                    std::io::copy(&mut input, &mut output)?;
-                    output.sync_all()?;
-                    std::fs::rename(&temporary, &target)
-                };
-                if let Err(error) = copy() {
-                    let _ = std::fs::remove_file(&temporary);
-                    return Err(format!("Could not retain {}: {error}", source.display()));
-                }
+                    std::io::copy(&mut input, output)?;
+                    Ok(())
+                })
+                .map_err(|error| format!("Could not retain {}: {error}", source.display()))?;
             }
             *source = target;
         }

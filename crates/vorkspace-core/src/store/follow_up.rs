@@ -141,14 +141,14 @@ impl Store {
     }
 
     pub fn follow_ups(&self, session: i64) -> Result<State, String> {
-        let mut state: State = if self.uses_vorkspace_schema() && session >= 0 {
-            self.shared_follow_ups(session)?
-        } else {
-            self.setting(&format!("follow-up:{session}"))?
-                .map(|text| serde_json::from_str(&text).map_err(|e| e.to_string()))
-                .transpose()?
-                .unwrap_or_default()
-        };
+        if self.uses_vorkspace_schema() && session >= 0 {
+            return self.shared_follow_ups(session);
+        }
+        let mut state: State = self
+            .setting(&format!("follow-up:{session}"))?
+            .map(|text| serde_json::from_str(&text).map_err(|e| e.to_string()))
+            .transpose()?
+            .unwrap_or_default();
         let mut remaining = Vec::new();
         for message in state.messages {
             if self
