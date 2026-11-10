@@ -20,6 +20,7 @@ pub(crate) fn button(
         .id(id)
         .role(Role::Button)
         .aria_label(label.into())
+        .aria_disabled(!enabled)
         .when(enabled, |d| {
             d.focusable()
                 .tab_stop(true)
