@@ -580,14 +580,12 @@ function contentBlocks(content) {
 }
 function parseGitPatch(text) {
   const plus = text.match(/^\+\+\+\s+(?:b\/)?(.+)$/m);
-  const git = text.match(/^diff --git\s+\S+\s+(\S+)/m);
+  const git = plus ? null : text.match(/^diff --git\s+\S+\s+(\S+)/m);
   let path = (plus?.[1] ?? git?.[1])?.replace(/^b\//, "").trim();
   if (path === "/dev/null") path = undefined;
-  const hunks = [];
-  let additions = 0;
-  let deletions = 0;
+  const preview = new DiffPreview();
   let newNum = 0;
-  for (const line of text.replace(/\r\n/g, "\n").split("\n")) {
+  for (const line of patchLines(text)) {
     const header = line.match(/^@@\s+-(\d+)(?:,\d+)?\s+\+(\d+)/);
     if (header) {
       newNum = Number(header[2]);
@@ -602,55 +600,78 @@ function parseGitPatch(text) {
       continue;
     }
     if (line.startsWith("+")) {
-      additions += 1;
-      hunks.push({ number: newNum, kind: "add", text: line.slice(1) });
+      preview.record(newNum, "add", line.slice(1));
       newNum += 1;
     } else if (line.startsWith("-")) {
-      deletions += 1;
-      hunks.push({ number: newNum, kind: "del", text: line.slice(1) });
+      preview.record(newNum, "del", line.slice(1));
     } else if (line.startsWith("\\")) {
       continue;
     } else {
       const body = line.startsWith(" ") ? line.slice(1) : line;
-      hunks.push({ number: newNum, kind: "context", text: body });
+      preview.record(newNum, "context", body);
       newNum += 1;
     }
   }
-  const first = hunks.findIndex((line) => line.kind !== "context");
-  const start = Math.max(0, first === -1 ? 0 : first - 1);
   return {
     path: path && looksLikePath(path) ? normalizePath(path) : path,
-    lines: hunks.slice(start, start + MAX_PREVIEW_LINES).map((line) => ({
-      ...line,
-      text: capLine(line.text),
-    })),
-    additions,
-    deletions,
+    ...preview.result(),
   };
 }
+
+/** Count the whole diff while retaining only its first visible hunk. */
+class DiffPreview {
+  lines = [];
+  additions = 0;
+  deletions = 0;
+  previousNumber;
+  previousText;
+
+  record(number, kind, text) {
+    if (kind !== "context" && this.additions + this.deletions === 0) {
+      this.lines.length = 0;
+      if (this.previousText !== undefined) {
+        this.lines.push({
+          number: this.previousNumber,
+          kind: "context",
+          text: capLine(this.previousText),
+        });
+      }
+      this.previousText = undefined;
+    }
+    if (kind === "add") this.additions += 1;
+    if (kind === "del") this.deletions += 1;
+    if (this.lines.length < MAX_PREVIEW_LINES)
+      this.lines.push({ number, kind, text: capLine(text) });
+    if (this.additions + this.deletions === 0) {
+      this.previousNumber = number;
+      this.previousText = text;
+    }
+  }
+
+  result() {
+    return {
+      lines: this.lines,
+      additions: this.additions,
+      deletions: this.deletions,
+    };
+  }
+}
+
+function* patchLines(text) {
+  let start = 0;
+  for (let end = text.indexOf("\n"); end !== -1; end = text.indexOf("\n", start)) {
+    yield text.slice(start, text[end - 1] === "\r" ? end - 1 : end);
+    start = end + 1;
+  }
+  yield text.slice(start);
+}
+
 function compactDiff(oldText, newText) {
-  const oldLines = textLines(oldText ?? "");
-  const newLines = textLines(newText);
-  const hunks =
-    oldText == null || oldText === ""
-      ? newLines.map((text, index) => ({
-          number: index + 1,
-          kind: "add",
-          text,
-        }))
-      : greedyDiff(oldLines, newLines);
-  const additions = hunks.filter((line) => line.kind === "add").length;
-  const deletions = hunks.filter((line) => line.kind === "del").length;
-  const first = hunks.findIndex((line) => line.kind !== "context");
-  const start = Math.max(0, first === -1 ? 0 : first - 1);
-  return {
-    lines: hunks.slice(start, start + MAX_PREVIEW_LINES).map((line) => ({
-      ...line,
-      text: capLine(line.text),
-    })),
-    additions,
-    deletions,
-  };
+  const preview = new DiffPreview();
+  const next = textLines(newText);
+  if (oldText) greedyDiff(textLines(oldText), next, preview);
+  else next.forEach((text, index) => preview.record(index + 1, "add", text));
+  return preview.result();
 }
 function textField(value) {
   return typeof value === "string" ? value : undefined;
@@ -661,8 +682,7 @@ function textLines(text) {
   if (lines[lines.length - 1] === "") lines.pop();
   return lines;
 }
-function greedyDiff(oldLines, newLines) {
-  const out = [];
+function greedyDiff(oldLines, newLines, preview) {
   let i = 0;
   let j = 0;
   while (i < oldLines.length || j < newLines.length) {
@@ -671,7 +691,7 @@ function greedyDiff(oldLines, newLines) {
       j < newLines.length &&
       oldLines[i] === newLines[j]
     ) {
-      out.push({ number: j + 1, kind: "context", text: oldLines[i] });
+      preview.record(j + 1, "context", oldLines[i]);
       i += 1;
       j += 1;
       continue;
@@ -679,24 +699,23 @@ function greedyDiff(oldLines, newLines) {
     const sync = findSync(oldLines, newLines, i, j, 8);
     if (sync) {
       while (i < sync.i) {
-        out.push({ number: i + 1, kind: "del", text: oldLines[i] });
+        preview.record(i + 1, "del", oldLines[i]);
         i += 1;
       }
       while (j < sync.j) {
-        out.push({ number: j + 1, kind: "add", text: newLines[j] });
+        preview.record(j + 1, "add", newLines[j]);
         j += 1;
       }
       continue;
     }
     if (i < oldLines.length) {
-      out.push({ number: i + 1, kind: "del", text: oldLines[i] });
+      preview.record(i + 1, "del", oldLines[i]);
       i += 1;
     } else {
-      out.push({ number: j + 1, kind: "add", text: newLines[j] });
+      preview.record(j + 1, "add", newLines[j]);
       j += 1;
     }
   }
-  return out;
 }
 function findSync(oldLines, newLines, i, j, window) {
   for (let di = 0; di <= window; di += 1) {
