@@ -1,7 +1,37 @@
 use super::*;
+use std::io::{BufRead, BufReader};
+
 struct ReceivedRequest {
     headers: String,
     payload: Value,
+}
+
+fn read_request(reader: &mut impl BufRead) -> ReceivedRequest {
+    let mut headers = String::new();
+    let mut length = 0;
+    loop {
+        let mut line = String::new();
+        assert_ne!(
+            reader.read_line(&mut line).unwrap(),
+            0,
+            "incomplete request"
+        );
+        if line == "\r\n" {
+            break;
+        }
+        if let Some((key, value)) = line.split_once(':') {
+            if key.eq_ignore_ascii_case("content-length") {
+                length = value.trim().parse().unwrap();
+            }
+        }
+        headers.push_str(&line);
+    }
+    let mut body = vec![0; length];
+    reader.read_exact(&mut body).unwrap();
+    ReceivedRequest {
+        headers,
+        payload: serde_json::from_slice(&body).unwrap(),
+    }
 }
 
 fn host_fixture(
@@ -11,7 +41,6 @@ fn host_fixture(
     std::sync::mpsc::Receiver<ReceivedRequest>,
     std::thread::JoinHandle<()>,
 ) {
-    use std::io::{BufRead, BufReader};
     let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
     let endpoint = format!("http://{}", listener.local_addr().unwrap());
     let (sender, receiver) = std::sync::mpsc::channel();
@@ -22,32 +51,74 @@ fn host_fixture(
                 .set_read_timeout(Some(std::time::Duration::from_secs(3)))
                 .unwrap();
             let mut reader = BufReader::new(stream.try_clone().unwrap());
-            let mut headers = String::new();
-            let mut length = 0;
-            loop {
-                let mut line = String::new();
-                reader.read_line(&mut line).unwrap();
-                if line == "\r\n" {
-                    break;
-                }
-                if let Some((key, value)) = line.split_once(':') {
-                    if key.eq_ignore_ascii_case("content-length") {
-                        length = value.trim().parse().unwrap();
-                    }
-                }
-                headers.push_str(&line);
-            }
-            let mut body = vec![0; length];
-            reader.read_exact(&mut body).unwrap();
-            let _ = sender.send(ReceivedRequest {
-                headers,
-                payload: serde_json::from_slice(&body).unwrap(),
-            });
+            let _ = sender.send(read_request(&mut reader));
             let body = response.to_string();
             write!(stream, "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nContent-Type: application/json\r\nConnection: close\r\n\r\n{}", body.len(), body).unwrap();
         }
     });
     (endpoint, receiver, server)
+}
+
+#[test]
+fn pooled_requests_use_current_credentials_and_never_retry_a_sent_command() {
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let directory = tempfile::tempdir().unwrap();
+    let connection = Connections::new(directory.path());
+    let mut machine = StoredMachine {
+        id: "machine".into(),
+        name: "Fixture".into(),
+        endpoint: format!("http://{}", listener.local_addr().unwrap()),
+        environment_id: "fixture".into(),
+        token: "a".repeat(43),
+        ssh: None,
+    };
+    write(&connection.store_path(), std::slice::from_ref(&machine)).unwrap();
+    let timeout = std::time::Duration::from_secs(3);
+    let (done, finished) = std::sync::mpsc::channel();
+    let server = std::thread::spawn(move || {
+        let (mut stream, _) = listener.accept().unwrap();
+        stream.set_read_timeout(Some(timeout)).unwrap();
+        let mut reader = BufReader::new(stream.try_clone().unwrap());
+        let first = read_request(&mut reader);
+        let body = r#"{"result":{"projects":[]}}"#;
+        write!(
+            stream,
+            "HTTP/1.1 200 OK\r\nContent-Length: {}\r\n\r\n{body}",
+            body.len()
+        )
+        .unwrap();
+        let command = read_request(&mut reader);
+        drop(reader);
+        drop(stream);
+        // The fixture received the command body and then lost its response.
+        // Keep listening until the client returns so a replay cannot hide.
+        finished.recv_timeout(timeout).unwrap();
+        listener.set_nonblocking(true).unwrap();
+        assert_eq!(
+            listener.accept().unwrap_err().kind(),
+            std::io::ErrorKind::WouldBlock
+        );
+        (first, command)
+    });
+    let result = connection
+        .request(&machine.id, "projects.list", json!({}))
+        .unwrap();
+    assert_eq!(result, json!({"projects":[]}));
+    machine.token = "b".repeat(43);
+    write(&connection.store_path(), std::slice::from_ref(&machine)).unwrap();
+    let result = connection.request(&machine.id, "commands.dispatch", json!({"id":"one"}));
+    done.send(()).unwrap();
+    assert!(result.unwrap_err().contains("did not complete"));
+    let (first, command) = server.join().unwrap();
+    assert!(first
+        .headers
+        .contains(&format!("Bearer {}", "a".repeat(43))));
+    assert!(command
+        .headers
+        .contains(&format!("Bearer {}", machine.token)));
+    assert_eq!(command.payload["method"], "commands.dispatch");
+    assert_eq!(command.payload["params"]["id"], "one");
+    assert_eq!(command.payload["environmentId"], "fixture");
 }
 
 #[test]

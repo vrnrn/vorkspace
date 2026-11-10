@@ -26,6 +26,7 @@ pub struct Connections {
     tunnels: Tunnels,
     jobs: Mutex<HashMap<String, Arc<Job>>>,
     model_catalogs: CatalogCache,
+    rpc_pool: Mutex<Option<ureq::Agent>>,
 }
 
 impl Connections {
@@ -37,6 +38,7 @@ impl Connections {
             tunnels: Tunnels::default(),
             jobs: Mutex::new(HashMap::new()),
             model_catalogs: CatalogCache::default(),
+            rpc_pool: Mutex::new(None),
         }
     }
 
@@ -87,6 +89,21 @@ impl Connections {
         result
     }
 
+    fn shared_rpc_agent(&self) -> ureq::Agent {
+        self.rpc_pool
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .get_or_insert_with(rpc_agent)
+            .clone()
+    }
+
+    fn retire_rpc_pool(&self) {
+        self.rpc_pool
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .take();
+    }
+
     pub fn shutdown(&self) {
         if let Ok(jobs) = self.jobs.lock() {
             for job in jobs.values() {
@@ -94,6 +111,7 @@ impl Connections {
             }
         }
         self.tunnels.clear();
+        self.retire_rpc_pool();
     }
     fn job(&self, id: &str) -> Result<Arc<Job>, String> {
         self.jobs
@@ -241,18 +259,24 @@ fn write(path: &Path, machines: &[StoredMachine]) -> Result<(), String> {
 /// (`host/sync-transfer.ts`), so it bounds memory without limiting transcripts.
 const MAX_RESPONSE_BYTES: u64 = 16 * 1024 * 1024;
 
+fn rpc_agent() -> ureq::Agent {
+    ureq::AgentBuilder::new()
+        .redirects(0)
+        .timeout_connect(std::time::Duration::from_secs(5))
+        .timeout(std::time::Duration::from_secs(30))
+        .max_idle_connections(12)
+        .max_idle_connections_per_host(3)
+        .build()
+}
+
 fn rpc(
+    agent: &ureq::Agent,
     endpoint: &str,
     token: &str,
     environment_id: Option<&str>,
     method: &str,
     params: Value,
 ) -> Result<Value, String> {
-    let agent = ureq::AgentBuilder::new()
-        .redirects(0)
-        .timeout_connect(std::time::Duration::from_secs(5))
-        .timeout(std::time::Duration::from_secs(30))
-        .build();
     let payload = json!({ "version": 1, "environmentId": environment_id, "method": method, "params": params });
     let response = agent
         .post(&format!("{endpoint}/rpc"))
@@ -281,7 +305,7 @@ fn rpc(
     if bytes.len() as u64 > MAX_RESPONSE_BYTES {
         return Err("Host response is too large".into());
     }
-    let value: Value = serde_json::from_slice(&bytes).map_err(|_| "Invalid host response")?;
+    let mut value: Value = serde_json::from_slice(&bytes).map_err(|_| "Invalid host response")?;
     if let Some(error) = value.get("error").and_then(Value::as_str) {
         return Err(format!("Host rejected request: {error}"));
     }
@@ -289,8 +313,8 @@ fn rpc(
         return Err(format!("Host returned HTTP {status}"));
     }
     value
-        .get("result")
-        .cloned()
+        .get_mut("result")
+        .map(Value::take)
         .ok_or_else(|| "Invalid host response".into())
 }
 
@@ -333,6 +357,7 @@ impl Connections {
             return Err("Enter the device token issued by vorkspace-host pair".into());
         }
         let descriptor = rpc(
+            &rpc_agent(),
             &endpoint,
             &token,
             None,
@@ -378,6 +403,7 @@ impl Connections {
         machines.retain(|m| m.id != id);
         machines.push(machine.clone());
         write(&path, &machines)?;
+        self.retire_rpc_pool();
         Ok(machine.public())
     }
 
@@ -392,6 +418,7 @@ impl Connections {
         write(&path, &machines)?;
         self.tunnels.remove(machine_id);
         self.model_catalogs.remove_machine(machine_id);
+        self.retire_rpc_pool();
         Ok(())
     }
 
@@ -432,6 +459,7 @@ impl Connections {
             .map(|lease| lease.endpoint.as_str())
             .unwrap_or(&machine.endpoint);
         let response = rpc(
+            &self.shared_rpc_agent(),
             endpoint,
             &machine.token,
             Some(&machine.environment_id),
@@ -595,6 +623,7 @@ impl Connections {
                 job.message("Opening the secure connection…");
                 let tunnel = Tunnel::start(&target, Some(&job), Some(&askpass))?;
                 let descriptor = rpc(
+                    &rpc_agent(),
                     &format!("http://127.0.0.1:{}", tunnel.port),
                     &machine.token,
                     Some(&machine.environment_id),
@@ -656,6 +685,7 @@ impl Connections {
                 machines.push(machine.clone());
                 write(&path, &machines)?;
                 state.tunnels.insert(machine.id.clone(), tunnel);
+                state.retire_rpc_pool();
                 Ok(machine.public())
             });
         });
