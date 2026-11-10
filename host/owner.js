@@ -47,7 +47,7 @@ export async function acquireHostOwner(directory) {
           );
           if (
             !command.trim() ||
-            /(?:vorkspace|vorkspace)-host.*\bserve\b/.test(command)
+            /vorkspace-host.*\bserve\b/.test(command)
           )
             throw new Error("A host already owns this data directory");
         }
@@ -61,7 +61,10 @@ export async function acquireHostOwner(directory) {
     db.close();
     throw error;
   }
+  let released = false;
   return () => {
+    if (released) return;
+    released = true;
     try {
       rmSync(path, { force: true });
     } finally {

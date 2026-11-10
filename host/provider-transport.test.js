@@ -50,7 +50,10 @@ readline.createInterface({input: process.stdin}).on('line', line => {
     }
     return;
   }
-  if (request.method === 'initialize') send({id: request.id, result: {}});
+  if (request.method === 'initialize') {
+    send(null);
+    send({id: request.id, result: {}});
+  }
   if (request.method === 'account/read') send({id: request.id, result: {account: {type: 'fixture'}, requiresOpenaiAuth: false}});
   if (request.method === 'model/list') send({id: request.id, result: {data: [{model: 'fixture-model', displayName: 'Fixture model', supportedReasoningEfforts: ['low', 'high']}], nextCursor: null}});
   if (request.method === 'thread/start' || request.method === 'thread/resume') send({id: request.id, result: {thread: {id: 'fixture-thread'}}});

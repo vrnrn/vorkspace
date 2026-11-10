@@ -123,7 +123,7 @@ export class HostChildBackend {
           !execArgsAllowed(provider, args.args)
         )
           throw new Error("Unsupported headless catalog command");
-        const launch = await providerLaunch(commandPath, args.args);
+        const launch = providerLaunch(commandPath, args.args);
         const { stdout } = await exec(launch.command, launch.args, {
           cwd: typeof args.cwd === "string" ? args.cwd : undefined,
           timeout: 10_000,
@@ -180,7 +180,7 @@ export class HostChildBackend {
         "Named provider accounts are not supported by this host yet",
       );
     const commandArgs = args.args;
-    let launch = await providerLaunch(String(args.command), commandArgs);
+    let launch = providerLaunch(String(args.command), commandArgs);
     if (
       args.binaryProvider === "claude" &&
       commandArgs.some(

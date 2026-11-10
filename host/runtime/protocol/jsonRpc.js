@@ -141,6 +141,7 @@ export class JsonRpcClient {
     }
   }
   handle(msg) {
+    if (!msg || typeof msg !== "object" || Array.isArray(msg)) return;
     if (msg.id != null && (msg.result !== undefined || msg.error)) {
       const key = String(msg.id);
       const pending = this.pending.get(key);

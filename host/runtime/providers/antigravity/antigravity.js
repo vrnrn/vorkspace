@@ -291,13 +291,15 @@ function queueLifecycle(input, recycle) {
     }
     return startLive(input, life);
   });
-  lifecycleByThread.set(
-    input.sessionId,
-    next.then(
-      () => undefined,
-      () => undefined,
-    ),
+  const settled = next.then(
+    () => undefined,
+    () => undefined,
   );
+  lifecycleByThread.set(input.sessionId, settled);
+  void settled.then(() => {
+    if (lifecycleByThread.get(input.sessionId) === settled)
+      lifecycleByThread.delete(input.sessionId);
+  });
   return next;
 }
 async function startLive(input, life) {

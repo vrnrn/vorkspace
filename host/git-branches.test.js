@@ -30,6 +30,7 @@ it("lists and switches only clean existing local branches", async () => {
     "initial",
   );
   git("branch", "feature");
+  git("tag", "feature");
   expect(await hostBranches(cwd)).toEqual({
     current: "main",
     branches: ["feature", "main"],

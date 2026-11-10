@@ -12,20 +12,20 @@ export async function hostBranches(cwd) {
     await Promise.all([
       exec(
         "git",
-        ["for-each-ref", "--format=%(refname:short)", "refs/heads"],
+        ["for-each-ref", "--format=%(refname:lstrip=2)", "refs/heads"],
         options(cwd),
       ),
       exec(
         "git",
         [
           "for-each-ref",
-          "--format=%(refname:short)%00%(symref)",
+          "--format=%(refname:lstrip=2)%00%(symref)",
           "refs/remotes",
         ],
         options(cwd),
       ),
-      exec("git", ["symbolic-ref", "--quiet", "--short", "HEAD"], options(cwd))
-        .then(({ stdout }) => stdout.trim())
+      exec("git", ["symbolic-ref", "--quiet", "HEAD"], options(cwd))
+        .then(({ stdout }) => stdout.trim().replace(/^refs\/heads\//, ""))
         .catch(() => null),
     ]);
   const remotes = remoteNames

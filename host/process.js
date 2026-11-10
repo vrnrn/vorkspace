@@ -117,7 +117,6 @@ export async function resolveProvider(provider) {
       try {
         await access(candidate, constants.X_OK);
         if (!(await stat(candidate)).isFile()) continue;
-        await providerLaunch(candidate, []);
         if (!(await matchesProvider(candidate, provider, name))) continue;
         return candidate;
       } catch {
@@ -130,7 +129,7 @@ export async function resolveProvider(provider) {
   );
 }
 /** Script launchers run with the bundled Node, preserving argv without a shell. */
-export async function providerLaunch(command, args) {
+export function providerLaunch(command, args) {
   if (/\.(cjs|mjs|js)$/i.test(command))
     return { command: process.execPath, args: [command, ...args] };
   return { command, args };

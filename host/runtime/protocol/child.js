@@ -213,7 +213,10 @@ export function startHarnessBridge() {
     teardownTimer = undefined;
   }
   ensureBridge();
+  let released = false;
   return () => {
+    if (released) return;
+    released = true;
     users -= 1;
     if (users > 0) return;
     users = 0;
