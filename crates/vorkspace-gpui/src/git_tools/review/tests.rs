@@ -398,7 +398,6 @@ fn file_reviews_are_editable_and_view_switches_preserve_the_unsaved_document(
     cx.run_until_parked();
     let editor = window
         .update(cx, |pane, w, cx| {
-            assert!(pane.sources[0].editor_mode);
             let editor = pane.active_editor().unwrap();
             editor
                 .read(cx)
@@ -417,7 +416,7 @@ fn file_reviews_are_editable_and_view_switches_preserve_the_unsaved_document(
     cx.run_until_parked();
     window
         .update(cx, |pane, _, cx| {
-            assert!(pane.sources[0].editor_mode);
+            assert_eq!(pane.active_editor().unwrap(), editor);
             assert!(editor.read(cx).dirty);
         })
         .unwrap();
@@ -429,7 +428,6 @@ fn file_reviews_are_editable_and_view_switches_preserve_the_unsaved_document(
     cx.run_until_parked();
     window
         .update(cx, |pane, _, cx| {
-            assert!(pane.sources[0].editor_mode);
             assert_eq!(pane.active_editor().unwrap(), editor);
             assert!(editor.read(cx).input.read(cx).content.contains("draft"));
             pane.open(
@@ -441,8 +439,7 @@ fn file_reviews_are_editable_and_view_switches_preserve_the_unsaved_document(
                 cx,
             );
             assert_eq!(pane.sources.len(), 2);
-            assert!(!pane.sources[1].editor_mode);
-            assert!(pane.sources[1].editor.is_none());
+            assert!(pane.active_editor().is_none());
             assert!(editor.read(cx).dirty);
         })
         .unwrap();
