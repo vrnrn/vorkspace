@@ -58,6 +58,8 @@ Click a project to return to its workspace.
 
 Files opened from Search or a Bot link stay with the working copy they came from. A new file pane opens beside the Bot when there is room, or in its own tab. Closing and reopening the file tab keeps unfinished edits while the app is open. Add to chat puts your comment in the original Bot's draft, even if you've moved the file or restarted. If the chat can't accept it, your comment stays available to copy or try again. GitHub activity appears in the Bot chat it belongs to.
 
+An open file tab checks its own working copy for Git changes. For local files, it checks whether the file changed before reading it again. Saving still checks the file's contents against the last version the editor read. Typing while a reload is in progress keeps those new edits.
+
 Drag a tab onto another pane’s edge to put them beside or above one another. Drag a pane’s small header to move it, or back to the tab bar to give it its own tab. You can resize the space between panes. The same limits apply throughout: each column needs 420 points of width, and up to three content panes can be stacked vertically. Existing file-pane exceptions stay the same. When you shrink the window, an older large layout scrolls instead of throwing away panes.
 
 Click a document in a Bot’s floating island to open it beside the Bot. If there is not enough room, it opens in its own tab. The island stays inside that Bot’s pane. On narrow panes, click the Bot face or the small button at the top right to open it. The island’s Bot settings button opens settings, including Habits. Bot diffs are not shown. Closing a Bot tab keeps its conversation, unsent draft and running work. Your tab order, layouts and selected panes are remembered after restarting.

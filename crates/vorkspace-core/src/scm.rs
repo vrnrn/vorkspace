@@ -25,8 +25,8 @@ pub(crate) use command::{git_cmd, git_output_capped};
 #[cfg(test)]
 use review::file_diff_versions;
 pub use review::{
-    diff_files, file_diff, stage_contents, CommitReview, DiffSnapshot, FileDiff, FileDiffVersion,
-    WorktreeReview, MAX_TEXT_FILE_BYTES,
+    diff_files, editor_baseline, file_diff, stage_contents, CommitReview, DiffSnapshot, FileDiff,
+    FileDiffVersion, WorktreeReview, MAX_TEXT_FILE_BYTES,
 };
 
 /// The PATH a login terminal would have, for shells the app starts: a

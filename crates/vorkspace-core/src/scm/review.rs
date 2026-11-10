@@ -351,6 +351,66 @@ pub fn file_diff(cwd: &Path, relative: &str, staged: bool) -> Result<FileDiff, S
     WorktreeReview::open(cwd)?.file(relative, staged)
 }
 
+/// Read only the Git side an open text editor compares its buffer against.
+pub fn editor_baseline(
+    cwd: &Path,
+    relative: &str,
+    remote_staged: Option<bool>,
+) -> Result<Option<(String, bool)>, String> {
+    let checkout = WorktreeReview::open(cwd)?;
+    let root = &checkout.cwd;
+    let Some(prefix) = &checkout.prefix else {
+        let staged = match remote_staged {
+            Some(staged) => staged,
+            None => diff_files(cwd)?
+                .files
+                .iter()
+                .find(|file| file.relative == relative)
+                .is_some_and(|file| file.staged && !file.unstaged),
+        };
+        let diff = checkout.file(relative, staged)?;
+        return Ok((!diff.binary && !diff.too_large).then_some((diff.original, staged)));
+    };
+    let relative = resolve_repo_path(root, relative)?;
+    let status = git_output(
+        root,
+        &[
+            "--literal-pathspecs",
+            "status",
+            "--porcelain=v1",
+            "-z",
+            "--no-renames",
+            "--untracked-files=all",
+            "--",
+            &relative,
+        ],
+    )
+    .ok_or("Could not read the file's Git status")?;
+    let mut staged = false;
+    let mut unstaged = false;
+    for record in status.split(|&byte| byte == 0) {
+        let [index, disk, b' ', path @ ..] = record else {
+            continue;
+        };
+        if path.strip_prefix(prefix.as_bytes()) != Some(relative.as_bytes()) {
+            continue;
+        }
+        staged |= *index != b' ' && *index != b'?';
+        unstaged |= *disk != b' ';
+    }
+    let staged = staged && !unstaged;
+    let rev = if staged { "HEAD:" } else { ":" };
+    let base = match git_blob(root, &format!("{rev}{prefix}{relative}")) {
+        None => Some(String::new()),
+        Some(FileContents::Bytes(bytes)) if !bytes.contains(&0) => Some(
+            String::from_utf8(bytes)
+                .unwrap_or_else(|error| String::from_utf8_lossy(error.as_bytes()).into_owned()),
+        ),
+        _ => None,
+    };
+    Ok(base.map(|base| (base, staged)))
+}
+
 /// Resolve a commit once before listing its files or reading any of their sides.
 pub struct CommitReview {
     cwd: PathBuf,

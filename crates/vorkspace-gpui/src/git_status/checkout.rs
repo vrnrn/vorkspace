@@ -125,6 +125,13 @@ impl Snapshot {
 
 type Versions = HashMap<String, scm::FileDiffVersion>;
 
+#[derive(Clone, PartialEq, Eq)]
+pub(crate) struct EditorBaselineRevision {
+    pub(crate) staged: bool,
+    head: Option<String>,
+    version: Option<scm::FileDiffVersion>,
+}
+
 #[derive(Clone)]
 struct Observation {
     snapshot: Arc<Snapshot>,
@@ -210,6 +217,26 @@ impl Checkout {
         self.observation.as_ref().map(|read| read.snapshot.clone())
     }
 
+    pub(crate) fn editor_baseline_revision(
+        &self,
+        relative: &str,
+    ) -> Option<EditorBaselineRevision> {
+        let read = self.observation.as_ref()?;
+        let versions = read.versions.as_ref()?;
+        let index = &read.snapshot.index;
+        let staged = index
+            .files
+            .iter()
+            .find(|file| file.relative == relative)
+            .is_some_and(|file| file.staged && !file.unstaged);
+        let side = if staged { "staged" } else { "unstaged" };
+        Some(EditorBaselineRevision {
+            staged,
+            head: index.head.clone(),
+            version: versions.get(&format!("{side}:{relative}")).cloned(),
+        })
+    }
+
     pub(super) fn attach(&mut self, cx: &mut Context<Self>) {
         if self.last_scan.is_some_and(|at| at.elapsed() < POLL) {
             return;
@@ -220,7 +247,7 @@ impl Checkout {
         self.scan(Refresh::Probe, cx);
     }
 
-    pub(super) fn poll(&mut self, viewer: EntityId, enabled: bool, cx: &mut Context<Self>) {
+    pub(crate) fn poll(&mut self, viewer: EntityId, enabled: bool, cx: &mut Context<Self>) {
         if enabled {
             self.pollers.insert(viewer);
         } else {
@@ -254,7 +281,7 @@ impl Checkout {
         }
     }
 
-    pub(super) fn changed(&mut self, cx: &mut Context<Self>) {
+    pub(crate) fn changed(&mut self, cx: &mut Context<Self>) {
         self.generation += 1;
         self.revision += 1;
         cx.notify();

@@ -1046,6 +1046,31 @@ fn file_diff_reads_each_side_and_bounds_content() {
 }
 
 #[test]
+fn editor_baseline_reads_a_literal_nested_file_and_tracks_its_side() {
+    let dir = tmp();
+    let relative = "src/[draft].txt";
+    assert!(init_git_commit(dir.path(), &[(relative, "head\n")]));
+    let root = dir.path().join("src");
+    let path = dir.path().join(relative);
+    let read = || {
+        editor_baseline(&root, "[draft].txt", None)
+            .unwrap()
+            .unwrap()
+    };
+    assert_eq!(read(), ("head\n".into(), false));
+    std::fs::write(&path, "index\n").unwrap();
+    assert!(git(dir.path(), &["--literal-pathspecs", "add", relative]));
+    assert_eq!(read(), ("head\n".into(), true));
+    std::fs::write(&path, "disk\n").unwrap();
+    assert_eq!(read(), ("index\n".into(), false));
+    assert!(git(
+        dir.path(),
+        &["--literal-pathspecs", "rm", "--cached", "-f", relative]
+    ));
+    assert_eq!(read(), (String::new(), false));
+}
+
+#[test]
 fn stage_contents_stages_a_partial_file_only() {
     let dir = tmp();
     assert!(init_git_commit(dir.path(), &[("a.txt", "one\ntwo\n")]));

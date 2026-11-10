@@ -1,11 +1,11 @@
 //! Window checkout selection and its projection of the shared checkout catalog.
-use gpui::{Context, Entity, EventEmitter, Subscription};
+use gpui::{App, Context, Entity, EventEmitter, Subscription};
 use std::{collections::HashMap, sync::Arc};
 use vorkspace_core::scm::DiffIndex;
 
 mod checkout;
 use checkout::Snapshot;
-pub(crate) use checkout::{Checkout, CheckoutCatalog, HistoryItem};
+pub(crate) use checkout::{Checkout, CheckoutCatalog, EditorBaselineRevision, HistoryItem};
 
 /// A disk or Git change: Changes, History and the Explorer reread.
 pub(crate) struct GitChanged;
@@ -119,6 +119,14 @@ impl ProjectGit {
     }
     pub(crate) fn checkout(&self) -> Option<Entity<Checkout>> {
         self.checkout.clone()
+    }
+    pub(crate) fn checkout_for(
+        project: &Entity<Self>,
+        path: &str,
+        cx: &mut App,
+    ) -> Entity<Checkout> {
+        let catalog = project.read(cx).catalog.clone();
+        catalog.update(cx, |catalog, cx| catalog.acquire(path, cx))
     }
     pub(crate) fn index(&self) -> Option<&DiffIndex> {
         self.snapshot

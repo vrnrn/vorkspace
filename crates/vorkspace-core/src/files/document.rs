@@ -6,6 +6,31 @@ pub const MAX_TEXT_BYTES: usize = 2 * 1024 * 1024;
 pub const MAX_LINE_BYTES: usize = 16 * 1024;
 const MAX_PREVIEW_BYTES: u64 = 32 * 1024 * 1024;
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct LocalRevision {
+    device: u64,
+    inode: u64,
+    len: u64,
+    modified: (i64, i64),
+    changed: (i64, i64),
+}
+
+/// A cheap check for a local preview. The save path still compares exact bytes.
+pub fn local_revision(path: &Path) -> Option<LocalRevision> {
+    if crate::remote_workspace::is_remote(path) {
+        return None;
+    }
+    use std::os::unix::fs::MetadataExt;
+    let meta = std::fs::metadata(expand_home(path)).ok()?;
+    meta.is_file().then(|| LocalRevision {
+        device: meta.dev(),
+        inode: meta.ino(),
+        len: meta.len(),
+        modified: (meta.mtime(), meta.mtime_nsec()),
+        changed: (meta.ctime(), meta.ctime_nsec()),
+    })
+}
+
 #[derive(Clone, Debug)]
 pub struct TextDocument {
     pub text: String,
@@ -56,6 +81,14 @@ fn private_temporary(path: &Path) -> Result<std::fs::File, String> {
     use std::os::unix::fs::OpenOptionsExt;
     options.mode(0o600);
     options.open(path).map_err(|error| error.to_string())
+}
+
+fn open_file(path: &Path) -> std::io::Result<std::fs::File> {
+    use std::os::unix::fs::OpenOptionsExt;
+    std::fs::OpenOptions::new()
+        .read(true)
+        .custom_flags(libc::O_NONBLOCK)
+        .open(path)
 }
 
 /// Resolve an editor link against its workspace without touching disk.
@@ -137,7 +170,7 @@ pub fn read_document(path: &Path) -> Result<Document, String> {
         return document_from_bytes(path, bytes, 1024 * 1024);
     }
     let path = expand_home(path);
-    let file = std::fs::File::open(&path).map_err(|e| e.to_string())?;
+    let file = open_file(&path).map_err(|e| e.to_string())?;
     let meta = file.metadata().map_err(|e| e.to_string())?;
     if !meta.is_file() {
         return Err("Not a regular file".into());
@@ -377,8 +410,9 @@ fn save_remote_document(
 }
 
 fn matches_disk(path: &Path, expected: &[u8]) -> Result<bool, String> {
-    let file = std::fs::File::open(path).map_err(|e| e.to_string())?;
-    if file.metadata().map_err(|e| e.to_string())?.len() != expected.len() as u64 {
+    let file = open_file(path).map_err(|e| e.to_string())?;
+    let meta = file.metadata().map_err(|e| e.to_string())?;
+    if !meta.is_file() || meta.len() != expected.len() as u64 {
         return Ok(false);
     }
     let mut bytes = Vec::with_capacity(expected.len());
@@ -391,6 +425,23 @@ fn matches_disk(path: &Path, expected: &[u8]) -> Result<bool, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn local_preview_revision_tracks_same_size_atomic_replacements_through_links() {
+        let directory = tempfile::tempdir().unwrap();
+        let target = directory.path().join("target.txt");
+        let link = directory.path().join("link.txt");
+        let replacement = directory.path().join("replacement.txt");
+        std::fs::write(&target, "old").unwrap();
+        std::os::unix::fs::symlink(&target, &link).unwrap();
+        let before = local_revision(&link).unwrap();
+        assert_eq!(before, local_revision(&link).unwrap());
+        std::fs::write(&replacement, "new").unwrap();
+        std::fs::rename(&replacement, &target).unwrap();
+        assert_ne!(before, local_revision(&link).unwrap());
+        std::fs::remove_file(&target).unwrap();
+        assert!(local_revision(&link).is_none());
+    }
+
     #[test]
     fn temporary_document_bytes_are_private_before_publication_and_never_replace_a_file() {
         let directory = tempfile::tempdir().unwrap();

@@ -34,9 +34,10 @@ impl FileEditor {
             self.git_line_ending
         };
         let cwd = PathBuf::from(&self.cwd);
-        let Ok(relative) = PathBuf::from(&self.path)
-            .strip_prefix(&cwd)
-            .map(|p| p.to_string_lossy().into_owned())
+        let Some(relative) = self
+            .checkout
+            .as_ref()
+            .map(|checkout| checkout.relative.clone())
         else {
             return;
         };
@@ -67,7 +68,7 @@ impl FileEditor {
                     if let Err(error) = result {
                         this.error = Some(error);
                     } else {
-                        this.git.update(cx, |git, cx| git.changed(cx));
+                        this.changed_checkout(cx);
                         this.refresh_git(cx);
                     }
                     cx.notify();
