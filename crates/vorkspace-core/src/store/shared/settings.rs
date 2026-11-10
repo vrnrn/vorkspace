@@ -1,4 +1,5 @@
 //! The settings sidecar is one atomic file shared by independent stores.
+use super::super::{remote::index::Index, RemoteSession, Store};
 use std::{
     cell::RefCell,
     collections::BTreeMap,
@@ -6,6 +7,7 @@ use std::{
     io::{BufWriter, ErrorKind, Read, Write},
     os::unix::fs::{MetadataExt, OpenOptionsExt},
     path::{Path, PathBuf},
+    sync::{Arc, OnceLock},
 };
 
 #[derive(PartialEq, Eq)]
@@ -34,11 +36,12 @@ impl Stamp {
 struct Snapshot {
     stamp: Option<Stamp>,
     values: BTreeMap<String, String>,
+    remote: Arc<OnceLock<Result<Index, String>>>,
 }
 
 pub(super) struct Sidecar {
     path: Option<PathBuf>,
-    snapshot: RefCell<Snapshot>,
+    snapshot: RefCell<Arc<Snapshot>>,
 }
 
 impl Sidecar {
@@ -68,7 +71,12 @@ impl Sidecar {
             {
                 Ok(file) => file,
                 Err(error) if error.kind() == ErrorKind::NotFound => {
-                    *self.snapshot.borrow_mut() = Snapshot::default();
+                    let snapshot = self.snapshot.borrow();
+                    if snapshot.stamp.is_none() && snapshot.values.is_empty() {
+                        return Ok(());
+                    }
+                    drop(snapshot);
+                    self.replace(None, BTreeMap::new());
                     return Ok(());
                 }
                 Err(error) => return Err(error.to_string()),
@@ -86,13 +94,25 @@ impl Sidecar {
             let values = crate::compatibility::settings(
                 serde_json::from_str(&raw).map_err(|error| error.to_string())?,
             )?;
-            *self.snapshot.borrow_mut() = Snapshot {
-                stamp: Some(stamp),
-                values,
-            };
+            self.replace(Some(stamp), values);
             return Ok(());
         }
         Err("Settings changed while being read. Try again.".into())
+    }
+
+    fn replace(&self, stamp: Option<Stamp>, values: BTreeMap<String, String>) {
+        let mut snapshot = self.snapshot.borrow_mut();
+        let remote =
+            if snapshot.remote.get().is_some() && Index::same_source(&snapshot.values, &values) {
+                snapshot.remote.clone()
+            } else {
+                Arc::default()
+            };
+        *snapshot = Arc::new(Snapshot {
+            stamp,
+            values,
+            remote,
+        });
     }
 
     pub(super) fn read<T>(
@@ -101,6 +121,23 @@ impl Sidecar {
     ) -> Result<T, String> {
         self.refresh()?;
         Ok(read(&self.snapshot.borrow().values))
+    }
+
+    pub(super) fn remote_session(
+        &self,
+        store: &Store,
+        id: i64,
+    ) -> Result<Option<RemoteSession>, String> {
+        self.refresh()?;
+        // Legacy resolution can read other settings. Retain the immutable
+        // source without holding a RefCell borrow across that boundary.
+        let snapshot = self.snapshot.borrow().clone();
+        snapshot
+            .remote
+            .get_or_init(|| Index::build(&snapshot.values))
+            .as_ref()
+            .map_err(Clone::clone)?
+            .resolve(&snapshot.values, store, id)
     }
 
     /// Retain this stable sibling lock through the read, edit and publication.
@@ -126,18 +163,12 @@ impl Sidecar {
     }
 
     pub(super) fn save(&self, values: BTreeMap<String, String>) -> Result<(), String> {
-        let snapshot = if let Some(path) = &self.path {
+        if let Some(path) = &self.path {
             write_atomic(path, &values)?;
-            // A second writer can replace the pathname immediately. Cache
-            // only a snapshot read and stamped through the same descriptor.
-            Snapshot::default()
-        } else {
-            Snapshot {
-                stamp: None,
-                values,
-            }
-        };
-        *self.snapshot.borrow_mut() = snapshot;
+        }
+        // A second writer can replace the pathname immediately. A subsequent
+        // disk read must check its own descriptor before using these values.
+        self.replace(None, values);
         Ok(())
     }
 }

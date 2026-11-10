@@ -40,6 +40,8 @@ Open **View → Running Work** to see the app’s local agents. A Stop click is 
 
 Side questions keep their own replies and unfinished drafts. You can switch between them or close the sheet and return later. A side question can read the conversation it came from and runs separately from the main reply.
 
+When the app opens one saved remote conversation, it looks up that conversation's saved information directly. It refreshes the lookup when remote bindings change and keeps older tab identities and unsent messages.
+
 Long indexed Bot chats opened from the Bot panel first show their newest messages. Scroll up or choose Load earlier messages to read older parts without losing your place. If the saved chat changes elsewhere, the app reloads it when you request another page; if loading fails temporarily, you can retry. Before a Bot runs or a message changes, the app loads the complete chat so older messages stay safe. Other kinds of history keep their existing loading behavior.
 
 Bots, sessions, terminals, notes, GitHub/GitLab/Jira items, Search, Automations and To-dos open in tabs. Different notes and items can stay open independently. Opening the same item again takes you back to its existing tab and unfinished work.

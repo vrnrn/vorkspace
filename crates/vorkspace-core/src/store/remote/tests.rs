@@ -14,6 +14,43 @@ fn snapshot(id: &str) -> Value {
 }
 
 #[test]
+fn a_remote_binding_read_uses_the_current_sidecar_and_isolates_invalid_records() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("vorkspace.db");
+    let reader = Store::open_vorkspace(&path).unwrap();
+    let writer = Store::open_vorkspace(&path).unwrap();
+    let local = writer.create("codex", "/local").unwrap();
+    let project = project(&writer, "env");
+    let remote = writer
+        .register_remote_summary(&project, &snapshot("selected"))
+        .unwrap();
+    let mut raw: Value = serde_json::from_str(&writer.setting(SESSIONS).unwrap().unwrap()).unwrap();
+    raw["-1"] = json!({"incomplete": true});
+    writer.save_setting(SESSIONS, &raw.to_string()).unwrap();
+    assert_eq!(
+        reader.remote_session(remote.id).unwrap().unwrap().summary,
+        remote
+    );
+    assert!(reader.remote_session(local.id).unwrap().is_none());
+    assert!(reader.remote_session(-1).is_err());
+
+    raw[remote.id.to_string()]["summary"]["title"] = json!("Changed by peer");
+    writer.save_setting(SESSIONS, &raw.to_string()).unwrap();
+    assert_eq!(
+        reader
+            .remote_session(remote.id)
+            .unwrap()
+            .unwrap()
+            .summary
+            .title,
+        "Changed by peer"
+    );
+    raw.as_object_mut().unwrap().remove(&remote.id.to_string());
+    writer.save_setting(SESSIONS, &raw.to_string()).unwrap();
+    assert!(reader.remote_session(remote.id).unwrap().is_none());
+}
+
+#[test]
 fn remote_metadata_and_original_outbox_survive_restart_without_local_sessions_or_rows() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("native.db");

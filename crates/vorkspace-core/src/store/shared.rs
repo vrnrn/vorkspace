@@ -578,6 +578,16 @@ impl Store {
         let shared = self.shared.as_ref().unwrap();
         shared.settings.read(|settings| settings.get(key).cloned())
     }
+    pub(super) fn shared_remote_session(
+        &self,
+        id: i64,
+    ) -> Result<Option<super::RemoteSession>, String> {
+        self.shared
+            .as_ref()
+            .unwrap()
+            .settings
+            .remote_session(self, id)
+    }
     pub(super) fn shared_claim_bot_message(
         &self,
         bot: &str,

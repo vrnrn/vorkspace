@@ -12,6 +12,7 @@ use serde_json::{json, Value};
 use std::collections::{BTreeMap, HashMap, HashSet};
 
 mod catalog;
+pub(super) mod index;
 pub use catalog::RemoteListing;
 
 const PROJECTS: &str = "remote-projects.v2";
@@ -266,10 +267,6 @@ impl Store {
             Ok((remote, vec![(PROJECTS.into(), shared::encode(&projects)?)]))
         })
     }
-    fn stored_remote_sessions(&self) -> Result<BTreeMap<i64, RemoteSession>, String> {
-        decode_sessions(self.setting(SESSIONS)?.as_deref())
-    }
-
     pub(super) fn hidden_legacy_remote_sessions(&self) -> Result<HashSet<i64>, String> {
         decode_hidden(self.setting(HIDDEN)?.as_deref())
     }
@@ -313,7 +310,10 @@ impl Store {
     }
 
     pub fn remote_session(&self, id: i64) -> Result<Option<RemoteSession>, String> {
-        let mut stored = self.stored_remote_sessions()?;
+        if self.shared.is_some() {
+            return self.shared_remote_session(id);
+        }
+        let mut stored = decode_sessions(self.setting(SESSIONS)?.as_deref())?;
         self.take_remote_session(id, &mut stored, || self.hidden_legacy_remote_sessions())
     }
 
@@ -323,7 +323,34 @@ impl Store {
         stored: &mut BTreeMap<i64, RemoteSession>,
         hidden: impl FnOnce() -> Result<HashSet<i64>, String>,
     ) -> Result<Option<RemoteSession>, String> {
-        if let Some(remote) = stored.remove(&id) {
+        let exact = stored.remove(&id);
+        self.resolve_remote_session(
+            id,
+            exact,
+            || Ok(hidden()?.contains(&id)),
+            |legacy| {
+                Ok(legacy
+                    .session_id
+                    .as_ref()
+                    .and_then(|host| {
+                        stored.values().find(|saved| {
+                            saved.project.environment_id == legacy.project.environment_id
+                                && saved.session_id.as_ref() == Some(host)
+                        })
+                    })
+                    .cloned())
+            },
+        )
+    }
+
+    fn resolve_remote_session(
+        &self,
+        id: i64,
+        exact: Option<RemoteSession>,
+        hidden: impl FnOnce() -> Result<bool, String>,
+        alias: impl FnOnce(&RemoteSession) -> Result<Option<RemoteSession>, String>,
+    ) -> Result<Option<RemoteSession>, String> {
+        if let Some(remote) = exact {
             if remote
                 .rejected
                 .as_ref()
@@ -337,26 +364,17 @@ impl Store {
             }
             return Ok(Some(remote));
         }
-        if id >= 0 && !hidden()?.contains(&id) {
-            if let Some(legacy) = self.legacy_remote_session(id)? {
-                if let Some(mut saved) = legacy
-                    .session_id
-                    .as_ref()
-                    .and_then(|host| {
-                        stored.values().find(|saved| {
-                            saved.project.environment_id == legacy.project.environment_id
-                                && saved.session_id.as_ref() == Some(host)
-                        })
-                    })
-                    .cloned()
-                {
-                    saved.summary.id = id;
-                    return Ok(Some(saved));
-                }
-                return Ok(Some(legacy));
-            }
+        if id < 0 || hidden()? {
+            return Ok(None);
         }
-        Ok(None)
+        let Some(legacy) = self.legacy_remote_session(id)? else {
+            return Ok(None);
+        };
+        if let Some(mut saved) = alias(&legacy)? {
+            saved.summary.id = id;
+            return Ok(Some(saved));
+        }
+        Ok(Some(legacy))
     }
 
     fn edit_remote_session(

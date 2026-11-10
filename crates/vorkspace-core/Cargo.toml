@@ -7,7 +7,7 @@ license.workspace = true
 [dependencies]
 tempfile = "3"
 serde.workspace = true
-serde_json.workspace = true
+serde_json = { workspace = true, features = ["raw_value"] }
 rusqlite.workspace = true
 async-channel = "2"
 shlex = "2"
