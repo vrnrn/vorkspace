@@ -76,17 +76,15 @@ pub(crate) fn cached_model_name(kind: Kind, id: Option<&str>) -> SharedString {
 }
 /// saveRecentModelChoice: the pick moves to the front of the six recents.
 pub(crate) fn remember_model(kind: Kind, model: Option<String>, cx: &mut gpui::App) {
-    if cx.has_global::<vorkspace_ui::preferences::Preferences>() {
-        cx.update_global::<vorkspace_ui::preferences::Preferences, _>(|prefs, _| {
-            let choice = vorkspace_ui::preferences::ModelChoice {
-                provider: kind.id().into(),
-                model,
-            };
-            prefs.recent_models.retain(|old| old != &choice);
-            prefs.recent_models.insert(0, choice);
-            prefs.recent_models.truncate(6);
-        });
-    }
+    crate::shell::remember_preferences(cx, |prefs| {
+        let choice = vorkspace_ui::preferences::ModelChoice {
+            provider: kind.id().into(),
+            model,
+        };
+        prefs.recent_models.retain(|old| old != &choice);
+        prefs.recent_models.insert(0, choice);
+        prefs.recent_models.truncate(6);
+    });
 }
 fn contains_account_id(value: &str) -> bool {
     value.match_indices("account-").any(|(offset, _)| {
@@ -522,17 +520,15 @@ impl ModelList {
             return;
         }
         self.tab = tab;
-        if cx.has_global::<vorkspace_ui::preferences::Preferences>() {
-            cx.update_global::<vorkspace_ui::preferences::Preferences, _>(|prefs, _| {
-                prefs.model_picker_tab = Some(
-                    match tab {
-                        ModelTab::Favorites => "favorites",
-                        ModelTab::Harness(kind) => kind.id(),
-                    }
-                    .into(),
-                );
-            });
-        }
+        crate::shell::remember_preferences(cx, |prefs| {
+            prefs.model_picker_tab = Some(
+                match tab {
+                    ModelTab::Favorites => "favorites",
+                    ModelTab::Harness(kind) => kind.id(),
+                }
+                .into(),
+            );
+        });
         if let ModelTab::Harness(kind) = tab
             && !self.catalogs.iter().any(|(k, _)| *k == kind)
             && !self.errors.iter().any(|(k, _)| *k == kind)

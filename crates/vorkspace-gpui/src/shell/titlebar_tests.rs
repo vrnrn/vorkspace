@@ -395,10 +395,14 @@ fn titlebar_zoom_paths_restore_and_keep_real_controls_live(cx: &mut TestAppConte
     for percent in SCALES {
         window
             .update(visual, |shell, _, cx| {
-                let mut prefs = shell.workspace.preferences.clone();
-                prefs.ui_scale = percent;
+                let before = shell.workspace.preferences.clone();
+                let mut after = before.clone();
+                after.ui_scale = percent;
                 shell.settings.as_ref().unwrap().update(cx, |_, cx| {
-                    cx.emit(crate::settings::SettingsEvent::Changed(Box::new(prefs)));
+                    cx.emit(crate::settings::SettingsEvent::Changed {
+                        before: Box::new(before),
+                        after: Box::new(after),
+                    });
                 });
             })
             .unwrap();

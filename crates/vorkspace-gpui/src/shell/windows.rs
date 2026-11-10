@@ -405,7 +405,7 @@ impl Shell {
 /// App-wide choices shared by the window layouts. UI zoom follows the window.
 #[derive(Clone, PartialEq, Serialize, Deserialize)]
 pub(super) struct WindowShared {
-    preferences: vorkspace_ui::preferences::Preferences,
+    pub(super) preferences: vorkspace_ui::preferences::Preferences,
     projects: Vec<String>,
     archived: HashMap<String, bool>,
     deleted: HashSet<String>,
@@ -438,26 +438,8 @@ impl WindowShared {
     }
 
     pub(super) fn apply_edits(&mut self, before: &Self, next: &Self) {
-        if next.preferences != before.preferences {
-            // Windows may save independent settings before a peer's observer
-            // runs. Apply only fields this editor changed.
-            let encode = |value| {
-                serde_json::to_value(value)
-                    .expect("serialize preferences")
-                    .as_object()
-                    .expect("preferences object")
-                    .clone()
-            };
-            let before = encode(&before.preferences);
-            let mut current = encode(&self.preferences);
-            for (key, value) in encode(&next.preferences) {
-                if before.get(&key) != Some(&value) {
-                    current.insert(key, value);
-                }
-            }
-            self.preferences = serde_json::from_value(serde_json::Value::Object(current))
-                .expect("deserialize preferences");
-        }
+        self.preferences
+            .apply_edits(&before.preferences, &next.preferences);
         if next.projects != before.projects {
             self.projects
                 .retain(|path| !before.projects.contains(path) || next.projects.contains(path));

@@ -11,7 +11,7 @@ mod titlebar;
 mod workspace_commands;
 pub(crate) use crate::bots::host_api::AppStart;
 mod app_core;
-pub(crate) use app_core::{AppCore, PreparedCore, bot_write_barriers};
+pub(crate) use app_core::{AppCore, PreparedCore, bot_write_barriers, remember_preferences};
 mod app_panes;
 mod app_views;
 mod automation_runs;
@@ -35,7 +35,6 @@ mod notifications;
 mod orchestration;
 #[cfg(test)]
 mod perf_tests;
-mod picker_preferences;
 mod project_delete;
 mod project_settings;
 mod quick_composer;
@@ -771,8 +770,8 @@ impl Shell {
                 }
             }
         }
-        vorkspace_core::cli::initialize(&workspace.preferences.binary_paths);
-        vorkspace_core::worktree_setup::set_commands(&workspace.preferences.worktree_setup);
+        let window_shared =
+            Some(app_core.update(cx, |core, cx| core.initialize_preferences(&workspace, cx)));
         let owner = cx.weak_entity();
         let sidebar_frame = cx.new(|_| Chrome {
             owner: owner.clone(),
@@ -1018,7 +1017,6 @@ impl Shell {
         this.scan_external_editors(cx);
         this.adopt_app_core(app_core, cx);
         this.observe_accounts(cx);
-        this.observe_picker_preferences(cx);
         let bot_owner: std::rc::Rc<dyn crate::bots::host_api::BotsHost> =
             std::rc::Rc::new(cx.weak_entity());
         let bot_active =

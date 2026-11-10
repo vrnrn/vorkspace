@@ -198,6 +198,34 @@ impl Default for Preferences {
 }
 
 impl Preferences {
+    /// Apply the fields edited against a snapshot to the current preferences.
+    pub fn apply_edits(&mut self, before: &Self, next: &Self) {
+        if before == next {
+            return;
+        }
+        if self == before {
+            self.clone_from(next);
+            return;
+        }
+        let encode = |value: &Self| {
+            let serde_json::Value::Object(fields) =
+                serde_json::to_value(value).expect("serialize preferences")
+            else {
+                unreachable!("preferences serialize as an object");
+            };
+            fields
+        };
+        let before = encode(before);
+        let mut current = encode(self);
+        for (key, value) in encode(next) {
+            if before.get(&key) != Some(&value) {
+                current.insert(key, value);
+            }
+        }
+        *self = serde_json::from_value(serde_json::Value::Object(current))
+            .expect("deserialize preferences");
+    }
+
     /// The saved cost monitoring link, only when it is a plain web link.
     pub fn cost_link(&self) -> Option<&str> {
         let url = self.bedrock_cost_url.trim();

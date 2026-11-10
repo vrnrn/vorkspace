@@ -8,7 +8,7 @@ impl AppCore {
         id
     }
 
-    fn stage_layouts(&mut self, cx: &mut Context<Self>) {
+    pub(super) fn stage_layouts(&mut self, cx: &mut Context<Self>) {
         self.writes.stage_layouts(self.layouts.clone());
         self.flush_settings(cx);
     }
@@ -21,13 +21,14 @@ impl AppCore {
         focused: bool,
         durable: bool,
         cx: &mut Context<Self>,
-    ) -> Result<Arc<WindowShared>, String> {
+    ) -> Result<(Arc<WindowShared>, bool), String> {
         let local = WindowShared::from_workspace(workspace);
         let mut next = self.layouts.clone();
         let shared = next.shared.get_or_insert_with(|| Arc::new(local.clone()));
         if let Some(before) = before.filter(|before| *before != &local) {
             Arc::make_mut(shared).apply_edits(before, &local);
         }
+        let preferences_reconciled = shared.preferences != local.preferences;
         if shared.as_ref() != &local {
             shared.apply(workspace);
         }
@@ -36,7 +37,7 @@ impl AppCore {
         let state = serde_json::to_string(workspace).expect("serialize workspace");
         if !next.record(window, state, focused) && !shared_changed {
             self.set_remote_scope(window, Some(&workspace.active_vorkspace), cx);
-            return Ok(shared);
+            return Ok((shared, preferences_reconciled));
         }
         if durable {
             self.writes.commit_layouts(&self.store, &next)?;
@@ -47,10 +48,11 @@ impl AppCore {
         }
         self.set_remote_scope(window, Some(&workspace.active_vorkspace), cx);
         if shared_changed {
+            self.publish_preferences(&shared.preferences, false, cx);
             self.reconcile_remote_projects(cx);
             cx.notify();
         }
-        Ok(shared)
+        Ok((shared, preferences_reconciled))
     }
 
     fn close_layout(&mut self, id: u64, cx: &mut Context<Self>) {
@@ -99,7 +101,7 @@ impl Shell {
         }
         let core = self.app_core.clone().expect("registered workspace window");
         let workspace = next.as_mut().unwrap_or(&mut self.workspace);
-        self.window_shared = Some(core.update(cx, |core, cx| {
+        let (shared, preferences_reconciled) = core.update(cx, |core, cx| {
             core.record_layout(
                 self.window_layout,
                 self.window_shared.as_deref(),
@@ -108,9 +110,14 @@ impl Shell {
                 durable,
                 cx,
             )
-        })?);
+        })?;
+        self.window_shared = Some(shared);
         if let Some(next) = next {
             self.workspace = next;
+        }
+        if preferences_reconciled {
+            self.apply_preferences(cx);
+            self.sync_settings(cx);
         }
         Ok(())
     }

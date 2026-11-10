@@ -348,7 +348,9 @@ impl Shell {
                         core.update(cx, |core, _| core.set_notification_permission(*permission));
                     }
                 }
-                SettingsEvent::Changed(prefs) => {
+                SettingsEvent::Changed { before, after } => {
+                    this.workspace.preferences.apply_edits(before, after);
+                    let prefs = &this.workspace.preferences;
                     window.set_ui_scale(prefs.interface_scale(), cx);
                     for (enabled, view) in
                         [(prefs.notes, AppView::Notes), (prefs.todos, AppView::Todos)]
@@ -362,9 +364,9 @@ impl Shell {
                             }
                         }
                     }
-                    this.workspace.preferences = *prefs.clone();
                     this.apply_preferences(cx);
                     this.persist(cx);
+                    this.sync_settings(cx);
                     this.invalidate_chrome(cx);
                     cx.notify();
                 }
@@ -496,43 +498,14 @@ impl Shell {
                 notes.configure_recording(&hidden_providers, cx);
             });
         }
-        crate::meetings::capture::init(cx);
-        crate::background_helper::configure(
-            self.workspace.preferences.clipboard_history,
-            // Retain the saved preference key so existing users keep their choice.
-            self.workspace.preferences.bot_menu_bar_icon,
-            crate::background_helper::dictation_configuration(&self.workspace.preferences),
-            cx,
-        );
         if let Some(vox) = &self.vox {
             let prefs = self.workspace.preferences.clone();
             vox.update(cx, |v, cx| v.preferences(&prefs, cx));
         }
-        self.refresh_notification_permission(cx);
-        self.configure_quick_composer(cx);
-        crate::menu_bar::refresh(&self.workspace.preferences, cx);
-        vorkspace_core::cli::initialize(&self.workspace.preferences.binary_paths);
-        vorkspace_core::worktree_setup::set_commands(&self.workspace.preferences.worktree_setup);
         self.keep_visible_idle_agents(cx);
-        vorkspace_core::provider::configure_idle_agents(
-            self.workspace.preferences.idle_agents as usize,
-        );
         if let Some(bots) = &self.bots {
             let prefs = self.workspace.preferences.clone();
             bots.update(cx, |m, cx| m.set_preferences(prefs, cx));
-        }
-        crate::settings::apply_keybindings(&self.workspace.preferences, cx);
-        cx.set_global(self.workspace.preferences.clone());
-        if let Some(center) = crate::accounts::get(cx) {
-            center.update(cx, |center, cx| {
-                let changed = center.mask_emails != self.workspace.preferences.mask_emails
-                    || center.show_remaining != self.workspace.preferences.show_remaining_usage;
-                center.mask_emails = self.workspace.preferences.mask_emails;
-                center.show_remaining = self.workspace.preferences.show_remaining_usage;
-                if changed {
-                    cx.notify();
-                }
-            });
         }
         for session in self.sessions.values() {
             session.read(cx).transcript.clone().update(cx, |view, cx| {

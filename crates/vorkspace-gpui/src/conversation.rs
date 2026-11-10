@@ -651,11 +651,9 @@ pub(crate) fn default_access(cx: &gpui::App) -> AccessMode {
         .unwrap_or_default()
 }
 pub(crate) fn remember_access(mode: AccessMode, cx: &mut gpui::App) {
-    if cx.has_global::<vorkspace_ui::preferences::Preferences>() {
-        cx.update_global::<vorkspace_ui::preferences::Preferences, _>(|prefs, _| {
-            prefs.default_access = Some(mode.id().into());
-        });
-    }
+    crate::shell::remember_preferences(cx, |prefs| {
+        prefs.default_access = Some(mode.id().into());
+    });
 }
 fn is_effort_key(key: &str) -> bool {
     matches!(

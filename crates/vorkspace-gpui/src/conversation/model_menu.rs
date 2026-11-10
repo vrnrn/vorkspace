@@ -218,15 +218,13 @@ impl Conversation {
             .retain(|key, _| !is_effort_key(key));
         self.settings.effort = (!effort.is_empty()).then(|| effort.to_owned());
         let provider = self.summary.provider.clone();
-        if cx.has_global::<vorkspace_ui::preferences::Preferences>() {
-            cx.update_global::<vorkspace_ui::preferences::Preferences, _>(|prefs, _| {
-                if effort.is_empty() {
-                    prefs.provider_efforts.remove(&provider);
-                } else {
-                    prefs.provider_efforts.insert(provider, effort.to_owned());
-                }
-            });
-        }
+        crate::shell::remember_preferences(cx, |prefs| {
+            if effort.is_empty() {
+                prefs.provider_efforts.remove(&provider);
+            } else {
+                prefs.provider_efforts.insert(provider, effort.to_owned());
+            }
+        });
     }
     pub(super) fn selected_effort(&self) -> Option<&str> {
         self.settings

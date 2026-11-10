@@ -470,6 +470,48 @@ fn agents_are_refused_while_work_would_be_lost(cx: &mut TestAppContext) {
 }
 
 #[gpui::test]
+fn stale_settings_event_preserves_a_newer_remembered_choice(cx: &mut TestAppContext) {
+    let (window, _, _) = window(cx);
+    let store = window
+        .update(cx, |shell, window, cx| {
+            shell.open_settings(Section::General, window, cx);
+            let before = shell.workspace.preferences.clone();
+            let mut after = before.clone();
+            after.autosave = !before.autosave;
+            after.ui_scale = 125;
+            crate::conversation::remember_access(vorkspace_core::agent::AccessMode::FullAccess, cx);
+            shell.settings.as_ref().unwrap().update(cx, |_, cx| {
+                cx.emit(SettingsEvent::Changed {
+                    before: Box::new(before),
+                    after: Box::new(after),
+                });
+            });
+            shell.store.clone()
+        })
+        .unwrap();
+    cx.run_until_parked();
+    window
+        .update(cx, |shell, window, cx| {
+            let preferences = &shell.workspace.preferences;
+            assert_eq!(preferences.default_access.as_deref(), Some("full-access"));
+            assert_eq!(preferences.ui_scale, 125);
+            assert_eq!(window.ui_scale(), 1.25);
+            let published = cx.global::<vorkspace_ui::preferences::Preferences>();
+            assert_eq!(published.default_access, preferences.default_access);
+            assert_eq!(published.autosave, preferences.autosave);
+            assert_eq!(published.ui_scale, 100);
+        })
+        .unwrap();
+    let store = locked(&store).unwrap();
+    let saved: Workspace = serde_json::from_str(&store.ui_state().unwrap().unwrap()).unwrap();
+    assert_eq!(
+        saved.preferences.default_access.as_deref(),
+        Some("full-access")
+    );
+    assert_eq!(saved.preferences.ui_scale, 125);
+}
+
+#[gpui::test]
 fn disabling_notes_retains_its_document_view(cx: &mut TestAppContext) {
     let (window, _, _) = window(cx);
     let (page_id, settings, prefs) = window
@@ -485,10 +527,17 @@ fn disabling_notes_retains_its_document_view(cx: &mut TestAppContext) {
         })
         .unwrap();
 
+    let mut before = prefs;
     for enabled in [false, true] {
-        let mut prefs = prefs.clone();
-        prefs.notes = enabled;
-        settings.update(cx, |_, cx| cx.emit(SettingsEvent::Changed(Box::new(prefs))));
+        let mut after = before.clone();
+        after.notes = enabled;
+        settings.update(cx, |_, cx| {
+            cx.emit(SettingsEvent::Changed {
+                before: Box::new(before.clone()),
+                after: Box::new(after.clone()),
+            });
+        });
+        before = after;
         window
             .update(cx, |shell, _, _| {
                 assert_eq!(shell.workspace.preferences.notes, enabled);

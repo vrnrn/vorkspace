@@ -119,7 +119,10 @@ pub(crate) enum SettingsEvent {
     JiraProject(String, bool),
     InboxBot(String, String),
     RefreshInbox,
-    Changed(Box<Preferences>),
+    Changed {
+        before: Box<Preferences>,
+        after: Box<Preferences>,
+    },
     Section(Section),
     OpenSession(i64),
     Archive(i64, bool),
@@ -737,11 +740,17 @@ impl SettingsView {
         }));
     }
     fn update(&mut self, cx: &mut Context<Self>, change: impl FnOnce(&mut Preferences)) {
+        let before = self.prefs.clone();
         change(&mut self.prefs);
         self.select_section(self.section, cx);
         self.search_active = 0;
         self.notification_deadline(cx);
-        cx.emit(SettingsEvent::Changed(Box::new(self.prefs.clone())));
+        if before != self.prefs {
+            cx.emit(SettingsEvent::Changed {
+                before: Box::new(before),
+                after: Box::new(self.prefs.clone()),
+            });
+        }
         cx.notify();
     }
     fn restore_defaults(&mut self, cx: &mut Context<Self>) {

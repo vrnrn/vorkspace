@@ -820,11 +820,9 @@ impl FileEditor {
     fn toggle_preview(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.selection.dismiss();
         self.preview = !self.preview;
-        if cx.has_global::<vorkspace_ui::preferences::Preferences>() {
-            cx.update_global::<vorkspace_ui::preferences::Preferences, _>(|prefs, _| {
-                prefs.file_view_mode = if self.preview { "preview" } else { "source" }.into();
-            });
-        }
+        crate::shell::remember_preferences(cx, |prefs| {
+            prefs.file_view_mode = if self.preview { "preview" } else { "source" }.into();
+        });
         self.update_preview(cx);
         window.focus(&self.focus_handle(cx), cx);
         cx.notify();

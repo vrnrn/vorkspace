@@ -16,6 +16,8 @@
 //! when it drops the loaded conversation.
 mod layouts;
 mod notifications;
+mod preferences;
+pub(crate) use preferences::remember_preferences;
 mod reminders;
 pub(super) use reminders::ReminderEdit;
 mod scheduler;
