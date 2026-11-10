@@ -58,6 +58,8 @@ GPUI view owns the pointer, and restores the stored style through AppKit cursor
 rectangles.
 The local text-input bridge honors AppKit's optional actual range and returned
 substring ownership. Pasteboard images reuse the bytes already copied from Cocoa.
+The AppKit delegate reports reopen handling and releases menu state before
+dispatching actions and validation callbacks.
 The vendored manifests omit the unused zed-scap dependency and its feature links.
 The gpui-pre build script rejects screen-capture builds pending license review.
 Font fallback and text tests use the underlying Lilex family directly.
