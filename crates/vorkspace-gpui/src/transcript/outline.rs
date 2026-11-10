@@ -2,7 +2,7 @@
 // and its model in src/features/sessions/model/promptOutline.ts.
 use super::TranscriptView;
 use crate::popover::{Align, Anchor, AnchorSlot, Side, popover};
-use gpui::{Context, ListOffset, Role, Task, Window, div, prelude::*, px};
+use gpui::{Context, ListOffset, Role, SharedString, Task, Window, div, prelude::*, px};
 use std::{collections::HashMap, time::Duration};
 use vorkspace_ui::clock::Instant;
 use vorkspace_ui::theme::*;
@@ -27,6 +27,7 @@ const NEAR_END: f32 = 16.;
 /// How far the hover ripple reaches, in bars on each side.
 const RIPPLE_SPAN: usize = 2;
 const REPLY_SCAN_CHARS: usize = 2000;
+const TITLE_CHARS: usize = 160;
 
 /// A bar's width and opacity, eased like the rail's CSS transition.
 #[derive(Clone, Copy)]
@@ -59,10 +60,19 @@ pub(super) struct Outline {
     opening: Option<Task<()>>,
     anchors: HashMap<usize, AnchorSlot>,
     tweens: HashMap<usize, Tween>,
+    titles: HashMap<usize, SharedString>,
 }
 impl Outline {
     /// Patches only replace or extend the source from `start`.
     pub(super) fn patched(&mut self, source: &[vorkspace_core::transcript::Row], start: usize) {
+        // An append to the first nonempty line can change an existing title.
+        let message = source[..start.min(source.len())]
+            .iter()
+            .rposition(|row| row.first)
+            .unwrap_or(0);
+        if self.prompts.last().is_some_and(|&prompt| prompt >= message) {
+            self.titles.retain(|&prompt, _| prompt < message);
+        }
         self.prompts
             .truncate(self.prompts.partition_point(|&ix| ix < start));
         self.prompts.extend(
@@ -180,6 +190,7 @@ impl TranscriptView {
             || f32::from(self.viewport.size.width) < MIN_PANE_WIDTH
         {
             self.outline.tweens.clear();
+            self.outline.titles.clear();
             return None;
         }
         let budget = BAR_STACK_MAX
@@ -200,6 +211,9 @@ impl TranscriptView {
             .retain(|prompt, _| bars.binary_search(prompt).is_ok());
         self.outline
             .anchors
+            .retain(|prompt, _| bars.binary_search(prompt).is_ok());
+        self.outline
+            .titles
             .retain(|prompt, _| bars.binary_search(prompt).is_ok());
         let mut animating = false;
         let mut rail = div()
@@ -250,12 +264,18 @@ impl TranscriptView {
             animating |= !tween.done(now);
             let (width, opacity) = tween.at(now);
             let anchor = self.outline.anchors.entry(prompt).or_default().clone();
+            let title = self
+                .outline
+                .titles
+                .entry(prompt)
+                .or_insert_with(|| prompt_title(&self.source, prompt).into())
+                .clone();
             rail = rail.child(
                 div()
                     .id(("prompt-bar", prompt))
                     .role(Role::Button)
                     .map(vorkspace_ui::theme::tab_reachable)
-                    .aria_label(prompt_label(&self.message_text(prompt)))
+                    .aria_label(title)
                     .relative()
                     .flex()
                     .w_full()
@@ -285,9 +305,10 @@ impl TranscriptView {
         if self.outline.open
             && let Some(hovered) = self.outline.hovered.filter(|_| hover_ix.is_some())
             && let Some(anchor) = self.outline.anchors.get(&hovered)
+            && let Some(title) = self.outline.titles.get(&hovered)
         {
-            let preview = self.preview(hovered);
-            let line = |text: String, alpha: f32| {
+            let [reply, detail] = self.preview(hovered);
+            let line = |text: SharedString, alpha: f32| {
                 div()
                     .text_size(px(14.))
                     .line_height(px(19.25))
@@ -308,15 +329,15 @@ impl TranscriptView {
                             .flex()
                             .flex_col()
                             .gap(px(6.))
-                            .child(line(preview.title, 1.))
-                            .when_some(preview.reply, |d, reply| d.child(line(reply, 0.45)))
-                            .when_some(preview.detail, |d, detail| {
+                            .child(line(title.clone(), 1.))
+                            .when_some(reply, |d, reply| d.child(line(reply.into(), 0.45)))
+                            .when_some(detail, |d, detail| {
                                 d.child(
                                     div()
                                         .border_l_2()
                                         .border_color(content(0.15))
                                         .pl_3()
-                                        .child(line(detail, 0.35)),
+                                        .child(line(detail.into(), 0.35)),
                                 )
                             }),
                     ),
@@ -334,17 +355,8 @@ impl TranscriptView {
                 .into_any_element(),
         )
     }
-    fn message_text(&self, start: usize) -> String {
-        let end = (start + 1..self.source.len())
-            .find(|&ix| self.source[ix].first)
-            .unwrap_or(self.source.len());
-        self.source[start..end]
-            .iter()
-            .map(|r| r.text.as_str())
-            .collect()
-    }
-    /// The prompt and the head of its reply, shown while a bar is hovered.
-    fn preview(&self, prompt: usize) -> Preview {
+    /// The first two prose lines of the reply, shown while a bar is hovered.
+    fn preview(&self, prompt: usize) -> [Option<String>; 2] {
         let mut reply = Vec::new();
         for ix in prompt + 1..self.source.len() {
             let row = &self.source[ix];
@@ -357,32 +369,51 @@ impl TranscriptView {
             if row.role != "assistant" {
                 continue;
             }
-            reply = preview_lines(&self.message_text(ix), 2);
+            let head = message_chars(&self.source, ix)
+                .take(REPLY_SCAN_CHARS)
+                .collect::<String>();
+            reply = preview_lines(&head, 2);
             if !reply.is_empty() {
                 break;
             }
         }
         let mut reply = reply.into_iter();
-        Preview {
-            title: prompt_label(&self.message_text(prompt)),
-            reply: reply.next(),
-            detail: reply.next(),
-        }
+        [reply.next(), reply.next()]
     }
 }
 
-struct Preview {
-    title: String,
-    reply: Option<String>,
-    detail: Option<String>,
+fn message_chars(
+    source: &[vorkspace_core::transcript::Row],
+    start: usize,
+) -> impl Iterator<Item = char> + '_ {
+    source[start..]
+        .iter()
+        .enumerate()
+        .take_while(|(index, row)| *index == 0 || !row.first)
+        .flat_map(|(_, row)| row.text.chars())
+}
+
+fn prompt_title(source: &[vorkspace_core::transcript::Row], start: usize) -> String {
+    let line = message_chars(source, start)
+        .skip_while(|character| character.is_whitespace())
+        .take_while(|&character| character != '\n')
+        .take(REPLY_SCAN_CHARS)
+        .collect::<String>();
+    prompt_label(&line)
 }
 
 fn prompt_label(text: &str) -> String {
-    text.lines()
+    let mut label = text
+        .lines()
         .map(str::trim)
         .find(|line| !line.is_empty())
         .map(|line| line.split_whitespace().collect::<Vec<_>>().join(" "))
-        .unwrap_or_else(|| "Empty message".into())
+        .unwrap_or_else(|| "Empty message".into());
+    if let Some((end, _)) = label.char_indices().nth(TITLE_CHARS) {
+        label.truncate(end);
+        label.push('…');
+    }
+    label
 }
 
 /// Selects at most `max` prompts. The window slides to keep the active
@@ -426,10 +457,9 @@ fn bar_lift(index: usize, hover: Option<usize>) -> f32 {
 
 /// The first `max` prose lines of a reply. Markers, fenced code and rules drop out.
 fn preview_lines(text: &str, max: usize) -> Vec<String> {
-    let head: String = text.chars().take(REPLY_SCAN_CHARS).collect();
     let mut lines = Vec::new();
     let mut fenced = false;
-    for raw in head.lines() {
+    for raw in text.lines() {
         let line = raw.trim();
         if line.starts_with("```") {
             fenced = !fenced;
@@ -516,6 +546,12 @@ mod tests {
     fn labels_use_the_first_non_empty_line() {
         assert_eq!(prompt_label("\n  fix   the\tbug \nmore"), "fix the bug");
         assert_eq!(prompt_label("  \n"), "Empty message");
+        let long = "🦀".repeat(3000);
+        let source = [row("user", "\n", true), row("user", &long, false)];
+        assert_eq!(
+            prompt_title(&source, 0),
+            format!("{}…", "🦀".repeat(TITLE_CHARS))
+        );
     }
 
     #[test]

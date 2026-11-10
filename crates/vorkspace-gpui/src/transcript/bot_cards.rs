@@ -173,7 +173,6 @@ pub(crate) fn render(
         .or_else(|| value["name"].as_str())
         .unwrap_or(match kind {
             "pr" => "Pull request",
-            "session" => "Session",
             "habit" => "Suggested habit",
             _ => "",
         })
@@ -181,7 +180,6 @@ pub(crate) fn render(
     let card = value.clone();
     let glyph = match kind {
         "pr" => "git-pull-request",
-        "session" => "message-square",
         "habit" => "clock",
         _ => "file",
     };
@@ -218,14 +216,6 @@ pub(crate) fn render(
                 )
             },
         )
-        .when(kind == "session", |d| {
-            d.child(
-                div()
-                    .text_size(px(12.))
-                    .text_color(content(0.5))
-                    .child(value["state"].as_str().unwrap_or("Saved").to_string()),
-            )
-        })
         .when(kind == "pr", |d| {
             d.child(
                 div()
