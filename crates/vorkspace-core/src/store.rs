@@ -24,7 +24,6 @@ pub use notes::NoteRecording;
 mod peer_history;
 mod remote;
 mod remote_legacy;
-mod vorkspace_import;
 pub use remote::{RemoteHistory, RemoteListing, RemoteProject, RemoteSession, RemoteUpload};
 pub(crate) use shared::handle as desktop_session_handle;
 mod session_folders;
@@ -41,6 +40,7 @@ mod turn_history;
 pub use native_history::{NativeHistoryRequest, NativeHistoryResult};
 pub use turn_history::{recovery_text, RecoveredTurn, TurnHistory};
 pub(crate) mod todos;
+pub use crate::compatibility::vorkspace_database;
 pub use crate::session::native_model;
 use crate::transcript::{Row, Transcript};
 pub use edit::EditSnapshot;
@@ -48,7 +48,6 @@ use rusqlite::{params, Connection};
 pub use side_threads::DesktopSideThread;
 use std::collections::BTreeMap;
 use std::path::Path;
-pub use vorkspace_import::{vorkspace_database, ImportReport};
 
 pub use crate::session::Session;
 
