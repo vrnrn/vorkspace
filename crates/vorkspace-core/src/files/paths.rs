@@ -114,6 +114,16 @@ pub fn is_equal_or_inside(path: &str, root: &str) -> bool {
     key == base_key || key.starts_with(&format!("{base_key}/"))
 }
 
+/// Use for destructive checkout operations, where a symlink must not hide
+/// an existing owner behind a different spelling of the same directory.
+pub fn is_resolved_inside(path: &str, root: &str) -> bool {
+    is_equal_or_inside(path, root)
+        || std::fs::canonicalize(path)
+            .ok()
+            .zip(std::fs::canonicalize(root).ok())
+            .is_some_and(|(path, root)| path.starts_with(root))
+}
+
 pub fn join_path(parent: &str, relative: &str) -> String {
     if let Some(remote) = crate::remote_path::parse_remote_path(parent) {
         return crate::remote_path::remote_path(

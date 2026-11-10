@@ -395,6 +395,26 @@ impl Shell {
                             return;
                         }
                         let linked = automation_work_item(&due.run);
+                        if let Err(error) =
+                            this.verify_prepared_checkout(id, settings.worktree_cwd.as_deref(), cx)
+                        {
+                            if reuse.is_none() {
+                                let _ = locked(&this.store)
+                                    .and_then(|mut store| install.discard(&mut store, id));
+                            }
+                            this.update_automation_run(
+                                due.run.id.clone(),
+                                "failed",
+                                None,
+                                Some(error.clone()),
+                                cx,
+                            );
+                            if reveal {
+                                this.error = Some(error);
+                                cx.notify();
+                            }
+                            return;
+                        }
                         // The local lease and composer were both revalidated.
                         // A run that falls back must not relink the old session.
                         let linked_result = locked(&this.store).and_then(|store| {

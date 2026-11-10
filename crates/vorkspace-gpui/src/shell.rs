@@ -1293,6 +1293,11 @@ impl Shell {
         if self.sessions.contains_key(&summary.id) {
             return None;
         }
+        if let Err(error) = self.verify_prepared_checkout(summary.id, None, cx) {
+            self.error = Some(error);
+            cx.notify();
+            return None;
+        }
         let project = summary.cwd.clone();
         let view = self.add_loaded_with_install(summary, Some(install), cx)?;
         self.workspace.restore_project(&project);
@@ -1300,8 +1305,41 @@ impl Shell {
     }
 
     fn session_install_failed(&mut self, cx: &mut Context<Self>) {
-        self.error = Some("The new session could not be opened in this window.".into());
+        self.error
+            .get_or_insert_with(|| "The new session could not be opened in this window.".into());
         cx.notify();
+    }
+
+    fn verify_prepared_checkout(
+        &self,
+        id: i64,
+        requested: Option<&str>,
+        cx: &App,
+    ) -> Result<(), String> {
+        let saved = locked(&self.store)?.agent_settings(id)?.unwrap_or_default();
+        let current = saved.worktree_cwd.as_deref();
+        if saved.worktree_removed
+            || requested.zip(current).is_some_and(|(requested, current)| {
+                vorkspace_core::files::path_key(requested)
+                    != vorkspace_core::files::path_key(current)
+            })
+        {
+            return Err("The session's worktree changed before it could open.".into());
+        }
+        if let Some(path) = requested.or(current) {
+            if self.project_is_deleting(path, cx)
+                || vorkspace_core::worktree_management::is_being_removed(path)
+            {
+                return Err("The session's worktree is being removed.".into());
+            }
+            if requested.is_some()
+                && !path.starts_with("remote://")
+                && !std::path::Path::new(path).is_dir()
+            {
+                return Err("The session's worktree is no longer available.".into());
+            }
+        }
+        Ok(())
     }
 
     fn publish_prepared(

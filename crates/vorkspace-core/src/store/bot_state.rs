@@ -226,6 +226,18 @@ pub fn root(store: &Store) -> PathBuf {
 impl Store {
     /// Unarchived sessions working in `path`.
     pub fn sessions_using(&self, path: &str) -> Result<Vec<i64>, String> {
+        self.sessions_using_path(path, crate::files::is_equal_or_inside)
+    }
+
+    pub fn sessions_using_resolved(&self, path: &str) -> Result<Vec<i64>, String> {
+        self.sessions_using_path(path, crate::files::is_resolved_inside)
+    }
+
+    fn sessions_using_path(
+        &self,
+        path: &str,
+        within: fn(&str, &str) -> bool,
+    ) -> Result<Vec<i64>, String> {
         let worktrees = self.session_worktrees()?;
         Ok(self
             .sessions()?
@@ -236,7 +248,7 @@ impl Store {
                     .get(&session.id)
                     .and_then(Option::as_deref)
                     .unwrap_or(&session.cwd);
-                crate::files::is_equal_or_inside(execution, path)
+                within(execution, path)
             })
             .map(|session| session.id)
             .collect())

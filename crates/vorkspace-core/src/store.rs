@@ -1312,16 +1312,48 @@ impl Store {
         path: &str,
         main: &str,
     ) -> Result<Vec<(Session, crate::agent::Settings)>, String> {
-        if self.shared.is_some() {
-            return self.shared_detach_worktree(path, main);
+        self.detach_worktree_paths(&[path], main)
+    }
+
+    /// Resolve stored aliases before removal makes symlinks into the checkout
+    /// unreadable. The returned spellings can be matched after Git removes it.
+    pub fn worktree_paths_for_removal(&self, path: &str) -> Result<Vec<String>, String> {
+        let worktrees = self.session_worktrees()?;
+        let mut paths = std::collections::HashSet::from([path.to_owned()]);
+        for session in self.sessions()? {
+            for candidate in std::iter::once(session.cwd.as_str())
+                .chain(worktrees.get(&session.id).and_then(Option::as_deref))
+            {
+                if !crate::files::is_equal_or_inside(candidate, path)
+                    && crate::files::is_resolved_inside(candidate, path)
+                {
+                    paths.insert(candidate.to_owned());
+                }
+            }
         }
+        Ok(paths.into_iter().collect())
+    }
+
+    pub fn detach_worktree_paths(
+        &self,
+        paths: &[&str],
+        main: &str,
+    ) -> Result<Vec<(Session, crate::agent::Settings)>, String> {
+        if self.shared.is_some() {
+            return self.shared_detach_worktree(paths, main);
+        }
+        let within = |cwd: &str| {
+            paths
+                .iter()
+                .any(|path| crate::files::is_equal_or_inside(cwd, path))
+        };
 
         let sessions = self.sessions()?;
         let mut changed = Vec::new();
         for mut session in sessions {
             let mut settings = self.agent_settings(session.id)?.unwrap_or_default();
             let execution = settings.worktree_cwd.as_deref().unwrap_or(&session.cwd);
-            if !crate::files::is_equal_or_inside(execution, path) {
+            if !within(execution) {
                 continue;
             }
             settings.worktree_cwd = Some(execution.to_owned());
@@ -1329,7 +1361,7 @@ impl Store {
             settings.revision += 1;
             settings.new_worktree = false;
             settings.worktree_base = None;
-            if crate::files::is_equal_or_inside(&session.cwd, path) {
+            if within(&session.cwd) {
                 session.cwd = main.into();
             }
             session.provider_id = None;

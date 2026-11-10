@@ -220,6 +220,14 @@ fn delete_saved(
 
 impl Shell {
     pub(super) fn window_uses_project(&self, path: &str, cx: &App) -> bool {
+        self.window_uses_path(path, cx, within)
+    }
+
+    pub(super) fn window_uses_worktree(&self, path: &str, cx: &App) -> bool {
+        self.window_uses_path(path, cx, vorkspace_core::files::is_resolved_inside)
+    }
+
+    fn window_uses_path(&self, path: &str, cx: &App, within: fn(&str, &str) -> bool) -> bool {
         within(&self.workspace.project, path)
             || self
                 .worktree_focus

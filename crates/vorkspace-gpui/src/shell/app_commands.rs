@@ -116,9 +116,12 @@ impl Shell {
             Err("The caller no longer owns this project's app capability".into())
         } else {
             self.check_app_placement(placement, &summary.cwd, cx)
+                .and_then(|()| {
+                    self.verify_prepared_checkout(id, settings.worktree_cwd.as_deref(), cx)
+                })
         };
         if let Err(error) = valid {
-            return Err(self.rollback_app_start(id, cleanup, error, cx));
+            return Err(self.rollback_app_start(id, install.as_mut(), cleanup, error, cx));
         }
         // Pane, rail and caller links publish only after the fresh view owns a
         // durable draft or queued prompt. No provider starts on a failed write.
@@ -143,7 +146,7 @@ impl Shell {
             // Shell owns these subscriptions independently of the discarded
             // view. Nothing else can register one during this synchronous call.
             self.observations.truncate(observations_before);
-            return Err(self.rollback_app_start(id, cleanup, error, cx));
+            return Err(self.rollback_app_start(id, install.as_mut(), cleanup, error, cx));
         }
         self.workspace.restore_project(&summary.cwd);
         let view = self
@@ -169,6 +172,7 @@ impl Shell {
     fn rollback_app_start(
         &mut self,
         id: i64,
+        install: Option<&mut crate::session_install::Install>,
         cleanup: Option<vorkspace_core::bot::launch::CreatedWorktree>,
         error: String,
         cx: &mut Context<Self>,
@@ -179,7 +183,10 @@ impl Shell {
         self.forget_session(id, cx);
         self.started_by.remove(&id);
         self.session_worktrees.remove(&id);
-        let removed = locked(&self.store).and_then(|mut store| store.delete(id));
+        let removed = locked(&self.store).and_then(|mut store| match install {
+            Some(install) => install.discard(&mut store, id),
+            None => store.delete(id),
+        });
         let cleanup_error = match removed {
             Ok(()) => cleanup
                 .map(vorkspace_core::bot::launch::CreatedWorktree::rollback)

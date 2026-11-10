@@ -369,6 +369,9 @@ fn a_peer_terminal_prevents_worktree_removal(cx: &mut TestAppContext) {
     let (dir, tree) = repository();
     let (window, _, _) = window(cx);
     let project = dir.path().to_string_lossy().into_owned();
+    let alias = dir.path().join("checkout-alias");
+    std::os::unix::fs::symlink(&tree, &alias).unwrap();
+    let alias = alias.to_string_lossy().into_owned();
     let store = window
         .update(cx, |shell, _, _| shell.store.clone())
         .unwrap();
@@ -381,7 +384,7 @@ fn a_peer_terminal_prevents_worktree_removal(cx: &mut TestAppContext) {
     });
     cx.run_until_parked();
     peer.update(cx, |shell, _, cx| {
-        let terminal = cx.new(|cx| crate::terminal::Terminal::new(tree.clone(), cx));
+        let terminal = cx.new(|cx| crate::terminal::Terminal::new(alias.clone(), cx));
         shell.terminal_tabs.insert(1, terminal);
     })
     .unwrap();
@@ -390,8 +393,36 @@ fn a_peer_terminal_prevents_worktree_removal(cx: &mut TestAppContext) {
     assert!(std::path::Path::new(&tree).is_dir());
     peer.update(cx, |shell, _, _| shell.terminal_tabs.clear())
         .unwrap();
+    let archived = window
+        .update(cx, |shell, _, _| {
+            let db = locked(&shell.store).unwrap();
+            let summary = db.create("codex", &project).unwrap();
+            db.save_agent_settings(
+                summary.id,
+                &vorkspace_core::agent::Settings {
+                    worktree_cwd: Some(alias),
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+            db.set_archived(summary.id, true).unwrap();
+            summary.id
+        })
+        .unwrap();
     remove(window, project, tree.clone(), cx).unwrap();
     assert!(!std::path::Path::new(&tree).exists());
+    window
+        .update(cx, |shell, _, _| {
+            assert!(
+                locked(&shell.store)
+                    .unwrap()
+                    .agent_settings(archived)
+                    .unwrap()
+                    .unwrap()
+                    .worktree_removed
+            );
+        })
+        .unwrap();
     let _ = std::fs::remove_dir_all(vorkspace_core::worktree_management::default_root(
         dir.path(),
     ));

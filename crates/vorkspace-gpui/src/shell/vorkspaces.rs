@@ -89,10 +89,19 @@ impl Shell {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        let landing = self.workspace.vorkspace_landing_where(id, |path| {
+            !self.project_is_deleting(path, cx)
+                && !vorkspace_core::worktree_management::is_being_removed(path)
+        });
+        if landing.is_empty() {
+            let preferred = self.workspace.vorkspace_landing(id);
+            if !preferred.is_empty() && !self.allow_project_entry(&preferred, cx) {
+                return;
+            }
+        }
         if !self.select_vorkspace(id, cx) {
             return;
         }
-        let landing = self.workspace.vorkspace_landing(id);
         self.open_project_from_user(landing, window, cx);
         self.persist(cx);
         cx.notify();

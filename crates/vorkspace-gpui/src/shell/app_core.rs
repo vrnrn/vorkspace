@@ -523,7 +523,10 @@ impl AppCore {
     ) -> bool {
         if !self.session_installs.permits(id, install)
             || self.session_deletions.contains(&id)
-            || self.metadata_is_writing(id)
+            || self
+                .metadata_writes
+                .get(&id)
+                .is_some_and(|owner| owner != shell && owner.upgrade().is_some())
             || self.other_session_window(id, shell).is_some()
         {
             return false;
@@ -703,7 +706,7 @@ impl Shell {
             }
         });
         self.take_shared_vorkspaces(&core, cx);
-        if self.workspace.reconcile_project_scope() {
+        if self.reconcile_project_admission(&core, cx) {
             self.sync_git(cx);
         }
         self.sync_inbox_scope(cx);
@@ -916,7 +919,11 @@ impl Shell {
     }
 
     fn reconcile_after_shared_change(&mut self, cx: &mut Context<Self>) {
-        if self.workspace.reconcile_project_scope() {
+        if self
+            .app_core
+            .clone()
+            .is_some_and(|core| self.reconcile_project_admission(&core, cx))
+        {
             self.sync_git(cx);
         }
         self.sync_inbox_scope(cx);
@@ -972,6 +979,16 @@ impl Shell {
         self.sync_vorkspace_bot_visibility(cx);
         self.invalidate_chrome(cx);
         cx.notify();
+    }
+
+    fn reconcile_project_admission(&mut self, core: &Entity<AppCore>, cx: &App) -> bool {
+        let blocked = core.read(cx).project_deletions.lock().unwrap();
+        self.workspace.reconcile_project_scope_where(|path| {
+            !blocked
+                .iter()
+                .any(|root| super::project_delete::within(path, root))
+                && !vorkspace_core::worktree_management::is_being_removed(path)
+        })
     }
 
     /// Hands this window's definitions to the other windows when they changed.
@@ -1245,6 +1262,14 @@ impl Shell {
     }
 
     pub(super) fn other_window_uses_project(&self, path: &str, cx: &Context<Self>) -> bool {
+        self.any_peer_window(cx, |shell, cx| shell.window_uses_project(path, cx))
+    }
+
+    pub(super) fn other_window_uses_worktree(&self, path: &str, cx: &Context<Self>) -> bool {
+        self.any_peer_window(cx, |shell, cx| shell.window_uses_worktree(path, cx))
+    }
+
+    fn any_peer_window(&self, cx: &Context<Self>, check: impl Fn(&Self, &App) -> bool) -> bool {
         let Some(core) = &self.app_core else {
             return false;
         };
@@ -1254,7 +1279,7 @@ impl Shell {
             .iter()
             .filter(|window| *window != &me)
             .filter_map(WeakEntity::upgrade)
-            .any(|shell| shell.read(cx).window_uses_project(path, cx))
+            .any(|shell| check(shell.read(cx), cx))
     }
 }
 

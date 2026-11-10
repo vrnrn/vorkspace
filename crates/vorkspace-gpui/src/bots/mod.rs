@@ -591,7 +591,7 @@ impl Bots {
                     .worktree_cwd
                     .as_deref()
                     .unwrap_or(&view.summary.cwd);
-                vorkspace_core::files::is_equal_or_inside(cwd, path)
+                vorkspace_core::files::is_resolved_inside(cwd, path)
             })
     }
     pub(crate) fn protected_app_target(&self, id: i64, cx: &App) -> bool {

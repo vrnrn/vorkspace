@@ -27,7 +27,7 @@ static REMOVING: Mutex<Option<HashSet<String>>> = Mutex::new(None);
 
 /// Held while a worktree is being removed. Turns and terminals check it, so nothing
 /// starts inside a folder that is about to disappear.
-pub struct RemovalGuard(String);
+pub struct RemovalGuard(Vec<String>);
 impl RemovalGuard {
     pub fn claim(path: &str) -> Result<Self, String> {
         let key = crate::files::path_key(path);
@@ -35,13 +35,29 @@ impl RemovalGuard {
         if !removing.get_or_insert_default().insert(key.clone()) {
             return Err("This worktree is already being removed.".into());
         }
-        Ok(Self(key))
+        Ok(Self(vec![key]))
+    }
+
+    /// Keep saved alias spellings blocked while the real path no longer
+    /// resolves and its durable bindings are still being detached.
+    pub fn include_aliases(&mut self, paths: &[String]) {
+        let mut removing = REMOVING.lock().unwrap_or_else(|e| e.into_inner());
+        let removing = removing.get_or_insert_default();
+        for path in paths {
+            let key = crate::files::path_key(path);
+            if removing.insert(key.clone()) {
+                self.0.push(key);
+            }
+        }
     }
 }
 impl Drop for RemovalGuard {
     fn drop(&mut self) {
         let mut removing = REMOVING.lock().unwrap_or_else(|e| e.into_inner());
-        removing.get_or_insert_default().remove(&self.0);
+        let removing = removing.get_or_insert_default();
+        for path in &self.0 {
+            removing.remove(path);
+        }
     }
 }
 pub fn is_being_removed(path: &str) -> bool {
@@ -49,7 +65,7 @@ pub fn is_being_removed(path: &str) -> bool {
     removing
         .iter()
         .flatten()
-        .any(|root| crate::files::is_equal_or_inside(path, root))
+        .any(|root| crate::files::is_resolved_inside(path, root))
 }
 pub fn default_root(main: &Path) -> PathBuf {
     main.with_file_name(format!(

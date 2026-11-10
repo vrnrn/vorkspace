@@ -247,10 +247,14 @@ impl Workspace {
     /// Restore the window within its saved vorkspace, even if an old snapshot
     /// paired that vorkspace with an unrelated project or session.
     pub(crate) fn reconcile_project_scope(&mut self) -> bool {
-        if self.vorkspace_has_project(&self.project) {
+        self.reconcile_project_scope_where(|_| true)
+    }
+
+    pub(crate) fn reconcile_project_scope_where(&mut self, allowed: impl Fn(&str) -> bool) -> bool {
+        if self.vorkspace_has_project(&self.project) && allowed(&self.project) {
             return false;
         }
-        let landing = self.vorkspace_landing(&self.active_vorkspace);
+        let landing = self.vorkspace_landing_where(&self.active_vorkspace, allowed);
         if self.project == landing {
             return false;
         }
@@ -346,6 +350,14 @@ impl Workspace {
     /// The project to show on entering a vorkspace: the one it last showed,
     /// else its first.
     pub(crate) fn vorkspace_landing(&self, id: &str) -> String {
+        self.vorkspace_landing_where(id, |_| true)
+    }
+
+    pub(crate) fn vorkspace_landing_where(
+        &self,
+        id: &str,
+        allowed: impl Fn(&str) -> bool,
+    ) -> String {
         let Some(v) = self.vorkspaces.iter().find(|v| v.id == id) else {
             return String::new();
         };
@@ -353,13 +365,14 @@ impl Workspace {
             .get(id)
             .filter(|p| {
                 self.is_project_available(p)
+                    && allowed(p)
                     && v.projects.iter().any(|q| path_key(q) == path_key(p))
             })
             .cloned()
             .or_else(|| {
                 v.projects
                     .iter()
-                    .find(|p| self.is_project_available(p))
+                    .find(|p| self.is_project_available(p) && allowed(p))
                     .cloned()
             })
             .unwrap_or_default()

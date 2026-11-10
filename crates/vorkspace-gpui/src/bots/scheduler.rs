@@ -1401,7 +1401,7 @@ impl Bots {
             install.track(s.id);
             s.title = format!("{} · {}", bot.label(), habit.name);
             if let Err(error) = db.title(s.id, &s.title) {
-                return match db.delete(s.id) {
+                return match install.discard(&mut db, s.id) {
                     Ok(()) => Err(error),
                     Err(cleanup) => Err(format!(
                         "{error}. Could not discard the Habit session: {cleanup}"
@@ -1411,7 +1411,7 @@ impl Bots {
             Ok((s, inherited, habit, install))
         });
         cx.spawn(async move |this, cx| {
-            let (summary, settings, habit, _install) = match work.await {
+            let (summary, settings, habit, mut install) = match work.await {
                 Ok(prepared) => prepared,
                 Err(error) => {
                     let _ = this.update(cx, |this, cx| {
@@ -1436,12 +1436,14 @@ impl Bots {
                 })
                 .ok()
                 .flatten();
-            let installed = if let Some(saved) = saved {
+            let mut committed = false;
+            if let Some(saved) = saved {
                 let result = saved
                     .recv()
                     .await
                     .unwrap_or_else(|_| Err("Habit admission was interrupted".into()));
-                this.update(cx, |this, cx| {
+                committed = result.is_ok();
+                let _ = this.update(cx, |this, cx| {
                     if let Err(error) = result {
                         this.roster.hidden_sessions.retain(|id| *id != session);
                         if let Some(bot) = this.roster.get_mut(&target) {
@@ -1451,29 +1453,28 @@ impl Bots {
                         this.active_run = None;
                         this.error = Some(format!("Could not start the Habit: {error}"));
                         this.changed(cx);
-                        return false;
+                        return;
                     }
                     this.roster_write_finished(cx);
                     let Some(bot) = this.habit_bot(&target, cx) else {
                         this.active_run = None;
                         this.changed(cx);
-                        return false;
+                        return;
                     };
                     this.launch_habit_view(summary, settings, habit, bot, cx);
-                    true
-                })
-                .unwrap_or(false)
+                });
             } else {
                 let _ = this.update(cx, |this, cx| {
                     this.active_run = None;
                     this.changed(cx);
                 });
-                false
-            };
-            if !installed {
+            }
+            // After association this is retained Bot history. Only an
+            // uncommitted allocation should be physically removed.
+            if !committed {
                 let result = cx
                     .background_executor()
-                    .spawn(async move { locked(&cleanup)?.delete(session) })
+                    .spawn(async move { install.discard(&mut *locked(&cleanup)?, session) })
                     .await;
                 if let Err(error) = result {
                     eprintln!("Could not discard unstarted Habit session {session}: {error}");
