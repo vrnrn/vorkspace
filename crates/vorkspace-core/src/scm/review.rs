@@ -313,52 +313,60 @@ pub struct CommitReview {
     cwd: PathBuf,
     sha: String,
     parent: Option<String>,
+    prefix: Option<String>,
 }
 
 impl CommitReview {
     pub fn open(cwd: &Path, sha: &str) -> Result<Self, String> {
-        if remote_workspace::is_remote(cwd) {
+        let WorktreeReview { cwd, prefix } = WorktreeReview::open(cwd)?;
+        if prefix.is_none() {
             return Ok(Self {
-                cwd: cwd.to_path_buf(),
+                cwd,
                 sha: sha.to_owned(),
                 parent: None,
+                prefix,
             });
         }
-        let cwd = expand_home(cwd);
         let sha = peel_commit(&cwd, sha)?;
         let parent = git_stdout(&cwd, &["rev-parse", "--verify", &format!("{sha}^")]);
-        Ok(Self { cwd, sha, parent })
+        Ok(Self {
+            cwd,
+            sha,
+            parent,
+            prefix,
+        })
     }
 
     /// The files a commit changed, against its first parent (or nothing).
     pub fn files(&self) -> Result<Vec<ChangedFile>, String> {
-        let Self { cwd: root, sha, .. } = self;
-        if remote_workspace::is_remote(root) {
+        let Self {
+            cwd: root,
+            sha,
+            parent,
+            prefix,
+        } = self;
+        if prefix.is_none() {
             return remote_workspace::command("git_commit_files", json!({"cwd":root,"sha":sha}));
         }
         let mut files: HashMap<String, FileAcc> = HashMap::new();
         let mut statuses: HashMap<String, &'static str> = HashMap::new();
         let tree = |kind: &str| {
-            git_run(
-                root,
-                &[
-                    "diff-tree",
-                    "-z",
-                    "--no-commit-id",
-                    "-r",
-                    "--root",
-                    "--no-renames",
-                    kind,
-                    sha,
-                ],
-            )
+            let mut args = vec![
+                "diff-tree",
+                "-z",
+                "--no-commit-id",
+                "-r",
+                "--root",
+                "--relative",
+                "--no-renames",
+                kind,
+            ];
+            args.extend(parent.as_deref());
+            args.extend([sha.as_str(), "--", "."]);
+            git_run(root, &args).ok_or("Could not list the commit's changes")
         };
-        if let Some(text) = tree("--numstat") {
-            add_numstat_map(&text, &mut files);
-        }
-        if let Some(names) = tree("--name-status") {
-            add_name_status(&names, &mut statuses);
-        }
+        add_numstat_map(&tree("--numstat")?, &mut files);
+        add_name_status(&tree("--name-status")?, &mut statuses);
         let mut out = Vec::with_capacity(files.len().max(statuses.len()));
         let mut seen = HashSet::new();
         let file = |relative: String, status: &str, additions, deletions| ChangedFile {
@@ -390,18 +398,19 @@ impl CommitReview {
             cwd: root,
             sha,
             parent,
+            prefix,
         } = self;
-        if remote_workspace::is_remote(root) {
+        let Some(prefix) = prefix else {
             return remote_workspace::command(
                 "git_commit_file_diff",
                 json!({"cwd":root,"sha":sha,"relative":relative}),
             );
-        }
+        };
         let relative = resolve_repo_path(root, relative)?;
         let original = parent
             .as_ref()
-            .and_then(|parent| git_blob(root, &format!("{parent}:{relative}")));
-        let current = git_blob(root, &format!("{sha}:{relative}"));
+            .and_then(|parent| git_blob(root, &format!("{parent}:{prefix}{relative}")));
+        let current = git_blob(root, &format!("{sha}:{prefix}{relative}"));
         Ok(text_diff(
             path_to_js(&root.join(&relative)),
             relative,
@@ -497,7 +506,7 @@ fn git_blob(root: &Path, spec: &str) -> Option<FileContents> {
 }
 fn peel_commit(root: &Path, spec: &str) -> Result<String, String> {
     let spec = spec.trim();
-    if spec.len() < 4 || spec.len() > 40 || !spec.bytes().all(|b| b.is_ascii_hexdigit()) {
+    if !(4..=64).contains(&spec.len()) || !spec.bytes().all(|b| b.is_ascii_hexdigit()) {
         return Err("Invalid commit".into());
     }
     git_stdout(

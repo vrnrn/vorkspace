@@ -280,6 +280,44 @@ fn pinned_header_follows_open_files_only(cx: &mut gpui::TestAppContext) {
         })
         .unwrap();
 }
+
+#[gpui::test]
+fn refresh_keeps_reading_position_and_pending_focus_on_the_same_file(
+    cx: &mut gpui::TestAppContext,
+) {
+    let window = cx.update(|cx| {
+        cx.open_window(Default::default(), |_, cx| cx.new(DiffView::new))
+            .unwrap()
+    });
+    window
+        .update(cx, |view, _, cx| {
+            let preceding = file("a.rs", "before\n", "after\n");
+            let selected = file("b.rs", "before\n", "after\n");
+            view.set_files(vec![preceding.clone(), selected.clone()], cx);
+            view.list.scroll_to(ListOffset {
+                item_ix: view.file_rows[1] + 1,
+                offset_in_item: px(3.),
+            });
+            let anchor = view.scroll_anchor().unwrap();
+            view.set_files(vec![selected.clone()], cx);
+            assert_eq!(view.scroll_anchor(), Some(anchor));
+
+            let loading = DiffFile {
+                blocks: Arc::default(),
+                empty_message: Some("Loading…".into()),
+                ..selected.clone()
+            };
+            view.set_files(vec![loading.clone()], cx);
+            view.focus_file(Some(loading.id.clone()), cx);
+            view.set_files(vec![preceding.clone(), loading], cx);
+            assert_eq!(view.list.logical_scroll_top().item_ix, view.file_rows[1]);
+            assert_eq!(view.pending.as_ref(), Some(&selected.id));
+            view.set_files(vec![preceding, selected], cx);
+            assert_eq!(view.list.logical_scroll_top().item_ix, view.file_rows[1]);
+            assert!(view.pending.is_none());
+        })
+        .unwrap();
+}
 #[test]
 fn bodies_number_hunks_and_mark_stageable_lines() {
     let f = file("a.rs", "one\ntwo\nthree\n", "one\nTWO\nthree\n");
@@ -397,7 +435,7 @@ fn live_layout_switch_retains_hunks_folds_anchor_tokens_and_comment_draft(
             let ix = view.rows.iter().position(|row| matches!(row.kind, RowKind::Line { block, line, .. } if view.files[row.file].blocks[block].lines()[line].kind == LineKind::Add)).unwrap();
             let key = view.row_key(ix).unwrap();
             let line = view.files[0].blocks[key.2].lines()[key.3].clone();
-            view.open_comment(0, line, AnchorSlot::default(), w, cx);
+            view.open_comment(id.clone(), line, false, AnchorSlot::default(), w, cx);
             let draft = view.comment.as_ref().unwrap().input.clone();
             draft.update(cx, |input, cx| input.set_text("keep this comment".into(), cx));
             view.list.scroll_to(ListOffset { item_ix: ix, offset_in_item: px(3.) });

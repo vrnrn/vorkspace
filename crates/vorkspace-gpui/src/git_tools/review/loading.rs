@@ -556,7 +556,7 @@ fn file_model(
             .unwrap_or(empty)
             .clone(),
         can_stage: editable,
-        can_discard: editable,
+        can_discard: editable && loaded.is_some_and(|loaded| loaded.error.is_none()),
         can_stage_hunk: editable && !binary && !too_large,
     }
 }

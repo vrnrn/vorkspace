@@ -1722,7 +1722,7 @@ impl Changes {
                 };
                 let relative = file.relative.clone();
                 let open_path = file.path.clone();
-                let can_open = file.status != "deleted";
+                let row_cwd = self.cwd.clone();
                 let row_file = file.clone();
                 let stage_file = file.clone();
                 div()
@@ -1786,17 +1786,18 @@ impl Changes {
                                         )
                                     }),
                             )
-                            .when(can_open, |d| {
-                                d.on_click(cx.listener(move |this, _, _, cx| {
-                                    this.selected = Some((relative.clone(), kind));
-                                    cx.emit(ChangesEvent::OpenDiff {
-                                        cwd: this.cwd.clone(),
-                                        path: Some(open_path.clone()),
-                                        staged: kind == Kind2::Staged,
-                                    });
-                                    cx.notify();
-                                }))
-                            }),
+                            .on_click(cx.listener(move |this, _, _, cx| {
+                                if this.cwd != row_cwd {
+                                    return;
+                                }
+                                this.selected = Some((relative.clone(), kind));
+                                cx.emit(ChangesEvent::OpenDiff {
+                                    cwd: row_cwd.clone(),
+                                    path: Some(open_path.clone()),
+                                    staged: kind == Kind2::Staged,
+                                });
+                                cx.notify();
+                            })),
                     )
                     .child(
                         div()

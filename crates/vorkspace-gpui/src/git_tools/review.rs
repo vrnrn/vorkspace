@@ -66,15 +66,23 @@ pub(crate) enum ReviewTab {
 impl ReviewTab {
     /// SurfaceTabs's `surfaceTabPresentation`.
     pub(crate) fn label(&self) -> String {
+        fn filename(path: &str) -> &str {
+            std::path::Path::new(path)
+                .file_name()
+                .and_then(std::ffi::OsStr::to_str)
+                .unwrap_or(path)
+        }
         match self {
-            Self::File { path, .. } => std::path::Path::new(path)
-                .file_name()
-                .map_or_else(|| path.clone(), |p| p.to_string_lossy().into_owned()),
+            Self::File { path, .. } => filename(path).to_owned(),
             Self::Changes {
-                path: Some(path), ..
-            } => std::path::Path::new(path)
-                .file_name()
-                .map_or_else(|| path.clone(), |p| p.to_string_lossy().into_owned()),
+                path: Some(path),
+                staged,
+                ..
+            } => match staged {
+                Some(true) => format!("{} (Staged)", filename(path)),
+                Some(false) => format!("{} (Unstaged)", filename(path)),
+                None => filename(path).to_owned(),
+            },
             Self::Changes { staged, .. } => {
                 if *staged == Some(true) {
                     "Staged changes".into()
@@ -958,60 +966,83 @@ impl ReviewPane {
             return;
         };
         let cwd = PathBuf::from(cwd);
-        let (id, work): (SharedString, Box<dyn FnOnce() -> Result<(), String> + Send>) = match event
-        {
-            DiffEvent::Comment(_) => return,
-            DiffEvent::StageFile(id) | DiffEvent::DiscardFile(id) => {
-                let Some(relative) = id.strip_prefix("unstaged:").map(str::to_owned) else {
-                    return;
-                };
-                let stage = matches!(event, DiffEvent::StageFile(_));
-                (
-                    id.clone(),
-                    Box::new(move || {
-                        if stage {
-                            scm::stage_file(&cwd, &relative)
-                        } else {
-                            scm::discard_file(&cwd, &relative)
-                        }
-                    }),
-                )
-            }
-            DiffEvent::StageHunk(id, chunk) => {
-                let Some(relative) = id.strip_prefix("unstaged:").map(str::to_owned) else {
-                    return;
-                };
-                let Some(loaded) = source.loaded.get(id.as_ref()) else {
-                    return;
-                };
-                // The same diff the view showed, so the same hunk is staged.
-                let Some(range) = loaded.chunks.get(*chunk).copied() else {
-                    return;
-                };
-                let next = diff::stage_chunk(&loaded.diff.original, &loaded.diff.current, range);
-                (
-                    id.clone(),
-                    Box::new(move || scm::stage_contents(&cwd, &relative, next.as_bytes())),
-                )
-            }
-        };
         let view = source.view.clone();
+        if view.read(cx).action_pending {
+            return;
+        }
+        let (id, chunk) = match event {
+            DiffEvent::StageFile(id) | DiffEvent::DiscardFile(id) => (id, None),
+            DiffEvent::StageHunk {
+                file,
+                chunk,
+                blocks,
+            } => {
+                let range = source.loaded.get(file.as_ref()).and_then(|loaded| {
+                    let current = loaded.unified.as_ref()?;
+                    Arc::ptr_eq(current, blocks).then_some(())?;
+                    loaded.chunks.get(*chunk).copied()
+                });
+                let Some(range) = range else {
+                    view.update(cx, |view, cx| {
+                        view.action_error =
+                            Some("The diff changed. Review it and choose the hunk again.".into());
+                        cx.notify();
+                    });
+                    return;
+                };
+                (file, Some(range))
+            }
+            DiffEvent::Comment(_) => return,
+        };
+        let Some(relative) = id.strip_prefix("unstaged:").map(str::to_owned) else {
+            return;
+        };
+        let stage_file = matches!(event, DiffEvent::StageFile(_));
+        let baseline = source.loaded.get(id.as_ref()).cloned();
+        let id = id.clone();
         view.update(cx, |v, cx| {
-            v.busy_id = Some(id.clone());
+            v.action_pending = true;
+            v.action_error = None;
             cx.notify();
         });
-        let task = cx.background_executor().spawn(async move { work() });
+        let task = cx.background_executor().spawn(async move {
+            if stage_file {
+                return scm::stage_file(&cwd, &relative);
+            }
+            let baseline = baseline.ok_or("Wait for the diff to load and try again.")?;
+            let checkout = scm::WorktreeReview::open(&cwd)?;
+            let current = if baseline.diff.binary || baseline.diff.too_large {
+                let versions = checkout.snapshot(None)?.versions;
+                baseline.version.as_ref().is_some_and(|expected| {
+                    versions
+                        .as_ref()
+                        .and_then(|versions| versions.get(id.as_ref()))
+                        == Some(expected)
+                })
+            } else {
+                checkout.file(&relative, false)? == *baseline.diff
+            };
+            if !current {
+                return Err("The file changed. Review the latest diff and try again.".into());
+            }
+            if let Some(chunk) = chunk {
+                let next =
+                    diff::stage_chunk(&baseline.diff.original, &baseline.diff.current, chunk);
+                scm::stage_contents(&cwd, &relative, next.as_bytes())
+            } else {
+                scm::discard_file(&cwd, &relative)
+            }
+        });
         cx.spawn(async move |this, cx| {
             let result = task.await;
             let _ = this.update(cx, |this, cx| {
                 view.update(cx, |v, cx| {
-                    v.busy_id = None;
+                    v.action_pending = false;
+                    v.action_error = result.err();
                     cx.notify();
                 });
                 this.git.update(cx, |git, cx| git.changed(cx));
-                if let Err(error) = result {
-                    log_error(&error);
-                }
+                this.load_active(cx);
             });
         })
         .detach();
@@ -1330,10 +1361,6 @@ impl ReviewPane {
             })
             .collect()
     }
-}
-
-fn log_error(error: &str) {
-    eprintln!("vorkspace: review action failed: {error}");
 }
 
 impl Render for ReviewPane {

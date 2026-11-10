@@ -1119,6 +1119,39 @@ fn stage_contents_stages_a_partial_file_only() {
 }
 
 #[test]
+fn commit_review_scopes_sha256_merges_to_the_nested_project_and_first_parent() {
+    let dir = tmp();
+    let root = dir.path();
+    if !git(root, &["init", "--object-format=sha256", "-b", "main"]) {
+        return;
+    }
+    let project = root.join("nested project");
+    let relative = "literal [x].txt";
+    std::fs::create_dir(&project).unwrap();
+    std::fs::write(project.join(relative), "before\n").unwrap();
+    assert!(git(root, &["add", "."]));
+    assert!(git(root, &["commit", "-m", "Base"]));
+    assert!(git(root, &["checkout", "-b", "topic"]));
+    std::fs::write(project.join(relative), "after\n").unwrap();
+    std::fs::write(root.join("outside.txt"), "outside the project\n").unwrap();
+    assert!(git(root, &["add", "."]));
+    assert!(git(root, &["commit", "-m", "Topic"]));
+    assert!(git(root, &["checkout", "main"]));
+    assert!(git(root, &["merge", "--no-ff", "--no-edit", "topic"]));
+
+    let sha = git_stdout(root, &["rev-parse", "HEAD"]).unwrap();
+    assert_eq!(sha.len(), 64);
+    let review = CommitReview::open(&project, &sha).unwrap();
+    let files = review.files().unwrap();
+    assert_eq!(files.len(), 1);
+    assert_eq!(files[0].relative, relative);
+    assert_eq!(files[0].path, path_to_js(&project.join(relative)));
+    let diff = review.file(relative).unwrap();
+    assert_eq!(diff.original, "before\n");
+    assert_eq!(diff.current, "after\n");
+}
+
+#[test]
 fn commit_files_and_diffs_include_the_root_commit() {
     let dir = tmp();
     assert!(init_git_commit(dir.path(), &[("a.txt", "one\n")]));
