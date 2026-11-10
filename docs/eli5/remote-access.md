@@ -40,6 +40,8 @@ Checking whether a remote chat changed reads its small summary instead of reopen
 
 When a chat changes, the host reads the new or updated messages and their order without loading every old message. Before a new turn can start, the host finishes stopping the old turn and saves its outcome.
 
+While a reply streams, the host can reuse the message list it just saved. It checks that the list is still current before writing the new text.
+
 Temporary downloads share a size budget. If it is busy, retry after another download finishes; active downloads are kept intact. A chat that exceeds the download size limit gets a clear error and stays saved on the host. Download limits do not delete conversation data.
 
 A slow reply from the host cannot undo newer status or settings. Partial chat lists can be filled in by a matching complete reply without treating missing fields as deleted.

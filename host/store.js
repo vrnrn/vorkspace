@@ -17,7 +17,8 @@ export class HostStore {
   cacheBytes = 0;
   // Only store-owned, deeply frozen blocks can skip serialization. Caller-owned
   // objects are always encoded again, including nested mutations.
-  encodedBlocks = new WeakMap();
+  #encodedBlocks = new WeakMap();
+  #normalizedSnapshots = new WeakMap();
   constructor(path) {
     this.attachmentDir = join(dirname(path), "attachments");
     this.db = new DatabaseSync(path);
@@ -92,6 +93,8 @@ export class HostStore {
   clearCache() {
     this.cache.clear();
     this.cacheBytes = 0;
+    // A rolled-back revision number can be reused by a different write.
+    this.#normalizedSnapshots = new WeakMap();
   }
   remember(value, snapshotLength) {
     const id = value.session.id;
@@ -128,21 +131,32 @@ export class HostStore {
     return row && String(row.snapshot);
   }
   #hydrate(id, value, length) {
-    if (!Object.hasOwn(value.session, "blocks")) {
-      const rows = this.db.prepare(
-        "SELECT id, revision, digest, code_units, payload FROM session_blocks WHERE session_id=? ORDER BY ordinal",
-      ).all(id);
-      value.session.blocks = rows.map((row) => {
-        const block = freezeJson(JSON.parse(String(row.payload)));
-        this.encodedBlocks.set(block, {
-          digest: String(row.digest), length: Number(row.code_units),
-        });
-        length += Number(row.code_units);
-        return block;
+    if (Object.hasOwn(value.session, "blocks")) return this.remember(value, length);
+    const rows = this.db.prepare(
+      "SELECT id, revision, digest, code_units, payload FROM session_blocks WHERE session_id=? ORDER BY ordinal",
+    ).all(id);
+    let blockLength = 0;
+    value.session.blocks = rows.map((row) => {
+      const block = freezeJson(JSON.parse(String(row.payload)));
+      this.#encodedBlocks.set(block, {
+        digest: String(row.digest), length: Number(row.code_units),
       });
-      value.blockRevisions = Object.fromEntries(rows.map((row) => [row.id, Number(row.revision)]));
-    }
-    return this.remember(value, length);
+      blockLength += Number(row.code_units);
+      return block;
+    });
+    value.blockRevisions = Object.fromEntries(rows.map((row) => [row.id, Number(row.revision)]));
+    return this.#rememberNormalized(value, length, blockLength);
+  }
+
+  #rememberNormalized(value, rootLength, blockLength) {
+    this.#normalizedSnapshots.set(value, {
+      id: value.session.id,
+      revision: value.revision,
+      blocks: Object.freeze(value.session.blocks),
+      revisions: Object.freeze(value.blockRevisions),
+      blockLength,
+    });
+    return this.remember(value, rootLength + blockLength);
   }
 
   find(id) {
@@ -245,21 +259,30 @@ export class HostStore {
     return rows.map((row) => this.session(String(row.id)))
       .sort((a, b) => b.updatedAt - a.updatedAt);
   }
-  advance(value, event) {
+  advance(value, event, base) {
     return this.transaction(() => this.save(
       { ...value, revision: value.revision + 1, updatedAt: Date.now() },
       event,
+      base,
     ));
   }
   /** Metadata, changed blocks, summary, event and caller receipts commit together.
    * Legacy full snapshots convert lazily on their next write. */
-  save(input, event) {
+  save(input, event, base) {
     if (!this.db.isTransaction)
-      return this.transaction(() => this.save(input, event));
+      return this.transaction(() => this.save(input, event, base));
     const id = input.session.id;
     const priorRow = this.db.prepare("SELECT snapshot FROM sessions WHERE id=?").get(id);
     const prior = priorRow && JSON.parse(String(priorRow.snapshot));
-    const previous = new Map(this.db.prepare(
+    if (base && (base.session.id !== id || prior?.revision !== base.revision || input.revision !== base.revision + 1))
+      throw new Error("Session changed before saving turn output");
+    const retained = this.#normalizedSnapshots.get(base);
+    // A store-issued snapshot of this exact revision already carries the row
+    // identities and digests. Reordering and deletion use the general diff.
+    const stable = retained && retained.id === id && retained.revision === prior?.revision
+      && retained.blocks.every((block, index) => block.id === input.session.blocks[index]?.id)
+      ? retained : undefined;
+    const previous = stable ? undefined : new Map(this.db.prepare(
       "SELECT id, ordinal, revision, digest, code_units FROM session_blocks WHERE session_id=?",
     ).all(id).map((row) => [String(row.id), row]));
     const legacyBlocks = new Map(prior?.session.blocks?.map((block) => [block.id, block]));
@@ -267,12 +290,20 @@ export class HostStore {
     const revisions = Object.create(null);
     const writes = [];
     const ids = new Set();
-    let length = 0;
+    let length = stable?.blockLength ?? 0;
     for (const [ordinal, incoming] of input.session.blocks.entries()) {
-      if (typeof incoming.id !== "string" || ids.has(incoming.id))
+      const retainedBlock = stable?.blocks[ordinal];
+      const blockId = incoming.id;
+      if (typeof blockId !== "string" || (!retainedBlock &&
+        (ids.has(blockId) || (stable && Object.hasOwn(stable.revisions, blockId)))))
         throw new Error("Session blocks must have unique string IDs");
-      ids.add(incoming.id);
-      let encoded = this.encodedBlocks.get(incoming);
+      if (!retainedBlock) ids.add(blockId);
+      if (retainedBlock === incoming) {
+        revisions[blockId] = stable.revisions[blockId];
+        blocks.push(incoming);
+        continue;
+      }
+      let encoded = this.#encodedBlocks.get(incoming);
       let payload;
       let block = incoming;
       if (!encoded) {
@@ -284,20 +315,21 @@ export class HostStore {
         // Freeze an independent JSON copy. Provider-owned preview objects remain
         // mutable, while a saved block cannot silently change behind its digest.
         block = freezeJson(JSON.parse(payload));
-        this.encodedBlocks.set(block, encoded);
+        this.#encodedBlocks.set(block, encoded);
       }
-      const old = previous.get(incoming.id);
-      const unchanged = old?.digest === encoded.digest;
+      const old = previous?.get(blockId);
+      const retainedEncoding = retainedBlock && this.#encodedBlocks.get(retainedBlock);
+      const unchanged = (retainedEncoding ?? old)?.digest === encoded.digest;
       // A legacy block's structural equality preserves its original sync stamp.
-      const legacy = legacyBlocks.get(incoming.id);
+      const legacy = legacyBlocks.get(blockId);
       const legacySame = !old && legacy && JSON.stringify(legacy) === (payload ?? JSON.stringify(block));
-      const revision = unchanged ? Number(old.revision)
-        : legacySame ? (prior.blockRevisions?.[incoming.id] ?? input.revision) : input.revision;
-      revisions[incoming.id] = revision;
+      const revision = unchanged ? (retainedBlock ? stable.revisions[blockId] : Number(old.revision))
+        : legacySame ? (prior.blockRevisions?.[blockId] ?? input.revision) : input.revision;
+      revisions[blockId] = revision;
       blocks.push(block);
-      length += encoded.length;
-      if (!unchanged) writes.push({ id: incoming.id, ordinal, revision, encoded, payload: payload ?? JSON.stringify(block) });
-      else if (Number(old.ordinal) !== ordinal) writes.push({ id: incoming.id, ordinal });
+      length += encoded.length - (retainedEncoding?.length ?? 0);
+      if (!unchanged) writes.push({ id: blockId, ordinal, revision, encoded, payload: payload ?? JSON.stringify(block) });
+      else if (old && Number(old.ordinal) !== ordinal) writes.push({ id: blockId, ordinal });
     }
     const value = {
       ...input,
@@ -321,11 +353,13 @@ export class HostStore {
         this.db.prepare("UPDATE session_blocks SET ordinal=? WHERE session_id=? AND id=?").run(write.ordinal, id, write.id);
       else upsert.run(id, write.id, write.ordinal, write.revision, write.encoded.digest, write.encoded.length, write.payload);
     }
-    for (const oldId of previous.keys())
-      if (!ids.has(oldId)) this.db.prepare("DELETE FROM session_blocks WHERE session_id=? AND id=?").run(id, oldId);
+    if (previous) {
+      for (const oldId of previous.keys())
+        if (!ids.has(oldId)) this.db.prepare("DELETE FROM session_blocks WHERE session_id=? AND id=?").run(id, oldId);
+    }
     this.db.prepare("INSERT INTO events VALUES (?, ?, ?)").run(id, value.revision, JSON.stringify(event));
     this.db.prepare("DELETE FROM events WHERE session_id=? AND revision<?").run(id, value.revision - 2_000);
-    return this.remember(value, length + snapshot.length);
+    return this.#rememberNormalized(value, snapshot.length, length);
   }
   updateSession(id, patch) {
     return this.transaction(() => {

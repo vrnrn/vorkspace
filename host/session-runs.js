@@ -58,7 +58,7 @@ export class SessionRuns {
 
   publish(value) {
     const run = this.#runs.get(value.session.id);
-    if (run && run.runId === value.runId && value.status === "running") run.value = value;
+    if (run && run.runId === value.runId && value.status === "running") run.value = run.base = value;
   }
 
   start(value, provider, input) {
@@ -66,6 +66,7 @@ export class SessionRuns {
       id: value.session.id,
       runId: value.runId,
       value,
+      base: value,
       provider,
       events: [],
       dispatched: false,
@@ -100,7 +101,7 @@ export class SessionRuns {
     clearTimeout(run.flushTimer);
     run.flushTimer = undefined;
     if (!run.events.length) return;
-    run.value = this.store.advance(run.value, { type: "events", events: run.events });
+    run.value = run.base = this.store.advance(run.value, { type: "events", events: run.events }, run.base);
     run.events = [];
   }
 
@@ -197,8 +198,7 @@ export class SessionRuns {
         if (this.#runs.get(run.id) !== run) return;
         endedAt ??= Date.now();
         this.#flush(run);
-        const latest = this.store.session(run.id);
-        if (latest.runId !== run.runId || latest.status !== "running") return;
+        const latest = run.base;
         const message = this.closing
           ? "Host stopped. This turn was interrupted."
           : run.persistenceFailed ? STORAGE_FAILURE : run.cancelled ? "Stopped by you." : error;
@@ -212,6 +212,7 @@ export class SessionRuns {
           run.persistenceFailed
             ? { type: "interrupted", reason: "persistence failure" }
             : { type: "settled", error, cancelled: run.cancelled },
+          latest,
         );
       } catch (error) {
         report("Session settlement failed:", error);

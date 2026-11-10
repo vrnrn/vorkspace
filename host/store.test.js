@@ -239,14 +239,16 @@ it("writes and serializes only a changed tail while preserving large hidden payl
   const updated = store.save({
     ...saved, revision: 2,
     session: { ...saved.session, blocks: [saved.session.blocks[0], { ...saved.session.blocks[1], text: "second" }] },
-  }, { type: "tail" });
+  }, { type: "tail" }, saved);
   expect(stringify.mock.calls.some(([value]) => value === saved.session.blocks[0])).toBe(false);
   expect(stringify.mock.results.filter((result) => typeof result.value === "string").every((result) => result.value.length < 4096)).toBe(true);
   expect(prepare.mock.calls.every(([sql]) => !sql.includes("SELECT") || !sql.includes("payload"))).toBe(true);
+  expect(prepare.mock.calls.some(([sql]) => sql.includes("SELECT id, ordinal, revision, digest"))).toBe(false);
   expect(prepare.mock.calls.filter(([sql]) => sql.includes("INSERT INTO session_blocks"))).toHaveLength(1);
   stringify.mockRestore();
   prepare.mockRestore();
   expect(store.db.prepare("SELECT id FROM changed_blocks").all().map((row) => row.id)).toEqual(["tail"]);
+  expect(() => store.advance(saved, { type: "stale" }, saved)).toThrow("Session changed");
   const reopened = new HostStore(join(directory, "host.db"));
   cleanups.push(() => reopened.close());
   const parse = vi.spyOn(JSON, "parse");
