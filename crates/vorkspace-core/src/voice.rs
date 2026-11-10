@@ -17,18 +17,17 @@ pub struct Conversation {
     pub thread_id: Option<String>,
 }
 pub fn conversation(store: &Store) -> Result<Conversation, String> {
-    let raw = store.setting(KEY)?.or_else(|| {
-        store
-            .desktop_preferences()
-            .and_then(|p| p.get(KEY))
-            .map(str::to_owned)
-    });
+    decode_conversation(store, store.setting(KEY)?.as_deref())
+}
+
+fn decode_conversation(store: &Store, native: Option<&str>) -> Result<Conversation, String> {
+    let raw = native.or_else(|| store.desktop_preferences().and_then(|p| p.get(KEY)));
     match raw {
         None => Ok(Conversation {
             revision: "initial".into(),
             thread_id: None,
         }),
-        Some(raw) => serde_json::from_str(&raw)
+        Some(raw) => serde_json::from_str(raw)
             .map_err(|_| "Vox conversation is unreadable; reset it explicitly in Settings".into()),
     }
 }
@@ -41,12 +40,14 @@ pub fn save(store: &Store, expected: &Conversation, thread: &str) -> Result<(), 
     {
         return Err("Invalid Vox thread identity".into());
     }
-    let current = conversation(store)?;
+    let native = store.setting(KEY)?;
+    let current = decode_conversation(store, native.as_deref())?;
     if &current != expected {
         return Err("Vox conversation changed; start the call again".into());
     }
-    store.save_setting(
+    store.compare_swap_setting(
         KEY,
+        native.as_deref(),
         &serde_json::to_string(&Conversation {
             revision: current.revision,
             thread_id: Some(thread.into()),
