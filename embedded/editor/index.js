@@ -1,11 +1,10 @@
 // The editor's parsers, completions, folding and search run without a DOM
 // in a bounded QuickJS worker. All offsets at this boundary are UTF-16.
 import { EditorState, Text } from "@codemirror/state";
-import { ensureSyntaxTree, foldable } from "@codemirror/language";
+import { ensureSyntaxTree, foldable, syntaxTree } from "@codemirror/language";
 import { CompletionContext, completeFromList } from "@codemirror/autocomplete";
 import { SearchQuery } from "@codemirror/search";
 import { highlightTree } from "@lezer/highlight";
-import { syntaxTree } from "@codemirror/language";
 import {
   languageForPath,
   syntaxTagHighlighter,
@@ -19,16 +18,13 @@ import {
   stageChunkText,
   revertChunkText,
 } from "./editorGit.js";
-import {
-  editorTyping,
-  tryExpandEmmet,
-} from "./editorEditing.js";
+import { emmetExtension, tryExpandEmmet } from "./editorEditing.js";
 async function stateFor(path, source, pos = 0, fullParse = false) {
   const language = (await languageForPath(path)) ?? [];
   const state = EditorState.create({
     doc: source,
     selection: { anchor: pos },
-    extensions: [language, editorTyping(path)],
+    extensions: [language, emmetExtension(path)],
   });
   return parsedState(state, fullParse);
 }
@@ -74,38 +70,47 @@ globalThis.vorkspaceAnalyze = async (path, source, original) => {
     );
     return tokens;
   };
-  const hasDiff = original != null && original !== source;
-  const originalTokens = hasDiff
-    ? tokensFor(originalState(state, source, original))
-    : [];
-  const changes = !hasDiff
-    ? []
-    : Chunk.build(Text.of(original.split("\n")), state.doc, {
-        scanLimit: 5_000,
-        timeout: 100,
-      }).map((chunk) => ({
-        kind:
-          chunk.fromA !== chunk.toA
-            ? chunk.fromB !== chunk.toB
-              ? "mod"
-              : "del"
-            : "add",
-        from: Math.min(chunk.fromB, source.length),
-        to: Math.min(chunk.endB, source.length),
-        original: original.slice(chunk.fromA, chunk.toA),
-        old_line: original.slice(0, chunk.fromA).split("\n").length,
-        tokens: originalTokens
-          .filter((t) => t.to > chunk.fromA && t.from < chunk.toA)
-          .map((t) => ({
-            from: Math.max(t.from, chunk.fromA) - chunk.fromA,
-            to: Math.min(t.to, chunk.toA) - chunk.fromA,
-            kind: t.kind,
-          })),
-        deleted: original
-          .slice(chunk.fromA, chunk.toA)
-          .replace(/\n$/, "")
-          .split("\n").length,
-      }));
+  const changes = [];
+  if (original != null && original !== source) {
+    const baseline = Text.of(original.split("\n"));
+    const chunks = Chunk.build(baseline, state.doc, {
+      scanLimit: 5_000,
+      timeout: 100,
+    });
+    const originalTokens = chunks.length
+      ? tokensFor(originalState(state, source, original))
+      : [];
+    const lineAt = (offset) =>
+      baseline.lineAt(Math.min(offset, baseline.length)).number;
+    let first = 0;
+    for (const chunk of chunks) {
+      const { fromA, toA, fromB, toB, endB } = chunk;
+      const old = original.slice(fromA, toA);
+      const oldLine = lineAt(fromA);
+      const oldEnd = fromA + old.length - Number(old.endsWith("\n"));
+      // Both streams are in document order. Keep a boundary-spanning token
+      // available for the next chunk, without revisiting preceding tokens.
+      while (originalTokens[first]?.to <= fromA) first++;
+      const tokens = [];
+      for (let i = first; originalTokens[i]?.from < toA; i++) {
+        const { from, to, kind } = originalTokens[i];
+        tokens.push({
+          from: Math.max(from, fromA) - fromA,
+          to: Math.min(to, toA) - fromA,
+          kind,
+        });
+      }
+      changes.push({
+        kind: fromA !== toA ? (fromB !== toB ? "mod" : "del") : "add",
+        from: Math.min(fromB, source.length),
+        to: Math.min(endB, source.length),
+        original: old,
+        old_line: oldLine,
+        tokens,
+        deleted: lineAt(oldEnd) - oldLine + 1,
+      });
+    }
+  }
   const folds = [];
   for (let n = 1; n <= state.doc.lines; n++) {
     const line = state.doc.line(n);
