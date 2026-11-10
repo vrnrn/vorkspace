@@ -4,7 +4,10 @@ use super::{
     effects::{MinionEffects, Permit},
 };
 use gpui::{App, AppContext as _, Context, Entity, EventEmitter, Task, WeakEntity};
-use std::{collections::HashMap, path::PathBuf};
+use std::{
+    collections::{HashMap, HashSet},
+    path::PathBuf,
+};
 use vorkspace_core::{
     agent::{AccessMode, Settings},
     bot::{Roster, home},
@@ -31,6 +34,9 @@ pub(crate) struct SharedRoster {
     pub(super) removed: HashMap<String, u64>,
     chat_owners: HashMap<String, WeakEntity<Bots>>,
     habit_runner: Option<WeakEntity<Bots>>,
+    // New ordinary messages can hand off within this process. Leave older
+    // queues on the existing cold recovery policy after app restart.
+    live_messages: HashSet<String>,
     minion_effects: MinionEffects,
     minions_enabled: bool,
     writes: Option<Task<()>>,
@@ -55,6 +61,7 @@ impl SharedRoster {
             removed: HashMap::new(),
             chat_owners: HashMap::new(),
             habit_runner: None,
+            live_messages: HashSet::new(),
             minion_effects: MinionEffects::default(),
             minions_enabled: false,
             writes: None,
@@ -113,6 +120,10 @@ impl SharedRoster {
         }
         self.habit_runner = Some(owner);
         true
+    }
+
+    pub(super) fn live_message(&self, id: &str) -> bool {
+        self.live_messages.contains(id)
     }
 
     pub(super) fn configure_minions(&mut self, enabled: bool) {
@@ -266,7 +277,24 @@ impl SharedRoster {
                         let changed = shared.member_ids().as_ref() != Some(&ids);
                         shared.revision += 1;
                         let mut retired = Vec::new();
+                        let messages = |roster: &Roster| {
+                            roster
+                                .bots
+                                .iter()
+                                .flat_map(|bot| {
+                                    bot.outbox
+                                        .iter()
+                                        .filter(|message| message.peer.is_none())
+                                        .map(|message| message.id.clone())
+                                })
+                                .collect::<HashSet<_>>()
+                        };
+                        let current = messages(&snapshot);
+                        shared.live_messages.retain(|id| current.contains(id));
                         if let Ok(previous) = &shared.snapshot {
+                            shared
+                                .live_messages
+                                .extend(current.difference(&messages(previous)).cloned());
                             for bot in &previous.bots {
                                 if snapshot.get(&bot.id).is_none() {
                                     shared.removed.insert(bot.id.clone(), shared.revision);

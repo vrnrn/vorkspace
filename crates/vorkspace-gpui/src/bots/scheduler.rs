@@ -1215,7 +1215,7 @@ impl Bots {
         for view in self.chats.values() {
             view.update(cx, |chat, cx| chat.sync_native_history(cx));
         }
-        self.resume_peer_queues(cx);
+        self.resume_pending_work(cx);
         self.check_habits(cx);
         cx.notify();
     }
