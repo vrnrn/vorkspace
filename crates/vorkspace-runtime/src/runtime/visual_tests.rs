@@ -72,6 +72,7 @@ for line in sys.stdin:
     let worker = std::thread::spawn(move || {
         run_turn_using(
             TurnInput {
+                composer_origin: None,
                 summary,
                 prompt: "Show a native visual".into(),
                 settings: Settings::default(),

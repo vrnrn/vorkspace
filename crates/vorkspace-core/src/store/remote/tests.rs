@@ -14,6 +14,40 @@ fn snapshot(id: &str) -> Value {
 }
 
 #[test]
+fn journal_consumes_the_draft_across_first_binding_and_preserves_new_edits() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("vorkspace.db");
+    let store = Store::open_vorkspace(&path).unwrap();
+    let project = project(&store, "env");
+    let summary = store.create("codex", &project.key).unwrap();
+    let id = summary.id;
+    let mut input = json!({"cwd":summary.cwd,"text":"Send once","selectionStart":0,"selectionEnd":0,"attachments":[],"mcpTags":[]});
+    let revision = store.save_composer_draft(id, 0, &input).unwrap();
+    let origin = store.composer_origin(id, revision).unwrap();
+    let before = store.remote_session(id).unwrap().unwrap();
+    let mut next = before.clone();
+    next.outbox = vec![json!({"type":"send","commandId":"send-once","text":"Send once"})];
+    next.composer_origin = Some(origin.clone());
+    let pending = store.commit_remote_journal(&before, next).unwrap();
+    assert!(store.composer_draft(id).unwrap().unwrap().deleted);
+    let mut bound = pending.clone();
+    bound.session_id = Some("host-assigned".into());
+    bound.outbox.clear();
+    store.commit_remote_journal(&pending, bound).unwrap();
+    drop(store);
+
+    let store = Store::open_vorkspace(&path).unwrap();
+    let saved = store.composer_draft(id).unwrap().unwrap();
+    assert_eq!(saved.revision, revision);
+    assert!(saved.deleted);
+    assert!(store.composer_origin(id, revision).is_err());
+    input["text"] = json!("Edit after the journal commit");
+    let latest = store.save_composer_draft(id, revision, &input).unwrap();
+    assert_ne!(store.composer_origin(id, latest).unwrap(), origin);
+    assert!(!store.composer_draft(id).unwrap().unwrap().deleted);
+}
+
+#[test]
 fn a_remote_binding_read_uses_the_current_sidecar_and_isolates_invalid_records() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("vorkspace.db");

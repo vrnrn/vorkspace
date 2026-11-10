@@ -3,6 +3,7 @@
 use super::*;
 use serde_json::{Value, json};
 use std::sync::Mutex;
+use vorkspace_core::store::ComposerOrigin;
 
 pub(super) struct State {
     pub(super) writer: Arc<Mutex<Writer>>,
@@ -12,6 +13,12 @@ pub(super) struct State {
     hydrating: bool,
     pub(super) error: Option<String>,
     resolving: bool,
+    submission: Option<PendingSubmission>,
+}
+
+struct PendingSubmission {
+    origin: ComposerOrigin,
+    generation: u64,
 }
 pub(super) struct Writer {
     store: Database,
@@ -48,6 +55,7 @@ impl State {
             hydrating: true,
             error: None,
             resolving: false,
+            submission: None,
         }
     }
     pub(super) fn flush(&self) -> Result<(), String> {
@@ -67,6 +75,9 @@ impl State {
             .lock()
             .unwrap_or_else(|e| e.into_inner())
             .generation
+    }
+    pub(super) fn submitting(&self) -> bool {
+        self.submission.is_some()
     }
     pub(super) fn forget_recovery(&self, owner: &str) {
         self.writer
@@ -198,6 +209,98 @@ fn same_submission_input(a: &Value, b: &Value) -> bool {
             })
 }
 impl Conversation {
+    pub(super) fn composer_submission_pending(&mut self, cx: &mut Context<Self>) -> bool {
+        if !self.composer_draft.submitting() {
+            return false;
+        }
+        self.persist_composer(cx);
+        self.composer_draft
+            .submission
+            .as_ref()
+            .is_some_and(|submission| submission.generation == self.composer_draft.generation())
+    }
+
+    pub(super) fn prepare_composer_submission(
+        &mut self,
+        cx: &mut Context<Self>,
+    ) -> Result<ComposerOrigin, String> {
+        if !self.composer_draft.ready_for_replacement() || self.composer_draft.submitting() {
+            return Err("Wait for the current draft to finish loading or sending.".into());
+        }
+        self.capture_composer(cx);
+        self.composer_draft.flush()?;
+        let (revision, generation) = {
+            let writer = self
+                .composer_draft
+                .writer
+                .lock()
+                .unwrap_or_else(|e| e.into_inner());
+            (writer.revision, writer.generation)
+        };
+        let origin = locked(&self.store)?.composer_origin(self.summary.id, revision)?;
+        self.composer_draft.submission = Some(PendingSubmission {
+            origin: origin.clone(),
+            generation,
+        });
+        Ok(origin)
+    }
+
+    pub(super) fn accept_composer_submission(
+        &mut self,
+        origin: &ComposerOrigin,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(generation) = self
+            .composer_draft
+            .submission
+            .as_ref()
+            .filter(|pending| pending.origin == *origin)
+            .map(|pending| pending.generation)
+        else {
+            return;
+        };
+        self.persist_composer(cx);
+        self.composer_draft.submission = None;
+        if self.composer_draft.generation() == generation && !self.input.read(cx).is_composing() {
+            self.attachments.clear();
+            self.follow_ups.draft_selected = false;
+            self.input
+                .update(cx, |input, cx| input.set_text(String::new(), cx));
+            self.persist_composer(cx);
+        }
+        cx.notify();
+    }
+
+    pub(super) fn finish_composer_submission(&mut self, cx: &mut Context<Self>) {
+        if self.composer_draft.submission.take().is_some() {
+            self.persist_composer(cx);
+        }
+    }
+
+    pub(super) fn settle_composer_submission(
+        &mut self,
+        origin: &ComposerOrigin,
+        cx: &mut Context<Self>,
+    ) {
+        if !self
+            .composer_draft
+            .submission
+            .as_ref()
+            .is_some_and(|pending| &pending.origin == origin)
+        {
+            return;
+        }
+        let committed =
+            locked(&self.store).and_then(|store| store.composer_transfer_committed(origin));
+        match committed {
+            Ok(true) => self.accept_composer_submission(origin, cx),
+            Ok(false) => self.finish_composer_submission(cx),
+            // Keep the offered version fenced until storage or a newer edit
+            // supplies ownership. An uncertain read must not recreate it.
+            Err(_) => {}
+        }
+    }
+
     /// A direct Bot send may have reached the outbox before its UI
     /// acknowledgement. Reuse its durable identity after reopening, so that
     /// neither a queued message nor a dispatch claim can be submitted twice.
@@ -630,12 +733,13 @@ impl Conversation {
                                 == b["server"]["enabled"].as_bool().unwrap_or(true)
                     })
             });
-        if current["text"].as_str() == Some(input.content.as_ref())
-            && current["selectionStart"].as_u64() == Some(selection.start as u64)
-            && current["selectionEnd"].as_u64() == Some(selection.end as u64)
-            && same_files
-            && same_tags
-        {
+        let same_input =
+            current["text"].as_str() == Some(input.content.as_ref()) && same_files && same_tags;
+        let same_selection = current["selectionStart"].as_u64() == Some(selection.start as u64)
+            && current["selectionEnd"].as_u64() == Some(selection.end as u64);
+        // Moving the caret while this version is offered must not publish
+        // another unsent copy of the same input after its receipt commits.
+        if same_input && (same_selection || self.composer_draft.submitting()) {
             return false;
         }
         let mut payload = state.base.as_object().cloned().unwrap_or_default();

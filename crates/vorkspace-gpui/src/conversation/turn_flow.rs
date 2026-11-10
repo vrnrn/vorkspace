@@ -1,10 +1,13 @@
 //! Submitting prompts and receiving a turn's updates.
 use super::*;
 use std::path::PathBuf;
-use vorkspace_core::agent::RemoteAction;
+use vorkspace_core::{agent::RemoteAction, store::ComposerOrigin};
 
 enum PromptSource<'a> {
-    Composer,
+    Composer {
+        origin: ComposerOrigin,
+        save_remote_draft: bool,
+    },
     Direct,
     Coordinator,
     Queued {
@@ -64,7 +67,7 @@ impl Conversation {
         })
     }
     pub(super) fn send(&mut self, cx: &mut Context<Self>) {
-        if self.reject_user_entry(cx) {
+        if self.reject_user_entry(cx) || self.composer_submission_pending(cx) {
             return;
         }
         let kind = match self.execution_provider() {
@@ -245,12 +248,20 @@ impl Conversation {
         if self.prepare_ticket_context(cx) {
             return;
         }
-        let raw = self
-            .input
-            .update(cx, |i, cx| i.take(cx))
-            .unwrap_or_default();
+        let queueing = self.stopping
+            || self.busy
+            || self.settings.pending_provider_switch.is_some()
+            || (!self.follow_ups.state.messages.is_empty() && !self.follow_ups.state.paused);
+        let text = self.input.read(cx).content.as_ref();
+        let raw = if text.trim().is_empty() {
+            String::new()
+        } else {
+            text.to_owned()
+        };
         let prompt = self.consume_mode_command(raw, cx);
         if prompt.trim().is_empty() && self.attachments.is_empty() {
+            self.input
+                .update(cx, |input, cx| input.set_text(String::new(), cx));
             return;
         }
         self.completion
@@ -269,11 +280,8 @@ impl Conversation {
             // the outgoing provider and commits the handoff.
             self.stop(cx);
         }
-        if self.stopping
-            || self.busy
-            || self.settings.pending_provider_switch.is_some()
-            || (!self.follow_ups.state.messages.is_empty() && !self.follow_ups.state.paused)
-        {
+        if queueing {
+            self.input.update(cx, |input, cx| input.take(cx));
             self.enqueue_follow_up(prompt, mode.map(str::to_owned), cx);
             if self.stopping || self.settings.pending_provider_switch.is_some() {
                 // A fresh Send continues the conversation, while older queued
@@ -296,9 +304,37 @@ impl Conversation {
             }
             return;
         }
-        if self.launch_turn(prompt, PromptSource::Composer, cx) && mode.is_some() {
+        if self.launch_composer(prompt, false, cx) && mode.is_some() {
             self.clear_submitted_mode(cx);
         }
+    }
+
+    pub(super) fn launch_composer(
+        &mut self,
+        prompt: String,
+        save_remote_draft: bool,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        let origin = match self.prepare_composer_submission(cx) {
+            Ok(origin) => origin,
+            Err(error) => {
+                self.status = error;
+                cx.notify();
+                return false;
+            }
+        };
+        let launched = self.launch_turn(
+            prompt,
+            PromptSource::Composer {
+                origin,
+                save_remote_draft,
+            },
+            cx,
+        );
+        if !launched {
+            self.finish_composer_submission(cx);
+        }
+        launched
     }
     pub(super) fn launch_prompt(&mut self, prompt: String, cx: &mut Context<Self>) {
         self.launch_turn(prompt, PromptSource::Direct, cx);
@@ -362,7 +398,7 @@ impl Conversation {
             }
         };
         if self.stopping {
-            if !matches!(source, PromptSource::Direct | PromptSource::Composer) {
+            if !matches!(source, PromptSource::Direct) {
                 return false;
             }
             let mode = if self.settings.orchestrator {
@@ -429,16 +465,22 @@ impl Conversation {
         let queued = matches!(source, PromptSource::Queued { .. });
         let reset_orchestration = matches!(
             source,
-            PromptSource::Composer | PromptSource::Queued { .. } | PromptSource::Bot { .. }
+            PromptSource::Composer { .. } | PromptSource::Queued { .. } | PromptSource::Bot { .. }
         );
         let one_shot_mode = matches!(
             source,
             PromptSource::Queued { .. } | PromptSource::Bot { .. }
         );
+        let mut composer_origin = None;
         match source {
-            PromptSource::Composer => {
+            PromptSource::Composer {
+                origin,
+                save_remote_draft,
+            } => {
                 settings.ticket_context = self.ticket_context.ready.take().map(Into::into);
-                settings.attachments = std::mem::take(&mut self.attachments);
+                settings.attachments = self.attachments.clone();
+                settings.remote_action = save_remote_draft.then_some(RemoteAction::SaveDraft);
+                composer_origin = Some(origin);
             }
             PromptSource::Coordinator => settings.internal_message = true,
             PromptSource::Queued {
@@ -461,9 +503,6 @@ impl Conversation {
                 apply_turn_mode(&mut settings, mode);
             }
             PromptSource::Remote(action) => {
-                if action == RemoteAction::SaveDraft {
-                    settings.attachments = std::mem::take(&mut self.attachments);
-                }
                 settings.remote_action = Some(action);
             }
             PromptSource::Direct => {}
@@ -507,7 +546,8 @@ impl Conversation {
             settings.worktree_base = settings.worktree_base.or(self.branch.clone());
             self.status = "Creating worktree…".into();
         }
-        if settings.bot.is_none()
+        if composer_origin.is_none()
+            && settings.bot.is_none()
             && matches!(
                 settings.remote_action,
                 None | Some(
@@ -539,19 +579,21 @@ impl Conversation {
             .is_remote()
             .then(|| self.remote_state.client.clone())
             .flatten();
-        let projection = turn_projection::TurnProjection::new(
+        let mut projection = turn_projection::TurnProjection::new(
             generation,
             source_provider,
             source_account,
             turn_model_id,
         );
+        projection.composer_origin = composer_origin.clone();
         self.controls = Some(admission.launch(
-            turn_driver::Request {
+            vorkspace_runtime::runtime::TurnInput {
                 summary,
                 prompt,
                 settings,
-                remote,
+                composer_origin,
             },
+            remote,
             projection,
             cx,
         ));
@@ -625,11 +667,19 @@ impl Conversation {
             self.fail_follow_up(&id, error, cx);
         }
     }
-    pub(super) fn turn_updates_closed(&mut self, generation: u64, cx: &mut Context<Self>) {
+    pub(super) fn turn_updates_closed(
+        &mut self,
+        generation: u64,
+        composer_origin: Option<&ComposerOrigin>,
+        cx: &mut Context<Self>,
+    ) {
         // The sender can disappear while unwinding, without a final Update.
         // A superseded worker must never release the replacement turn's UI.
         if self.submission_generation != generation || (!self.busy && !self.stopping) {
             return;
+        }
+        if let Some(origin) = composer_origin {
+            self.settle_composer_submission(origin, cx);
         }
         self.cancel.store(true, Ordering::Relaxed);
         self.busy = false;

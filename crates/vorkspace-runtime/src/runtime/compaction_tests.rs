@@ -121,6 +121,7 @@ for line in sys.stdin:
     let (_control, controls) = std::sync::mpsc::channel();
     run_turn_using(
         TurnInput {
+            composer_origin: None,
             summary: summary.clone(),
             prompt: "Back in Vorkspace".into(),
             settings,
@@ -224,6 +225,7 @@ fn bot_final_snapshot_includes_imports_when_initial_publication_is_stopped_or_sk
                 let (_control, controls) = std::sync::mpsc::channel();
                 run_turn_using(
                     TurnInput {
+                        composer_origin: None,
                         summary,
                         prompt: "Managed prompt".into(),
                         settings,
@@ -559,7 +561,7 @@ fn native_cursor_advance_blocks_stale_bot_and_compaction_admission() {
     let mut submissions = submissions::Submissions::new(store.clone(), summary.id);
     assert!(
         submissions
-            .reserve_initial("Stale prompt", &settings, Some(&checked))
+            .reserve_initial("Stale prompt", &settings, Some(&checked), None)
             .is_err()
     );
     assert!(
@@ -696,6 +698,7 @@ fn rollover_resets_context_before_provider_start_and_keeps_it_reset_on_failure()
         let (_controls, control_rx) = std::sync::mpsc::channel();
         run_turn_using(
             TurnInput {
+                composer_origin: None,
                 summary: summary.clone(),
                 prompt: "Try to continue".into(),
                 settings,
@@ -801,6 +804,7 @@ for line in sys.stdin:
         let (_controls, control_rx) = std::sync::mpsc::channel();
         run_turn_using(
             TurnInput {
+                composer_origin: None,
                 summary: summary.clone(),
                 prompt: "Keep working.".into(),
                 settings,
@@ -930,6 +934,7 @@ for line in sys.stdin:
         let (_controls, control_rx) = std::sync::mpsc::channel();
         run_turn_using(
             TurnInput {
+                composer_origin: None,
                 summary: summary.clone(),
                 prompt: format!("Work {turn}"),
                 settings: settings.clone(),

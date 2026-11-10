@@ -5,12 +5,7 @@ use std::{
     collections::HashMap,
     sync::{Arc, atomic::AtomicBool},
 };
-use vorkspace_core::{
-    agent::{Control, Settings},
-    process::TurnToken,
-    remote::Connections,
-    store::Session,
-};
+use vorkspace_core::{agent::Control, process::TurnToken, remote::Connections};
 use vorkspace_runtime::runtime::{self, Database, Update};
 
 #[derive(Clone, Copy, PartialEq, Eq, Hash)]
@@ -93,13 +88,6 @@ pub(super) fn admit(
     })
 }
 
-pub(super) struct Request {
-    pub(super) summary: Session,
-    pub(super) prompt: String,
-    pub(super) settings: Settings,
-    pub(super) remote: Option<Arc<Connections>>,
-}
-
 impl Admission {
     pub(super) fn cancel_handle(&self) -> Arc<AtomicBool> {
         self.cancel.clone()
@@ -107,16 +95,11 @@ impl Admission {
 
     pub(super) fn launch(
         self,
-        request: Request,
+        input: runtime::TurnInput,
+        remote: Option<Arc<Connections>>,
         projection: TurnProjection,
         cx: &mut App,
     ) -> std::sync::mpsc::Sender<Control> {
-        let Request {
-            summary,
-            prompt,
-            settings,
-            remote,
-        } = request;
         let store = self.store.clone();
         let (controls, control_rx) = std::sync::mpsc::channel();
         let (tx, rx) = async_channel::bounded(8);
@@ -128,11 +111,9 @@ impl Admission {
                 // the recipient view has gone away or the worker unwinds.
                 let _worker_alive = worker_alive;
                 if let Some(client) = remote {
-                    runtime::remote::run_with_client(
-                        client, summary, prompt, settings, control_rx, store, cancel, tx,
-                    );
+                    runtime::remote::run_with_client(client, input, control_rx, store, cancel, tx);
                 } else {
-                    runtime::run_turn(summary, prompt, settings, control_rx, store, cancel, tx);
+                    runtime::run_turn(input, control_rx, store, cancel, tx);
                 }
             })
             .detach();
@@ -193,7 +174,11 @@ pub(super) fn project(
             }
             let _ = view.update(cx, |view, cx| match terminal {
                 Some(update) => projection.apply(view, update, cx),
-                None => view.turn_updates_closed(projection.generation, cx),
+                None => view.turn_updates_closed(
+                    projection.generation,
+                    projection.composer_origin.as_ref(),
+                    cx,
+                ),
             });
         });
     })

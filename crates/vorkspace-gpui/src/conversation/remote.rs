@@ -201,11 +201,7 @@ impl Conversation {
         if prompt.trim().is_empty() && self.attachments.is_empty() {
             return;
         }
-        if self.launch_remote(prompt, RemoteAction::SaveDraft, cx) {
-            self.input
-                .update(cx, |input, cx| input.set_text(String::new(), cx));
-            self.follow_ups.draft_selected = false;
-        }
+        self.launch_composer(prompt, true, cx);
     }
     pub(super) fn remote_notice(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
         if !self.is_remote() || self.busy {

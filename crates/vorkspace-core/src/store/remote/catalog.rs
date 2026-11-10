@@ -192,6 +192,7 @@ impl<'a> Catalog<'a> {
             outbox: Vec::new(),
             uploads: Vec::new(),
             rejected: None,
+            composer_origin: None,
             configuration,
             host_revision: revision.or_else(|| prior.and_then(|remote| remote.host_revision)),
             configuration_revision: if full_snapshot {
@@ -223,6 +224,7 @@ impl<'a> Catalog<'a> {
             remote.outbox = prior.outbox;
             remote.uploads = prior.uploads;
             remote.rejected = prior.rejected;
+            remote.composer_origin = prior.composer_origin;
         }
         self.sessions.insert(id, remote);
         self.changed = true;

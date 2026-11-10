@@ -313,24 +313,41 @@ fn conversation(cx: &mut TestAppContext) -> WindowHandle<Conversation> {
 }
 
 #[gpui::test]
-fn send_paints_before_storage_and_keeps_one_message_after_startup_failure(cx: &mut TestAppContext) {
+fn send_keeps_the_composer_until_dispatch_and_keeps_failed_attempts_in_history(
+    cx: &mut TestAppContext,
+) {
     for text in [
         "First message".to_owned(),
         "🙂 café\n".repeat(400),
         String::new(),
     ] {
         let window = conversation(cx);
-        let attachment = std::path::PathBuf::from("/missing/optimistic-attachment.png");
-        let sent_at = window
+        cx.run_until_parked();
+        let attachment = PathBuf::from("/missing/optimistic-attachment.png");
+        window
             .update(cx, |view, _, cx| {
                 view.attachments.push(attachment.clone());
                 view.input
                     .update(cx, |input, cx| input.set_text(text.clone(), cx));
                 view.send(cx);
                 assert!(view.busy);
-                assert!(view.summary.has_messages);
-                assert!(view.input.read(cx).content.is_empty());
-                assert!(view.attachments.is_empty());
+                assert_eq!(view.input.read(cx).content.as_ref(), text.as_str());
+                assert_eq!(view.attachments, [attachment.clone()]);
+                assert!(view.transcript.read(cx).source_rows().is_empty());
+                let store = locked(&view.store).unwrap();
+                let saved = store.composer_draft(view.summary.id).unwrap().unwrap();
+                assert_eq!(saved.payload["text"], text);
+                assert!(!saved.deleted);
+                assert!(store.local_submissions(view.summary.id).unwrap().is_empty());
+            })
+            .unwrap();
+        super::receive_tests::settle_turn(window, cx);
+        window
+            .update(cx, |view, _, cx| {
+                assert!(!view.busy);
+                assert_ne!(view.status, UNCONFIRMED_TURN);
+                assert_eq!(view.input.read(cx).content.as_ref(), text.as_str());
+                assert_eq!(view.attachments, [attachment.clone()]);
                 let rows = view.transcript.read(cx).source_rows();
                 assert_eq!(
                     rows.iter()
@@ -345,47 +362,13 @@ fn send_paints_before_storage_and_keeps_one_message_after_startup_failure(cx: &m
                         .collect::<String>(),
                     text
                 );
-                assert_eq!(rows.last().unwrap().role, "assistant");
+                assert!(rows[0].sent_at.is_some());
+                assert_eq!(rows.last().unwrap().role, "error");
                 let manifest = rows
                     .iter()
                     .find(|row| row.role == attachments::ROLE)
                     .unwrap();
-                assert_eq!(
-                    attachments::paths(manifest).unwrap(),
-                    std::slice::from_ref(&attachment)
-                );
-                assert!(
-                    locked(&view.store)
-                        .unwrap()
-                        .load(view.summary.id)
-                        .unwrap()
-                        .rows
-                        .is_empty(),
-                    "the bubble must exist before the background save runs"
-                );
-                rows[0].sent_at
-            })
-            .unwrap();
-        super::receive_tests::settle_turn(window, cx);
-        window
-            .update(cx, |view, _, cx| {
-                assert!(!view.busy);
-                assert_ne!(
-                    view.status, UNCONFIRMED_TURN,
-                    "a final update confirms normal termination"
-                );
-                let rows = view.transcript.read(cx).source_rows();
-                assert_eq!(
-                    rows.iter()
-                        .filter(|row| row.first && row.is_prompt())
-                        .count(),
-                    1
-                );
-                assert_eq!(
-                    rows[0].sent_at, sent_at,
-                    "acceptance keeps the original send time"
-                );
-                assert_eq!(rows.last().unwrap().role, "error");
+                assert_eq!(attachments::paths(manifest).unwrap(), [attachment.clone()]);
                 assert_eq!(
                     rows,
                     locked(&view.store)
@@ -394,7 +377,6 @@ fn send_paints_before_storage_and_keeps_one_message_after_startup_failure(cx: &m
                         .unwrap()
                         .rows
                 );
-                // A later send must append after the failed message, not replace it.
                 view.input
                     .update(cx, |input, cx| input.set_text("Try again".into(), cx));
                 view.send(cx);
@@ -405,7 +387,7 @@ fn send_paints_before_storage_and_keeps_one_message_after_startup_failure(cx: &m
                         .iter()
                         .filter(|row| row.first && row.is_prompt())
                         .count(),
-                    2
+                    1
                 );
             })
             .unwrap();
@@ -433,10 +415,11 @@ fn send_paints_before_storage_and_keeps_one_message_after_startup_failure(cx: &m
 }
 
 #[gpui::test]
-fn worktree_setup_shows_the_prompt_immediately_and_preserves_it_on_failure(
+fn worktree_setup_keeps_the_unaccepted_draft_and_allows_a_distinct_follow_up(
     cx: &mut TestAppContext,
 ) {
     let window = conversation(cx);
+    cx.run_until_parked();
     window
         .update(cx, |view, _, cx| {
             view.settings.new_worktree = true;
@@ -447,12 +430,11 @@ fn worktree_setup_shows_the_prompt_immediately_and_preserves_it_on_failure(
             view.send(cx);
             assert!(view.busy && view.preparing_worktree);
             assert_eq!(view.status, "Creating worktree…");
-            assert!(view.input.read(cx).content.is_empty());
+            assert_eq!(view.input.read(cx).content, "Start in a worktree");
             assert!(!view.settings.plan);
-            assert_eq!(
-                view.transcript.read(cx).source_rows()[0].text,
-                "Start in a worktree"
-            );
+            assert!(view.transcript.read(cx).source_rows().is_empty());
+            view.send(cx);
+            assert!(view.follow_ups.state.messages.is_empty());
             view.input
                 .update(cx, |input, cx| input.set_text("Follow up".into(), cx));
             view.send(cx);
@@ -485,9 +467,10 @@ fn worktree_setup_shows_the_prompt_immediately_and_preserves_it_on_failure(
 }
 
 #[gpui::test]
-fn stopping_before_the_worker_runs_keeps_the_optimistic_message(cx: &mut TestAppContext) {
+fn stop_before_dispatch_preserves_the_draft_without_admitting_a_turn(cx: &mut TestAppContext) {
     for new_worktree in [false, true] {
         let window = conversation(cx);
+        cx.run_until_parked();
         window
             .update(cx, |view, _, cx| {
                 view.settings.new_worktree = new_worktree;
@@ -495,12 +478,10 @@ fn stopping_before_the_worker_runs_keeps_the_optimistic_message(cx: &mut TestApp
                     input.set_text("Keep this message".into(), cx)
                 });
                 view.send(cx);
+                assert!(view.busy);
                 view.stop(cx);
                 assert!(!view.busy);
-                assert_eq!(
-                    view.transcript.read(cx).source_rows()[0].text,
-                    "Keep this message"
-                );
+                assert_eq!(view.input.read(cx).content, "Keep this message");
             })
             .unwrap();
         cx.run_until_parked();
@@ -508,22 +489,14 @@ fn stopping_before_the_worker_runs_keeps_the_optimistic_message(cx: &mut TestApp
             .update(cx, |view, _, cx| {
                 assert!(!view.stopping);
                 assert!(!view.preparing_worktree);
-                let rows = view.transcript.read(cx).source_rows();
-                assert_eq!(
-                    rows.iter()
-                        .filter(|row| row.first && row.is_prompt())
-                        .count(),
-                    1
-                );
-                assert_eq!(rows[0].text, "Keep this message");
-                assert_eq!(
-                    rows,
-                    locked(&view.store)
-                        .unwrap()
-                        .load(view.summary.id)
-                        .unwrap()
-                        .rows
-                );
+                assert_eq!(view.input.read(cx).content, "Keep this message");
+                assert!(view.transcript.read(cx).source_rows().is_empty());
+                let store = locked(&view.store).unwrap();
+                assert!(store.load(view.summary.id).unwrap().rows.is_empty());
+                assert!(store.local_submissions(view.summary.id).unwrap().is_empty());
+                let saved = store.composer_draft(view.summary.id).unwrap().unwrap();
+                assert!(!saved.deleted);
+                assert_eq!(saved.payload["text"], "Keep this message");
             })
             .unwrap();
     }

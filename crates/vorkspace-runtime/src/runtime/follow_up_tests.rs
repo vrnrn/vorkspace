@@ -77,6 +77,7 @@ for line in sys.stdin:
     let worker = std::thread::spawn(move || {
         run_turn_using(
             TurnInput {
+                composer_origin: None,
                 summary,
                 prompt: "Start working".into(),
                 settings: Settings {
@@ -206,6 +207,7 @@ for line in sys.stdin:
         let binary = binary.clone();
         run_turn_using(
             TurnInput {
+                composer_origin: None,
                 summary: summary.clone(),
                 prompt: "Saved request".into(),
                 settings: Settings {

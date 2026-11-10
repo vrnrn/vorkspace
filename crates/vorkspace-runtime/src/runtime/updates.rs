@@ -3,6 +3,8 @@ use vorkspace_core::{agent::Approval, provider, transcript::Row};
 
 #[derive(Default)]
 pub struct Update {
+    /// The input was transferred to a durable receipt or journal.
+    pub composer_accepted: Option<vorkspace_core::store::ComposerOrigin>,
     /// Full, bounded latest-tool label for this run; None means no known tool.
     pub activity: Option<String>,
     pub transcript: TranscriptPatch,

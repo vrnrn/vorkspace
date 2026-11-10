@@ -1,5 +1,6 @@
 //! Apply an admitted turn's updates to a conversation without owning execution.
 use super::*;
+use vorkspace_core::store::ComposerOrigin;
 use vorkspace_runtime::runtime::Update;
 
 pub(super) struct TurnProjection {
@@ -7,6 +8,7 @@ pub(super) struct TurnProjection {
     source_provider: String,
     source_account: String,
     turn_model_id: Option<String>,
+    pub(super) composer_origin: Option<ComposerOrigin>,
 }
 
 impl TurnProjection {
@@ -21,6 +23,7 @@ impl TurnProjection {
             source_provider,
             source_account,
             turn_model_id,
+            composer_origin: None,
         }
     }
 
@@ -37,10 +40,17 @@ impl TurnProjection {
         if this.submission_generation != self.generation {
             return;
         }
+        let accepted = update.composer_accepted.is_some();
+        if let Some(origin) = update.composer_accepted.as_ref() {
+            this.accept_composer_submission(origin, cx);
+        }
+        if finished && let Some(origin) = self.composer_origin.as_ref() {
+            this.settle_composer_submission(origin, cx);
+        }
         let stopping = this.stopping;
         // The final update settles accepted rows and storage.
         // Ignore streaming notifications after the user stops.
-        if stopping && !finished {
+        if stopping && !finished && !accepted {
             return;
         }
         let source_selected =

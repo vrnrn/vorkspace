@@ -145,7 +145,7 @@ pub(super) fn run_using(
                     .into(),
             );
         }
-        submissions.dispatch_initial()?;
+        submissions.dispatch_initial(None)?;
         let request = Request {
             kind,
             binary,

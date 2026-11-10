@@ -565,37 +565,33 @@ fn reply(question: &Question, answers: Vec<Vec<String>>) -> Value {
     json!({"kind":"answered","answers":selected,"custom":custom})
 }
 pub fn run(
-    summary: Session,
-    prompt: String,
-    settings: Settings,
+    input: super::TurnInput,
     controls: std::sync::mpsc::Receiver<Control>,
     store: Database,
     cancel: Arc<AtomicBool>,
     tx: async_channel::Sender<Update>,
 ) {
     match vorkspace_core::remote::default_connections() {
-        Ok(client) => run_with_client(
-            client, summary, prompt, settings, controls, store, cancel, tx,
-        ),
+        Ok(client) => run_with_client(client, input, controls, store, cancel, tx),
         Err(error) => {
             let _ = tx.send_blocking(update(error, Some(TurnOutcome::Failed)));
         }
     }
 }
-#[allow(
-    clippy::too_many_arguments,
-    reason = "Mirrors the turn worker inputs while injecting the remote transport for isolation"
-)]
 pub fn run_with_client(
     client: Arc<vorkspace_core::remote::Connections>,
-    summary: Session,
-    prompt: String,
-    mut settings: Settings,
+    input: super::TurnInput,
     controls: std::sync::mpsc::Receiver<Control>,
     store: Database,
     cancel: Arc<AtomicBool>,
     tx: async_channel::Sender<Update>,
 ) {
+    let super::TurnInput {
+        summary,
+        prompt,
+        mut settings,
+        composer_origin,
+    } = input;
     let result = (|| -> Result<(), String> {
         if tx.is_closed() {
             return Ok(());
@@ -609,6 +605,14 @@ pub fn run_with_client(
             .ok_or("Remote session no longer exists")?;
         let action = settings.remote_action.take();
         let attaching = matches!(action, Some(RemoteAction::Attach(_)));
+        if composer_origin.is_some()
+            && !matches!(
+                action,
+                None | Some(RemoteAction::SaveDraft | RemoteAction::Compact)
+            )
+        {
+            return Err("This remote operation cannot consume a composer draft".into());
+        }
         if !attaching && Kind::parse(&summary.provider).is_none() {
             return Err(format!(
                 "Provider {} is no longer supported. Saved remote history is still available.",
@@ -636,6 +640,9 @@ pub fn run_with_client(
             }
             if !binding.outbox.is_empty() {
                 return Err("A remote command needs confirmation. Choose Retry before sending another message.".into());
+            }
+            if composer_origin.is_some() && binding.composer_origin == composer_origin {
+                return Err("The Host journal already accepted this composer version".into());
             }
             if settings.operator || settings.orchestrator {
                 return Err(
@@ -776,7 +783,21 @@ pub fn run_with_client(
             binding.rejected = None;
             binding.summary.has_messages = true;
             binding.summary.updated_at = vorkspace_core::time::now_ms();
+            if let Some(origin) = composer_origin.as_ref() {
+                if cancel.load(Ordering::Relaxed) {
+                    return Err("Stopped".into());
+                }
+                binding.composer_origin = Some(origin.clone());
+            }
             binding = locked(&store)?.commit_remote_journal(&before, binding)?;
+            if let Some(origin) = composer_origin {
+                // The outbox can continue independently of the observing window.
+                let _ = tx.send_blocking(Update {
+                    composer_accepted: Some(origin),
+                    status: "Sending to Host…".into(),
+                    ..Default::default()
+                });
+            }
         }
         let mut run = if let Some(RemoteAction::Attach(run_id)) = action {
             Some(ObservedRun {

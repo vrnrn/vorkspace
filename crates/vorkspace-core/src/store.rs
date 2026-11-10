@@ -13,7 +13,7 @@ pub use bot_state::root as bot_root;
 mod card;
 mod composer_draft;
 mod follow_up;
-pub use composer_draft::{ComposerDraft, ComposerRecovery};
+pub use composer_draft::{ComposerDraft, ComposerOrigin, ComposerRecovery};
 mod local_submissions;
 pub use local_submissions::{
     EditAdmissionError, EditBarrier, EditClaim, SubmissionClaim, SubmissionInput, SubmissionOwner,

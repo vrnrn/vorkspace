@@ -490,6 +490,25 @@ impl Store {
     pub fn dispatch_local_submission(&self, attempt: &str) -> Result<SubmissionClaim, String> {
         dispatch(&self.conn, attempt)
     }
+    pub fn dispatch_composer_submission(
+        &self,
+        attempt: &str,
+        origin: &super::ComposerOrigin,
+    ) -> Result<SubmissionClaim, String> {
+        let tx = Transaction::new_unchecked(&self.conn, TransactionBehavior::Immediate)
+            .map_err(|error| error.to_string())?;
+        let claim = dispatch(&tx, attempt)?;
+        if claim.claimed {
+            if claim.receipt.session_id != origin.source
+                || claim.receipt.user_turn_id != origin.message_id()
+            {
+                return Err("Local receipt does not own this composer version".into());
+            }
+            self.transfer_composer_origin(&tx, origin.session, origin)?;
+        }
+        tx.commit().map_err(|error| error.to_string())?;
+        Ok(claim)
+    }
     pub fn settle_local_submission(
         &self,
         attempt: &str,

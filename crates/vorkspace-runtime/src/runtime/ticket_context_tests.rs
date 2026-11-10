@@ -24,6 +24,7 @@ fn inaccessible_ticket_admission_keeps_queued_user_identity_and_never_dispatches
         let (_sender, controls) = std::sync::mpsc::channel();
         run_turn_using(
             TurnInput {
+                composer_origin: None,
                 summary: summary.clone(),
                 prompt: text.into(),
                 settings: Settings {

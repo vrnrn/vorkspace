@@ -6,7 +6,7 @@ use std::time::Duration;
 use vorkspace_core::agent::{Control, Settings};
 use vorkspace_core::{
     provider::{self, Event, Kind, Request},
-    store::{Session, Store},
+    store::{ComposerOrigin, Session, Store},
     transcript::{Row, Transcript},
 };
 mod activity;
@@ -30,10 +30,11 @@ mod visual_discovery;
 mod visual_tests;
 use persistence::PendingSave;
 pub type Database = Arc<Mutex<Store>>;
-struct TurnInput {
-    summary: Session,
-    prompt: String,
-    settings: Settings,
+pub struct TurnInput {
+    pub summary: Session,
+    pub prompt: String,
+    pub settings: Settings,
+    pub composer_origin: Option<ComposerOrigin>,
 }
 
 fn publish(
@@ -60,30 +61,17 @@ pub fn locked(store: &Database) -> Result<std::sync::MutexGuard<'_, Store>, Stri
 }
 
 pub fn run_turn(
-    summary: Session,
-    prompt: String,
-    settings: Settings,
+    input: TurnInput,
     controls: std::sync::mpsc::Receiver<Control>,
     store: Database,
     cancel: Arc<AtomicBool>,
     tx: async_channel::Sender<Update>,
 ) {
-    if summary.cwd.starts_with("remote://") {
-        remote::run(summary, prompt, settings, controls, store, cancel, tx);
+    if input.summary.cwd.starts_with("remote://") {
+        remote::run(input, controls, store, cancel, tx);
         return;
     }
-    run_turn_using(
-        TurnInput {
-            summary,
-            prompt,
-            settings,
-        },
-        controls,
-        store,
-        cancel,
-        tx,
-        provider::resolve,
-    );
+    run_turn_using(input, controls, store, cancel, tx, provider::resolve);
 }
 
 fn run_turn_using(
@@ -98,6 +86,7 @@ fn run_turn_using(
         summary,
         prompt,
         mut settings,
+        composer_origin,
     } = input;
     if settings.account.root.is_none() && settings.account.id != vorkspace_core::accounts::DEFAULT {
         settings.account.root = locked(&store)
@@ -138,6 +127,9 @@ fn run_turn_using(
         .unwrap_or_default();
     let mut usage_limit = None;
     let result = (|| {
+        if composer_origin.is_some() && cancel.load(Ordering::Relaxed) {
+            return Err("Stopped".into());
+        }
         let kind = Kind::parse(&summary.provider).ok_or_else(|| {
             format!(
                 "Provider {} is no longer supported; its saved history is still available",
@@ -176,8 +168,12 @@ fn run_turn_using(
             &cancel,
             settings.ticket_context.take(),
         )?);
-        if let Err(error) = submissions.reserve_initial(&prompt, &settings, native_history.as_ref())
-        {
+        if let Err(error) = submissions.reserve_initial(
+            &prompt,
+            &settings,
+            native_history.as_ref(),
+            composer_origin.as_ref(),
+        ) {
             // Rejected admission owns no transcript rows, even when the
             // ordinary chat loaded a read baseline during preparation.
             history_loaded = false;
@@ -336,7 +332,9 @@ fn run_turn_using(
                 // A native import may have committed while its idle UI refresh
                 // was superseded by this submission. Publish the admitted Bot
                 // baseline together with its prompt, never a tail over stale rows.
-                transcript: if bot_snapshot {
+                transcript: if composer_origin.is_some() {
+                    TranscriptPatch::Unchanged
+                } else if bot_snapshot {
                     TranscriptPatch::BotSnapshot {
                         turn_start,
                         rows: transcript.rows.clone(),
@@ -566,7 +564,22 @@ fn run_turn_using(
         if cancel.load(Ordering::Relaxed) {
             return Err("Stopped".into());
         }
-        submissions.dispatch_initial()?;
+        submissions.dispatch_initial(composer_origin.as_ref())?;
+        if let Some(origin) = composer_origin {
+            // The transfer has already committed. Deliver it even if Stop is
+            // concurrently draining progress updates.
+            tx.send_blocking(Update {
+                composer_accepted: Some(origin),
+                activity: activity.label(),
+                transcript: TranscriptPatch::tail(
+                    turn_start,
+                    transcript.rows[turn_start..].to_vec(),
+                ),
+                status: "Connecting…".into(),
+                ..Default::default()
+            })
+            .map_err(|_| "Window closed".to_owned())?;
+        }
         // The running-work list attributes the provider and its tools to this session.
         let result = vorkspace_core::process::owned_turn(summary.id, &cancel, || {
             provider::run_with_controls(request, cancel.clone(), Some(controls), |events| {
@@ -892,6 +905,7 @@ fn run_turn_using(
                         &tx,
                         &cancel,
                         Update {
+                            composer_accepted: None,
                             activity: activity.label(),
                             worktree_cwd: None,
                             commands,
@@ -1489,6 +1503,7 @@ mod unsupported_history_tests {
             let (tx, rx) = async_channel::bounded(8);
             run_turn_using(
                 TurnInput {
+                    composer_origin: None,
                     summary: summary.clone(),
                     prompt: "Continue".into(),
                     settings: settings.clone(),

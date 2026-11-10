@@ -194,11 +194,14 @@ fn observe_snapshots(snapshots: Vec<Value>) -> Vec<Update> {
     let worker = thread::spawn(move || {
         run_with_client(
             client,
-            binding.summary,
-            String::new(),
-            Settings {
-                remote_action: Some(RemoteAction::Attach(None)),
-                ..Default::default()
+            super::super::TurnInput {
+                summary: binding.summary,
+                prompt: String::new(),
+                settings: Settings {
+                    remote_action: Some(RemoteAction::Attach(None)),
+                    ..Default::default()
+                },
+                composer_origin: None,
             },
             controls,
             store,
@@ -516,9 +519,12 @@ fn attaching_never_replays_pending_sends_or_stops_a_run_when_receiver_closes() {
     let worker = thread::spawn(move || {
         run_with_client(
             client,
-            summary,
-            String::new(),
-            settings,
+            super::super::TurnInput {
+                summary,
+                prompt: String::new(),
+                settings,
+                composer_origin: None,
+            },
             controls,
             worker_store,
             Arc::new(AtomicBool::new(false)),
@@ -590,9 +596,12 @@ fn explicit_stop_is_journaled_once_for_the_observed_run() {
     let worker = thread::spawn(move || {
         run_with_client(
             client,
-            summary,
-            String::new(),
-            settings,
+            super::super::TurnInput {
+                summary,
+                prompt: String::new(),
+                settings,
+                composer_origin: None,
+            },
             controls,
             worker_store,
             Arc::new(AtomicBool::new(true)),
@@ -657,11 +666,14 @@ fn stop_never_targets_a_successor_seen_during_observation() {
     let worker = thread::spawn(move || {
         run_with_client(
             client,
-            binding.summary,
-            String::new(),
-            Settings {
-                remote_action: Some(RemoteAction::Attach(Some("host-run".into()))),
-                ..Default::default()
+            super::super::TurnInput {
+                summary: binding.summary,
+                prompt: String::new(),
+                settings: Settings {
+                    remote_action: Some(RemoteAction::Attach(Some("host-run".into()))),
+                    ..Default::default()
+                },
+                composer_origin: None,
             },
             controls,
             store,
@@ -860,9 +872,12 @@ require('node:readline').createInterface({input:process.stdin}).on('line', line 
         let worker = thread::spawn(move || {
             run_with_client(
                 worker_client,
-                worker_summary,
-                text,
-                settings,
+                super::super::TurnInput {
+                    summary: worker_summary,
+                    prompt: text,
+                    settings,
+                    composer_origin: None,
+                },
                 controls,
                 worker_store,
                 Arc::new(AtomicBool::new(false)),
@@ -985,11 +1000,14 @@ fn ambiguous_legacy_requests_block_direct_send_and_retry_before_transport() {
         let (_controls_tx, controls) = std::sync::mpsc::channel();
         run_with_client(
             client.clone(),
-            binding.summary.clone(),
-            "new message".into(),
-            Settings {
-                remote_action: action,
-                ..Default::default()
+            super::super::TurnInput {
+                summary: binding.summary.clone(),
+                prompt: "new message".into(),
+                settings: Settings {
+                    remote_action: action,
+                    ..Default::default()
+                },
+                composer_origin: None,
             },
             controls,
             store.clone(),

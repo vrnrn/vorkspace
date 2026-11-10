@@ -70,6 +70,10 @@ pub struct RemoteSession {
     /// Definite host rejections retain the original text for explicit recovery.
     #[serde(default)]
     pub rejected: Option<Value>,
+    /// The last exact composer revision accepted into this desktop journal.
+    /// Kept after dispatch so reopening cannot offer the same draft again.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub composer_origin: Option<super::ComposerOrigin>,
     /// Last full host snapshot, used to reconcile changes from other desktops.
     #[serde(default)]
     pub configuration: Option<Value>,
@@ -412,6 +416,7 @@ impl Store {
         self.edit_remote_session(session.summary.id, |current| {
             let mut next = session.clone();
             if let Some(current) = current.filter(|current| current.same_binding(&next)) {
+                next.composer_origin = current.composer_origin;
                 // Host observations can commit while a command is in flight.
                 // Legacy writes still preserve newer revisioned metadata.
                 if next.host_revision < current.host_revision {
@@ -445,10 +450,19 @@ impl Store {
                         && current.outbox == before.outbox
                         && current.uploads == before.uploads
                         && current.rejected == before.rejected
+                        && current.composer_origin == before.composer_origin
                 })
                 .ok_or("The local remote command journal changed. Refresh the conversation before retrying.")?;
             if current.session_id.is_some() && current.session_id != next.session_id {
                 return Err("A remote receipt cannot change an existing session binding".into());
+            }
+            if current.composer_origin != next.composer_origin {
+                let origin = next.composer_origin.as_ref()
+                    .ok_or("A remote journal cannot discard a composer transfer")?;
+                if origin.session != before.summary.id || next.outbox.is_empty() {
+                    return Err("Remote journal does not own this composer version".into());
+                }
+                current.composer_origin = next.composer_origin;
             }
             current.session_id = next.session_id;
             current.outbox = next.outbox;
@@ -564,6 +578,7 @@ impl Store {
             outbox: vec![],
             uploads: vec![],
             rejected: None,
+            composer_origin: None,
             configuration: None,
             host_revision: None,
             configuration_revision: None,

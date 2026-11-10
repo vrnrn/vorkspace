@@ -134,6 +134,7 @@ fn cancelled_initial_delivery_replays_accepted_rows_in_the_final_update() {
     let (_control, controls) = std::sync::mpsc::channel();
     run_turn_using(
         TurnInput {
+            composer_origin: None,
             summary,
             prompt: "Accepted before stopping".into(),
             settings: Settings::default(),
@@ -167,12 +168,15 @@ fn rejected_preflight_preserves_existing_history_without_a_provider_launch() {
     let (tx, rx) = async_channel::bounded(2);
     let (_control, controls) = std::sync::mpsc::channel();
     run_turn(
-        summary,
-        "Unsent".into(),
-        Settings {
-            worktree_removed: true,
-            bot_message_id: Some("not-accepted".into()),
-            ..Default::default()
+        TurnInput {
+            summary,
+            prompt: "Unsent".into(),
+            settings: Settings {
+                worktree_removed: true,
+                bot_message_id: Some("not-accepted".into()),
+                ..Default::default()
+            },
+            composer_origin: None,
         },
         controls,
         store.clone(),
@@ -233,6 +237,7 @@ fn worktree_creation_follows_message_acceptance_and_reports_the_checkout_in_the_
     let (_control, controls) = std::sync::mpsc::channel();
     run_turn_using(
         TurnInput {
+            composer_origin: None,
             summary,
             prompt: "Create the checkout".into(),
             settings: Settings {
@@ -321,6 +326,7 @@ fn first_turn_with_setup(command: &str) -> (String, Vec<Update>, std::path::Path
     let (_control, controls) = std::sync::mpsc::channel();
     run_turn_using(
         TurnInput {
+            composer_origin: None,
             summary,
             prompt: "Create the checkout".into(),
             settings: Settings {
@@ -393,6 +399,7 @@ for line in sys.stdin:
         let (_control, controls) = std::sync::mpsc::channel();
         run_turn_using(
             TurnInput {
+                composer_origin: None,
                 summary,
                 prompt: "Continue in this worktree".into(),
                 settings: Settings {
@@ -468,6 +475,7 @@ for line in sys.stdin:
     let (_control, controls) = std::sync::mpsc::channel();
     run_turn_using(
         TurnInput {
+            composer_origin: None,
             summary,
             prompt: "The competing prompt".into(),
             settings: Settings::default(),
