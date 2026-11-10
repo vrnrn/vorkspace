@@ -1243,7 +1243,7 @@ impl Explorer {
     }
 
     fn line(&self, ix: usize, focused: bool, cx: &mut Context<Self>) -> AnyElement {
-        let statuses = &self.git.read(cx).statuses;
+        let statuses = self.git.read(cx).statuses();
         let pad = |depth: usize| px(28. + depth as f32 * 12.);
         match self.lines[ix].clone() {
             Line::Note { depth, text } => div()
@@ -1332,11 +1332,13 @@ impl Explorer {
                     .as_ref()
                     .is_some_and(|c| c.cut && c.path == entry.path);
                 let over = self.drag_over.as_deref() == Some(entry.path.as_str());
-                let status = if entry.is_dir {
-                    statuses.dirs.get(&entry.path)
-                } else {
-                    statuses.files.get(&entry.path)
-                };
+                let status = statuses.and_then(|statuses| {
+                    if entry.is_dir {
+                        statuses.dirs.get(&entry.path)
+                    } else {
+                        statuses.files.get(&entry.path)
+                    }
+                });
                 let git_color: Option<Hsla> = status.and_then(|s| match s.as_str() {
                     "modified" | "added" | "untracked" | "deleted" => {
                         Some(crate::git_status::status_color(s))

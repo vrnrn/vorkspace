@@ -854,7 +854,8 @@ impl Shell {
             }
         });
         let git_project = workspace.project.clone();
-        let git = cx.new(|cx| crate::git_status::ProjectGit::new(git_project, cx));
+        let checkouts = app_core.read(cx).checkouts.clone();
+        let git = cx.new(|cx| crate::git_status::ProjectGit::shared(git_project, checkouts, cx));
         let git_observation = cx.observe(&git, |this, _, cx| {
             // The title bar's dot and the panel's tab label follow its stats.
             let _ = this;

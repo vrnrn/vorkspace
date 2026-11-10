@@ -49,6 +49,7 @@ pub(crate) struct AppCore {
     pub(super) bot_roster: Entity<SharedRoster>,
     pub(super) layouts: WindowLayouts,
     next_window_id: u64,
+    pub(super) checkouts: Entity<crate::git_status::CheckoutCatalog>,
     pub(super) remote: Arc<vorkspace_core::remote::Connections>,
     pub(super) remote_refreshes: HashMap<String, Option<std::time::Instant>>,
     pub(super) quick_shortcut: crate::composer::quick_composer::Shortcut,
@@ -159,6 +160,7 @@ impl AppCore {
         })
         .detach();
         let bot_roster = SharedRoster::install(store.clone(), cx);
+        let checkouts = cx.new(|_| crate::git_status::CheckoutCatalog::default());
         let core = cx.new(|cx: &mut Context<AppCore>| {
             cx.subscribe(&bot_roster, |core, _, event: &MembershipChanged, cx| {
                 core.reconcile_bots(
@@ -178,6 +180,7 @@ impl AppCore {
                 bot_roster,
                 layouts,
                 next_window_id,
+                checkouts,
                 remote,
                 remote_refreshes: HashMap::new(),
                 quick_shortcut: Default::default(),

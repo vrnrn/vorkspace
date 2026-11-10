@@ -327,7 +327,7 @@ impl Shell {
     pub(super) fn project_diff_stat(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
         let width = self.diff_stat_room(cx);
         (width > 0.).then(|| {
-            crate::panel_kit::diff_stat(self.git.read(cx).stats.as_ref(), width)
+            crate::panel_kit::diff_stat(self.git.read(cx).stats(), width)
                 .when(self.has_session_panes(), |d| {
                     d.cursor(CursorStyle::Arrow)
                         .hover(|s| s.bg(vorkspace_ui::fluid::hover(0.1)))
@@ -363,7 +363,7 @@ impl Shell {
         if !self.has_session_panes() || !self.git.read(cx).available() {
             return 0.;
         }
-        let natural = crate::panel_kit::diff_stat_width(self.git.read(cx).stats.as_ref());
+        let natural = crate::panel_kit::diff_stat_width(self.git.read(cx).stats());
         if !self.workspace.right_panel_open || !self.has_session_panes() {
             return natural;
         }

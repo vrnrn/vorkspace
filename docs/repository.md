@@ -44,6 +44,8 @@ In GPUI, `conversation` connects the session runtime to input and transcript vie
 
 Conversation changes carry their cause to the shell. Catalog and draft edits update the relevant summaries. Run transitions also update scheduled work and visibility. Checkout changes, settled runs, and requests that pause the active agent for input can refresh project files. The turn protocol distinguishes incremental rows, authoritative Host history, and a Bot's admitted history. Status-only updates skip transcript projection.
 
+Each working directory has one Git observation per app store. The checkout catalog owns polling, version checks, the diff index and derived file statuses. Each window selects its own checkout and shares its immutable observation with other windows on the same directory. A mutation invalidates the checkout before its next scan publishes, and warm checkout observations share an app-wide memory budget.
+
 The host's top-level modules own server, service, store, engine, and sync lifecycles. `host/runtime/models/` contains domain records and validation; `providers/` contains provider-specific adapters; `protocol/` contains their shared stream and RPC machinery; `platform/` owns Node filesystem/platform helpers; `lib/` contains small pure utilities. These modules run on the remote machine.
 
 ## Sources, generated files, and tests
