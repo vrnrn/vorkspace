@@ -67,6 +67,59 @@ fn a_peer_reports_to_a_bot_conversation_parked_in_another_window(cx: &mut TestAp
 }
 
 #[gpui::test]
+fn ordinary_bot_work_survives_its_owning_window_closing_after_save(cx: &mut TestAppContext) {
+    let s = setup(cx);
+    close_bot_pane(&s, cx);
+    let peer = peer_window(&s, cx);
+    let manager = peer.update(cx, |shell, _, _| shell.bot_manager()).unwrap();
+    s.manager.update(cx, |bots, cx| {
+        bots.chats[&s.id].update(cx, |view, _| view.busy = true)
+    });
+    manager.update(cx, |bots, cx| {
+        bots.enqueue_held(
+            &s.id,
+            "Deliver after handoff".into(),
+            vec![],
+            false,
+            true,
+            Some("handoff-message".into()),
+            None,
+            None,
+            cx,
+        );
+    });
+    cx.run_until_parked();
+    manager.read_with(cx, |bots, _| assert!(!bots.chats.contains_key(&s.id)));
+    {
+        // Simulate an admitted send with an unknown result. Recovery should
+        // open the chat, but must not attempt a second provider submission.
+        let db = locked(&s.store).unwrap();
+        let saved = Roster::load(&db).unwrap();
+        let message = &saved.get(&s.id).unwrap().outbox[0];
+        assert!(
+            db.claim_bot_message(&s.id, message, "original-owner")
+                .unwrap()
+        );
+    }
+    drop(s.manager);
+    cx.update_window(s.window.into(), |_, window, _| window.remove_window())
+        .unwrap();
+    cx.run_until_parked();
+    manager.update(cx, |bots, cx| bots.resume_pending_work(cx));
+    cx.run_until_parked();
+    manager.read_with(cx, |bots, cx| {
+        assert_eq!(bots.chats[&s.id].read(cx).summary.id, s.session);
+        let message = &bots.roster.get(&s.id).unwrap().outbox[0];
+        assert!(
+            message
+                .error
+                .as_deref()
+                .is_some_and(|error| error.contains("uncertain"))
+        );
+    });
+}
+
+#[gpui::test]
 fn confirming_reset_does_not_replace_a_chat_that_opened_in_another_window(cx: &mut TestAppContext) {
     let s = setup(cx);
     close_bot_pane(&s, cx);

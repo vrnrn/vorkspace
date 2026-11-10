@@ -555,7 +555,7 @@ impl Bots {
             this.ensure_chat(&id, cx);
             this.reload_files(&id, cx);
         }
-        this.resume_peer_queues(cx);
+        this.resume_pending_work(cx);
         this.sync_minions(cx);
         this.sync_team_histories(cx);
         this
@@ -827,6 +827,7 @@ impl Bots {
                 self.configure_chat(&id, cx);
                 self.dispatch(&id, cx);
             }
+            self.resume_pending_work(cx);
             self.changed(cx);
         }
     }
@@ -903,6 +904,7 @@ impl Bots {
                     }
                 }
                 this.roster_write_finished(cx);
+                this.resume_pending_work(cx);
             });
         })
         .detach();
