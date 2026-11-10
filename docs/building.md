@@ -23,7 +23,7 @@ This builds the app and helper in the `native-dev` Cargo profile, which rebuilds
 
 | Option | Effect |
 | --- | --- |
-| `--release` | Use the release profile. This also installs to `/Applications/vorkspace.app`, unless `VORKSPACE_NO_INSTALL=1` is set. |
+| `--release` | Use the release profile. Normal desktop launches install to `/Applications/vorkspace.app` when permitted. Isolated data, read-only checks, and `VORKSPACE_NO_INSTALL=1` launch from the build directory. |
 | `--profile NAME` | Use another Cargo profile, such as `dev` or `perf`. |
 | `--dev-data` | Use isolated development data. `VORKSPACE_NATIVE_DATA_DIR` chooses its directory. |
 | `--vorkspace-data` | Use normal desktop data, which is the default. |
@@ -55,7 +55,7 @@ cargo run --locked -p vorkspace-gpui --profile native-dev
 npm run build
 ```
 
-This compiles the app and helper with the release profile, packages `target/release/vorkspace.app`, and installs it to `/Applications/vorkspace.app` when that's safe. `VORKSPACE_NO_INSTALL=1` skips installing. To package a build by hand, use the commands in [verification](testing.md).
+This compiles the app and helper with the release profile, packages `target/release/vorkspace.app`, and installs it to `/Applications/vorkspace.app` when permitted. The installer stages a complete bundle and atomically swaps it into the installed path. `VORKSPACE_NO_INSTALL=1` builds the bundle without installing. To package a build by hand, use the commands in [verification](testing.md).
 
 The app provides **Restart vorkspace** in its application menu and Command Palette (`⌘⌥R`). When developing from inside the installed app, run `npm run build`, confirm installation succeeded, then use Restart to load it. Restart relaunches the bundle that is running, so a `native-dev` build stays on `target/native-dev/vorkspace.app` even when an older copy is installed. Restart prompts about unsaved file edits and uses the normal shutdown hooks for drafts, workspace state, voice, and provider processes. Its relaunch helper waits for the old process to exit before opening the successor. Restart does not compile code; use the runner's `r` to rebuild a development bundle. `cargo build` alone does not update the installed app bundle.
 

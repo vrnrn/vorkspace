@@ -1,5 +1,5 @@
 import { spawnSync } from "node:child_process";
-import { existsSync } from "node:fs";
+import { existsSync, mkdtempSync, rmSync } from "node:fs";
 import { homedir } from "node:os";
 import { delimiter, dirname, join, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
@@ -29,28 +29,33 @@ export function installAppBundle(sourceBundle, destBundle = "/Applications/vorks
   if (process.platform !== "darwin" || process.env.CI || process.env.VORKSPACE_NO_INSTALL === "1") {
     return false;
   }
+  let staging;
   try {
-    const destNext = `${destBundle}.next`;
-    if (spawnSync("rm", ["-rf", destNext]).status !== 0) return false;
-    const cp = spawnSync("cp", ["-R", sourceBundle, destNext]);
+    // Stage beside the destination so publishing is one filesystem operation.
+    staging = mkdtempSync(join(dirname(destBundle), ".vorkspace-install-"));
+    const next = join(staging, "vorkspace.app");
+    const cp = spawnSync("cp", ["-R", sourceBundle, next]);
     if (cp.status !== 0) return false;
-    // mv nests the source inside an existing destination directory. Only report
-    // a replacement after removal succeeded, so the runner can fall back safely.
-    if (spawnSync("rm", ["-rf", destBundle]).status !== 0) return false;
-    const mv = spawnSync("mv", ["-f", destNext, destBundle]);
-    if (mv.status === 0) {
+    const publisher = fileURLToPath(new URL("./publish-native-bundle.py", import.meta.url));
+    const publish = spawnSync("python3", [publisher, next, destBundle], { encoding: "utf8" });
+    if (publish.status === 0) {
       console.log(`Installed: ${destBundle}`);
       return true;
     }
+    const error = publish.error?.message ?? publish.stderr?.trim();
+    if (error) console.warn(`Could not install to ${destBundle}: ${error}`);
   } catch (err) {
     console.warn(`Could not install to ${destBundle}: ${err.message}`);
+  } finally {
+    if (staging) {
+      try { rmSync(staging, { recursive: true, force: true }); }
+      catch (err) { console.warn(`Could not clean ${staging}: ${err.message}`); }
+    }
   }
   return false;
 }
 
-const env = resolveNativeEnv(process.env);
-
-function run(command, args, capture = false) {
+function run(env, command, args, capture = false) {
   const result = spawnSync(command, args, {
     cwd: root,
     env,
@@ -66,17 +71,18 @@ function run(command, args, capture = false) {
 }
 
 export function buildNative() {
+  const env = resolveNativeEnv(process.env);
   const metadata = JSON.parse(
-    run("cargo", ["metadata", "--manifest-path", "Cargo.toml", "--locked", "--no-deps", "--format-version", "1"], true),
+    run(env, "cargo", ["metadata", "--manifest-path", "Cargo.toml", "--locked", "--no-deps", "--format-version", "1"], true),
   );
   const app = metadata.packages.find((pkg) => pkg.name === "vorkspace-gpui");
   if (!app) throw new Error("The vorkspace-gpui package was not found.");
 
-  run("cargo", ["build", "--manifest-path", "Cargo.toml", "--locked", "-p", app.name, "-p", "vorkspace-helper", "--release"]);
+  run(env, "cargo", ["build", "--manifest-path", "Cargo.toml", "--locked", "-p", app.name, "-p", "vorkspace-helper", "--release"]);
   const target = process.env.CARGO_BUILD_TARGET
     ? join(metadata.target_directory, process.env.CARGO_BUILD_TARGET)
     : metadata.target_directory;
-  run("bash", ["scripts/desktop/bundle-native-macos.sh", "release", target, app.version, "vorkspace-data"]);
+  run(env, "bash", ["scripts/desktop/bundle-native-macos.sh", "release", target, app.version, "vorkspace-data"]);
   installAppBundle(join(target, "release", "vorkspace.app"));
 }
 
