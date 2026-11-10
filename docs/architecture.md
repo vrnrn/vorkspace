@@ -8,9 +8,11 @@ A conversation admits a turn, records its submission state, starts the selected 
 
 The core reads and writes the desktop SQLite schema directly. Native viewport and supplementary state live in an atomically written `.gpui.json` sidecar. Bot files live under the selected data directory. History projection preserves unloaded fields and canonical provider session IDs; conflicting writes fail instead of replacing newer state. [Data continuity](data-storage.md) explains historical-data reads.
 
+Startup prepares the saved window layouts, workspace definitions, and Bot roster before creating windows. AppCore owns the immutable definition snapshot and stages changes through the shared settings writer. Each window keeps its own selection, panes, and focus.
+
 ## Rendering and history work
 
-Indexed histories are projected one source block at a time, so loading display rows does not retain a second complete parsed transcript. Durable tool payloads remain in storage; display metadata excludes large output fields. Preference-only writes do not reconstruct historical turn receipts.
+Indexed histories are projected one source block at a time. Complete local loads read display rows, historical turn metadata, and the exact revision in one SQLite snapshot. Durable tool payloads remain in storage and display metadata excludes large output fields. Preference-only writes skip historical turn projection. Window activation refreshes visible chats. The inactive cache retains reconstructible transcripts within its budget and releases an oversized transcript without displacing the rest of the warm set. Drafts and pending work keep their history pinned.
 
 Active standalone indexed Bot chats initially retain the newest ten turns when older indexed history exists. Older pages load off the UI thread, retain the reading anchor, and carry global row offsets for saved-search reveal. A page cursor is tied to the table owner, block contents and positions, and turn boundaries in one SQLite snapshot; a changed snapshot restores the complete history, while a transient failure leaves the cursor available for retry. Transcript mutations and Bot execution restore the complete history first. Page-relative core writes independently validate the snapshot in the merge transaction, preserve unloaded blocks, and allow appends only through the newest page; they invalidate complete-history readers' write guards. The page API scans the full indexed history to validate the snapshot and calculate row offsets, so it bounds retained page rows but not read or projection work. Blob, ordinary and remote histories use their existing loading paths.
 
@@ -61,7 +63,7 @@ Cached GPUI views record the frame that owns their drawing ranges. Replaying an 
 - Editor analysis and formatting run committed bundles in bounded QuickJS interpreters. Their time limits count the interpreter thread's CPU time, so a busy machine cannot interrupt them. Rust owns files, edits, and saves.
 - Vox runs a Rust controller that owns its Codex app-server child, bounded tool receipts, saved conversation identity, memory, and shutdown. An ephemeral WebKit WebRTC page handles microphone and audio only. Window-scoped GPUI handlers admit actions through existing session and Bot owners.
 - Claude sessions routed through Copilot use a Rust loopback gateway. The supervised Claude process owns its gateway across parked turns; terminating that process releases the listener and connected clients. The remote Node host retains its JavaScript gateway. Other provider transports remain Rust-owned local CLI processes.
-- The remote Node host owns its own database and provider processes. SSH carries authenticated RPC through a private forward; local windows consume revisioned remote snapshots.
+- The remote Node host owns its database and provider processes. SSH carries authenticated RPC through a private forward. Local windows consume revisioned snapshots and keep pending commands and attachments in a separate durable journal. An observed Host revision updates metadata without replacing the journal. A command transition compares its admitted journal with the current saved one before publishing.
 
 JavaScript is maintained directly under `host/` and `embedded/`. No browser frontend or TypeScript compilation step is part of the application build.
 
