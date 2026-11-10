@@ -18,6 +18,8 @@ pub(crate) struct WindowLayouts {
     pub(crate) entries: Vec<WindowLayout>,
     pub(crate) focused: Option<u64>,
     pub(super) shared: Option<WindowShared>,
+    #[serde(skip)]
+    pub(super) imported_projects: Vec<String>,
 }
 
 impl WindowLayouts {
@@ -38,7 +40,52 @@ impl WindowLayouts {
         if !layouts.focused.is_some_and(|id| ids.contains(&id)) {
             layouts.focused = layouts.entries.first().map(|entry| entry.id);
         }
+        if !layouts.entries.is_empty()
+            && let Some(current) = store.ui_state().ok().flatten()
+        {
+            layouts.reconcile_legacy(&current);
+        }
         layouts
+    }
+
+    fn reconcile_legacy(&mut self, raw: &str) {
+        let Ok(legacy) = serde_json::from_str::<Workspace>(raw) else {
+            return;
+        };
+        if let Some(previous) = &self.shared {
+            let known = previous
+                .projects
+                .iter()
+                .map(|path| vorkspace_core::files::path_key(path))
+                .collect::<HashSet<_>>();
+            self.imported_projects = legacy
+                .projects
+                .iter()
+                .filter(|path| !known.contains(&vorkspace_core::files::path_key(path)))
+                .cloned()
+                .collect();
+        }
+        self.shared = Some(WindowShared::from_workspace(&legacy));
+        for entry in &mut self.entries {
+            // Keep each layout's selected project, panes and zoom. Carry the
+            // desktop merge baseline forward so the next launch can detect edits.
+            let Ok(mut layout) = serde_json::from_str::<Workspace>(&entry.workspace) else {
+                continue;
+            };
+            layout
+                .project_appearance
+                .clone_from(&legacy.project_appearance);
+            layout
+                .desktop_project_preferences
+                .clone_from(&legacy.desktop_project_preferences);
+            layout
+                .desktop_preferences_metadata
+                .clone_from(&legacy.desktop_preferences_metadata);
+            layout
+                .desktop_workspace_snapshot
+                .clone_from(&legacy.desktop_workspace_snapshot);
+            entry.workspace = serde_json::to_string(&layout).expect("serialize reconciled window");
+        }
     }
 
     pub(super) fn record(&mut self, id: u64, workspace: String, focused: bool) -> bool {
@@ -140,15 +187,17 @@ impl Shell {
             .map(|display| (window.bounds(), display.visible_bounds()));
         let bounds = additional_window_bounds(source, 0, cx);
         let store = self.store.clone();
+        let installs = core.read(cx).session_installs.clone();
         let projects = state.projects;
         let mut revision = core.read(cx).catalog_revision;
         cx.spawn(async move |source, cx| {
             let result = loop {
                 let read_store = store.clone();
                 let projects = projects.clone();
+                let installs = installs.clone();
                 let work = cx.background_executor().spawn(async move {
                     let db = locked(&read_store)?;
-                    let sessions = db.sessions()?;
+                    let sessions = installs.visible_sessions(&db)?;
                     let metadata = db.session_sidebar_metadata(&projects);
                     Ok::<_, String>((sessions, metadata))
                 });
@@ -249,7 +298,10 @@ impl Shell {
     }
 
     fn finish_window_close(&mut self, cx: &mut Context<Self>) -> bool {
-        let conversation_active = self.sessions.values().any(|view| view.read(cx).busy);
+        let conversation_active = self.sessions.values().any(|view| {
+            let view = view.read(cx);
+            view.busy || view.external_submission_pending()
+        });
         let bot_active = self
             .bots
             .as_ref()
@@ -276,6 +328,11 @@ impl Shell {
             || !self.deleting.is_empty()
             || !self.deleting_projects.is_empty()
             || !self.pending_project_creations.is_empty()
+            || self
+                .preparing_sessions
+                .load(std::sync::atomic::Ordering::Relaxed)
+                > 0
+            || self.pending_last_window_bot_writes(cx)
             || self.quick_window_active(cx)
         {
             self.error =
@@ -522,5 +579,62 @@ mod tests {
         let mut expected = vec![(main, 130), (side, 85)];
         expected.sort();
         assert_eq!(restored, expected);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn desktop_import_refreshes_shared_defaults_without_replacing_local_layout() {
+        let path = std::path::Path::new(":memory:");
+        let store = vorkspace_core::store::Store::open(path).unwrap();
+        let mut local = Workspace {
+            project: "/workspace/first".into(),
+            projects: vec!["/workspace/first".into()],
+            right_panel_open: true,
+            ..Workspace::default()
+        };
+        local.preferences.ui_scale = 135;
+        local.preferences.default_provider = Some("codex".into());
+        let layouts = WindowLayouts {
+            entries: vec![WindowLayout {
+                id: 1,
+                workspace: serde_json::to_string(&local).unwrap(),
+            }],
+            focused: Some(1),
+            shared: Some(WindowShared::from_workspace(&local)),
+            ..Default::default()
+        };
+        let mut updated = local.clone();
+        updated
+            .projects
+            .push("/workspace/new-desktop-project".into());
+        updated.preferences.default_provider = Some("claude".into());
+        updated.desktop_project_preferences =
+            Some(serde_json::json!({"default_provider":"claude"}));
+        updated.preferences.ui_scale = 100;
+        store
+            .save_settings(&[
+                (WINDOW_STATE_KEY, &serde_json::to_string(&layouts).unwrap()),
+                ("workspace", &serde_json::to_string(&updated).unwrap()),
+            ])
+            .unwrap();
+        let loaded = WindowLayouts::load(&store);
+        let mut restored: Workspace = serde_json::from_str(&loaded.entries[0].workspace).unwrap();
+        loaded.shared.unwrap().apply(&mut restored);
+        assert_eq!(
+            restored.preferences.default_provider.as_deref(),
+            Some("claude")
+        );
+        assert_eq!(restored.preferences.ui_scale, 135);
+        assert_eq!(restored.project, local.project);
+        assert!(restored.right_panel_open);
+        assert_eq!(
+            restored.desktop_project_preferences,
+            updated.desktop_project_preferences
+        );
+        assert_eq!(loaded.imported_projects, ["/workspace/new-desktop-project"]);
     }
 }

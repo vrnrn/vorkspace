@@ -148,6 +148,7 @@ impl Shell {
         write: impl FnOnce(&mut vorkspace_core::store::Store) -> Result<(), String> + Send + 'static,
     ) {
         let store = self.store.clone();
+        self.begin_session_metadata(&changed, cx);
         let previous = self.group_writes.take();
         self.group_writes = Some(cx.spawn(async move |this, cx| {
             if let Some(previous) = previous {
@@ -157,15 +158,18 @@ impl Shell {
                 .background_executor()
                 .spawn(async move { write(&mut *locked(&store)?) });
             let result = work.await;
-            let _ = this.update(cx, |this, cx| match result {
-                Ok(()) => {
-                    for id in changed {
-                        this.publish_session_summary(id, cx);
+            let _ = this.update(cx, |this, cx| {
+                this.finish_session_metadata(&changed, cx);
+                match result {
+                    Ok(()) => {
+                        for id in changed {
+                            this.publish_session_summary(id, cx);
+                        }
                     }
-                }
-                Err(error) => {
-                    this.error = Some(format!("Could not {what}: {error}"));
-                    cx.notify();
+                    Err(error) => {
+                        this.error = Some(format!("Could not {what}: {error}"));
+                        cx.notify();
+                    }
                 }
             });
         }));

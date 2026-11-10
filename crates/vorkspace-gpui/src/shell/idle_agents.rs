@@ -2,15 +2,15 @@
 use super::*;
 
 impl Shell {
-    pub(crate) fn keep_visible_idle_agents(&self, cx: &App) {
-        let mut ids = Vec::new();
+    pub(crate) fn keep_visible_idle_agents(&self, cx: &mut Context<Self>) {
+        let mut ids = HashSet::new();
         let mut visible_bots = HashSet::new();
         if self.settings.is_none()
             && let Some(tab) = self.workspace.active_tab()
         {
             for pane in self.workspace.layout(tab).leaf_ids() {
                 if let Some(id) = self.workspace.session_for_pane(pane) {
-                    ids.push(id);
+                    ids.insert(id);
                 } else if let Some(crate::workspace::AppPane::Bot(bot)) = self
                     .workspace
                     .app_panes
@@ -22,11 +22,15 @@ impl Shell {
             }
         }
         if let Some(preview) = &self.session_preview {
-            ids.push(preview.id);
+            ids.insert(preview.id);
         }
         if let Some(bots) = &self.bots {
             ids.extend(bots.read(cx).visible_idle_sessions(&visible_bots));
         }
-        vorkspace_core::provider::keep_idle_agents(ids);
+        if let Some(core) = &self.app_core {
+            core.update(cx, |core, _| {
+                core.keep_visible_agents(self.window_layout, ids)
+            });
+        }
     }
 }

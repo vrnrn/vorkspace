@@ -24,6 +24,7 @@ use gpui::{AppContext as _, EventEmitter, WeakEntity};
 use serde::{Deserialize, Serialize};
 
 const STORE_KEY: &str = "vorkspaces";
+const AUTOMATION_EVENTS_KEY: &str = "native-automation-inbox-retries";
 
 #[derive(Default, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
@@ -33,7 +34,7 @@ struct Saved {
 }
 
 pub(crate) struct AppCore {
-    store: Database,
+    pub(super) store: Database,
     writes: Arc<SettingsWrites>,
     pub(crate) vorkspaces: Vec<VorkspaceDef>,
     pub(crate) seen_bots: HashSet<String>,
@@ -41,14 +42,19 @@ pub(crate) struct AppCore {
     pub(super) layouts: WindowLayouts,
     next_window_id: u64,
     pub(super) remote: Arc<vorkspace_core::remote::Connections>,
+    pub(super) remote_refreshes: HashMap<String, Option<std::time::Instant>>,
     pub(super) quick_shortcut: crate::composer::quick_composer::Shortcut,
     scheduler: Option<WeakEntity<Shell>>,
     pub(super) automation_cutoff: i64,
     pub(super) automation_recovered: bool,
+    automation_events: HashMap<String, vorkspace_core::inbox::Item>,
     dock_badges: HashMap<u64, usize>,
+    idle_protection: HashMap<u64, HashSet<i64>>,
     sessions: HashMap<i64, WeakEntity<Shell>>,
     session_deletions: HashSet<i64>,
+    metadata_writes: HashMap<i64, WeakEntity<Shell>>,
     pub(super) catalog_revision: u64,
+    pub(super) session_installs: crate::session_install::Registry,
     /// Windows in the order they joined; the oldest open one is the default
     /// destination for work no window owns.
     windows: Vec<WeakEntity<Shell>>,
@@ -90,6 +96,23 @@ impl SettingsWrites {
 struct Installed(HashMap<usize, Entity<AppCore>>);
 impl gpui::Global for Installed {}
 
+pub(crate) fn bot_write_barriers(cx: &mut App) -> Vec<async_channel::Receiver<()>> {
+    let rosters = cx
+        .try_global::<Installed>()
+        .map(|installed| {
+            installed
+                .0
+                .values()
+                .map(|core| core.read(cx).bot_roster.clone())
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+    rosters
+        .into_iter()
+        .filter_map(|roster| roster.update(cx, |roster, cx| roster.write_barrier(cx)))
+        .collect()
+}
+
 fn store_key(store: &Database) -> usize {
     Arc::as_ptr(store) as *const () as usize
 }
@@ -101,7 +124,7 @@ impl AppCore {
         if let Some(core) = cx.try_global::<Installed>().and_then(|i| i.0.get(&key)) {
             return core.clone();
         }
-        let (saved, layouts, remote_dir) = locked(store)
+        let (saved, layouts, automation_events, remote_dir) = locked(store)
             .map(|db| {
                 let saved: Saved = db
                     .setting(STORE_KEY)
@@ -112,6 +135,16 @@ impl AppCore {
                 (
                     saved,
                     WindowLayouts::load(&db),
+                    db.setting(AUTOMATION_EVENTS_KEY)
+                        .ok()
+                        .flatten()
+                        .and_then(|raw| {
+                            serde_json::from_str::<Vec<vorkspace_core::inbox::Item>>(&raw).ok()
+                        })
+                        .unwrap_or_default()
+                        .into_iter()
+                        .map(|item| (item.key(), item))
+                        .collect(),
                     db.data_dir().map(std::path::Path::to_path_buf),
                 )
             })
@@ -163,14 +196,19 @@ impl AppCore {
                 layouts,
                 next_window_id,
                 remote,
+                remote_refreshes: HashMap::new(),
                 quick_shortcut: Default::default(),
                 scheduler: None,
                 automation_cutoff: vorkspace_core::time::now_ms().min(i64::MAX as u64) as i64,
                 automation_recovered: false,
+                automation_events,
                 dock_badges: HashMap::new(),
+                idle_protection: HashMap::new(),
                 sessions: HashMap::new(),
                 session_deletions: HashSet::new(),
+                metadata_writes: HashMap::new(),
                 catalog_revision: 0,
+                session_installs: Default::default(),
                 windows: Vec::new(),
                 bridge: None,
             }
@@ -266,12 +304,15 @@ impl AppCore {
         cx.notify();
     }
 
-    fn flush_settings(&self, cx: &mut Context<Self>) {
+    pub(super) fn flush_pending(&self, cx: &App) -> gpui::Task<Result<(), String>> {
         let writes = self.writes.clone();
         let store = self.store.clone();
-        let work = cx
-            .background_executor()
-            .spawn(async move { writes.flush(&store) });
+        cx.background_executor()
+            .spawn(async move { writes.flush(&store) })
+    }
+
+    fn flush_settings(&self, cx: &mut Context<Self>) {
+        let work = self.flush_pending(cx);
         cx.spawn(async move |core, cx| {
             if let Err(error) = work.await {
                 let _ = core.update(cx, |core, cx| {
@@ -358,11 +399,28 @@ impl AppCore {
     }
 
     fn close_layout(&mut self, id: u64, cx: &mut Context<Self>) {
+        self.keep_visible_agents(id, HashSet::new());
         if self.dock_badges.remove(&id).is_some() {
             crate::notifications::platform::set_dock_badge(self.dock_badges.values().sum());
         }
         if self.layouts.close(id) {
             self.stage_layouts(cx);
+        }
+    }
+
+    pub(super) fn keep_visible_agents(&mut self, window: u64, ids: HashSet<i64>) {
+        let changed = if ids.is_empty() {
+            self.idle_protection.remove(&window).is_some()
+        } else if self.idle_protection.get(&window) != Some(&ids) {
+            self.idle_protection.insert(window, ids);
+            true
+        } else {
+            false
+        };
+        if changed {
+            vorkspace_core::provider::keep_idle_agents(
+                self.idle_protection.values().flatten().copied().collect(),
+            );
         }
     }
 
@@ -378,14 +436,99 @@ impl AppCore {
         }
     }
 
+    pub(super) fn automation_events(&self) -> Vec<vorkspace_core::inbox::Item> {
+        self.automation_events.values().cloned().collect()
+    }
+
+    pub(super) fn queue_automation_events(
+        &mut self,
+        items: Vec<vorkspace_core::inbox::Item>,
+        cx: &mut Context<Self>,
+    ) {
+        let mut changed = false;
+        for item in items {
+            let key = item.key();
+            let current = self.automation_events.get(&key);
+            if current.is_none_or(|old| old != &item && old.updated_ms() <= item.updated_ms()) {
+                self.automation_events.insert(key, item);
+                changed = true;
+            }
+        }
+        if !changed {
+            return;
+        }
+        if self.automation_events.len() > 500 {
+            let mut items = self.automation_events();
+            items.sort_unstable_by_key(|item| std::cmp::Reverse(item.updated_ms()));
+            self.automation_events = items
+                .into_iter()
+                .take(500)
+                .map(|item| (item.key(), item))
+                .collect();
+        }
+        self.stage_automation_events(cx);
+    }
+
+    pub(super) fn settle_automation_events(
+        &mut self,
+        attempted: Vec<vorkspace_core::inbox::Item>,
+        retry: Vec<vorkspace_core::inbox::Item>,
+        cx: &mut Context<Self>,
+    ) {
+        let mut retry: HashMap<_, _> = retry.into_iter().map(|item| (item.key(), item)).collect();
+        let mut changed = false;
+        for item in attempted {
+            let key = item.key();
+            // A newer connector refresh may have arrived during the claim.
+            if self.automation_events.get(&key) != Some(&item) {
+                continue;
+            }
+            match retry.remove(&key) {
+                Some(pending) if pending != item => {
+                    self.automation_events.insert(key, pending);
+                    changed = true;
+                }
+                Some(_) => {}
+                None => {
+                    self.automation_events.remove(&key);
+                    changed = true;
+                }
+            }
+        }
+        if changed {
+            self.stage_automation_events(cx);
+        }
+    }
+
+    fn stage_automation_events(&self, cx: &mut Context<Self>) {
+        let snapshot =
+            serde_json::to_string(&self.automation_events()).expect("serialize connector retries");
+        self.writes
+            .pending
+            .lock()
+            .unwrap()
+            .insert(AUTOMATION_EVENTS_KEY, snapshot.into());
+        self.flush_settings(cx);
+    }
+
     /// Whether `shell` may load session `id` live. Another window keeps it
     /// only while that window exists and still has the session loaded.
     fn claim_session(&mut self, id: i64, shell: &WeakEntity<Shell>) -> bool {
-        if self.session_deletions.contains(&id) || self.other_session_window(id, shell).is_some() {
+        if self.session_installs.contains(id)
+            || self.session_deletions.contains(&id)
+            || self.metadata_is_writing(id)
+            || self.other_session_window(id, shell).is_some()
+        {
             return false;
         }
         self.sessions.insert(id, shell.clone());
         true
+    }
+
+    fn metadata_is_writing(&self, id: i64) -> bool {
+        self.metadata_writes
+            .get(&id)
+            .is_some_and(|owner| owner.upgrade().is_some())
     }
 
     fn other_session_window(
@@ -415,6 +558,13 @@ struct CatalogChanged {
 }
 
 impl EventEmitter<CatalogChanged> for AppCore {}
+
+struct GroupsChanged {
+    project: String,
+    groups: vorkspace_core::session_groups::Groups,
+}
+
+impl EventEmitter<GroupsChanged> for AppCore {}
 
 impl AppCore {
     fn register(&mut self, shell: WeakEntity<Shell>) {
@@ -569,8 +719,31 @@ impl Shell {
                 this.invalidate_chrome(cx);
                 cx.notify();
             }));
+        self.observations
+            .push(cx.subscribe(&core, |this, _, event: &GroupsChanged, cx| {
+                if this.groups.get(&event.project) != Some(&event.groups) {
+                    this.groups
+                        .insert(event.project.clone(), event.groups.clone());
+                    this.invalidate_chrome(cx);
+                    cx.notify();
+                }
+            }));
+        self.observations.push(cx.subscribe(
+            &core,
+            |this, _, event: &super::remote_sessions::RemoteCatalog, cx| {
+                this.apply_remote_catalog(event, cx);
+            },
+        ));
         let me = cx.weak_entity();
         core.update(cx, |core, _| core.register(me));
+        let release = core.downgrade();
+        let window = self.window_layout;
+        cx.on_release(move |_, cx| {
+            let _ = release.update(cx, |core, _| {
+                core.keep_visible_agents(window, HashSet::new())
+            });
+        })
+        .detach();
         self.app_core = Some(core);
     }
 
@@ -639,6 +812,18 @@ impl Shell {
         if let Some(core) = self.app_core.clone() {
             core.update(cx, |core, cx| core.close_layout(self.window_layout, cx));
         }
+    }
+
+    pub(super) fn pending_last_window_bot_writes(&self, cx: &App) -> bool {
+        self.app_core.as_ref().is_some_and(|core| {
+            let core = core.read(cx);
+            core.windows
+                .iter()
+                .filter(|window| window.upgrade().is_some())
+                .count()
+                == 1
+                && core.bot_roster.read(cx).has_pending_writes()
+        })
     }
 
     pub(super) fn unsaved_window_edits(&self, cx: &mut Context<Self>) -> bool {
@@ -838,11 +1023,92 @@ impl Shell {
         self.app_core.as_ref().is_none_or(|core| {
             let core = core.read(cx);
             !core.session_deletions.contains(&id)
+                && !core.session_installs.contains(id)
+                && !core.metadata_is_writing(id)
                 && core.other_session_window(id, &cx.weak_entity()).is_none()
         })
     }
 
+    pub(super) fn begin_session_metadata(&self, ids: &[i64], cx: &mut Context<Self>) {
+        if let Some(core) = &self.app_core {
+            let owner = cx.weak_entity();
+            core.update(cx, |core, _| {
+                for id in ids {
+                    core.metadata_writes.insert(*id, owner.clone());
+                }
+            });
+        }
+    }
+
+    pub(super) fn finish_session_metadata(&self, ids: &[i64], cx: &mut Context<Self>) {
+        if let Some(core) = &self.app_core {
+            let owner = cx.weak_entity();
+            core.update(cx, |core, _| {
+                for id in ids {
+                    if core.metadata_writes.get(id) == Some(&owner) {
+                        core.metadata_writes.remove(id);
+                    }
+                }
+            });
+        }
+    }
+
+    pub(super) fn publish_groups(&mut self, project: String, cx: &mut Context<Self>) {
+        match locked(&self.store).and_then(|store| store.groups(&project)) {
+            Ok(groups) => {
+                self.groups.insert(project.clone(), groups.clone());
+                if let Some(core) = &self.app_core {
+                    core.update(cx, |core, cx| {
+                        core.catalog_revision = core.catalog_revision.wrapping_add(1);
+                        cx.emit(GroupsChanged { project, groups });
+                    });
+                }
+            }
+            Err(error) => {
+                self.error = Some(format!("Could not refresh the project folders: {error}"))
+            }
+        }
+        let owner = cx.weak_entity();
+        cx.defer(move |cx| {
+            let _ = owner.update(cx, |shell, cx| {
+                shell.invalidate_chrome(cx);
+                cx.notify();
+            });
+        });
+    }
+
+    pub(super) fn session_install(&self, cx: &App) -> crate::session_install::Install {
+        self.app_core
+            .as_ref()
+            .expect("registered workspace window")
+            .read(cx)
+            .session_installs
+            .begin(&self.preparing_sessions)
+    }
+
     pub(super) fn focus_session_window(&self, id: i64, cx: &mut Context<Self>) -> bool {
+        self.focus_session_window_with(id, move |shell, window, cx| shell.open(id, window, cx), cx)
+    }
+
+    pub(super) fn peer_session_view(
+        &self,
+        id: i64,
+        cx: &Context<Self>,
+    ) -> Option<Entity<Conversation>> {
+        let owner = self
+            .app_core
+            .as_ref()?
+            .read(cx)
+            .other_session_window(id, &cx.weak_entity())?;
+        owner.read(cx).sessions.get(&id).cloned()
+    }
+
+    pub(super) fn focus_session_window_with(
+        &self,
+        id: i64,
+        show: impl Fn(&mut Shell, &mut Window, &mut Context<Shell>) + 'static,
+        cx: &mut Context<Self>,
+    ) -> bool {
         let Some(owner) = self
             .app_core
             .as_ref()
@@ -861,7 +1127,7 @@ impl Shell {
             let shown = target.is_some_and(|target| {
                 target
                     .update(cx, |shell, window, cx| {
-                        shell.open(id, window, cx);
+                        show(shell, window, cx);
                         vorkspace_ui::traffic_lights::show(window);
                         window.activate_window();
                     })
@@ -871,7 +1137,7 @@ impl Shell {
                 && owner.upgrade().is_none()
                 && let Some(source) = source
             {
-                let _ = source.update(cx, |shell, window, cx| shell.open(id, window, cx));
+                let _ = source.update(cx, |shell, window, cx| show(shell, window, cx));
             }
         });
         true
@@ -1284,6 +1550,198 @@ mod tests {
                 .unwrap();
             cx.run_until_parked();
             assert_eq!(cx.update(|cx| cx.windows().len()), expected);
+        }
+    }
+
+    #[gpui::test]
+    fn a_session_is_private_during_preparation_and_peers_receive_its_worktree(
+        cx: &mut TestAppContext,
+    ) {
+        let (a, b, _, _dir) = two_windows(cx);
+        let (summary, mut install) = a
+            .update(cx, |shell, window, cx| {
+                let mut install = shell.session_install(cx);
+                let summary = {
+                    let db = locked(&shell.store).unwrap();
+                    let summary = db.create("codex", &shell.workspace.project).unwrap();
+                    install.track(summary.id);
+                    assert!(
+                        !shell
+                            .app_core
+                            .as_ref()
+                            .unwrap()
+                            .read(cx)
+                            .session_installs
+                            .visible_sessions(&db)
+                            .unwrap()
+                            .iter()
+                            .any(|row| row.id == summary.id)
+                    );
+                    summary
+                };
+                assert!(!shell.allow_window_close(window, cx));
+                (summary, install)
+            })
+            .unwrap();
+        let id = summary.id;
+        b.update(cx, |shell, _, cx| {
+            assert!(!shell.session_available_here(id, cx));
+            assert!(shell.add_loaded(summary.clone(), cx).is_none());
+            assert!(!shell.session_summaries.contains_key(&id));
+        })
+        .unwrap();
+        let worktree = format!("{}/checkout", summary.cwd);
+        a.update(cx, |shell, _, cx| {
+            let view = shell.install_prepared(summary, &mut install, cx).unwrap();
+            view.update(cx, |view, cx| {
+                view.seed_new_settings(
+                    Settings {
+                        worktree_cwd: Some(worktree.clone()),
+                        ..Default::default()
+                    },
+                    cx,
+                )
+            });
+            shell.publish_prepared(&view, cx);
+        })
+        .unwrap();
+        drop(install);
+        cx.run_until_parked();
+        b.update(cx, |shell, _, cx| {
+            assert!(shell.session_summaries.contains_key(&id));
+            assert_eq!(shell.session_worktrees.get(&id), Some(&Some(worktree)));
+            assert!(shell.ensure_session(id, cx).is_none());
+        })
+        .unwrap();
+    }
+
+    #[gpui::test]
+    fn a_peer_cannot_claim_a_cold_session_until_its_archive_commits(cx: &mut TestAppContext) {
+        let (a, b, _, _dir) = two_windows(cx);
+        let summary = a
+            .update(cx, |shell, _, _| {
+                locked(&shell.store)
+                    .unwrap()
+                    .create("codex", &shell.workspace.project)
+                    .unwrap()
+            })
+            .unwrap();
+        let id = summary.id;
+        cx.update(|cx| {
+            a.update(cx, |shell, _, cx| {
+                shell.session_summaries.insert(id, summary.clone());
+                shell.toggle_archive(id, cx);
+            })
+            .unwrap();
+            b.update(cx, |shell, _, cx| {
+                shell.session_summaries.insert(id, summary);
+                assert!(shell.ensure_session(id, cx).is_none());
+            })
+            .unwrap();
+        });
+        cx.run_until_parked();
+        b.update(cx, |shell, _, _| {
+            assert!(shell.session_summaries[&id].archived)
+        })
+        .unwrap();
+    }
+
+    #[gpui::test]
+    fn scheduler_handoff_keeps_new_connector_retries_and_the_durable_snapshot(
+        cx: &mut TestAppContext,
+    ) {
+        let (a, b, _, _dir) = two_windows(cx);
+        let item = vorkspace_core::inbox::Item {
+            provider: "github".into(),
+            kind: "issue".into(),
+            id: "event".into(),
+            updated_at: "2026-11-09T12:00:00Z".into(),
+            ..Default::default()
+        };
+        let newer = vorkspace_core::inbox::Item {
+            updated_at: "2026-11-09T12:01:00Z".into(),
+            ..item.clone()
+        };
+        cx.update(|cx| {
+            a.update(cx, |shell, _, cx| {
+                assert!(shell.holds_scheduler(cx));
+                shell.app_core.as_ref().unwrap().update(cx, |core, cx| {
+                    core.queue_automation_events(vec![item.clone()], cx);
+                });
+            })
+            .unwrap();
+            b.update(cx, |shell, _, cx| {
+                assert!(!shell.holds_scheduler(cx));
+                shell.app_core.as_ref().unwrap().update(cx, |core, cx| {
+                    core.queue_automation_events(vec![newer.clone()], cx);
+                    core.settle_automation_events(vec![item], Vec::new(), cx);
+                });
+            })
+            .unwrap();
+            a.update(cx, |_, window, _| window.remove_window()).unwrap();
+        });
+        cx.run_until_parked();
+        b.update(cx, |shell, _, cx| {
+            assert!(shell.holds_scheduler(cx));
+            assert_eq!(
+                shell
+                    .app_core
+                    .as_ref()
+                    .unwrap()
+                    .read(cx)
+                    .automation_events(),
+                [newer.clone()]
+            );
+            let raw = locked(&shell.store)
+                .unwrap()
+                .setting(AUTOMATION_EVENTS_KEY)
+                .unwrap()
+                .unwrap();
+            let saved: Vec<vorkspace_core::inbox::Item> = serde_json::from_str(&raw).unwrap();
+            assert_eq!(saved, [newer]);
+        })
+        .unwrap();
+    }
+
+    #[gpui::test]
+    fn committed_folder_moves_are_applied_to_the_latest_groups_and_shared(cx: &mut TestAppContext) {
+        let (a, b, first, _dir) = two_windows(cx);
+        let (project, second) = a
+            .update(cx, |shell, _, _| {
+                let db = locked(&shell.store).unwrap();
+                let project = shell.workspace.project.clone();
+                let second = db.create("codex", &project).unwrap().id;
+                (project, second)
+            })
+            .unwrap();
+        cx.update(|cx| {
+            for (window, id, label) in [(a, first, "First"), (b, second, "Second")] {
+                window
+                    .update(cx, |shell, _, cx| {
+                        locked(&shell.store)
+                            .unwrap()
+                            .edit_groups(&project, |groups| {
+                                groups.move_session(id, None, Some(label))
+                            })
+                            .unwrap();
+                        shell.publish_groups(project.clone(), cx);
+                    })
+                    .unwrap();
+            }
+        });
+        for window in [a, b] {
+            window
+                .update(cx, |shell, _, _| {
+                    assert_eq!(
+                        shell.groups[&project].folder_of(first).unwrap().name,
+                        "First"
+                    );
+                    assert_eq!(
+                        shell.groups[&project].folder_of(second).unwrap().name,
+                        "Second"
+                    );
+                })
+                .unwrap();
         }
     }
 

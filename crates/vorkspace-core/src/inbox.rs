@@ -285,7 +285,7 @@ pub struct OptionRow {
     pub key: String,
 }
 
-#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
 pub struct StatusFilter {
     pub open: bool,
@@ -293,7 +293,7 @@ pub struct StatusFilter {
     pub closed: bool,
     pub merged: bool,
 }
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
 pub struct Filters {
     pub assigned_to_me: bool,
@@ -380,7 +380,7 @@ impl Filters {
             .all(|word| text.contains(&word.to_lowercase()))
     }
 }
-#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Seen {
     pub seeded: bool,
@@ -407,7 +407,7 @@ impl Seen {
         }
     }
 }
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct ViewState {
     pub source: String,

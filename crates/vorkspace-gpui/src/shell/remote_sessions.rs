@@ -10,33 +10,131 @@ impl Shell {
             .into_iter()
             .filter(|path| path.starts_with("remote://"))
             .collect();
-        // A slow host gets one slot. Rotate through the remaining projects
-        // so a cached row can refresh even when another project is focused.
+        let Some(core) = &self.app_core else {
+            return;
+        };
+        // Rotate so a slow host cannot starve the other project slots.
         for _ in 0..projects.len() {
-            if self.remote_refreshing.len() >= 2 {
-                break;
-            }
             let ix = self.remote_refresh_cursor % projects.len();
             self.remote_refresh_cursor = ix + 1;
             let project = &projects[ix];
-            if self.remote_refreshing.insert(project.clone()) {
-                self.refresh_remote_project(project.clone(), cx);
+            if core.update(cx, |core, cx| core.poll_remote_project(project, cx)) {
+                break;
             }
         }
     }
 
-    fn refresh_remote_project(&mut self, project_key: String, cx: &mut Context<Self>) {
+    pub(super) fn apply_remote_catalog(&mut self, event: &RemoteCatalog, cx: &mut Context<Self>) {
+        let project = &event.project;
+        match &event.result {
+            Ok((summaries, removed)) => {
+                for &id in removed {
+                    self.session_removal_epoch = self.session_removal_epoch.wrapping_add(1);
+                    self.remote_marks.remove(&id);
+                    self.order.retain(|existing| *existing != id);
+                    if let Some(view) = self.sessions.get(&id) {
+                        view.update(cx, |view, cx| {
+                            view.remote_connection_error(
+                                "This conversation was deleted on the host.",
+                                cx,
+                            )
+                        });
+                    }
+                    // An open tab keeps its identity and an explanatory placeholder.
+                    if self.workspace.tab_of(id).is_none() {
+                        self.session_summaries.remove(&id);
+                        self.release_live_session(id, cx);
+                    }
+                }
+                for (summary, running, waiting, draft) in summaries {
+                    let id = summary.id;
+                    if self
+                        .session_summaries
+                        .get(&id)
+                        .is_some_and(|known| known.updated_at > summary.updated_at)
+                    {
+                        continue;
+                    }
+                    self.remote_marks.insert(id, (*running, *waiting));
+                    if *draft {
+                        self.draft_sessions.insert(id);
+                    } else {
+                        self.draft_sessions.remove(&id);
+                    }
+                    if !self.session_summaries.contains_key(&id) {
+                        self.order.push(id);
+                    }
+                    if let Some(view) = self.sessions.get(&id) {
+                        view.update(cx, |view, cx| {
+                            if !view.busy {
+                                view.summary = summary.clone();
+                                cx.notify();
+                            }
+                        });
+                    }
+                    self.session_summaries.insert(id, summary.clone());
+                }
+                if self.workspace.vorkspace_has_project(project) {
+                    self.invalidate_chrome(cx);
+                    cx.notify();
+                }
+            }
+            Err(error) => {
+                // A transient disconnect retains the last host index.
+                if let Some(id) = self.workspace.active
+                    && let Some(owner) = self.workspace.session_for_pane(id)
+                    && let Some(view) = self.sessions.get(&owner)
+                    && &view.read(cx).summary.cwd == project
+                {
+                    view.update(cx, |view, cx| view.remote_connection_error(error, cx));
+                }
+            }
+        }
+    }
+}
+
+type RemoteSnapshot = (Vec<(Session, bool, bool, bool)>, Vec<i64>);
+
+pub(super) struct RemoteCatalog {
+    project: String,
+    result: Result<RemoteSnapshot, String>,
+}
+impl gpui::EventEmitter<RemoteCatalog> for app_core::AppCore {}
+
+impl app_core::AppCore {
+    fn poll_remote_project(&mut self, project_key: &str, cx: &mut Context<Self>) -> bool {
+        use std::time::{Duration, Instant};
+        self.remote_refreshes
+            .retain(|_, finished| finished.is_none_or(|at| at.elapsed() < Duration::from_secs(30)));
+        if self
+            .remote_refreshes
+            .values()
+            .filter(|finish| finish.is_none())
+            .count()
+            >= 2
+            || self
+                .remote_refreshes
+                .get(project_key)
+                .is_some_and(|finished| {
+                    finished.is_none_or(|at| at.elapsed() < Duration::from_secs(2))
+                })
+        {
+            return false;
+        }
+        let project_key = project_key.to_owned();
+        self.remote_refreshes.insert(project_key.clone(), None);
         let store = self.store.clone();
         let client = self.remote.clone();
         let requested = project_key.clone();
         let work = cx.background_executor().spawn(async move {
-            let project = locked(&store)?
-                .remote_projects()?
-                .into_values()
-                .find(|p| p.key == project_key)
-                .ok_or(
-                    "Remote project identity is missing. Open this folder on its machine again.",
-                )?;
+            let (project, baseline) = {
+                let db = locked(&store)?;
+                let project = db.remote_projects()?.into_values()
+                    .find(|p| p.key == project_key)
+                    .ok_or("Remote project identity is missing. Open this folder on its machine again.")?;
+                let baseline = db.remote_listing_baseline(&project)?;
+                (project, baseline)
+            };
             let machine = client.machine_for_environment(&project.environment_id)?;
             let response = client.request(
                 &machine.id,
@@ -56,7 +154,6 @@ impl Shell {
                 })
                 .collect::<Option<_>>()
                 .ok_or("Invalid remote session identity")?;
-            store.prune_remote_sessions(&project, &host_ids)?;
             for value in values {
                 let summary = store.register_remote_summary(&project, value)?;
                 let state = store
@@ -69,89 +166,22 @@ impl Shell {
                     value["draft"] == true,
                 ));
             }
-            let retained: HashSet<i64> = store
-                .sessions()?
-                .iter()
-                .filter(|s| s.cwd == project.key)
-                .map(|s| s.id)
-                .collect();
-            Ok::<_, String>((project.key, summaries, retained))
+            let removed = store.prune_remote_listing(&project, &host_ids, &baseline)?;
+            Ok::<_, String>((summaries, removed))
         });
-        cx.spawn(async move |this, cx| {
+        cx.spawn(async move |core, cx| {
             let result = work.await;
-            let _ = this.update(cx, |this, cx| {
-                this.remote_refreshing.remove(&requested);
-                match result {
-                    Ok((project, summaries, retained)) => {
-                        let removed: Vec<_> = this
-                            .order
-                            .iter()
-                            .copied()
-                            .filter(|id| {
-                                this.session_summaries
-                                    .get(id)
-                                    .is_some_and(|s| s.cwd == project && !retained.contains(id))
-                            })
-                            .collect();
-                        for id in removed {
-                            this.session_removal_epoch = this.session_removal_epoch.wrapping_add(1);
-                            this.remote_marks.remove(&id);
-                            this.order.retain(|existing| *existing != id);
-                            if let Some(view) = this.sessions.get(&id) {
-                                view.update(cx, |view, cx| {
-                                    view.remote_connection_error(
-                                        "This conversation was deleted on the host.",
-                                        cx,
-                                    )
-                                });
-                            }
-                            // Open tabs retain an explanatory placeholder. A stale
-                            // tab must not be rebound to a new host conversation.
-                            if this.workspace.tab_of(id).is_none() {
-                                this.session_summaries.remove(&id);
-                                this.release_live_session(id, cx);
-                            }
-                        }
-                        for (summary, running, waiting, draft) in summaries {
-                            let id = summary.id;
-                            this.remote_marks.insert(id, (running, waiting));
-                            if draft {
-                                this.draft_sessions.insert(id);
-                            } else {
-                                this.draft_sessions.remove(&id);
-                            }
-                            if !this.session_summaries.contains_key(&id) {
-                                this.order.push(id);
-                            }
-                            if let Some(view) = this.sessions.get(&id) {
-                                view.update(cx, |view, cx| {
-                                    if !view.busy {
-                                        view.summary = summary.clone();
-                                        cx.notify();
-                                    }
-                                });
-                            }
-                            this.session_summaries.insert(id, summary);
-                        }
-                        if this.workspace.vorkspace_has_project(&project) {
-                            this.invalidate_chrome(cx);
-                        }
-                    }
-                    Err(error) => {
-                        // A transient disconnect retains the last host index.
-                        // The active conversation exposes the error and Retry.
-                        if let Some(id) = this.workspace.active
-                            && let Some(owner) = this.workspace.session_for_pane(id)
-                            && let Some(view) = this.sessions.get(&owner)
-                            && view.read(cx).summary.cwd == requested
-                        {
-                            view.update(cx, |view, cx| view.remote_connection_error(&error, cx));
-                        }
-                    }
-                }
-                cx.notify();
+            let _ = core.update(cx, |core, cx| {
+                core.remote_refreshes
+                    .insert(requested.clone(), Some(Instant::now()));
+                core.catalog_revision = core.catalog_revision.wrapping_add(1);
+                cx.emit(RemoteCatalog {
+                    project: requested,
+                    result,
+                });
             });
         })
         .detach();
+        true
     }
 }

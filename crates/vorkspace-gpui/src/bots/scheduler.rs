@@ -1360,6 +1360,9 @@ impl Bots {
         let Some(bot) = self.habit_bot(id, cx) else {
             return;
         };
+        let Some(mut install) = self.owner.begin_session_install(cx) else {
+            return;
+        };
         self.active_run = Some(-1);
         self.ensure_chat(id, cx);
         let other = self
@@ -1395,6 +1398,7 @@ impl Bots {
             };
             let cwd = std::env::var("HOME").unwrap_or_else(|_| ".".into());
             let mut s = db.create(&provider, &cwd)?;
+            install.track(s.id);
             s.title = format!("{} · {}", bot.label(), habit.name);
             if let Err(error) = db.title(s.id, &s.title) {
                 return match db.delete(s.id) {
@@ -1404,13 +1408,13 @@ impl Bots {
                     )),
                 };
             }
-            Ok((s, inherited, habit))
+            Ok((s, inherited, habit, install))
         });
         cx.spawn(async move |this, cx| {
             let result = work.await;
-            let session = result.as_ref().ok().map(|(summary, _, _)| summary.id);
+            let session = result.as_ref().ok().map(|(summary, _, _, _)| summary.id);
             let installed = this.update(cx, |this, cx| {
-                let (summary, mut settings, habit) = match result {
+                let (summary, mut settings, habit, install) = match result {
                     Ok(prepared) => prepared,
                     Err(error) => {
                         this.active_run = None;
@@ -1428,7 +1432,7 @@ impl Bots {
                 settings.access=AccessMode::FullAccess;settings.internal_message=true;settings.bot=None;settings.environment.clear();
                 view.update(cx,|v,cx|{v.install_transfer(settings,None,cx);v.configure_bot(bot,root,env,cx);});
                 this.observations.push(cx.subscribe(&view,move|this,_,_:&SessionChanged,cx|this.habit_changed(session,cx)));
-                this.running.insert(session,RunningHabit{bot:target.clone(),habit:habit.id.clone(),view:view.clone(),started:now_ms(),launched:now_ms(),failure:None,waiting_since:None,cards:Vec::new(),mailbox:Vec::new()});this.active_run=Some(session);
+                this.running.insert(session,RunningHabit{_install:install,bot:target.clone(),habit:habit.id.clone(),view:view.clone(),started:now_ms(),launched:now_ms(),failure:None,waiting_since:None,cards:Vec::new(),mailbox:Vec::new()});this.active_run=Some(session);
                 this.roster.hidden_sessions.push(session);
                 if let Some(m)=this.roster.get_mut(&target){m.habit_sessions.push(session);}
                 this.save(cx);

@@ -139,6 +139,7 @@ pub(crate) struct BotDocumentSource {
 }
 pub(crate) use notifications::{NotificationChanged, NotificationFinished};
 struct RunningHabit {
+    _install: crate::session_install::Install,
     bot: String,
     habit: String,
     view: Entity<Conversation>,
@@ -574,7 +575,10 @@ impl Bots {
             || self.active_run.is_some()
             || !self.running.is_empty()
             || !self.loading_chats.is_empty()
-            || self.chats.values().any(|chat| chat.read(cx).busy)
+            || self.chats.values().any(|chat| {
+                let chat = chat.read(cx);
+                chat.busy || chat.external_submission_pending()
+            })
     }
     pub(crate) fn protected_app_target(&self, id: i64, cx: &App) -> bool {
         // Sidebar visibility is a display choice. Only internal identities

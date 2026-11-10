@@ -90,6 +90,26 @@ impl SharedRoster {
         self.snapshot.as_ref().ok()
     }
 
+    pub(crate) fn has_pending_writes(&self) -> bool {
+        self.writes.as_ref().is_some_and(|task| !task.is_ready())
+    }
+
+    pub(crate) fn write_barrier(
+        &mut self,
+        cx: &mut Context<Self>,
+    ) -> Option<async_channel::Receiver<()>> {
+        if !self.has_pending_writes() {
+            return None;
+        }
+        let previous = self.writes.take().expect("pending roster writer");
+        let (send, receive) = async_channel::bounded(1);
+        self.writes = Some(cx.spawn(async move |_, _| {
+            previous.await;
+            let _ = send.try_send(());
+        }));
+        Some(receive)
+    }
+
     pub(super) fn chat_owner(&self, id: &str) -> Option<&WeakEntity<Bots>> {
         self.chat_owners
             .get(id)

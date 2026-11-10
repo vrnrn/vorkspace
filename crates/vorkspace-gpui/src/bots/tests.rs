@@ -2255,13 +2255,15 @@ fn selected_working_session(s: &Setup, cx: &mut TestAppContext) -> i64 {
     let id = summary.id;
     s.window
         .update(cx, |shell, _, cx| {
-            shell.bot_install(
-                summary,
-                vorkspace_core::agent::Settings::default(),
-                String::new(),
-                true,
-                cx,
-            );
+            shell
+                .bot_install(
+                    summary,
+                    vorkspace_core::agent::Settings::default(),
+                    String::new(),
+                    true,
+                    cx,
+                )
+                .unwrap();
             shell.workspace.open(id);
             shell
                 .bot_session_entity(id)

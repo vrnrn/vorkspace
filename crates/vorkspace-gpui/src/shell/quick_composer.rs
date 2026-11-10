@@ -155,9 +155,11 @@ impl Shell {
         let account = crate::accounts::get(cx)
             .map(|a| a.read(cx).selected(launch.kind, &launch.cwd))
             .unwrap_or_default();
+        let mut install = self.session_install(cx);
         let work = cx.background_executor().spawn(async move {
             let store = locked(&store)?;
             let summary = store.create(choice.kind.id(), &choice.cwd)?;
+            install.track(summary.id);
             let settings = vorkspace_core::agent::Settings {
                 account,
                 model: choice.model,
@@ -166,18 +168,21 @@ impl Shell {
                 ..Default::default()
             };
             store.save_agent_settings(summary.id, &settings)?;
-            Ok::<_, String>((summary, settings))
+            Ok::<_, String>((summary, settings, install))
         });
         cx.spawn(async move |this, cx| {
             let result = work.await;
             let _ = this.update_in(cx, |this, window, cx| {
                 this.finish_project_creation(&key);
                 match result {
-                    Ok((summary, settings)) => {
+                    Ok((summary, settings, mut install)) => {
                         let id = summary.id;
-                        this.add(summary, cx);
-                        this.sessions[&id]
-                            .update(cx, |v, cx| v.quick_submit(launch.prompt, settings, cx));
+                        let Some(view) = this.install_prepared(summary, &mut install, cx) else {
+                            this.session_install_failed(cx);
+                            return;
+                        };
+                        view.update(cx, |v, cx| v.quick_submit(launch.prompt, settings, cx));
+                        this.publish_prepared(&view, cx);
                         this.order.retain(|i| *i != id);
                         this.order.insert(0, id);
                         if launch.foreground

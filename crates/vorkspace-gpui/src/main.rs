@@ -40,6 +40,7 @@ mod resource_pressure;
 mod response_actions;
 mod right_panel;
 mod search;
+mod session_install;
 mod settings;
 mod shell;
 mod sound;
@@ -80,7 +81,7 @@ fn quit(cx: &mut App) {
                 vorkspace_core::process::shutdown_all();
             })
             .await;
-        cx.update(|cx| cx.quit());
+        finish_exit(false, cx).await;
     })
     .detach();
 }
@@ -98,13 +99,31 @@ fn restart(cx: &mut App) {
                 vorkspace_core::process::shutdown_all();
             })
             .await;
-        if let Err(error) = vorkspace_macos::restart::relaunch_self() {
-            eprintln!("Could not schedule restart: {error}");
-            return;
-        }
-        cx.update(|cx| cx.quit());
+        finish_exit(true, cx).await;
     })
     .detach();
+}
+
+async fn finish_exit(relaunch: bool, cx: &mut gpui::AsyncApp) {
+    loop {
+        let waiting = cx.update(|cx| {
+            let barriers = shell::bot_write_barriers(cx);
+            if barriers.is_empty() {
+                if relaunch && let Err(error) = vorkspace_macos::restart::relaunch_self() {
+                    eprintln!("Could not schedule restart: {error}");
+                } else {
+                    cx.quit();
+                }
+            }
+            barriers
+        });
+        if waiting.is_empty() {
+            return;
+        }
+        for barrier in waiting {
+            let _ = barrier.recv().await;
+        }
+    }
 }
 
 fn data_dir() -> PathBuf {

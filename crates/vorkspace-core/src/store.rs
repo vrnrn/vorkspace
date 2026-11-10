@@ -1103,6 +1103,17 @@ impl Store {
         self.conn.execute("INSERT INTO native_settings(key,value) VALUES(?1,?2) ON CONFLICT(key) DO UPDATE SET value=excluded.value", params![format!("groups:{cwd}"), serde_json::to_string(groups).map_err(|e| e.to_string())?]).map_err(|e| e.to_string())?;
         Ok(())
     }
+
+    /// Call with the database guard held across the read, edit and write.
+    pub fn edit_groups(
+        &self,
+        cwd: &str,
+        edit: impl FnOnce(&mut crate::session_groups::Groups) -> Result<(), String>,
+    ) -> Result<(), String> {
+        let mut groups = self.groups(cwd)?;
+        edit(&mut groups)?;
+        self.save_groups(cwd, &groups)
+    }
     pub fn reminders(&self) -> Result<Vec<Reminder>, String> {
         if self.shared.is_some() {
             return self.shared_reminders();

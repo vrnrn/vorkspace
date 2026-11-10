@@ -124,7 +124,7 @@ impl Shell {
                 s
             };
             let id = summary.id;
-            self.bot_install(summary, settings, prompt, false, cx);
+            self.bot_install(summary, settings, prompt, false, cx)?;
             if input["reveal"] == true {
                 self.open(id, window, cx);
             }
@@ -188,7 +188,9 @@ impl Shell {
             {
                 return Err("Session is outside known local projects".into());
             }
-            self.ensure_session(id, cx).ok_or("Session unavailable")?
+            self.ensure_session(id, cx)
+                .or_else(|| self.peer_session_view(id, cx))
+                .ok_or("Session unavailable")?
         };
         if project.is_some_and(|p| view.read(cx).summary.cwd != p) {
             return Err("Session does not belong to the requested project".into());

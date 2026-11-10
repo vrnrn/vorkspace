@@ -11,6 +11,7 @@ mod titlebar;
 mod workspace_commands;
 pub(crate) use crate::bots::host_api::AppStart;
 mod app_core;
+pub(crate) use app_core::bot_write_barriers;
 mod app_panes;
 mod app_views;
 mod automation_runs;
@@ -502,7 +503,6 @@ pub(crate) struct Shell {
     store: Database,
     remote: Arc<vorkspace_core::remote::Connections>,
     remote_project_picker: Option<remote_projects::Open>,
-    remote_refreshing: HashSet<String>,
     remote_refresh_cursor: usize,
     remote_marks: HashMap<i64, (bool, bool)>,
     _remote_clock: gpui::Task<()>,
@@ -601,6 +601,7 @@ pub(crate) struct Shell {
     pub(super) vorkspace_dialog: Option<vorkspaces::VorkspaceDialog>,
     /// What every window shares; `None` only before the window joins it.
     app_core: Option<Entity<app_core::AppCore>>,
+    preparing_sessions: Arc<std::sync::atomic::AtomicUsize>,
     vorkspace_baseline: Vec<crate::workspace::VorkspaceDef>,
     window_layout: u64,
     window_shared: Option<windows::WindowShared>,
@@ -780,7 +781,13 @@ impl Shell {
         });
         let metadata: Vec<_> = summaries.iter().map(|s| (s.id, s.cwd.clone())).collect();
         let mut workspace = Workspace::restore(saved.as_deref(), &metadata, &cwd);
-        let window_shared = app_core.read(cx).layouts.shared.clone();
+        let layouts = &app_core.read(cx).layouts;
+        let window_shared = layouts.shared.clone();
+        if window_layout.is_some() && window_layout == layouts.focused {
+            workspace
+                .restored_new_projects
+                .extend(layouts.imported_projects.iter().cloned());
+        }
         if let Some(shared) = &window_shared {
             let discovered = workspace.restored_new_projects.clone();
             shared.apply(&mut workspace);
@@ -887,7 +894,6 @@ impl Shell {
             store,
             remote,
             remote_project_picker: None,
-            remote_refreshing: HashSet::new(),
             remote_refresh_cursor: 0,
             remote_marks: HashMap::new(),
             _remote_clock: remote_clock,
@@ -972,6 +978,7 @@ impl Shell {
             background_dialog: None,
             vorkspace_dialog: None,
             app_core: None,
+            preparing_sessions: Default::default(),
             vorkspace_baseline: Vec::new(),
             window_layout: window_layout
                 .unwrap_or_else(|| app_core.update(cx, |core, _| core.allocate_window())),
@@ -1269,22 +1276,61 @@ impl Shell {
         }
         self.trim_session_histories(&shown, cx);
     }
+    #[cfg(test)]
     fn add(&mut self, summary: Session, cx: &mut Context<Self>) {
         self.workspace.restore_project(&summary.cwd);
         let id = summary.id;
         self.add_loaded(summary, cx);
         self.publish_session_summary(id, cx);
     }
-    /// Loading history must not turn every session directory into a rail project.
-    fn add_loaded(&mut self, summary: Session, cx: &mut Context<Self>) {
-        let id = summary.id;
-        if self.sessions.contains_key(&id) {
-            return;
+
+    fn install_prepared(
+        &mut self,
+        summary: Session,
+        install: &mut crate::session_install::Install,
+        cx: &mut Context<Self>,
+    ) -> Option<Entity<Conversation>> {
+        if self.sessions.contains_key(&summary.id) {
+            return None;
         }
-        // Another window has this session live; it is listed, not loaded.
+        install.expose();
+        let project = summary.cwd.clone();
+        let view = self.add_loaded(summary, cx)?;
+        self.workspace.restore_project(&project);
+        Some(view)
+    }
+
+    fn session_install_failed(&mut self, cx: &mut Context<Self>) {
+        self.error = Some("The new session could not be opened in this window.".into());
+        cx.notify();
+    }
+
+    fn publish_prepared(&mut self, view: &Entity<Conversation>, cx: &mut Context<Self>) {
+        let view = view.read(cx);
+        let id = view.summary.id;
+        self.session_summaries.insert(id, view.summary.clone());
+        self.session_worktrees
+            .insert(id, view.settings.worktree_cwd.clone());
+        if view.has_saved_draft() {
+            self.draft_sessions.insert(id);
+        } else {
+            self.draft_sessions.remove(&id);
+        }
+        self.publish_session_summary(id, cx);
+    }
+
+    /// Loading history must not turn every session directory into a rail project.
+    fn add_loaded(
+        &mut self,
+        summary: Session,
+        cx: &mut Context<Self>,
+    ) -> Option<Entity<Conversation>> {
+        let id = summary.id;
+        if let Some(view) = self.sessions.get(&id) {
+            return Some(view.clone());
+        }
         if !self.claim_session(id, cx) {
-            self.session_summaries.insert(id, summary);
-            return;
+            return None;
         }
         self.session_summaries.insert(id, summary.clone());
         self.session_marks
@@ -1389,10 +1435,11 @@ impl Shell {
                 }
             }));
         self.observe_orchestration(&view, id, cx);
-        self.sessions.insert(id, view);
+        self.sessions.insert(id, view.clone());
         if !self.order.contains(&id) {
             self.order.push(id);
         }
+        Some(view)
     }
     /// SessionPane's reviewUndoLocked: another running session shares the checkout.
     fn sync_review_locks(&mut self, cx: &mut Context<Self>) {
@@ -1479,6 +1526,7 @@ impl Shell {
         if !self.archiving.insert(id) {
             return;
         }
+        self.begin_session_metadata(&[id], cx);
         self.close_preview(cx);
         let archived = !self.session_metadata(id, cx).summary.archived;
         let store = self.store.clone();
@@ -1489,6 +1537,7 @@ impl Shell {
             let result = work.await;
             let _ = this.update_in(cx, |this, window, cx| {
                 this.archiving.remove(&id);
+                this.finish_session_metadata(&[id], cx);
                 match result {
                     Ok(()) => {
                         if let Some(summary) = this.session_summaries.get_mut(&id) {
@@ -1533,6 +1582,7 @@ impl Shell {
         let account = crate::accounts::get(cx)
             .map(|center| center.read(cx).selected(target_kind, &transfer.cwd))
             .unwrap_or_default();
+        let mut install = self.session_install(cx);
         let work = cx.background_executor().spawn(async move {
             let mut settings = Settings {
                 account,
@@ -1553,24 +1603,29 @@ impl Shell {
                 });
                 None
             };
-            let mut summary = locked(&store)?.create(&transfer.target.provider, &transfer.cwd)?;
+            let db = locked(&store)?;
+            let mut summary = db.create(&transfer.target.provider, &transfer.cwd)?;
+            install.track(summary.id);
             summary.title = if transfer.kind == TransferKind::SecondOpinion {
                 "Second opinion".into()
             } else {
                 transfer.title
             };
-            locked(&store)?.title(summary.id, &summary.title)?;
-            locked(&store)?.configure_agent(summary.id, &summary.provider, &settings)?;
-            Ok::<_, String>((summary, settings, prompt))
+            db.title(summary.id, &summary.title)?;
+            db.configure_agent(summary.id, &summary.provider, &settings)?;
+            Ok::<_, String>((summary, settings, prompt, install))
         });
         cx.spawn(async move |this, cx| {
             let result = work.await;
             let _ = this.update_in(cx, |this, window, cx| match result {
-                Ok((summary, settings, prompt)) => {
+                Ok((summary, settings, prompt, mut install)) => {
                     let id = summary.id;
-                    this.add(summary, cx);
-                    this.sessions[&id]
-                        .update(cx, |view, cx| view.install_transfer(settings, prompt, cx));
+                    let Some(view) = this.install_prepared(summary, &mut install, cx) else {
+                        this.session_install_failed(cx);
+                        return;
+                    };
+                    view.update(cx, |view, cx| view.install_transfer(settings, prompt, cx));
+                    this.publish_prepared(&view, cx);
                     this.order.retain(|s| *s != id);
                     this.order.insert(0, id);
                     if this.navigation_revision == navigation_revision {
@@ -2341,12 +2396,14 @@ impl Shell {
             .unwrap_or_default();
         let access = crate::conversation::default_access(cx);
         let effort = crate::conversation::preferred_effort(kind.id(), cx);
+        let mut install = self.session_install(cx);
         let work = cx.background_executor().spawn({
             let cwd = cwd.clone();
             let worktree_cwd = focus.as_ref().map(|f| f.path.clone());
             async move {
                 let store = locked(&store)?;
                 let summary = store.create(kind.id(), &cwd)?;
+                install.track(summary.id);
                 let mut settings = session_loading::new_session_settings(
                     store
                         .desktop_preferences()
@@ -2374,7 +2431,7 @@ impl Shell {
                 {
                     store.save_agent_settings(summary.id, &settings)?;
                 }
-                Ok::<_, String>((summary, settings))
+                Ok::<_, String>((summary, settings, install))
             }
         });
         let previous = self.new_tab_task.take();
@@ -2389,13 +2446,15 @@ impl Shell {
                     this.pending_project_blanks.remove(&blank_key);
                 }
                 match result {
-                    Ok((summary, settings)) => {
+                    Ok((summary, settings, mut install)) => {
                         let id = summary.id;
-                        this.add(summary, cx);
-                        if let Some(view) = this.sessions.get(&id) {
-                            view.update(cx, |view, cx| view.seed_new_settings(settings, cx));
-                        }
+                        let Some(view) = this.install_prepared(summary, &mut install, cx) else {
+                            this.session_install_failed(cx);
+                            return;
+                        };
+                        view.update(cx, |view, cx| view.seed_new_settings(settings, cx));
                         this.seed_worktree(id, focus.as_ref(), cx);
+                        this.publish_prepared(&view, cx);
                         // A pending blank belongs to the copy that requested it;
                         // navigation to another copy must never redirect that request.
                         if this.workspace.project != cwd

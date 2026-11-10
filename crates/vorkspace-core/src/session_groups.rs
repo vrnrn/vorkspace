@@ -32,6 +32,28 @@ pub struct Groups {
 }
 
 impl Groups {
+    pub fn move_session(
+        &mut self,
+        id: i64,
+        folder: Option<&str>,
+        new_name: Option<&str>,
+    ) -> Result<(), String> {
+        if let Some(name) = new_name {
+            if let Some(folder) =
+                self.create_folder(&[id], uuid::Uuid::new_v4().simple().to_string())
+            {
+                self.rename_folder(&folder, name);
+            }
+        } else if let Some(folder) = folder {
+            if self.folder(folder).is_none() {
+                return Err("Folder not found.".into());
+            }
+            self.add_to_folder(folder, id);
+        } else {
+            self.remove_sessions(&[id]);
+        }
+        Ok(())
+    }
     pub fn folder_of(&self, session: i64) -> Option<&Folder> {
         self.folders
             .iter()

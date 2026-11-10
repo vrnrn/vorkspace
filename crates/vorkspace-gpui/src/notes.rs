@@ -631,11 +631,7 @@ impl Notes {
                     draft.title.clone()
                 };
                 copy.title = format!("{title} (copy)");
-                Some(
-                    store
-                        .upsert_note_if_current(&copy, None)?
-                        .ok_or("Could not reserve a new note for the copy")?,
-                )
+                Some(store.copy_note_draft(&draft.id, &copy)?)
             } else {
                 None
             };

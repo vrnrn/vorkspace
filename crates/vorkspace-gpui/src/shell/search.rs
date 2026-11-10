@@ -198,6 +198,9 @@ impl Shell {
             cx.notify();
             return;
         }
+        if self.reveal_search_in_owner(id, jump.clone(), cx) {
+            return;
+        }
         if let Some(view) = self.ensure_session(id, cx) {
             self.open(id, window, cx);
             if self.workspace.active == Some(id)
@@ -216,10 +219,17 @@ impl Shell {
             return;
         }
         let store = self.store.clone();
+        let installs = self
+            .app_core
+            .as_ref()
+            .expect("registered window")
+            .read(cx)
+            .session_installs
+            .clone();
         let revision = self.navigation_revision;
         let work = cx.background_executor().spawn(async move {
-            locked(&store)?
-                .sessions()?
+            installs
+                .visible_sessions(&*locked(&store)?)?
                 .into_iter()
                 .find(|s| s.id == id)
                 .ok_or_else(|| "Conversation no longer exists".to_owned())
@@ -230,15 +240,18 @@ impl Shell {
                 if this.navigation_revision != revision {
                     return;
                 }
+                if this.reveal_search_in_owner(id, jump.clone(), cx) {
+                    return;
+                }
                 match result {
                     Ok(summary) => {
-                        this.add_loaded(summary, cx);
-                        this.open(id, window, cx);
-                        if this.workspace.active == Some(id)
-                            && let Some((row, query)) = jump
-                            && let Some(view) = this.sessions.get(&id)
-                        {
-                            view.update(cx, |v, cx| v.reveal_search(row, query, cx));
+                        if let Some(view) = this.add_loaded(summary, cx) {
+                            this.open(id, window, cx);
+                            if this.workspace.active == Some(id)
+                                && let Some((row, query)) = jump
+                            {
+                                view.update(cx, |v, cx| v.reveal_search(row, query, cx));
+                            }
                         }
                     }
                     Err(error) => {
@@ -249,6 +262,21 @@ impl Shell {
             });
         })
         .detach();
+    }
+
+    fn reveal_search_in_owner(
+        &self,
+        id: i64,
+        jump: Option<(usize, String)>,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        self.focus_session_window_with(
+            id,
+            move |owner, window, cx| {
+                owner.open_search_session(id, jump.clone(), window, cx);
+            },
+            cx,
+        )
     }
     pub(super) fn sync_bot_search(&mut self, cx: &mut Context<Self>) {
         let Some(search) = self.app_search.as_ref().or(self.parked_search.as_ref()) else {

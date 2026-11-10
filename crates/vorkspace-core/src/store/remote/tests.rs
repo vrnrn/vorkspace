@@ -134,6 +134,31 @@ fn resolved_approval_strings_do_not_keep_needs_input_set() {
 }
 
 #[test]
+fn a_listing_cannot_prune_a_binding_created_or_updated_while_it_was_pending() {
+    let store = Store::open(Path::new(":memory:")).unwrap();
+    let project = project(&store, "env");
+    let gone = store
+        .register_remote_summary(&project, &snapshot("gone"))
+        .unwrap();
+    let current = store
+        .register_remote_summary(&project, &snapshot("current"))
+        .unwrap();
+    let baseline = store.remote_listing_baseline(&project).unwrap();
+    let new = store
+        .register_remote_summary(&project, &snapshot("new"))
+        .unwrap();
+    let mut newer = snapshot("current");
+    newer["revision"] = json!(100);
+    store.register_remote_summary(&project, &newer).unwrap();
+    let removed = store
+        .prune_remote_listing(&project, &Default::default(), &baseline)
+        .unwrap();
+    assert_eq!(removed, [gone.id]);
+    assert!(store.remote_session(current.id).unwrap().is_some());
+    assert!(store.remote_session(new.id).unwrap().is_some());
+}
+
+#[test]
 fn pruning_external_deletions_keeps_pending_and_unbound_sessions() {
     let store = Store::open(Path::new(":memory:")).unwrap();
     let project = project(&store, "env");

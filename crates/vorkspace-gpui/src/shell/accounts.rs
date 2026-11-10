@@ -126,19 +126,25 @@ impl Shell {
         let cwd = current.summary.cwd.clone();
         let store = self.store.clone();
         let revision = self.navigation_revision;
+        let mut install = self.session_install(cx);
         let work = cx.background_executor().spawn(async move {
             let store = locked(&store)?;
             let summary = store.create(kind.id(), &cwd)?;
+            install.track(summary.id);
             store.save_agent_settings(summary.id, &settings)?;
-            Ok::<_, String>((summary, settings))
+            Ok::<_, String>((summary, settings, install))
         });
         cx.spawn(async move |this, cx| {
             let result = work.await;
             let _ = this.update_in(cx, |this, window, cx| match result {
-                Ok((summary, settings)) => {
+                Ok((summary, settings, mut install)) => {
                     let id = summary.id;
-                    this.add(summary, cx);
-                    this.sessions[&id].update(cx, |v, cx| v.install_transfer(settings, None, cx));
+                    let Some(view) = this.install_prepared(summary, &mut install, cx) else {
+                        this.session_install_failed(cx);
+                        return;
+                    };
+                    view.update(cx, |v, cx| v.install_transfer(settings, None, cx));
+                    this.publish_prepared(&view, cx);
                     if this.navigation_revision == revision {
                         this.activate_session(id, window, cx);
                     } else {

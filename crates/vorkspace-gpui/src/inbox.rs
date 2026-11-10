@@ -3,6 +3,7 @@
 mod avatar;
 mod diff;
 mod document;
+mod saved_preferences;
 mod ui;
 
 use crate::{
@@ -59,6 +60,8 @@ pub(crate) struct Inbox {
     appearances:
         std::collections::HashMap<String, vorkspace_core::project_appearance::ProjectAppearance>,
     state: ViewState,
+    preferences: Entity<saved_preferences::SavedPreferences>,
+    saved_state: ViewState,
     snapshot: Snapshot,
     sessions: Vec<Session>,
     focus: FocusHandle,
@@ -164,16 +167,24 @@ impl Inbox {
         if !cwd.as_os_str().is_empty() && !projects.contains(&cwd) {
             projects.push(cwd.clone());
         }
-        let (state, data_dir) = locked(&store)
-            .map(|db| {
-                (
-                    ViewState::load(&db),
-                    db.data_dir()
-                        .map(PathBuf::from)
-                        .unwrap_or_else(|| cwd.clone()),
-                )
-            })
-            .unwrap_or_else(|_| (ViewState::default(), cwd.clone()));
+        let preferences = saved_preferences::SavedPreferences::get(&store, cx);
+        let state = Self::project_preferences(&preferences.read(cx).state, None);
+        let data_dir = locked(&store)
+            .ok()
+            .and_then(|db| db.data_dir().map(PathBuf::from))
+            .unwrap_or_else(|| cwd.clone());
+        cx.observe(&preferences, |this, owner, cx| {
+            let saved = owner.read(cx).state.clone();
+            let scope = this.state.fetch_scope(&this.poll_projects);
+            this.adopt_preferences(&saved, true, cx);
+            if this.owner.is_none()
+                && !cfg!(test)
+                && scope != this.state.fetch_scope(&this.poll_projects)
+            {
+                this.refresh(cx);
+            }
+        })
+        .detach();
         let placeholder = crate::controls::page::secondary_ink();
         let search = cx.new(|cx| Input::field("Filter items", "Filter items", placeholder, cx));
         let comment = cx.new(Input::inbox_comment);
@@ -268,7 +279,9 @@ impl Inbox {
             poll_projects: projects.clone(),
             projects,
             appearances: Default::default(),
+            saved_state: state.clone(),
             state,
+            preferences,
             snapshot: Snapshot::default(),
             sessions: vec![],
             focus: cx.focus_handle(),
@@ -451,8 +464,10 @@ impl Inbox {
         filter: model::JiraFilter,
         cx: &mut Context<Self>,
     ) -> Result<(), String> {
-        locked(&self.store).and_then(|store| filter.save(&store))?;
-        self.state.jira_filter = filter;
+        let saved = self.preferences.update(cx, |saved, cx| {
+            saved.update_store(|store| filter.save(store), cx)
+        })?;
+        self.adopt_preferences(&saved, true, cx);
         self.publish_pages(cx);
         self.refresh(cx);
         cx.notify();
@@ -471,10 +486,17 @@ impl Inbox {
         bot: &str,
         cx: &mut Context<Self>,
     ) -> Result<(), String> {
-        let mut defaults = self.state.default_bots.clone();
-        defaults.set(source, bot)?;
-        locked(&self.store).and_then(|store| defaults.save(&store))?;
-        self.state.default_bots = defaults;
+        let saved = self.preferences.update(cx, |saved, cx| {
+            saved.update_store(
+                |store| {
+                    let mut defaults = model::BotDefaults::load(store);
+                    defaults.set(source, bot)?;
+                    defaults.save(store)
+                },
+                cx,
+            )
+        })?;
+        self.adopt_preferences(&saved, true, cx);
         self.publish_pages(cx);
         if !self.destination_explicit {
             self.reset_destination();
@@ -507,14 +529,21 @@ impl Inbox {
         enabled: bool,
         cx: &mut Context<Self>,
     ) -> Result<(), String> {
-        let mut connectors = self.state.connectors.clone();
-        connectors.set(provider, enabled)?;
-        if connectors == self.state.connectors {
-            return Ok(());
-        }
-        locked(&self.store).and_then(|store| connectors.save(&store))?;
-        self.state.connectors = connectors;
-        self.state.normalize_source();
+        let saved = self.preferences.update(cx, |saved, cx| {
+            saved.update_store(
+                |store| {
+                    let mut connectors = model::Connectors::load(store);
+                    let before = connectors.clone();
+                    connectors.set(provider, enabled)?;
+                    if connectors != before {
+                        connectors.save(store)?;
+                    }
+                    Ok(())
+                },
+                cx,
+            )
+        })?;
+        self.adopt_preferences(&saved, true, cx);
         self.snapshot
             .items
             .retain(|item| self.state.connectors.enabled(&item.provider));
@@ -712,28 +741,75 @@ impl Inbox {
         }
         cx.notify();
     }
+    fn project_preferences(saved: &ViewState, source: Option<&str>) -> ViewState {
+        let mut state = saved.clone();
+        if let Some(source) = source {
+            state.source = source.into();
+        }
+        for provider in model::PROVIDERS {
+            state
+                .provider_filters
+                .entry(provider.into())
+                .or_insert_with(|| saved.filters.clone());
+        }
+        state.filters = saved.filters_for(&state.source).clone();
+        state
+    }
+
+    fn adopt_preferences(
+        &mut self,
+        saved: &ViewState,
+        preserve_edits: bool,
+        cx: &mut Context<Self>,
+    ) {
+        let source = if self.owner.is_some() || saved.connectors.enabled(&self.state.source) {
+            Some(self.state.source.as_str())
+        } else {
+            None
+        };
+        let mut next = Self::project_preferences(saved, source);
+        let baseline = next.clone();
+        if preserve_edits {
+            if self.state.list_width != self.saved_state.list_width {
+                next.list_width = self.state.list_width;
+            }
+            if self.state.filters != self.saved_state.filters {
+                next.filters = self.state.filters.clone();
+            }
+            for (provider, filter) in &self.state.provider_filters {
+                if self.saved_state.provider_filters.get(provider) != Some(filter) {
+                    next.provider_filters
+                        .insert(provider.clone(), filter.clone());
+                }
+            }
+        }
+        self.saved_state = baseline;
+        if next != self.state {
+            let defaults_changed = self.state.default_bots != next.default_bots;
+            self.state = next;
+            if defaults_changed && !self.destination_explicit {
+                self.reset_destination();
+            }
+            cx.notify();
+        }
+    }
+
     fn save(&mut self, cx: &mut Context<Self>) {
-        if let Some(owner) = self.owner.clone() {
-            let state = self.state.clone();
-            let save_layout = self.pinned_item.is_none();
-            let _ = owner.update(cx, |owner, cx| {
-                for (key, revision) in state.seen.items {
-                    let old = owner.state.seen.items.entry(key).or_default();
-                    *old = (*old).max(revision);
-                }
-                owner.state.seen.seeded |= state.seen.seeded;
-                if save_layout {
-                    owner
-                        .state
-                        .provider_filters
-                        .insert(state.source.clone(), state.filters);
-                    owner.state.list_width = state.list_width;
-                }
-                owner.save(cx);
-                cx.notify();
-            });
-        } else if let Err(error) = locked(&self.store).and_then(|db| self.state.save(&db)) {
-            self.error = Some(error);
+        if self.saved_state == self.state {
+            return;
+        }
+        let result = self.preferences.update(cx, |saved, cx| {
+            saved.save_edits(
+                &self.saved_state,
+                &self.state,
+                self.pinned_item.is_none(),
+                self.owner.is_none(),
+                cx,
+            )
+        });
+        match result {
+            Ok(saved) => self.adopt_preferences(&saved, false, cx),
+            Err(error) => self.error = Some(error),
         }
     }
     #[cfg(test)]
@@ -745,6 +821,7 @@ impl Inbox {
     }
     pub(crate) fn remember_source(&mut self, source: &str, cx: &mut Context<Self>) {
         self.state.source = source.into();
+        self.state.filters = self.state.filters_for(source).clone();
         self.save(cx);
         if self.last_refresh.elapsed() >= Duration::from_secs(120) {
             self.refresh(cx);
@@ -779,6 +856,7 @@ impl Inbox {
             page.state = self.state.clone();
             page.state.source = source.into();
             page.state.filters = self.state.filters_for(source).clone();
+            page.saved_state = page.state.clone();
             page.snapshot = self.snapshot.clone();
             page.sessions = self.sessions.clone();
             page.bots = self.bots.clone();
@@ -826,6 +904,7 @@ impl Inbox {
             page.state = self.state.clone();
             page.state.source = source.into();
             page.state.filters = self.state.filters_for(source).clone();
+            page.saved_state = page.state.clone();
             page.snapshot = self.snapshot.clone();
             page.sessions = self.sessions.clone();
             page.bots = self.bots.clone();
@@ -975,12 +1054,6 @@ impl Inbox {
             );
             for page in pages {
                 page.update(cx, |page, cx| {
-                    let defaults_changed = page.state.default_bots != state.default_bots;
-                    page.state.connectors = state.connectors.clone();
-                    page.state.jira_filter = state.jira_filter.clone();
-                    page.state.default_bots = state.default_bots.clone();
-                    page.state.seen = state.seen.clone();
-                    page.state.hidden_jira_projects = state.hidden_jira_projects.clone();
                     let scope_changed = page.projects != projects;
                     page.projects = projects.clone();
                     page.service = service.clone();
@@ -1018,9 +1091,6 @@ impl Inbox {
                             page.state.seen.mark(&item);
                             page.save(cx);
                         }
-                    }
-                    if defaults_changed && !page.destination_explicit {
-                        page.reset_destination();
                     }
                     cx.notify();
                 });
@@ -1119,6 +1189,7 @@ impl Inbox {
         if self.owner.is_some() || !self.state.connectors.enabled(&source) {
             return;
         }
+        self.state.filters = self.state.filters_for(&source).clone();
         self.state.source = source;
         self.selected = None;
         self.narrow_detail = false;

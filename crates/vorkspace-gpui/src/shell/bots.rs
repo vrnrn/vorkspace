@@ -77,34 +77,22 @@ impl Shell {
         prompt: String,
         draft: bool,
         cx: &mut Context<Self>,
-    ) {
-        let id = summary.id;
-        self.add_loaded(summary, cx);
-        let view = self.sessions[&id].clone();
+    ) -> Result<(), String> {
+        let view = self
+            .add_loaded(summary, cx)
+            .ok_or("Could not open the new session")?;
         view.update(cx, |v, cx| {
             v.install_transfer(settings, (!draft).then(|| prompt.clone()), cx);
             if draft {
                 v.input.update(cx, |i, cx| i.set_text(prompt, cx));
             }
         });
+        self.publish_prepared(&view, cx);
         self.invalidate_chrome(cx);
+        Ok(())
     }
     pub(crate) fn bot_groups(&self, project: &str) -> vorkspace_core::session_groups::Groups {
         self.groups.get(project).cloned().unwrap_or_default()
-    }
-    pub(crate) fn bot_apply_groups(
-        &mut self,
-        project: String,
-        groups: vorkspace_core::session_groups::Groups,
-        cx: &mut Context<Self>,
-    ) {
-        self.groups.insert(project, groups);
-        // Bot callers can still hold their entity while applying these groups.
-        // Keep state current, but refresh only after that update has returned.
-        let owner = cx.weak_entity();
-        cx.defer(move |cx| {
-            let _ = owner.update(cx, |owner, cx| owner.invalidate_chrome(cx));
-        });
     }
 }
 
@@ -151,8 +139,8 @@ impl BotsHost for gpui::WeakEntity<Shell> {
             .map(|shell| shell.read(cx).bot_groups(project))
             .unwrap_or_default()
     }
-    fn apply_groups(&self, project: String, groups: Groups, cx: &mut App) {
-        let _ = self.update(cx, |shell, cx| shell.bot_apply_groups(project, groups, cx));
+    fn apply_groups(&self, project: String, cx: &mut App) {
+        let _ = self.update(cx, |shell, cx| shell.publish_groups(project, cx));
     }
     fn placement(
         &self,
@@ -164,6 +152,9 @@ impl BotsHost for gpui::WeakEntity<Shell> {
         self.upgrade()
             .ok_or_else(|| "Workspace is unavailable".to_string())
             .and_then(|shell| shell.read(cx).app_placement(caller, project, input, cx))
+    }
+    fn begin_session_install(&self, cx: &App) -> Option<crate::session_install::Install> {
+        Some(self.upgrade()?.read(cx).session_install(cx))
     }
     fn install_start(
         &self,

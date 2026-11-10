@@ -648,6 +648,92 @@ impl Store {
         Ok(Some(saved))
     }
 
+    /// Save a recovered draft under a new identity. The new note owns its
+    /// images, so deleting the original cannot break the recovered copy.
+    pub fn copy_note_draft(&self, source: &str, copy: &NoteUpsert) -> Result<Note, String> {
+        valid_id(source)?;
+        self.prepare_note_upsert(copy)?;
+        let tx = Transaction::new_unchecked(&self.conn, TransactionBehavior::Immediate)
+            .map_err(|e| e.to_string())?;
+        if source == copy.id
+            || get_content(&tx, &copy.id, "note")
+                .map_err(|e| e.to_string())?
+                .is_some()
+        {
+            return Err("Could not reserve a new note for the copy".into());
+        }
+        static ASSET: std::sync::LazyLock<regex::Regex> = std::sync::LazyLock::new(|| {
+            regex::Regex::new(r"/note-assets/([A-Za-z0-9_-]+)/([A-Za-z0-9_.-]+)").unwrap()
+        });
+        let assets: std::collections::HashSet<_> = ASSET
+            .captures_iter(&copy.body)
+            .filter(|asset| asset.get(1).unwrap().as_str() == source)
+            .map(|asset| asset.get(2).unwrap().as_str())
+            .collect();
+        let directory = if assets.is_empty() {
+            None
+        } else {
+            let directory = self
+                .data_dir()
+                .ok_or("Note image storage is unavailable")?
+                .join("note-assets")
+                .join(&copy.id);
+            let mut builder = std::fs::DirBuilder::new();
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::DirBuilderExt;
+                builder.mode(0o700);
+            }
+            builder.create(&directory).map_err(|e| e.to_string())?;
+            Some(directory)
+        };
+        let saved = (|| {
+            let mut copy = copy.clone();
+            if let Some(directory) = &directory {
+                for name in assets {
+                    let source = self.note_image_path(&format!("/note-assets/{source}/{name}"))?;
+                    let mut options = std::fs::OpenOptions::new();
+                    options.write(true).create_new(true);
+                    #[cfg(unix)]
+                    {
+                        use std::os::unix::fs::OpenOptionsExt;
+                        options.mode(0o600);
+                    }
+                    let mut output = options
+                        .open(directory.join(name))
+                        .map_err(|e| e.to_string())?;
+                    let mut input = std::fs::File::open(source).map_err(|e| e.to_string())?;
+                    std::io::copy(&mut input, &mut output).map_err(|e| e.to_string())?;
+                    output.sync_all().map_err(|e| e.to_string())?;
+                }
+                for path in [directory.as_path(), directory.parent().expect("asset root")] {
+                    std::fs::File::open(path)
+                        .and_then(|f| f.sync_all())
+                        .map_err(|e| e.to_string())?;
+                }
+                copy.body = ASSET
+                    .replace_all(&copy.body, |asset: &regex::Captures<'_>| {
+                        if &asset[1] == source {
+                            format!("/note-assets/{}/{}", copy.id, &asset[2])
+                        } else {
+                            asset[0].to_owned()
+                        }
+                    })
+                    .into_owned();
+            }
+            if copy.body.len() > MAX_BODY {
+                return Err("Content is too large".into());
+            }
+            let saved = upsert_note(&tx, &copy).map_err(|e| e.to_string())?;
+            tx.commit().map_err(|e| e.to_string())?;
+            Ok(saved)
+        })();
+        if let (Err(_), Some(directory)) = (&saved, directory) {
+            let _ = std::fs::remove_dir_all(directory);
+        }
+        saved
+    }
+
     fn prepare_note_upsert(&self, note: &NoteUpsert) -> Result<(), String> {
         valid_id(&note.id)?;
         if note.body.len() > MAX_BODY {
