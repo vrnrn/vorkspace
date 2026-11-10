@@ -644,6 +644,21 @@ impl Bots {
         self.ensure_chat(id, cx);
         self.chats.get(id).cloned()
     }
+    /// Vox can read and edit the live composer in another window. The Bot's
+    /// owning manager still controls its provider and transcript.
+    pub(crate) fn chat_for_vox(
+        &mut self,
+        id: &str,
+        cx: &mut Context<Self>,
+    ) -> Option<Entity<Conversation>> {
+        if let Some(owner) = self
+            .other_chat_owner(id, cx)
+            .and_then(|owner| owner.upgrade())
+        {
+            return owner.read(cx).chats.get(id).cloned();
+        }
+        self.chat_for_action(id, cx)
+    }
     pub(crate) fn set_visible_panes(&mut self, visible: &HashSet<String>, cx: &mut Context<Self>) {
         for id in visible {
             self.ensure_chat(id, cx);

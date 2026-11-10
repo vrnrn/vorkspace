@@ -169,7 +169,7 @@ impl Shell {
             self.bots
                 .as_ref()
                 .ok_or("Bots unavailable")?
-                .update(cx, |m, cx| m.chat_for_action(&bot.id, cx))
+                .update(cx, |m, cx| m.chat_for_vox(&bot.id, cx))
                 .ok_or("Bot conversation is opening; try again")?
         } else {
             let id = input["sessionId"]

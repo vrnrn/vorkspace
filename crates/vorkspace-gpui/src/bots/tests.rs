@@ -67,6 +67,38 @@ fn a_peer_reports_to_a_bot_conversation_parked_in_another_window(cx: &mut TestAp
 }
 
 #[gpui::test]
+fn vox_reads_and_edits_the_live_bot_composer_from_a_peer_window(cx: &mut TestAppContext) {
+    let s = setup(cx);
+    close_bot_pane(&s, cx);
+    let peer = peer_window(&s, cx);
+    let edit = peer
+        .update(cx, |shell, window, cx| {
+            shell.vox_action(
+                "composer.write",
+                &json!({"bot":s.id, "text":"A draft from Vox"}),
+                window,
+                cx,
+            )
+        })
+        .unwrap()
+        .unwrap();
+    assert_eq!(edit["sent"], false);
+    s.manager.read_with(cx, |bots, cx| {
+        assert_eq!(
+            bots.chats[&s.id].read(cx).input.read(cx).content,
+            "A draft from Vox"
+        );
+    });
+    let read = peer
+        .update(cx, |shell, window, cx| {
+            shell.vox_action("composer.read", &json!({"bot":s.id}), window, cx)
+        })
+        .unwrap()
+        .unwrap();
+    assert_eq!(read["text"], "A draft from Vox");
+}
+
+#[gpui::test]
 fn ordinary_bot_work_survives_its_owning_window_closing_after_save(cx: &mut TestAppContext) {
     let s = setup(cx);
     close_bot_pane(&s, cx);
