@@ -237,12 +237,16 @@ impl Page {
                 .is_some_and(|doc| !doc.state.phase.active() && !doc.awaiting_transcript)
     }
 
-    pub(crate) fn delete_note_recording(&mut self, cx: &mut Context<Self>) {
+    pub(crate) fn delete_note_recording(
+        &mut self,
+        expected: Option<vorkspace_core::notes::Note>,
+        cx: &mut Context<Self>,
+    ) {
         if !self.can_delete_note() {
             return;
         }
         self.confirm_delete = true;
-        self.delete(cx);
+        self.delete_with_note_snapshot(Some(expected), cx);
     }
 
     pub(super) fn emit_note_deleted(&self, id: &str, cx: &mut Context<Self>) {

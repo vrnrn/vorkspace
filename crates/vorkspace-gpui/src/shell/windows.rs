@@ -211,6 +211,18 @@ impl Shell {
                     continue;
                 }
                 break cx.update(|cx| {
+                    if core
+                        .read(cx)
+                        .project_deletions
+                        .lock()
+                        .unwrap()
+                        .iter()
+                        .any(|path| super::project_delete::within(&cwd, path))
+                    {
+                        return Err(
+                            "That project is being deleted. Try again after it finishes.".into(),
+                        );
+                    }
                     if !core
                         .read(cx)
                         .vorkspaces
@@ -583,7 +595,7 @@ mod tests {
 }
 
 #[cfg(test)]
-mod tests {
+mod compatibility_tests {
     use super::*;
 
     #[test]

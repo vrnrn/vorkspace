@@ -31,6 +31,7 @@ fn dropping_delete_lease_releases_admission() {
     let lease = ProjectDeleteLease {
         store: store.clone(),
         path: "/project".into(),
+        admissions: Default::default(),
     };
     assert!(locked(&store).unwrap().create("codex", "/project").is_err());
     drop(lease);

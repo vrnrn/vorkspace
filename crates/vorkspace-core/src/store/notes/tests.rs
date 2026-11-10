@@ -33,7 +33,8 @@ fn recovered_note_copy_keeps_its_images_when_the_original_is_deleted() {
         "Plan (copy)",
         &crate::notes::image_markdown(&asset),
     );
-    let saved = store.copy_note_draft(&draft.id, &copy).unwrap();
+    let (saved, missing) = store.copy_note_draft(&draft.id, &copy).unwrap();
+    assert_eq!(missing, 0);
     let path = asset.markdown_path.replace("/original/", "/recovered/");
     assert!(saved.body.contains(&path));
     store.delete_note(&draft.id).unwrap();
@@ -42,6 +43,11 @@ fn recovered_note_copy_keeps_its_images_when_the_original_is_deleted() {
         std::fs::read_to_string(store.note_image_path(&path).unwrap()).unwrap(),
         "<svg/>"
     );
+    let mut late_copy = copy;
+    late_copy.id = "late-copy".into();
+    let (saved, missing) = store.copy_note_draft(&draft.id, &late_copy).unwrap();
+    assert_eq!(missing, 1);
+    assert_eq!(saved.body, late_copy.body);
 }
 
 #[test]

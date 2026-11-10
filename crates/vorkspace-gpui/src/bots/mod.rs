@@ -139,7 +139,6 @@ pub(crate) struct BotDocumentSource {
 }
 pub(crate) use notifications::{NotificationChanged, NotificationFinished};
 struct RunningHabit {
-    _install: crate::session_install::Install,
     bot: String,
     habit: String,
     view: Entity<Conversation>,
@@ -578,6 +577,21 @@ impl Bots {
             || self.chats.values().any(|chat| {
                 let chat = chat.read(cx);
                 chat.busy || chat.external_submission_pending()
+            })
+    }
+
+    pub(crate) fn uses_working_copy(&self, path: &str, cx: &App) -> bool {
+        self.chats
+            .values()
+            .chain(self.running.values().map(|run| &run.view))
+            .any(|view| {
+                let view = view.read(cx);
+                let cwd = view
+                    .settings
+                    .worktree_cwd
+                    .as_deref()
+                    .unwrap_or(&view.summary.cwd);
+                vorkspace_core::files::is_equal_or_inside(cwd, path)
             })
     }
     pub(crate) fn protected_app_target(&self, id: i64, cx: &App) -> bool {

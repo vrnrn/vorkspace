@@ -10,6 +10,7 @@ pub(super) struct Running {
     generation_before: u64,
 }
 
+#[derive(Default)]
 pub(super) struct State {
     pub service: Option<ServiceHandle>,
     pub open_requested: Option<u64>,
@@ -21,23 +22,6 @@ pub(super) struct State {
     writes: Option<gpui::Task<()>>,
     events_polling: bool,
     pub session_automations: HashMap<i64, String>,
-}
-
-impl Default for State {
-    fn default() -> Self {
-        Self {
-            service: None,
-            open_requested: None,
-            opening: false,
-            polling: false,
-            pending: HashSet::new(),
-            running: HashMap::new(),
-            reserved: HashSet::new(),
-            writes: None,
-            events_polling: false,
-            session_automations: HashMap::new(),
-        }
-    }
 }
 
 fn now() -> i64 {
@@ -437,7 +421,7 @@ impl Shell {
                         let installed = if reuse.is_some() {
                             this.sessions.get(&id).cloned()
                         } else {
-                            this.install_prepared(summary, &mut install, cx)
+                            this.install_prepared(summary, &install, cx)
                         };
                         let Some(view) = installed else {
                             this.update_automation_run(
@@ -489,7 +473,7 @@ impl Shell {
                             .clone()
                             .unwrap_or_else(|| due.automation.prompt.clone());
                         view.update(cx, |view, cx| view.quick_submit(prompt, settings, cx));
-                        this.publish_prepared(&view, cx);
+                        this.publish_prepared(&view, Some(&mut install), cx);
                         if let Some(run) = this.automation_state.running.get_mut(&id) {
                             run.submitting = false;
                         }

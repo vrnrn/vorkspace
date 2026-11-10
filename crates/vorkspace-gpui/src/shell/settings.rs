@@ -640,6 +640,11 @@ impl Shell {
             };
             let admitted = this.update_in(cx, |this, window, cx| {
                 let guard = worktrees::RemovalGuard::claim(&path)?;
+                if this.other_window_uses_project(&path, cx) {
+                    return Err(
+                        "Close the other window using this worktree before removing it.".into(),
+                    );
+                }
                 if this.terminals_using(&path, cx) {
                     return Err("Close the terminals using this worktree first.".to_owned());
                 }
@@ -649,10 +654,11 @@ impl Shell {
                     .filter(|id| is_equal_or_inside(this.session_working_copy(**id, cx), &path))
                     .copied()
                     .collect::<Vec<_>>();
-                if ids
-                    .iter()
-                    .any(|id| this.sessions.get(id).is_some_and(|v| v.read(cx).busy))
-                {
+                if ids.iter().any(|id| {
+                    this.sessions
+                        .get(id)
+                        .is_some_and(|v| v.read(cx).external_submission_pending())
+                }) {
                     return Err("Stop the running sessions using this worktree first.".to_owned());
                 }
                 if safe {
@@ -718,12 +724,14 @@ impl Shell {
             let _ = this.update(cx, |this, cx| {
                 let result = result.map(|detached| {
                     for (summary, settings) in detached {
+                        let id = summary.id;
                         this.session_summaries.insert(summary.id, summary.clone());
                         this.session_worktrees
                             .insert(summary.id, settings.worktree_cwd.clone());
                         if let Some(view) = this.sessions.get(&summary.id) {
                             view.update(cx, |v, cx| v.worktree_deleted(summary, settings, cx));
                         }
+                        this.publish_session_summary(id, cx);
                     }
                     this.worktree_focus
                         .retain(|_, focus| !is_equal_or_inside(&focus.path, &path));

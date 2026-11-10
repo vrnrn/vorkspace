@@ -885,7 +885,16 @@ impl Page {
         cx.notify();
     }
 
+    #[cfg(test)]
     pub(super) fn delete(&mut self, cx: &mut Context<Self>) {
+        self.delete_with_note_snapshot(None, cx);
+    }
+
+    pub(super) fn delete_with_note_snapshot(
+        &mut self,
+        expected: Option<Option<vorkspace_core::notes::Note>>,
+        cx: &mut Context<Self>,
+    ) {
         if !self.editable()
             || self.saving
             || self.analysis.is_some()
@@ -927,7 +936,13 @@ impl Page {
                         .into_iter()
                         .find(|link| link.recording_id == deleting_id)
                         .ok_or("Recording is no longer attached to a note")?;
-                    store.delete_note(&link.note_id)?;
+                    if let Some(expected) = &expected {
+                        if !store.delete_note_if_current(&link.note_id, expected.as_ref())? {
+                            return Err("This note changed in another window. Reload it before deleting it.".into());
+                        }
+                    } else {
+                        store.delete_note(&link.note_id)?;
+                    }
                 }
                 committed = true;
                 Ok(())

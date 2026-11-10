@@ -242,12 +242,12 @@ impl Shell {
             let _ = this.update_in(cx, |this, window, cx| match result {
                 Ok((summary, mut install)) => {
                     let id = summary.id;
-                    let Some(view) = this.install_prepared(summary, &mut install, cx) else {
+                    let Some(view) = this.install_prepared(summary, &install, cx) else {
                         this.session_install_failed(cx);
                         return;
                     };
                     this.seed_worktree(id, worktree.as_ref(), cx);
-                    this.publish_prepared(&view, cx);
+                    this.publish_prepared(&view, Some(&mut install), cx);
                     this.finish_split_placement(id, (target, navigation_revision, dir), window, cx);
                 }
                 Err(error) => {
@@ -278,9 +278,9 @@ impl Shell {
     ) {
         let id = summary.id;
         let mut install = self.session_install(cx);
-        if let Some(view) = self.install_prepared(summary, &mut install, cx) {
+        if let Some(view) = self.install_prepared(summary, &install, cx) {
             self.seed_worktree(id, worktree, cx);
-            self.publish_prepared(&view, cx);
+            self.publish_prepared(&view, Some(&mut install), cx);
             self.finish_split_placement(id, request, window, cx);
         }
     }

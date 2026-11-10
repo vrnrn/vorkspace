@@ -102,14 +102,11 @@ impl Shell {
             cleanup,
         } = start;
         let id = summary.id;
-        if let Some(install) = &mut install {
-            install.expose();
-        }
         // Preparation ran in the background. A view opened since then belongs
         // to its newer owner, including any input it has already collected.
         if self.sessions.contains_key(&id)
             || self.workspace.tab_of(id).is_some()
-            || !self.session_available_here(id, cx)
+            || !self.session_available_for_install(id, install.as_ref(), cx)
         {
             return Err(format!(
                 "New session {id} was already opened; its state and working copy were preserved"
@@ -127,7 +124,7 @@ impl Shell {
         // durable draft or queued prompt. No provider starts on a failed write.
         let observations_before = self.observations.len();
         let accepted = self
-            .add_loaded(summary.clone(), cx)
+            .add_loaded_with_install(summary.clone(), install.as_ref(), cx)
             .ok_or_else(|| "New session view is unavailable".to_owned())
             .and_then(|view| {
                 view.update(cx, |view, cx| {
@@ -154,7 +151,7 @@ impl Shell {
             .get(&id)
             .cloned()
             .expect("accepted session view");
-        self.publish_prepared(&view, cx);
+        self.publish_prepared(&view, install.as_mut(), cx);
         self.started_by.insert(id, caller);
         if let Some((target, edge)) = placement {
             let before = self.active_leaves();

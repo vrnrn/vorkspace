@@ -52,6 +52,7 @@ pub(crate) struct AppCore {
     idle_protection: HashMap<u64, HashSet<i64>>,
     sessions: HashMap<i64, WeakEntity<Shell>>,
     session_deletions: HashSet<i64>,
+    pub(super) project_deletions: Arc<Mutex<HashSet<String>>>,
     metadata_writes: HashMap<i64, WeakEntity<Shell>>,
     pub(super) catalog_revision: u64,
     pub(super) session_installs: crate::session_install::Registry,
@@ -206,6 +207,7 @@ impl AppCore {
                 idle_protection: HashMap::new(),
                 sessions: HashMap::new(),
                 session_deletions: HashSet::new(),
+                project_deletions: Default::default(),
                 metadata_writes: HashMap::new(),
                 catalog_revision: 0,
                 session_installs: Default::default(),
@@ -513,8 +515,13 @@ impl AppCore {
 
     /// Whether `shell` may load session `id` live. Another window keeps it
     /// only while that window exists and still has the session loaded.
-    fn claim_session(&mut self, id: i64, shell: &WeakEntity<Shell>) -> bool {
-        if self.session_installs.contains(id)
+    fn claim_session(
+        &mut self,
+        id: i64,
+        shell: &WeakEntity<Shell>,
+        install: Option<&crate::session_install::Install>,
+    ) -> bool {
+        if !self.session_installs.permits(id, install)
             || self.session_deletions.contains(&id)
             || self.metadata_is_writing(id)
             || self.other_session_window(id, shell).is_some()
@@ -631,6 +638,30 @@ impl AppCore {
 }
 
 impl Shell {
+    pub(super) fn project_is_deleting(&self, path: &str, cx: &App) -> bool {
+        self.app_core.as_ref().is_some_and(|core| {
+            core.read(cx)
+                .project_deletions
+                .lock()
+                .unwrap()
+                .iter()
+                .any(|root| super::project_delete::within(path, root))
+        })
+    }
+
+    pub(super) fn allow_project_entry(&mut self, path: &str, cx: &mut Context<Self>) -> bool {
+        let error = if self.project_is_deleting(path, cx) {
+            "This project is being deleted."
+        } else if vorkspace_core::worktree_management::is_being_removed(path) {
+            "This worktree is being removed."
+        } else {
+            return true;
+        };
+        self.error = Some(error.into());
+        cx.notify();
+        false
+    }
+
     /// Joins this window to the application's shared state. The first
     /// window seeds it from its own (possibly migrated) definitions.
     pub(super) fn adopt_app_core(&mut self, core: Entity<AppCore>, cx: &mut Context<Self>) {
@@ -1011,19 +1042,33 @@ impl Shell {
     }
 
     /// Whether this window may load session `id` live.
-    pub(super) fn claim_session(&mut self, id: i64, cx: &mut Context<Self>) -> bool {
+    pub(super) fn claim_session(
+        &mut self,
+        id: i64,
+        install: Option<&crate::session_install::Install>,
+        cx: &mut Context<Self>,
+    ) -> bool {
         let Some(core) = self.app_core.clone() else {
             return true;
         };
         let me = cx.weak_entity();
-        core.update(cx, |core, _| core.claim_session(id, &me))
+        core.update(cx, |core, _| core.claim_session(id, &me, install))
     }
 
     pub(super) fn session_available_here(&self, id: i64, cx: &Context<Self>) -> bool {
+        self.session_available_for_install(id, None, cx)
+    }
+
+    pub(super) fn session_available_for_install(
+        &self,
+        id: i64,
+        install: Option<&crate::session_install::Install>,
+        cx: &Context<Self>,
+    ) -> bool {
         self.app_core.as_ref().is_none_or(|core| {
             let core = core.read(cx);
             !core.session_deletions.contains(&id)
-                && !core.session_installs.contains(id)
+                && core.session_installs.permits(id, install)
                 && !core.metadata_is_writing(id)
                 && core.other_session_window(id, &cx.weak_entity()).is_none()
         })
@@ -1592,17 +1637,17 @@ mod tests {
         .unwrap();
         let worktree = format!("{}/checkout", summary.cwd);
         a.update(cx, |shell, _, cx| {
-            let view = shell.install_prepared(summary, &mut install, cx).unwrap();
+            let view = shell.install_prepared(summary, &install, cx).unwrap();
             view.update(cx, |view, cx| {
                 view.seed_new_settings(
-                    Settings {
+                    vorkspace_core::agent::Settings {
                         worktree_cwd: Some(worktree.clone()),
                         ..Default::default()
                     },
                     cx,
                 )
             });
-            shell.publish_prepared(&view, cx);
+            shell.publish_prepared(&view, Some(&mut install), cx);
         })
         .unwrap();
         drop(install);
@@ -1690,7 +1735,7 @@ mod tests {
                     .unwrap()
                     .read(cx)
                     .automation_events(),
-                [newer.clone()]
+                std::slice::from_ref(&newer)
             );
             let raw = locked(&shell.store)
                 .unwrap()
@@ -1699,6 +1744,45 @@ mod tests {
                 .unwrap();
             let saved: Vec<vorkspace_core::inbox::Item> = serde_json::from_str(&raw).unwrap();
             assert_eq!(saved, [newer]);
+        })
+        .unwrap();
+    }
+
+    #[gpui::test]
+    fn a_project_pending_deletion_cannot_be_selected_in_a_peer(cx: &mut TestAppContext) {
+        let (a, b, _, dir) = two_windows(cx);
+        let path = dir.path().join("deleting");
+        std::fs::create_dir(&path).unwrap();
+        let path = path.to_string_lossy().into_owned();
+        let admissions = a
+            .update(cx, |shell, _, cx| {
+                shell
+                    .app_core
+                    .as_ref()
+                    .unwrap()
+                    .read(cx)
+                    .project_deletions
+                    .clone()
+            })
+            .unwrap();
+        let key = vorkspace_core::files::path_key(&path);
+        admissions.lock().unwrap().insert(key.clone());
+        b.update(cx, |shell, window, cx| {
+            let original = shell.workspace.project.clone();
+            shell.select_project(path.clone(), window, cx);
+            assert_eq!(shell.workspace.project, original);
+            assert!(
+                shell
+                    .error
+                    .as_ref()
+                    .is_some_and(|error| error.contains("being deleted"))
+            );
+        })
+        .unwrap();
+        admissions.lock().unwrap().remove(&key);
+        b.update(cx, |shell, window, cx| {
+            shell.select_project(path.clone(), window, cx);
+            assert_eq!(shell.workspace.project, path);
         })
         .unwrap();
     }

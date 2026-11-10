@@ -132,6 +132,9 @@ impl Shell {
         if path.is_empty() {
             return true;
         }
+        if !self.allow_project_entry(path, cx) {
+            return false;
+        }
         let Some(id) = self
             .workspace
             .vorkspace_for_project(path)

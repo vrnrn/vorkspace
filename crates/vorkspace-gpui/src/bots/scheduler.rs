@@ -1411,46 +1411,139 @@ impl Bots {
             Ok((s, inherited, habit, install))
         });
         cx.spawn(async move |this, cx| {
-            let result = work.await;
-            let session = result.as_ref().ok().map(|(summary, _, _, _)| summary.id);
-            let installed = this.update(cx, |this, cx| {
-                let (summary, mut settings, habit, install) = match result {
-                    Ok(prepared) => prepared,
-                    Err(error) => {
+            let (summary, settings, habit, _install) = match work.await {
+                Ok(prepared) => prepared,
+                Err(error) => {
+                    let _ = this.update(cx, |this, cx| {
                         this.active_run = None;
                         this.error = Some(error);
                         this.changed(cx);
+                    });
+                    return;
+                }
+            };
+            let session = summary.id;
+            let saved = this
+                .update(cx, |this, cx| {
+                    this.habit_bot(&target, cx)?;
+                    this.roster.hidden_sessions.push(session);
+                    this.roster
+                        .get_mut(&target)
+                        .expect("validated Bot")
+                        .habit_sessions
+                        .push(session);
+                    Some(this.persist_roster(|_| Ok(()), cx))
+                })
+                .ok()
+                .flatten();
+            let installed = if let Some(saved) = saved {
+                let result = saved
+                    .recv()
+                    .await
+                    .unwrap_or_else(|_| Err("Habit admission was interrupted".into()));
+                this.update(cx, |this, cx| {
+                    if let Err(error) = result {
+                        this.roster.hidden_sessions.retain(|id| *id != session);
+                        if let Some(bot) = this.roster.get_mut(&target) {
+                            bot.habit_sessions.retain(|id| *id != session);
+                        }
+                        this.roster_write_finished(cx);
+                        this.active_run = None;
+                        this.error = Some(format!("Could not start the Habit: {error}"));
+                        this.changed(cx);
                         return false;
                     }
-                };
-                let Some(bot) = this.habit_bot(&target, cx) else {
+                    this.roster_write_finished(cx);
+                    let Some(bot) = this.habit_bot(&target, cx) else {
+                        this.active_run = None;
+                        this.changed(cx);
+                        return false;
+                    };
+                    this.launch_habit_view(summary, settings, habit, bot, cx);
+                    true
+                })
+                .unwrap_or(false)
+            } else {
+                let _ = this.update(cx, |this, cx| {
                     this.active_run = None;
                     this.changed(cx);
-                    return false;
-                };
-                let session=summary.id;let view=cx.new(|cx|Conversation::new(summary,this.store.clone(),cx));let root=this.root.clone();let env=this.bridge.as_ref().map(|b|b.environment(session)).unwrap_or_default();
-                settings.access=AccessMode::FullAccess;settings.internal_message=true;settings.bot=None;settings.environment.clear();
-                view.update(cx,|v,cx|{v.install_transfer(settings,None,cx);v.configure_bot(bot,root,env,cx);});
-                this.observations.push(cx.subscribe(&view,move|this,_,_:&SessionChanged,cx|this.habit_changed(session,cx)));
-                this.running.insert(session,RunningHabit{_install:install,bot:target.clone(),habit:habit.id.clone(),view:view.clone(),started:now_ms(),launched:now_ms(),failure:None,waiting_since:None,cards:Vec::new(),mailbox:Vec::new()});this.active_run=Some(session);
-                this.roster.hidden_sessions.push(session);
-                if let Some(m)=this.roster.get_mut(&target){m.habit_sessions.push(session);}
-                this.save(cx);
-                let message=Message{peer:None,sent_at:Some(vorkspace_core::time::now_ms()),id:bot::new_id(),text:format!("[Scheduled habit: {}]\n{}\n\nDo this scheduled work independently. Return a concise report; if nothing requires attention, reply exactly NOTHING_TO_REPORT. Any session you start belongs to this habit. Do not change the habit unless asked.",habit.name,habit.instructions),prepared_prompt:None,internal:true,error:None,attachments:Vec::new()};
-                view.update(cx,|v,cx|v.bot_dispatch(&message,cx));
-                this.changed(cx);
-                true
-            }).unwrap_or(false);
-            if let Some(session) = session.filter(|_| !installed) {
-                let result = cx.background_executor().spawn(async move {
-                    locked(&cleanup)?.delete(session)
-                }).await;
+                });
+                false
+            };
+            if !installed {
+                let result = cx
+                    .background_executor()
+                    .spawn(async move { locked(&cleanup)?.delete(session) })
+                    .await;
                 if let Err(error) = result {
                     eprintln!("Could not discard unstarted Habit session {session}: {error}");
                 }
             }
-        }).detach();
+        })
+        .detach();
     }
+
+    fn launch_habit_view(
+        &mut self,
+        summary: vorkspace_core::store::Session,
+        mut settings: Settings,
+        habit: Habit,
+        bot: Bot,
+        cx: &mut Context<Self>,
+    ) {
+        let session = summary.id;
+        let target = bot.id.clone();
+        let view = cx.new(|cx| Conversation::new(summary, self.store.clone(), cx));
+        let root = self.root.clone();
+        let env = self
+            .bridge
+            .as_ref()
+            .map(|bridge| bridge.environment(session))
+            .unwrap_or_default();
+        settings.access = AccessMode::FullAccess;
+        settings.internal_message = true;
+        settings.bot = None;
+        settings.environment.clear();
+        view.update(cx, |view, cx| {
+            view.install_transfer(settings, None, cx);
+            view.configure_bot(bot, root, env, cx);
+        });
+        self.observations
+            .push(cx.subscribe(&view, move |this, _, _: &SessionChanged, cx| {
+                this.habit_changed(session, cx);
+            }));
+        self.running.insert(
+            session,
+            RunningHabit {
+                bot: target,
+                habit: habit.id.clone(),
+                view: view.clone(),
+                started: now_ms(),
+                launched: now_ms(),
+                failure: None,
+                waiting_since: None,
+                cards: Vec::new(),
+                mailbox: Vec::new(),
+            },
+        );
+        self.active_run = Some(session);
+        let message = Message {
+            peer: None,
+            sent_at: Some(now_ms()),
+            id: bot::new_id(),
+            text: format!(
+                "[Scheduled habit: {}]\n{}\n\nDo this scheduled work independently. Return a concise report; if nothing requires attention, reply exactly NOTHING_TO_REPORT. Any session you start belongs to this habit. Do not change the habit unless asked.",
+                habit.name, habit.instructions
+            ),
+            prepared_prompt: None,
+            internal: true,
+            error: None,
+            attachments: Vec::new(),
+        };
+        view.update(cx, |view, cx| view.bot_dispatch(&message, cx));
+        self.changed(cx);
+    }
+
     pub(super) fn habit_changed(&mut self, session: i64, cx: &mut Context<Self>) {
         cx.emit(NotificationChanged);
         let Some(run) = self.running.get(&session) else {

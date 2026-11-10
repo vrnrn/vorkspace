@@ -24,6 +24,13 @@ impl Registry {
         self.0.lock().unwrap().contains(&id)
     }
 
+    pub(crate) fn permits(&self, id: i64, install: Option<&Install>) -> bool {
+        !self.contains(id)
+            || install.is_some_and(|ticket| {
+                ticket.id == Some(id) && Arc::ptr_eq(&ticket.registry.0, &self.0)
+            })
+    }
+
     pub(crate) fn visible_sessions(
         &self,
         db: &vorkspace_core::store::Store,
@@ -56,7 +63,7 @@ impl Install {
     /// Register under the same database guard that created the row.
     pub(crate) fn track(&mut self, id: i64) {
         assert!(self.id.is_none());
-        self.registry.0.lock().unwrap().insert(id);
+        assert!(self.registry.0.lock().unwrap().insert(id));
         self.id = Some(id);
     }
 

@@ -27,6 +27,15 @@ pub(crate) enum Event {
     OpenTab(String),
     OpenSource(i64),
     AddToChat(Note),
+    Notice(String),
+}
+
+#[derive(Default)]
+struct Editors(HashMap<usize, Vec<gpui::WeakEntity<Notes>>>);
+impl gpui::Global for Editors {}
+
+fn editor_store(store: &Database) -> usize {
+    std::sync::Arc::as_ptr(store) as usize
 }
 
 pub(crate) struct Notes {
@@ -95,6 +104,14 @@ impl Notes {
     }
 
     fn with_pinned(store: Database, pinned: Option<String>, cx: &mut Context<Self>) -> Self {
+        let editor = cx.weak_entity();
+        let peers = cx
+            .default_global::<Editors>()
+            .0
+            .entry(editor_store(&store))
+            .or_default();
+        peers.retain(|peer| peer.upgrade().is_some());
+        peers.push(editor);
         let recording = cx.new(|cx| crate::meetings::Page::new(store.clone(), cx));
         let query =
             cx.new(|cx| Input::field("Filter notes", "Filter notes", page::secondary_ink(), cx));
@@ -648,10 +665,15 @@ impl Notes {
                 self.notes.extend(latest);
                 self.load_selection(selected, cx);
                 self.error = None;
-                if let Some(copy) = copy {
+                if let Some((copy, missing)) = copy {
                     let id = copy.id.clone();
                     self.notes.insert(0, copy);
                     cx.emit(Event::OpenTab(id));
+                    if missing > 0 {
+                        cx.emit(Event::Notice(format!(
+                            "Saved a copy. {missing} original image(s) could not be recovered."
+                        )));
+                    }
                 }
             }
             Err(error) => self.error = Some(format!("Could not resolve the note edit: {error}")),
@@ -803,22 +825,64 @@ impl Notes {
             cx.notify();
             return;
         }
+        if self.peer_has_unfinished_note(&id, cx) {
+            self.confirm_delete = false;
+            self.error = Some(
+                "This note has unfinished edits in another window. Save them before deleting it."
+                    .into(),
+            );
+            cx.notify();
+            return;
+        }
         if self.recordings.contains_key(&id) {
+            let expected = self.saved_note.clone();
             self.recording
-                .update(cx, |page, cx| page.delete_note_recording(cx));
+                .update(cx, |page, cx| page.delete_note_recording(expected, cx));
         } else {
             self.delete_saved_note(&id, cx);
         }
     }
 
+    fn peer_has_unfinished_note(&self, id: &str, cx: &Context<Self>) -> bool {
+        let current = cx.weak_entity();
+        cx.try_global::<Editors>()
+            .and_then(|editors| editors.0.get(&editor_store(&self.store)))
+            .into_iter()
+            .flatten()
+            .filter(|peer| **peer != current)
+            .filter_map(gpui::WeakEntity::upgrade)
+            .any(|peer| {
+                let peer = peer.read(cx);
+                peer.image_note.as_deref() == Some(id)
+                    || peer.recording.read(cx).has_pending_note_edit(id)
+                    || (peer.selected.as_deref() == Some(id)
+                        && (peer.dirty
+                            || peer.title.read(cx).is_composing()
+                            || peer.body.read(cx).is_composing()
+                            || !peer.tag.read(cx).content.is_empty()))
+            })
+    }
+
     fn delete_saved_note(&mut self, id: &str, cx: &mut Context<Self>) {
         let selected = self.selected.as_deref() == Some(id);
-        if selected {
-            self.debounce = None;
-        }
-        let result = locked(&self.store).and_then(|store| store.delete_note(id));
+        let expected = if selected {
+            self.saved_note.as_ref()
+        } else {
+            self.notes
+                .iter()
+                .find(|note| note.id == id && !self.ephemeral.contains(id))
+        };
+        let result =
+            locked(&self.store).and_then(|store| store.delete_note_if_current(id, expected));
+        self.confirm_delete = false;
         match result {
-            Ok(()) => self.forget_note(id, cx),
+            Ok(true) => self.forget_note(id, cx),
+            Ok(false) => {
+                self.error = Some(
+                    "This note changed in another window. Reload it before deleting it.".into(),
+                );
+                self.save_conflict |= selected && self.dirty;
+            }
             Err(error) => self.error = Some(error),
         }
         cx.notify();
@@ -1956,6 +2020,66 @@ mod tests {
         let visual = VisualTestContext::from_window(window.into(), cx);
         visual.run_until_parked();
         (window, visual)
+    }
+
+    #[gpui::test]
+    fn deleting_a_note_checks_peer_drafts_and_the_saved_revision(cx: &mut TestAppContext) {
+        let store = store();
+        locked(&store)
+            .unwrap()
+            .upsert_note(&notes::NoteUpsert {
+                id: "shared".into(),
+                title: "Shared note".into(),
+                body: "Original".into(),
+                ..Default::default()
+            })
+            .unwrap();
+        let (first, mut first_visual) = view(cx, &store);
+        let (second, mut second_visual) = view(cx, &store);
+        second
+            .update(&mut second_visual, |notes, _, cx| {
+                notes
+                    .body
+                    .update(cx, |body, cx| body.set_text("Peer draft".into(), cx));
+                notes.edited(cx);
+            })
+            .unwrap();
+        first
+            .update(&mut first_visual, |notes, _, cx| {
+                notes.delete(cx);
+                notes.delete(cx);
+                assert!(
+                    notes
+                        .error
+                        .as_ref()
+                        .is_some_and(|error| error.contains("unfinished edits"))
+                );
+            })
+            .unwrap();
+        second
+            .update(&mut second_visual, |notes, _, cx| notes.flush(cx))
+            .unwrap();
+        first
+            .update(&mut first_visual, |notes, _, cx| {
+                notes.delete(cx);
+                notes.delete(cx);
+                assert!(
+                    notes
+                        .error
+                        .as_ref()
+                        .is_some_and(|error| error.contains("changed in another window"))
+                );
+            })
+            .unwrap();
+        assert_eq!(
+            locked(&store)
+                .unwrap()
+                .get_note("shared")
+                .unwrap()
+                .unwrap()
+                .body,
+            "Peer draft"
+        );
     }
 
     #[gpui::test]

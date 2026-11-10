@@ -1287,15 +1287,14 @@ impl Shell {
     fn install_prepared(
         &mut self,
         summary: Session,
-        install: &mut crate::session_install::Install,
+        install: &crate::session_install::Install,
         cx: &mut Context<Self>,
     ) -> Option<Entity<Conversation>> {
         if self.sessions.contains_key(&summary.id) {
             return None;
         }
-        install.expose();
         let project = summary.cwd.clone();
-        let view = self.add_loaded(summary, cx)?;
+        let view = self.add_loaded_with_install(summary, Some(install), cx)?;
         self.workspace.restore_project(&project);
         Some(view)
     }
@@ -1305,7 +1304,12 @@ impl Shell {
         cx.notify();
     }
 
-    fn publish_prepared(&mut self, view: &Entity<Conversation>, cx: &mut Context<Self>) {
+    fn publish_prepared(
+        &mut self,
+        view: &Entity<Conversation>,
+        install: Option<&mut crate::session_install::Install>,
+        cx: &mut Context<Self>,
+    ) {
         let view = view.read(cx);
         let id = view.summary.id;
         self.session_summaries.insert(id, view.summary.clone());
@@ -1316,6 +1320,9 @@ impl Shell {
         } else {
             self.draft_sessions.remove(&id);
         }
+        if let Some(install) = install {
+            install.expose();
+        }
         self.publish_session_summary(id, cx);
     }
 
@@ -1325,11 +1332,28 @@ impl Shell {
         summary: Session,
         cx: &mut Context<Self>,
     ) -> Option<Entity<Conversation>> {
+        self.add_loaded_with_install(summary, None, cx)
+    }
+
+    fn add_loaded_with_install(
+        &mut self,
+        summary: Session,
+        install: Option<&crate::session_install::Install>,
+        cx: &mut Context<Self>,
+    ) -> Option<Entity<Conversation>> {
         let id = summary.id;
         if let Some(view) = self.sessions.get(&id) {
             return Some(view.clone());
         }
-        if !self.claim_session(id, cx) {
+        let worktree = self.session_worktrees.get(&id).cloned().flatten();
+        if !self.allow_project_entry(&summary.cwd, cx)
+            || worktree
+                .as_deref()
+                .is_some_and(|path| !self.allow_project_entry(path, cx))
+        {
+            return None;
+        }
+        if !self.claim_session(id, install, cx) {
             return None;
         }
         self.session_summaries.insert(id, summary.clone());
@@ -1338,7 +1362,6 @@ impl Shell {
         self.tab_marks
             .insert(id, cx.new(|_| SessionMark::tab(summary.provider.clone())));
         let appearance = self.appearance(&summary.cwd);
-        let worktree = self.session_worktrees.get(&id).cloned().flatten();
         let existing = self
             .bot_conversations
             .borrow()
@@ -1620,12 +1643,12 @@ impl Shell {
             let _ = this.update_in(cx, |this, window, cx| match result {
                 Ok((summary, settings, prompt, mut install)) => {
                     let id = summary.id;
-                    let Some(view) = this.install_prepared(summary, &mut install, cx) else {
+                    let Some(view) = this.install_prepared(summary, &install, cx) else {
                         this.session_install_failed(cx);
                         return;
                     };
                     view.update(cx, |view, cx| view.install_transfer(settings, prompt, cx));
-                    this.publish_prepared(&view, cx);
+                    this.publish_prepared(&view, Some(&mut install), cx);
                     this.order.retain(|s| *s != id);
                     this.order.insert(0, id);
                     if this.navigation_revision == navigation_revision {
@@ -2166,12 +2189,7 @@ impl Shell {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if self
-            .deleting_projects
-            .contains(&vorkspace_core::files::path_key(&path))
-        {
-            self.error = Some("This project is being deleted.".into());
-            cx.notify();
+        if !self.allow_project_entry(&path, cx) {
             return;
         }
         if !path.is_empty()
@@ -2326,12 +2344,7 @@ impl Shell {
             cx.notify();
             return;
         }
-        if self
-            .deleting_projects
-            .contains(&vorkspace_core::files::path_key(&path))
-        {
-            self.error = Some("This project is being deleted.".into());
-            cx.notify();
+        if !self.allow_project_entry(&path, cx) {
             return;
         }
         self.workspace.add_project_to_vorkspace(target, &path);
@@ -2448,13 +2461,13 @@ impl Shell {
                 match result {
                     Ok((summary, settings, mut install)) => {
                         let id = summary.id;
-                        let Some(view) = this.install_prepared(summary, &mut install, cx) else {
+                        let Some(view) = this.install_prepared(summary, &install, cx) else {
                             this.session_install_failed(cx);
                             return;
                         };
                         view.update(cx, |view, cx| view.seed_new_settings(settings, cx));
                         this.seed_worktree(id, focus.as_ref(), cx);
-                        this.publish_prepared(&view, cx);
+                        this.publish_prepared(&view, Some(&mut install), cx);
                         // A pending blank belongs to the copy that requested it;
                         // navigation to another copy must never redirect that request.
                         if this.workspace.project != cwd

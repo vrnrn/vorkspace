@@ -181,6 +181,10 @@ impl Shell {
         cx: &mut Context<Self>,
     ) {
         let project = self.workspace.project.clone();
+        let target = focus.as_ref().map_or(&project, |f| &f.path).clone();
+        if !self.allow_project_entry(&target, cx) {
+            return;
+        }
         if let Some(id) = self
             .workspace
             .active
@@ -189,7 +193,6 @@ impl Shell {
             self.worktree_returns
                 .insert((project.clone(), self.working_copy().into()), id);
         }
-        let target = focus.as_ref().map_or(&project, |f| &f.path).clone();
         match focus {
             Some(focus) => {
                 self.worktree_focus.insert(project.clone(), focus);

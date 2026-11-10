@@ -177,12 +177,12 @@ impl Shell {
                 match result {
                     Ok((summary, settings, mut install)) => {
                         let id = summary.id;
-                        let Some(view) = this.install_prepared(summary, &mut install, cx) else {
+                        let Some(view) = this.install_prepared(summary, &install, cx) else {
                             this.session_install_failed(cx);
                             return;
                         };
                         view.update(cx, |v, cx| v.quick_submit(launch.prompt, settings, cx));
-                        this.publish_prepared(&view, cx);
+                        this.publish_prepared(&view, Some(&mut install), cx);
                         this.order.retain(|i| *i != id);
                         this.order.insert(0, id);
                         if launch.foreground

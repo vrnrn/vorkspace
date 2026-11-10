@@ -362,8 +362,7 @@ impl Shell {
                     match result {
                         Ok((summary, settings, prompt, mut install)) => {
                             let id = summary.id;
-                            let Some(view) = this.install_prepared(summary, &mut install, cx)
-                            else {
+                            let Some(view) = this.install_prepared(summary, &install, cx) else {
                                 if let Some(run) = this.orchestrations.get_mut(&lead) {
                                     run.tasks[ix].state = State::Failed;
                                     run.tasks[ix].report =
@@ -384,7 +383,7 @@ impl Shell {
                                     v.install_transfer(settings, Some(prompt), cx)
                                 });
                             }
-                            this.publish_prepared(&view, cx);
+                            this.publish_prepared(&view, Some(&mut install), cx);
                         }
                         Err(error) => {
                             if let Some(run) = this.orchestrations.get_mut(&lead) {

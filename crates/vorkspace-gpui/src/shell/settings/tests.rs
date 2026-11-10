@@ -365,6 +365,39 @@ fn remove(
 }
 
 #[gpui::test]
+fn a_peer_terminal_prevents_worktree_removal(cx: &mut TestAppContext) {
+    let (dir, tree) = repository();
+    let (window, _, _) = window(cx);
+    let project = dir.path().to_string_lossy().into_owned();
+    let store = window
+        .update(cx, |shell, _, _| shell.store.clone())
+        .unwrap();
+    let cwd = project.clone();
+    let peer = cx.update(|cx| {
+        cx.open_window(Default::default(), |_, cx| {
+            cx.new(|cx| Shell::new(store, Vec::new(), cwd, None, cx))
+        })
+        .unwrap()
+    });
+    cx.run_until_parked();
+    peer.update(cx, |shell, _, cx| {
+        let terminal = cx.new(|cx| crate::terminal::Terminal::new(tree.clone(), cx));
+        shell.terminal_tabs.insert(1, terminal);
+    })
+    .unwrap();
+    let error = remove(window, project.clone(), format!("{tree}/."), cx).unwrap_err();
+    assert!(error.contains("other window"), "{error}");
+    assert!(std::path::Path::new(&tree).is_dir());
+    peer.update(cx, |shell, _, _| shell.terminal_tabs.clear())
+        .unwrap();
+    remove(window, project, tree.clone(), cx).unwrap();
+    assert!(!std::path::Path::new(&tree).exists());
+    let _ = std::fs::remove_dir_all(vorkspace_core::worktree_management::default_root(
+        dir.path(),
+    ));
+}
+
+#[gpui::test]
 fn an_alias_cannot_slip_past_a_title_tab_terminal(cx: &mut TestAppContext) {
     let (dir, tree) = repository();
     let (window, _, _) = window(cx);

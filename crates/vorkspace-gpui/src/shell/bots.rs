@@ -87,7 +87,7 @@ impl Shell {
                 v.input.update(cx, |i, cx| i.set_text(prompt, cx));
             }
         });
-        self.publish_prepared(&view, cx);
+        self.publish_prepared(&view, None, cx);
         self.invalidate_chrome(cx);
         Ok(())
     }

@@ -548,6 +548,7 @@ impl Conversation {
     /// well as the provider, including submissions deferred by the editor.
     pub(crate) fn external_submission_pending(&self) -> bool {
         self.busy
+            || self.ticket_context.pending()
             || self.stopping
             || self.preparing_worktree
             || self.attaching
@@ -560,6 +561,7 @@ impl Conversation {
     /// or an already accepted message must keep ownership of this composer.
     pub(crate) fn available_for_managed_run(&self, cx: &gpui::App) -> bool {
         !self.busy
+            && !self.ticket_context.pending()
             && !self.stopping
             && !self.preparing_worktree
             && !self.attaching

@@ -2,7 +2,7 @@
 use super::*;
 use vorkspace_core::store::{Session, Store};
 
-fn within(path: &str, root: &str) -> bool {
+pub(super) fn within(path: &str, root: &str) -> bool {
     let path = vorkspace_core::files::path_key(path);
     let root = vorkspace_core::files::path_key(root);
     path == root || std::path::Path::new(&path).starts_with(std::path::Path::new(&root))
@@ -139,12 +139,17 @@ fn check_bots(roster: &vorkspace_core::bot::Roster, path: &str, ids: &[i64]) -> 
 struct ProjectDeleteLease {
     store: Database,
     path: String,
+    admissions: Arc<Mutex<HashSet<String>>>,
 }
 impl Drop for ProjectDeleteLease {
     fn drop(&mut self) {
         if let Ok(mut store) = locked(&self.store) {
             store.end_project_deletion(&self.path);
         }
+        self.admissions
+            .lock()
+            .unwrap()
+            .remove(&vorkspace_core::files::path_key(&self.path));
     }
 }
 
@@ -216,6 +221,15 @@ fn delete_saved(
 impl Shell {
     pub(super) fn window_uses_project(&self, path: &str, cx: &App) -> bool {
         within(&self.workspace.project, path)
+            || self
+                .worktree_focus
+                .values()
+                .any(|focus| within(&focus.path, path))
+            || self.terminals_using(path, cx)
+            || self
+                .bots
+                .as_ref()
+                .is_some_and(|bots| bots.read(cx).uses_working_copy(path, cx))
             || self.sessions.values().any(|view| {
                 let session = view.read(cx);
                 within(&session.summary.cwd, path)
@@ -536,6 +550,23 @@ impl Shell {
             return;
         }
         let key = vorkspace_core::files::path_key(&path);
+        let admissions = self
+            .app_core
+            .as_ref()
+            .expect("registered workspace window")
+            .read(cx)
+            .project_deletions
+            .clone();
+        if admissions
+            .lock()
+            .unwrap()
+            .iter()
+            .any(|root| within(&path, root) || within(root, &path))
+        {
+            self.error = Some("An overlapping project is being deleted.".into());
+            cx.notify();
+            return;
+        }
         if let Err(error) =
             locked(&self.store).and_then(|mut store| store.begin_project_deletion(&path))
         {
@@ -557,27 +588,31 @@ impl Shell {
             }
         }
         self.deleting_projects.insert(key.clone());
+        admissions.lock().unwrap().insert(key.clone());
         self.deleting.extend(ids.iter().copied());
         let previous = self.group_writes.take();
         let store = self.store.clone();
         let lease = ProjectDeleteLease {
             store: store.clone(),
             path: path.clone(),
+            admissions,
         };
         self.group_writes = Some(cx.spawn(async move |this, cx| {
-            let _lease = lease;
             if let Some(previous) = previous { previous.await; }
             let worker_path = path.clone(); let worker_ids = ids.clone(); let worker_store = store.clone();
             let work = cx.background_executor().spawn(async move {
-                if let Err(error) = check_worktrees(&worker_path) { return DeleteResult { deleted: Vec::new(), error: Some(error) }; }
-                if !worker_ids.is_empty() && vorkspace_core::checkpoint::store().is_none() {
-                    return DeleteResult { deleted: Vec::new(), error: Some("Checkpoint storage is unavailable; no conversations were deleted.".into()) };
-                }
-                match locked(&worker_store) { Ok(mut store) => delete_saved(&mut store, &worker_path, &worker_ids, |id| {
+                let result = if let Err(error) = check_worktrees(&worker_path) {
+                    DeleteResult { deleted: Vec::new(), error: Some(error) }
+                } else if !worker_ids.is_empty() && vorkspace_core::checkpoint::store().is_none() {
+                    DeleteResult { deleted: Vec::new(), error: Some("Checkpoint storage is unavailable; no conversations were deleted.".into()) }
+                } else {
+                    match locked(&worker_store) { Ok(mut store) => delete_saved(&mut store, &worker_path, &worker_ids, |id| {
                         if let Some(checkpoints) = vorkspace_core::checkpoint::store() { checkpoints.exclusive(|c| c.forget(&id.to_string())) } else { Ok(()) }
                     }), Err(error) => DeleteResult { deleted: Vec::new(), error: Some(error) } }
+                };
+                (result, lease)
             });
-            let result = work.await;
+            let (result, _lease) = work.await;
             let _ = this.update(cx, |this, cx| {
                 for id in &ids { this.deleting.remove(id); this.release_session_deletion(*id, cx); }
                 for id in &result.deleted { this.forget_session(*id, cx); }
