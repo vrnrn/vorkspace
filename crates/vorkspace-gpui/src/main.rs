@@ -39,6 +39,7 @@ mod popover;
 mod preference_writes;
 mod project_background;
 mod project_mark;
+mod render_pixels;
 mod resource_pressure;
 mod response_actions;
 mod right_panel;

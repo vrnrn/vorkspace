@@ -1,4 +1,5 @@
 //! Native port of `src/shared/ui/ImageLightbox.tsx`.
+use crate::render_pixels::to_render_image;
 use vorkspace_ui::radius;
 mod annotation;
 mod diagram;
@@ -185,17 +186,21 @@ impl ImageLightbox {
             },
         );
         let mut diagram = None;
+        cx.on_release(|this, cx| {
+            if (this.original.is_some() || matches!(this.source, Source::Embedded { .. }))
+                && let Some(image) = this.image.take()
+            {
+                cx.drop_image(image, None);
+            }
+        })
+        .detach();
         if owner.is_some()
             && let Source::Path(path) = &open.source
         {
             let path = path.clone();
-            let renderer = cx.svg_renderer();
             let work = cx.background_executor().spawn(async move {
                 let pixels = annotation::read_image(&path)?;
-                let bytes = annotation::png(&pixels, &[], &[])?;
-                let image = Image::from_bytes(ImageFormat::Png, bytes)
-                    .to_image_data(renderer)
-                    .map_err(|e| e.to_string())?;
+                let image = to_render_image(pixels.clone());
                 Ok::<_, String>((Arc::new(pixels), image))
             });
             cx.spawn(async move |this, cx| {
@@ -321,16 +326,10 @@ impl ImageLightbox {
         self.drawing = false;
         self.saving = true;
         self.error = None;
-        let renderer = cx.svg_renderer();
         let work = cx.background_executor().spawn(async move {
-            let bytes = annotation::png(&original, &strokes, &texts)?;
-            let image = Image::from_bytes(ImageFormat::Png, bytes.clone())
-                .to_image_data(renderer)
-                .map_err(|e| e.to_string())?;
-            let pixels = image::load_from_memory_with_format(&bytes, image::ImageFormat::Png)
-                .map_err(|e| e.to_string())?
-                .into_rgba8();
-            Ok::<_, String>((bytes, image, pixels))
+            let flattened = annotation::flatten(&original, &strokes, &texts)?;
+            let image = to_render_image(flattened.pixels.clone());
+            Ok::<_, String>((flattened, image))
         });
         cx.spawn_in(window, async move |this, cx| {
             let result = work.await;
@@ -338,9 +337,9 @@ impl ImageLightbox {
                 if this.cancelled {
                     return;
                 }
-                let result = result.and_then(|(bytes, image, pixels)| {
-                    let (path, generation) = owner.apply(&path, generation, &bytes, cx)?;
-                    Ok::<_, String>((path, image, pixels, generation))
+                let result = result.and_then(|(flattened, image)| {
+                    let (path, generation) = owner.apply(&path, generation, &flattened.png, cx)?;
+                    Ok::<_, String>((path, image, flattened.pixels, generation))
                 });
                 this.saving = false;
                 for text in &this.texts {
@@ -350,7 +349,9 @@ impl ImageLightbox {
                     Ok((path, image, pixels, generation)) => {
                         this.generation = Some(generation);
                         this.source = Source::Path(path);
-                        this.image = Some(image);
+                        if let Some(previous) = this.image.replace(image) {
+                            cx.drop_image(previous, None);
+                        }
                         this.original = Some(Arc::new(pixels));
                         this.strokes.clear();
                         let had_text = !this.texts.is_empty();

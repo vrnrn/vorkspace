@@ -1,5 +1,9 @@
 use super::*;
 
+fn png(image: &RgbaImage, strokes: &[Stroke], texts: &[TextBox]) -> Result<Vec<u8>, String> {
+    Ok(flatten(image, strokes, texts)?.png)
+}
+
 #[test]
 fn supported_still_formats_decode_and_animated_gif_stays_read_only() {
     let dir = tempfile::tempdir().unwrap();
@@ -47,8 +51,9 @@ fn flattened_strokes_preserve_source_and_apply_selected_color_and_alpha() {
             points: vec![(0.5, 0.2)],
         },
     ];
-    let bytes = png(&original, &strokes, &[]).unwrap();
-    let flattened = image::load_from_memory(&bytes).unwrap().into_rgba8();
+    let prepared = flatten(&original, &strokes, &[]).unwrap();
+    let flattened = image::load_from_memory(&prepared.png).unwrap().into_rgba8();
+    assert_eq!(prepared.pixels, flattened);
     assert_eq!(original.get_pixel(50, 25).0, [255, 255, 255, 255]);
     assert_eq!(flattened.get_pixel(50, 25).0, [255, 59, 48, 255]);
     assert_eq!(flattened.get_pixel(50, 10).0, [0, 85, 255, 255]);

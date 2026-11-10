@@ -2,11 +2,11 @@
 //! and size, with a vector face drawn over it. Gaze, blinks, hops and squash
 //! move only the vector face and the body's bounds, so a pose costs a few GPU
 //! quads rather than a rasterized frame. Plus sidebar cursor gaze tracking.
+use crate::render_pixels::to_render_image;
 use gpui::{
     AnyElement, Bounds, Corners, DispatchPhase, Pixels, Point, RenderImage, Window, canvas,
     prelude::*, px,
 };
-use image::Frame;
 use std::{
     collections::HashMap,
     hash::Hash,
@@ -332,13 +332,6 @@ pub(crate) fn sidebar_cursor_tracker() -> AnyElement {
     .absolute()
     .inset_0()
     .into_any_element()
-}
-
-pub(crate) fn to_render_image(mut pixels: image::RgbaImage) -> Arc<RenderImage> {
-    for pixel in pixels.pixels_mut() {
-        pixel.0.swap(0, 2);
-    }
-    Arc::new(RenderImage::new(vec![Frame::new(pixels)]))
 }
 
 thread_local! {

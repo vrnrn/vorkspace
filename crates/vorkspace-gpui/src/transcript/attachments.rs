@@ -248,9 +248,7 @@ fn thumbnail_frame(mut frame: Frame) -> Frame {
             frame.delay(),
         );
     }
-    for pixel in frame.buffer_mut().as_mut().as_chunks_mut::<4>().0 {
-        pixel.swap(0, 2);
-    }
+    crate::render_pixels::swap_red_blue(frame.buffer_mut());
     frame
 }
 
@@ -356,9 +354,7 @@ fn render_image_frame(image: &RenderImage, index: usize) -> Option<Frame> {
     let mut buffer =
         image::RgbaImage::from_raw(size.width.0 as u32, size.height.0 as u32, bytes.to_vec())?;
     // GPUI RenderImage storage is BGRA; image::Frame expects RGBA.
-    for pixel in buffer.as_mut().as_chunks_mut::<4>().0 {
-        pixel.swap(0, 2);
-    }
+    crate::render_pixels::swap_red_blue(&mut buffer);
     Some(Frame::from_parts(buffer, 0, 0, image.delay(index)))
 }
 

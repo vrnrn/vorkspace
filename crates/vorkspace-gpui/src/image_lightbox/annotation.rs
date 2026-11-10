@@ -76,11 +76,16 @@ pub(super) fn read_image(path: &Path) -> Result<RgbaImage, String> {
     Ok(image.into_rgba8())
 }
 
-pub(super) fn png(
+pub(super) struct Flattened {
+    pub pixels: RgbaImage,
+    pub png: Vec<u8>,
+}
+
+pub(super) fn flatten(
     image: &RgbaImage,
     strokes: &[Stroke],
     texts: &[TextBox],
-) -> Result<Vec<u8>, String> {
+) -> Result<Flattened, String> {
     let mut image = image.clone();
     let (w, h) = image.dimensions();
     for stroke in strokes {
@@ -141,10 +146,13 @@ pub(super) fn png(
         }
     }
     let mut output = Cursor::new(Vec::new());
-    image::DynamicImage::ImageRgba8(image)
+    image
         .write_to(&mut output, image::ImageFormat::Png)
         .map_err(|e| e.to_string())?;
-    Ok(output.into_inner())
+    Ok(Flattened {
+        pixels: image,
+        png: output.into_inner(),
+    })
 }
 
 // The editor and export deliberately use a single unwrapped system-font line.

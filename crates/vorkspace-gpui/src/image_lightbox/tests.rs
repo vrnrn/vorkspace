@@ -195,9 +195,10 @@ fn annotation_preview_matches_flattened_text_at_zoom() {
             text: "Wi".into(),
         },
     ];
-    let flattened = image::load_from_memory(&annotation::png(&original, &[], &texts).unwrap())
-        .unwrap()
-        .into_rgba8();
+    let flattened =
+        image::load_from_memory(&annotation::flatten(&original, &[], &texts).unwrap().png)
+            .unwrap()
+            .into_rgba8();
     window
         .update(&mut cx, |view, _, cx| {
             assert!(view.original.is_some());
