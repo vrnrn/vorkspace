@@ -12,25 +12,16 @@ fn large_edited_file() -> (String, String) {
     }
     (original, current_lines.join("\n") + "\n")
 }
+fn visible_lines(file: &UnifiedFile) -> impl Iterator<Item = &Line> {
+    file.blocks.iter().flat_map(Block::lines)
+}
+
 fn changed(file: &UnifiedFile) -> Vec<(LineKind, &str, Option<u32>, Option<u32>)> {
-    file.lines
-        .iter()
+    visible_lines(file)
         .filter(|l| l.kind != LineKind::Context)
         .map(|l| (l.kind, l.text.as_str(), l.old_number, l.new_number))
         .collect()
 }
-fn context(from: u32, to: u32) -> Vec<Line> {
-    (from..=to)
-        .map(|n| Line {
-            kind: LineKind::Context,
-            text: format!("c{n}"),
-            old_number: Some(n),
-            new_number: Some(n),
-            chunk: None,
-        })
-        .collect()
-}
-
 #[test]
 fn replacement_is_a_delete_then_an_add() {
     let diff = build_unified_file("alpha\nbeta\ngamma\n", "alpha\nBETA\ngamma\n", 3);
@@ -47,13 +38,13 @@ fn replacement_is_a_delete_then_an_add() {
 fn new_deleted_and_identical_files() {
     let added = build_unified_file("", "one\ntwo\n", 3);
     assert!(added.additions > 0 && added.deletions == 0);
-    assert!(added.lines.iter().all(|l| l.kind == LineKind::Add));
+    assert!(visible_lines(&added).all(|l| l.kind == LineKind::Add));
     let deleted = build_unified_file("one\ntwo\n", "", 3);
     assert!(deleted.deletions > 0 && deleted.additions == 0);
-    assert!(deleted.lines.iter().all(|l| l.kind == LineKind::Del));
+    assert!(visible_lines(&deleted).all(|l| l.kind == LineKind::Del));
     let same = build_unified_file("same\nfile\n", "same\nfile\n", 3);
     assert_eq!((same.additions, same.deletions), (0, 0));
-    assert!(same.lines.iter().all(|l| l.kind == LineKind::Context));
+    assert_eq!(same.blocks, [Block::Fold { line_count: 2 }]);
 }
 #[test]
 fn unmodified_runs_fold_outside_the_context() {
@@ -66,43 +57,33 @@ fn unmodified_runs_fold_outside_the_context() {
     let folds: Vec<_> = diff
         .blocks
         .iter()
-        .filter(|b| matches!(b, Block::Fold { .. }))
+        .filter_map(|block| match block {
+            Block::Fold { line_count } => Some(*line_count),
+            Block::Hunk { .. } => None,
+        })
         .collect();
-    assert_eq!(folds.len(), 2);
-    assert_eq!(folds[0].lines()[0].text, "line-1");
-    assert_eq!(folds[0].lines().last().unwrap().text, "line-6");
-    assert_eq!(folds[1].lines()[0].text, "line-14");
+    assert_eq!(folds, [6, 7]);
     let tiny = build_unified_file("a\nb\nc\n", "a\nB\nc\n", 3);
     assert!(tiny.blocks.iter().all(|b| matches!(b, Block::Hunk { .. })));
 }
 #[test]
 fn folding_keeps_context_around_changes() {
-    let mut lines = context(1, 8);
-    lines.push(Line {
-        kind: LineKind::Del,
-        text: "old".into(),
-        old_number: Some(9),
-        new_number: None,
+    let before = (1..=16).map(|n| format!("c{n}\n")).collect::<String>();
+    let after = before.replace("c9\n", "new\n");
+    let diff = build_unified_file(&before, &after, 2);
+    let [Block::Fold { line_count: 6 }, Block::Hunk {
+        lines,
         chunk: Some(0),
-    });
-    lines.push(Line {
-        kind: LineKind::Add,
-        text: "new".into(),
-        old_number: None,
-        new_number: Some(9),
-        chunk: Some(0),
-    });
-    lines.extend(context(10, 16));
-    let blocks = fold_unified_lines(&lines, 2);
-    let kinds: Vec<_> = blocks
-        .iter()
-        .map(|b| matches!(b, Block::Hunk { .. }))
-        .collect();
-    assert_eq!(kinds, [false, true, false]);
-    let texts: Vec<_> = blocks[1].lines().iter().map(|l| l.text.as_str()).collect();
-    assert_eq!(texts, ["c7", "c8", "old", "new", "c10", "c11"]);
-    assert!(matches!(blocks[1], Block::Hunk { chunk: Some(0), .. }));
-    assert_eq!(fold_unified_lines(&lines, usize::MAX).len(), 1);
+    }, Block::Fold { line_count: 5 }] = diff.blocks.as_slice()
+    else {
+        panic!("Unexpected diff blocks: {:?}", diff.blocks);
+    };
+    let texts: Vec<_> = lines.iter().map(|l| l.text.as_str()).collect();
+    assert_eq!(texts, ["c7", "c8", "c9", "new", "c10", "c11"]);
+    assert_eq!(
+        build_unified_file(&before, &after, usize::MAX).blocks.len(),
+        1
+    );
 }
 #[test]
 fn missing_final_newline_shows_as_a_change() {
@@ -115,19 +96,30 @@ fn missing_final_newline_shows_as_a_change() {
         ]
     );
 }
+
+#[test]
+fn context_counts_ignore_edits_that_do_not_produce_display_lines() {
+    let diff = build_unified_file("💡\n\n\n漢字\n漢字\n\n\na\r\n", "a\n💡\n\n漢字\n字\n", 1);
+    assert_eq!(diff.chunks.len(), 3);
+    assert!(matches!(
+        diff.blocks.as_slice(),
+        [
+            Block::Hunk { chunk: Some(0), .. },
+            Block::Fold { line_count: 1 },
+            Block::Hunk { chunk: Some(2), .. }
+        ]
+    ));
+}
 #[test]
 fn nearby_short_lines_merge_into_one_chunk() {
     // `}` is shorter than CodeMirror's 3-unit gap, so the two edits
     // around it read as one hunk.
     let diff = build_unified_file("a\n}\nb\n", "A\n}\nB\n", 0);
-    assert!(diff
-        .lines
-        .iter()
-        .all(|l| l.chunk == Some(0) || l.kind == LineKind::Context));
+    assert!(visible_lines(&diff).all(|l| l.chunk == Some(0) || l.kind == LineKind::Context));
     assert_eq!(diff.deletions, 3);
     let apart = build_unified_file("a\nkeep\nb\n", "A\nkeep\nB\n", 0);
     assert_eq!(apart.deletions, 2);
-    assert!(apart.lines.iter().any(|l| l.chunk == Some(1)));
+    assert!(visible_lines(&apart).any(|l| l.chunk == Some(1)));
 }
 #[test]
 fn staging_one_chunk_leaves_the_others() {
