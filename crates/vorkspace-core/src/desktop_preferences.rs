@@ -38,7 +38,9 @@ impl DesktopPreferences {
     /// Read committed SQLite/WAL data once when opening a store. The store owns
     /// the verified snapshot so session reads never rescan WebKit directories.
     pub fn load(data_dir: &Path) -> Self {
-        let desktop = crate::compatibility::vorkspace_database();
+        let Some(desktop) = crate::compatibility::vorkspace_database() else {
+            return Self::default();
+        };
         if data_dir
             .canonicalize()
             .ok()

@@ -6,9 +6,16 @@ use std::sync::Mutex;
 use std::{process::Stdio, sync::mpsc, time::Duration};
 
 pub fn home() -> Option<PathBuf> {
-    std::env::var_os("HOME")
-        .or_else(|| std::env::var_os("USERPROFILE"))
+    ["HOME", "USERPROFILE"]
+        .into_iter()
+        .filter_map(std::env::var_os)
         .map(PathBuf::from)
+        .find(|path| path.is_absolute())
+        .or_else(|| {
+            passwd_identity()
+                .map(|identity| PathBuf::from(&identity.home))
+                .filter(|path| path.is_absolute())
+        })
 }
 
 const LOGIN_SHELL_TIMEOUT: Duration = Duration::from_secs(5);
@@ -16,21 +23,7 @@ const LOGIN_SHELL_TIMEOUT: Duration = Duration::from_secs(5);
 static LOGIN_SHELL_ENV: Mutex<Option<HashMap<String, String>>> = Mutex::new(None);
 
 pub(crate) fn dirs_home() -> Option<String> {
-    let keys = ["HOME", "USERPROFILE"];
-    for key in keys {
-        if let Some(home) = std::env::var_os(key) {
-            let home = home.to_string_lossy().into_owned();
-            if !home.is_empty() {
-                return Some(home);
-            }
-        }
-    }
-    match (std::env::var("HOMEDRIVE"), std::env::var("HOMEPATH")) {
-        (Ok(drive), Ok(path)) if !drive.is_empty() && !path.is_empty() => {
-            Some(format!("{drive}{path}"))
-        }
-        _ => passwd_identity().map(|id| id.home),
-    }
+    home().map(|path| path.to_string_lossy().into_owned())
 }
 
 pub(crate) fn expand_home(path: &Path) -> PathBuf {

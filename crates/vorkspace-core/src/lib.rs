@@ -37,6 +37,7 @@ pub mod session_filters;
 pub mod session_groups;
 pub mod session_title;
 pub(crate) mod shell_env;
+pub use shell_env::home as user_home;
 pub mod store;
 pub(crate) mod ticket_admission;
 pub mod ticket_context;

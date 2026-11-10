@@ -96,12 +96,17 @@ impl Options {
 impl DataSource {
     fn database(&self) -> Result<PathBuf, String> {
         match self {
-            Self::Desktop(path) => Ok(path
+            Self::Desktop(path) => path
                 .clone()
-                .unwrap_or_else(vorkspace_core::store::vorkspace_database)),
+                .or_else(vorkspace_core::store::vorkspace_database)
+                .ok_or_else(|| {
+                    "Could not locate your home directory for the desktop database.".into()
+                }),
             Self::Development => {
-                let database = development_dir().join("vorkspace.db");
-                if same_database(&database, &vorkspace_core::store::vorkspace_database()) {
+                let database = development_dir()?.join("vorkspace.db");
+                if vorkspace_core::store::vorkspace_database()
+                    .is_some_and(|desktop| same_database(&database, &desktop))
+                {
                     return Err("The isolated development directory points at the desktop database. Choose a separate VORKSPACE_NATIVE_DATA_DIR.".into());
                 }
                 Ok(database)
@@ -344,7 +349,8 @@ fn launch_cwd(
         .iter()
         .find(|session| session.cwd != cwd)
         .map(|session| session.cwd.clone())
-        .unwrap_or_else(|| std::env::var("HOME").unwrap_or(cwd))
+        .or_else(|| vorkspace_core::user_home().map(|home| home.to_string_lossy().into_owned()))
+        .unwrap_or(cwd)
 }
 
 fn fail(error: &str, code: i32) -> ! {
@@ -352,12 +358,15 @@ fn fail(error: &str, code: i32) -> ! {
     std::process::exit(code);
 }
 
-fn development_dir() -> PathBuf {
-    if let Some(path) = std::env::var_os("VORKSPACE_NATIVE_DATA_DIR") {
-        return path.into();
+fn development_dir() -> Result<PathBuf, String> {
+    if let Some(path) =
+        std::env::var_os("VORKSPACE_NATIVE_DATA_DIR").filter(|path| !path.is_empty())
+    {
+        return Ok(path.into());
     }
-    PathBuf::from(std::env::var_os("HOME").unwrap_or_default())
-        .join("Library/Application Support/vorkspace Native Development")
+    let home = vorkspace_core::user_home()
+        .ok_or("Could not locate your home directory. Set VORKSPACE_NATIVE_DATA_DIR to an isolated directory.")?;
+    Ok(home.join("Library/Application Support/vorkspace Native Development"))
 }
 
 // The bundle runs this binary directly so macOS can admit its menu bar item.

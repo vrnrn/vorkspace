@@ -1,6 +1,6 @@
 # Data selection and continuity
 
-All desktop launches use the existing production database by default, keeping sessions and project continuity persistent across builds. Isolated development data under `vorkspace Native Development` is used only when explicitly requested with `--dev-data`. `VORKSPACE_NATIVE_DATA_DIR` overrides the development directory.
+All desktop launches use the existing production database by default, keeping sessions and project continuity persistent across builds. Isolated development data under `vorkspace Native Development` is used only when explicitly requested with `--dev-data`. `VORKSPACE_NATIVE_DATA_DIR` overrides the development directory. Without a directory override, the app resolves its data location from an absolute home directory, using the system account when the launch environment omits it.
 
 ```sh
 npm run dev
