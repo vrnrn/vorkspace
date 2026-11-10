@@ -67,6 +67,59 @@ fn file(dir: &Path, relative: &str) -> ChangedFile {
 }
 
 #[test]
+fn nested_checkout_detects_same_count_edits_and_preserves_literal_paths() {
+    let dir = tmp();
+    let root = dir.path();
+    let nested = root.join("sub");
+    std::fs::create_dir(&nested).unwrap();
+    let name = " draft => report [a].txt ";
+    let tracked = format!("sub/{name}");
+    assert!(init_git_commit(root, &[(&tracked, "base\n")]));
+    let path = nested.join(name);
+    std::fs::write(&path, "edit one\n").unwrap();
+    let before = CheckoutStamp::read(&nested);
+    assert!(before.is_some());
+    assert!(before == CheckoutStamp::read(&nested));
+    assert_eq!(file(&nested, name).relative, name);
+
+    std::fs::write(&path, "edit two\n").unwrap();
+    std::fs::File::open(&path)
+        .unwrap()
+        .set_modified(SystemTime::UNIX_EPOCH + std::time::Duration::from_secs(60))
+        .unwrap();
+    let edited = CheckoutStamp::read(&nested);
+    assert!(edited.is_some() && edited != before);
+    assert_eq!(
+        file_diff(&nested, name, false).unwrap().current,
+        "edit two\n"
+    );
+    stage_file(&nested, name).unwrap();
+    assert!(file(&nested, name).staged);
+    assert!(CheckoutStamp::read(&nested) != edited);
+}
+
+#[test]
+fn diff_sides_stop_at_the_text_limit_for_disk_files_and_git_blobs() {
+    let dir = tmp();
+    let root = dir.path();
+    assert!(init_git_commit(root, &[("large.txt", "base\n")]));
+    std::fs::OpenOptions::new()
+        .write(true)
+        .open(root.join("large.txt"))
+        .unwrap()
+        .set_len(MAX_TEXT_FILE_BYTES + 1)
+        .unwrap();
+    let review = WorktreeReview::open(root).unwrap();
+    let worktree = review.file("large.txt", false).unwrap();
+    assert!(worktree.too_large);
+    assert!(worktree.current.is_empty());
+    stage_file(root, "large.txt").unwrap();
+    let staged = review.file("large.txt", true).unwrap();
+    assert!(staged.too_large);
+    assert!(staged.current.is_empty());
+}
+
+#[test]
 fn review_versions_invalidate_only_changed_file_sides() {
     let dir = tmp();
     let root = dir.path();
@@ -107,17 +160,23 @@ fn review_index_revalidates_closed_views_and_subdirectories() {
     let before = diff_files(root).unwrap();
     let added_name = " new\tfile.txt";
     std::fs::write(root.join("src").join(added_name), "new\n").unwrap();
-    let next = review_index(root, Some(&before)).unwrap();
+    let next = WorktreeReview::open(root)
+        .unwrap()
+        .index(Some(&before))
+        .unwrap();
     assert_eq!(next.files.len(), 2);
     assert_eq!(next.files[1].additions, before.files[0].additions);
-    let sub = review_index(&root.join("src"), None).unwrap();
+    let sub = WorktreeReview::open(&root.join("src"))
+        .unwrap()
+        .index(None)
+        .unwrap();
     assert_eq!(sub.files[0].relative, added_name);
     assert_eq!(sub.files[1].relative, "a.txt");
     let versions = file_diff_versions(&root.join("src"), &sub).unwrap();
     assert!(versions.contains_key(&format!("unstaged:{added_name}")));
     assert!(versions.contains_key("unstaged:a.txt"));
     std::fs::remove_file(root.join("src/a.txt")).unwrap();
-    let deleted = review_index(root, None).unwrap();
+    let deleted = WorktreeReview::open(root).unwrap().index(None).unwrap();
     assert_eq!(deleted.files[1].status, "deleted");
     assert!(file_diff_versions(root, &deleted).is_ok());
 }
@@ -127,7 +186,10 @@ fn review_versions_support_repositories_with_only_untracked_files() {
     let dir = tmp();
     assert!(init_git(dir.path(), "main"));
     std::fs::write(dir.path().join("new.txt"), "new\n").unwrap();
-    let snapshot = review_index(dir.path(), None).unwrap();
+    let snapshot = WorktreeReview::open(dir.path())
+        .unwrap()
+        .index(None)
+        .unwrap();
     assert!(file_diff_versions(dir.path(), &snapshot)
         .unwrap()
         .contains_key("unstaged:new.txt"));
@@ -998,7 +1060,10 @@ fn commit_files_and_diffs_include_the_root_commit() {
     std::fs::write(dir.path().join("b.txt"), "bee\n").unwrap();
     assert!(git(dir.path(), &["add", "."]) && git(dir.path(), &["commit", "-m", "second"]));
     let head = git_stdout(dir.path(), &["rev-parse", "HEAD"]).unwrap();
-    let files = commit_files(dir.path(), &head).unwrap();
+    let files = CommitReview::open(dir.path(), &head)
+        .unwrap()
+        .files()
+        .unwrap();
     let summary: Vec<_> = files
         .iter()
         .map(|f| {
@@ -1014,16 +1079,29 @@ fn commit_files_and_diffs_include_the_root_commit() {
         summary,
         [("a.txt", "modified", 1, 0), ("b.txt", "added", 1, 0)]
     );
-    let diff = commit_file_diff(dir.path(), &head, "a.txt").unwrap();
+    let diff = CommitReview::open(dir.path(), &head)
+        .unwrap()
+        .file("a.txt")
+        .unwrap();
     assert_eq!(
         (diff.original.as_str(), diff.current.as_str()),
         ("one\n", "one\ntwo\n")
     );
-    let first = commit_file_diff(dir.path(), &root, "a.txt").unwrap();
+    let first = CommitReview::open(dir.path(), &root)
+        .unwrap()
+        .file("a.txt")
+        .unwrap();
     assert_eq!(
         (first.status.as_str(), first.original.as_str()),
         ("added", "")
     );
-    assert_eq!(commit_files(dir.path(), &root).unwrap().len(), 1);
-    assert!(commit_files(dir.path(), "not-a-sha").is_err());
+    assert_eq!(
+        CommitReview::open(dir.path(), &root)
+            .unwrap()
+            .files()
+            .unwrap()
+            .len(),
+        1
+    );
+    assert!(CommitReview::open(dir.path(), "not-a-sha").is_err());
 }

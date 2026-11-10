@@ -17,7 +17,7 @@ impl FileEditor {
             .unwrap_or(path.as_os_str())
             .to_string_lossy();
         let git = self.git.read(cx);
-        let root = [git.root.as_str(), self.cwd.as_str()]
+        let root = [git.project(), self.cwd.as_str()]
             .into_iter()
             .filter(|root| !root.is_empty() && *root != "~")
             .map(Path::new)

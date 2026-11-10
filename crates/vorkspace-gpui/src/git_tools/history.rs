@@ -122,7 +122,7 @@ impl History {
     }
     /// A new checkout clears the search and opens on its cached history.
     fn sync_project(&mut self, cx: &mut Context<Self>) -> bool {
-        let root = self.git.read(cx).root.clone();
+        let root = self.git.read(cx).project().to_owned();
         if root == self.cwd {
             return false;
         }

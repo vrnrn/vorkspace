@@ -356,16 +356,12 @@ impl Explorer {
         }
     }
     fn git_changed(&mut self, cx: &mut Context<Self>) {
-        if self.enabled {
-            if !self.sync_project(cx) {
-                self.refresh_loaded(cx);
-            }
-        } else if self.git.read(cx).root != self.cwd {
-            // Keep the hidden tree intact; rebuild it when Files is shown.
+        if self.enabled && !self.sync_project(cx) {
+            self.refresh_loaded(cx);
         }
     }
     fn sync_project(&mut self, cx: &mut Context<Self>) -> bool {
-        let root = self.git.read(cx).root.clone();
+        let root = self.git.read(cx).project().to_owned();
         if root == self.cwd {
             return false;
         }

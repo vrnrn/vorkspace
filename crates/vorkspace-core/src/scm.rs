@@ -1,5 +1,7 @@
 //! Source control for the Changes and History panes.
 //! Synchronous: callers run these on a background executor.
+mod checkout;
+mod command;
 mod review;
 use crate::shell_env::{self as shell, expand_home, path_to_js};
 pub(crate) mod text;
@@ -14,9 +16,17 @@ use crate::remote_workspace;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 
+pub use checkout::CheckoutStamp;
+use checkout::{read_worktree_file, FileContents};
+#[cfg(test)]
+use command::git_cmd_for_args_with_path;
+use command::{git_checked, git_output, git_run, git_stdout};
+pub(crate) use command::{git_cmd, git_output_capped};
+#[cfg(test)]
+use review::file_diff_versions;
 pub use review::{
-    commit_file_diff, commit_files, diff_files, file_diff, file_diff_versions, review_index,
-    stage_contents, FileDiff, FileDiffVersion, MAX_TEXT_FILE_BYTES,
+    diff_files, file_diff, stage_contents, CommitReview, DiffSnapshot, FileDiff, FileDiffVersion,
+    WorktreeReview, MAX_TEXT_FILE_BYTES,
 };
 
 /// The PATH a login terminal would have, for shells the app starts: a
@@ -472,7 +482,7 @@ fn diff_stats_for(root: &Path) -> DiffStats {
     }
 }
 
-#[derive(Clone, Default)]
+#[derive(Default)]
 struct FileAcc {
     additions: i64,
     deletions: i64,
@@ -482,6 +492,9 @@ struct FileAcc {
 }
 
 fn diff_index_with(root: &Path, include_sync: bool) -> DiffIndex {
+    if !git_is_work_tree(root) {
+        return DiffIndex::default();
+    }
     let mut files: HashMap<String, FileAcc> = HashMap::new();
     let mut statuses: HashMap<String, &'static str> = HashMap::new();
 
@@ -650,11 +663,10 @@ fn add_numstat_map(text: &str, files: &mut HashMap<String, FileAcc>) {
         } else {
             path
         };
-        let relative = literal_diff_path(path);
-        if relative.is_empty() {
+        if path.is_empty() {
             continue;
         }
-        let entry = files.entry(relative).or_default();
+        let entry = files.entry(path.to_owned()).or_default();
         if add != "-" && del != "-" {
             entry.additions += add.parse::<i64>().unwrap_or(0);
             entry.deletions += del.parse::<i64>().unwrap_or(0);
@@ -678,33 +690,10 @@ fn add_name_status(text: &str, statuses: &mut HashMap<String, &'static str>) {
             Some(b'M' | b'T') => "modified",
             _ => continue,
         };
-        let relative = literal_diff_path(path);
-        if !relative.is_empty() {
-            statuses.insert(relative, status);
+        if !path.is_empty() {
+            statuses.insert(path.to_owned(), status);
         }
     }
-}
-
-fn literal_diff_path(path: &str) -> String {
-    let path = path.trim();
-    if path.is_empty() {
-        String::new()
-    } else {
-        path_to_js(Path::new(path))
-    }
-}
-
-fn normalize_diff_path(path: &str) -> String {
-    let path = path.trim();
-    if path.is_empty() {
-        return String::new();
-    }
-    let path = if let Some((_, new)) = path.split_once(" => ") {
-        new.trim_end_matches('}')
-    } else {
-        path
-    };
-    path_to_js(Path::new(path))
 }
 
 fn add_untracked_map(root: &Path, files: &mut HashMap<String, FileAcc>) {
@@ -722,22 +711,18 @@ fn add_untracked_map(root: &Path, files: &mut HashMap<String, FileAcc>) {
         let entry = files.entry(relative.clone()).or_default();
         entry.untracked = true;
         if entry.additions == 0 {
-            entry.additions = text_line_count(&root.join(rel));
+            entry.additions = text_line_count(root, rel);
         }
     }
 }
 
-fn text_line_count(path: &Path) -> i64 {
-    let Ok(meta) = std::fs::metadata(path) else {
+fn text_line_count(root: &Path, relative: &str) -> i64 {
+    let Ok(Some(FileContents::Bytes(bytes))) =
+        read_worktree_file(root, relative, MAX_UNTRACKED_BYTES)
+    else {
         return 0;
     };
-    if !meta.is_file() || meta.len() == 0 || meta.len() > MAX_UNTRACKED_BYTES {
-        return 0;
-    }
-    let Ok(bytes) = std::fs::read(path) else {
-        return 0;
-    };
-    if bytes.contains(&0) {
+    if bytes.is_empty() || bytes.contains(&0) {
         return 0;
     }
     let mut lines = 1i64;
@@ -767,9 +752,8 @@ fn mark_cached_and_unstaged(root: &Path, files: &mut HashMap<String, FileAcc>) {
         ],
     ) {
         for line in names.split('\0') {
-            let relative = literal_diff_path(line);
-            if !relative.is_empty() {
-                files.entry(relative).or_default().staged = true;
+            if !line.is_empty() {
+                files.entry(line.to_owned()).or_default().staged = true;
             }
         }
     }
@@ -786,9 +770,8 @@ fn mark_cached_and_unstaged(root: &Path, files: &mut HashMap<String, FileAcc>) {
         ],
     ) {
         for line in names.split('\0') {
-            let relative = literal_diff_path(line);
-            if !relative.is_empty() {
-                files.entry(relative).or_default().unstaged = true;
+            if !line.is_empty() {
+                files.entry(line.to_owned()).or_default().unstaged = true;
             }
         }
     }
@@ -952,16 +935,29 @@ fn git_remote_names(root: &Path) -> Vec<String> {
 
 fn discard_file_for(root: &Path, relative: &str) -> Result<(), String> {
     let relative = resolve_repo_path(root, relative)?;
-    let abs = root.join(&relative);
-    if git_checked(root, &["ls-files", "--error-unmatch", "--", &relative]).is_err() {
-        if abs.is_file() {
-            std::fs::remove_file(&abs).map_err(|e| e.to_string())?;
-        } else if abs.exists() {
-            git_checked(root, &["clean", "-fd", "--", &relative])?;
-        }
-        return Ok(());
+    let listed = [
+        "--literal-pathspecs",
+        "ls-files",
+        "--error-unmatch",
+        "--",
+        &relative,
+    ];
+    if git_checked(root, &listed).is_err() {
+        return git_checked(
+            root,
+            &["--literal-pathspecs", "clean", "-fd", "--", &relative],
+        );
     }
-    git_checked(root, &["restore", "--worktree", "--", &relative])
+    git_checked(
+        root,
+        &[
+            "--literal-pathspecs",
+            "restore",
+            "--worktree",
+            "--",
+            &relative,
+        ],
+    )
 }
 
 fn commit_args(root: &Path, message: &str, extra: &[&str]) -> Result<(), String> {
@@ -1121,7 +1117,6 @@ fn gh_run(root: &Path, args: &[&str]) -> Result<String, String> {
 }
 
 fn resolve_repo_path(root: &Path, relative: &str) -> Result<String, String> {
-    let relative = normalize_diff_path(relative);
     if relative.is_empty()
         || relative.starts_with('/')
         || relative
@@ -1130,88 +1125,11 @@ fn resolve_repo_path(root: &Path, relative: &str) -> Result<String, String> {
     {
         return Err("Invalid path".into());
     }
-    let abs = root.join(&relative);
+    let abs = root.join(relative);
     if !abs.starts_with(root) {
         return Err("Invalid path".into());
     }
-    Ok(relative)
-}
-
-/// Any git can start a filter (git-lfs), which a Finder launch's bare PATH
-/// lacks. The cached search path finds it without waiting on the login shell.
-pub(crate) fn git_cmd() -> Command {
-    let mut cmd = Command::new("git");
-    crate::process::configure_child(&mut cmd);
-    cmd.env("PATH", shell::cached_gui_search_path())
-        .env("GIT_TERMINAL_PROMPT", "0");
-    cmd
-}
-
-fn git_cmd_for_args_with_path(args: &[&str], gui_path: impl FnOnce() -> String) -> Command {
-    let mut cmd = git_cmd();
-    let args = args.strip_prefix(&["--literal-pathspecs"]).unwrap_or(args);
-    if matches!(
-        args.first().copied(),
-        Some("commit" | "push" | "pull" | "fetch" | "clone")
-    ) {
-        // Signers, hooks, and credential helpers may only be on the login-shell PATH.
-        cmd.env("PATH", gui_path());
-    }
-    cmd
-}
-
-fn git_cmd_for_args(args: &[&str]) -> Command {
-    git_cmd_for_args_with_path(args, shell::gui_search_path)
-}
-
-fn git_checked(root: &Path, args: &[&str]) -> Result<(), String> {
-    let mut cmd = git_cmd_for_args(args);
-    let output = cmd
-        .arg("--no-pager")
-        .arg("-C")
-        .arg(root)
-        .args(args)
-        .env("GIT_OPTIONAL_LOCKS", "0")
-        .output()
-        .map_err(|e| e.to_string())?;
-    if output.status.success() {
-        return Ok(());
-    }
-    let stderr = String::from_utf8_lossy(&output.stderr);
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    let msg = stderr.trim();
-    if !msg.is_empty() {
-        return Err(msg.to_string());
-    }
-    let msg = stdout.trim();
-    if !msg.is_empty() {
-        return Err(msg.to_string());
-    }
-    Err(format!("git {} failed", args.join(" ")))
-}
-
-fn git_run(root: &Path, args: &[&str]) -> Option<String> {
-    git_output(root, args).map(|bytes| String::from_utf8_lossy(&bytes).into_owned())
-}
-
-fn git_output(root: &Path, args: &[&str]) -> Option<Vec<u8>> {
-    let output = git_cmd_for_args(args)
-        .arg("--no-pager")
-        .arg("-C")
-        .arg(root)
-        .args(args)
-        .env("GIT_OPTIONAL_LOCKS", "0")
-        .output()
-        .ok()?;
-    if git_status_ok(&output.status, args) {
-        return Some(output.stdout);
-    }
-    None
-}
-
-fn git_status_ok(status: &std::process::ExitStatus, args: &[&str]) -> bool {
-    status.success()
-        || (status.code() == Some(1) && matches!(args.first().copied(), Some("diff" | "grep")))
+    Ok(relative.to_owned())
 }
 
 fn git_branch(root: &Path) -> Option<String> {
@@ -1340,19 +1258,6 @@ fn git_ahead_behind(root: &Path, base: &str) -> (i64, i64) {
         .and_then(|value| value.parse().ok())
         .unwrap_or(0);
     (ahead, behind)
-}
-
-fn git_stdout(root: &Path, args: &[&str]) -> Option<String> {
-    let output = git_cmd().arg("-C").arg(root).args(args).output().ok()?;
-    if !output.status.success() {
-        return None;
-    }
-    let text = String::from_utf8_lossy(&output.stdout).trim().to_string();
-    if text.is_empty() {
-        None
-    } else {
-        Some(text)
-    }
 }
 
 #[cfg(test)]

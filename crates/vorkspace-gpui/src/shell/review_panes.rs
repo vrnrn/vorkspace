@@ -33,8 +33,9 @@ impl Shell {
     ) -> Entity<crate::git_tools::review::ReviewPane> {
         use crate::git_tools::review::ReviewEvent;
         let git = self.git.clone();
+        let cache = self.review_cache.clone();
         let review = cx.new(|cx| {
-            let mut pane = crate::git_tools::review::ReviewPane::new(git, state, cx);
+            let mut pane = crate::git_tools::review::ReviewPane::new(git, cache, state, cx);
             pane.pane_draggable = true;
             pane
         });

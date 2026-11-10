@@ -159,7 +159,7 @@ export class WorkspaceCommands {
         return this.move(input.from, input.destParent);
       case "git_diff_index":
       case "git_diff_files":
-        return this.gitIndex(input.cwd);
+        return this.gitIndex(input.cwd, input.includeVersions === true);
       case "git_diff_stats":
         return this.gitIndex(input.cwd).then((index) => ({
           files: index.files.length,
@@ -612,8 +612,8 @@ export class WorkspaceCommands {
     const options = input;
     return searchHostContent(await this.gitRoot(options.cwd), options);
   }
-  async gitIndex(input) {
-    return hostGitIndex(await this.gitRoot(input));
+  async gitIndex(input, includeVersions = false) {
+    return hostGitIndex(await this.gitRoot(input), includeVersions);
   }
   async gitFileDiff(cwd, relative, staged) {
     return hostFileDiff(await this.gitRoot(cwd), relative, staged === true);

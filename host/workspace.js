@@ -1,4 +1,5 @@
 import { execFile, spawn } from "node:child_process";
+import { createHash } from "node:crypto";
 import { realpathSync } from "node:fs";
 import { promisify } from "node:util";
 import {
@@ -557,16 +558,18 @@ function statusName(code) {
   if (code.includes("A") || code.includes("?")) return "added";
   return "modified";
 }
-export async function hostGitIndex(root) {
+export async function hostGitIndex(root, includeVersions = false) {
   // An ordinary folder has an empty Changes view, just as it does locally.
   const repository = await git(root, [
     "rev-parse",
     "--is-inside-work-tree",
+    "--show-prefix",
   ]).catch((error) => {
     if (String(error).includes("not a git repository")) return "";
     throw error;
   });
-  if (repository.trim() !== "true") {
+  const [inside, prefix] = repository.split("\n");
+  if (inside.trim() !== "true") {
     return {
       branch: null,
       head: null,
@@ -594,14 +597,17 @@ export async function hostGitIndex(root) {
   ] = await Promise.all([
     git(root, ["symbolic-ref", "--quiet", "--short", "HEAD"]).catch(() => ""),
     git(root, ["rev-parse", "--verify", "HEAD"]).catch(() => ""),
-    git(root, ["status", "--porcelain=v1", "-z", "--untracked-files=all"]),
+    git(root, ["status", "--porcelain=v1", "-z", "--untracked-files=all", "--", "."]),
     git(root, [
       "diff",
+      "-z",
+      "--relative",
       "--no-ext-diff",
       "--no-textconv",
       "--numstat",
       "HEAD",
       "--",
+      ".",
     ]).catch(() => ""),
     git(root, ["remote", "get-url", "origin"]).catch(() => ""),
     git(root, [
@@ -673,13 +679,16 @@ export async function hostGitIndex(root) {
       ) || 0
     : 0;
   const counts = new Map();
-  for (const line of numstat.split("\n")) {
-    const match = /^(\d+|-)\t(\d+|-)\t(.+)$/.exec(line);
-    if (match)
-      counts.set(match[3], {
-        additions: Number(match[1]) || 0,
-        deletions: Number(match[2]) || 0,
-      });
+  const stats = numstat.split("\0");
+  for (let index = 0; index < stats.length; index++) {
+    const match = /^(\d+|-)\t(\d+|-)\t([\s\S]*)$/.exec(stats[index]);
+    if (!match) continue;
+    const path = match[3] || stats[(index += 2)];
+    if (!path) continue;
+    counts.set(path, {
+      additions: Number(match[1]) || 0,
+      deletions: Number(match[2]) || 0,
+    });
   }
   const parts = statusText.split("\0");
   const files = [];
@@ -687,8 +696,10 @@ export async function hostGitIndex(root) {
     const item = parts[index];
     if (!item || item.length < 4) continue;
     const code = item.slice(0, 2);
-    const path = item.slice(3);
     if (code.includes("R") || code.includes("C")) index++;
+    const repoPath = item.slice(3);
+    if (!repoPath.startsWith(prefix)) continue;
+    const path = repoPath.slice(prefix.length);
     const count = counts.get(path) ?? { additions: 0, deletions: 0 };
     if (code === "??") {
       try {
@@ -714,7 +725,7 @@ export async function hostGitIndex(root) {
     });
   }
   files.sort((a, b) => a.relative.localeCompare(b.relative));
-  return {
+  const result = {
     branch: branchText.trim() || null,
     head: headText.trim() || null,
     files,
@@ -728,6 +739,55 @@ export async function hostGitIndex(root) {
     aheadOfDefault,
     headPushed,
   };
+  if (includeVersions) {
+    result.fileVersions = await hostDiffVersions(root, files, result.head).catch(
+      () => null,
+    );
+  }
+  return result;
+}
+
+// The client can revalidate review sides without transferring their text.
+// Keep these in the same order as the files in the enclosing snapshot.
+async function hostDiffVersions(root, files, head) {
+  if (!files.length) return [];
+  if (files.length > 10_000) return null;
+  const changed = new Set(files.map((file) => file.relative));
+  const entries = new Map();
+  const listing = await git(root, ["ls-files", "--stage", "-z", "--", "."]);
+  for (const entry of listing.split("\0")) {
+    const tab = entry.indexOf("\t");
+    if (tab < 0) continue;
+    const path = entry.slice(tab + 1);
+    if (changed.has(path))
+      entries.set(path, (entries.get(path) ?? "") + entry.slice(0, tab) + "\n");
+  }
+  const fingerprint = (...fields) =>
+    createHash("sha256").update(JSON.stringify(fields)).digest("hex");
+  const versions = [];
+  for (const file of files) {
+    const indexed = entries.get(file.relative) ?? "";
+    let disk = null;
+    if (file.unstaged) {
+      const path = workspacePath(root, file.relative);
+      const info = await lstat(path, { bigint: true }).catch((error) => {
+        if (error.code === "ENOENT") return null;
+        throw error;
+      });
+      // A symlink or submodule's metadata doesn't describe its diff body.
+      if (info && !info.isFile()) return null;
+      if (info) {
+        disk = [
+          info.dev, info.ino, info.mode, info.size, info.mtimeNs, info.ctimeNs,
+        ].map(String);
+      }
+    }
+    versions.push([
+      file.staged ? fingerprint(head, indexed) : null,
+      file.unstaged ? fingerprint(indexed, disk) : null,
+    ]);
+  }
+  return versions;
 }
 async function gitBlob(root, spec) {
   try {
@@ -744,19 +804,31 @@ async function gitBlob(root, spec) {
 export async function hostFileDiff(root, input, staged) {
   const path = workspacePath(root, input);
   const relativePath = relative(root, path).split(sep).join("/");
-  const index = await hostGitIndex(root);
-  const file = index.files.find((entry) => entry.relative === relativePath);
-  if (!file) throw new Error("File has no uncommitted changes");
+  const prefix = (await git(root, ["rev-parse", "--show-prefix"])).slice(0, -1);
+  const repoPath = prefix + relativePath;
+  const status = await git(root, [
+    "--literal-pathspecs",
+    "status",
+    "--porcelain=v1",
+    "-z",
+    "--untracked-files=all",
+    "--no-renames",
+    "--",
+    relativePath,
+  ]);
+  const entry = status.split("\0").find((record) => record.slice(3) === repoPath);
+  if (!entry) throw new Error("File has no uncommitted changes");
+  const fileStatus = statusName(entry.slice(0, 2));
   const original = await gitBlob(
     root,
-    `${staged ? "HEAD" : ""}:${relativePath}`,
+    `${staged ? "HEAD" : ""}:${repoPath}`,
   );
   const current = staged
-    ? await gitBlob(root, `:${relativePath}`)
+    ? await gitBlob(root, `:${repoPath}`)
     : await readHostFile(root, relativePath).then(
         (text) => ({ text, binary: false, tooLarge: false }),
         (error) => {
-          if (file.status === "deleted")
+          if (fileStatus === "deleted")
             return { text: "", binary: false, tooLarge: false };
           if (String(error).includes("too large"))
             return { text: "", binary: false, tooLarge: true };
@@ -768,7 +840,7 @@ export async function hostFileDiff(root, input, staged) {
   return {
     path: relativePath,
     relative: relativePath,
-    status: file.status,
+    status: fileStatus,
     original: original.text,
     current: current.text,
     binary: original.binary || current.binary,

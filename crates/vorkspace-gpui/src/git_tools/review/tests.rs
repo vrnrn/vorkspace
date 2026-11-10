@@ -61,7 +61,7 @@ fn review_focus_follows_the_visible_body_after_loading(cx: &mut gpui::TestAppCon
         crate::input::bind(cx);
         cx.open_window(Default::default(), |_, cx| {
             let git = cx.new(|cx| ProjectGit::new(cwd.clone(), cx));
-            cx.new(|cx| ReviewPane::new(git, Default::default(), cx))
+            cx.new(|cx| ReviewPane::new(git, Default::default(), Default::default(), cx))
         })
         .unwrap()
     });
@@ -139,7 +139,7 @@ fn entering_panes_defer_file_reads_and_diff_construction(cx: &mut gpui::TestAppC
     let repo = Repo::new();
     let cwd = repo.cwd();
     let git = cx.new(|cx| ProjectGit::new(cwd.clone(), cx));
-    let pane = cx.new(|cx| ReviewPane::new(git, Default::default(), cx));
+    let pane = cx.new(|cx| ReviewPane::new(git, Default::default(), Default::default(), cx));
     pane.update(cx, |pane, cx| {
         pane.set_deferred(true, cx);
         pane.open(
@@ -154,7 +154,7 @@ fn entering_panes_defer_file_reads_and_diff_construction(cx: &mut gpui::TestAppC
     });
     cx.run_until_parked();
     pane.read_with(cx, |pane, _| {
-        assert!(!pane.sources[0].loading);
+        assert!(pane.sources[0].load.is_none());
         assert!(pane.sources[0].files.is_none());
         assert!(pane.sources[0].loaded.is_empty());
     });
@@ -195,7 +195,8 @@ fn reopening_diffs_reuses_views_and_only_reads_changed_files(cx: &mut gpui::Test
         path: None,
         staged: None,
     };
-    let pane = cx.new(|cx| ReviewPane::new(git.clone(), Default::default(), cx));
+    let cache = ReviewCache::default();
+    let pane = cx.new(|cx| ReviewPane::new(git.clone(), cache.clone(), Default::default(), cx));
     pane.update(cx, |pane, cx| {
         pane.open(tab.clone(), cx);
         pane.set_visible(true, cx);
@@ -221,7 +222,7 @@ fn reopening_diffs_reuses_views_and_only_reads_changed_files(cx: &mut gpui::Test
     });
     pane.update(cx, |pane, cx| pane.cache_closed(cx));
     drop(pane);
-    let reopened = cx.new(|cx| ReviewPane::new(git.clone(), Default::default(), cx));
+    let reopened = cx.new(|cx| ReviewPane::new(git.clone(), cache.clone(), Default::default(), cx));
     reopened.update(cx, |pane, cx| {
         pane.open(tab.clone(), cx);
         pane.set_visible(true, cx);
@@ -239,7 +240,7 @@ fn reopening_diffs_reuses_views_and_only_reads_changed_files(cx: &mut gpui::Test
     drop(reopened);
     std::fs::write(repo.0.join("a.txt"), "edit2\n").unwrap();
     std::fs::write(repo.0.join("new.txt"), "new\n").unwrap();
-    let reopened = cx.new(|cx| ReviewPane::new(git, Default::default(), cx));
+    let reopened = cx.new(|cx| ReviewPane::new(git, cache, Default::default(), cx));
     reopened.update(cx, |pane, cx| {
         pane.open(tab, cx);
         pane.set_visible(true, cx);
@@ -269,7 +270,7 @@ fn cached_diff_comments_are_acknowledged_by_the_current_review(cx: &mut gpui::Te
     let window = cx.update(|cx| {
         cx.open_window(Default::default(), |_, cx| {
             let git = cx.new(|cx| ProjectGit::new(cwd, cx));
-            cx.new(|cx| ReviewPane::new(git, state.clone(), cx))
+            cx.new(|cx| ReviewPane::new(git, Default::default(), state.clone(), cx))
         })
         .unwrap()
     });
@@ -281,7 +282,8 @@ fn cached_diff_comments_are_acknowledged_by_the_current_review(cx: &mut gpui::Te
         .update(cx, |previous, w, cx| {
             let view = previous.active_diff_for_test();
             previous.cache_closed(cx);
-            let next = cx.new(|cx| ReviewPane::new(previous.git.clone(), state, cx));
+            let next = cx
+                .new(|cx| ReviewPane::new(previous.git.clone(), previous.cache.clone(), state, cx));
             assert_eq!(next.read(cx).active_diff_for_test(), view);
             let events = cx.subscribe(&next, |_, next, event: &ReviewEvent, cx| {
                 if let ReviewEvent::Comment(comment) = event {
@@ -306,7 +308,7 @@ fn cached_diff_comments_are_acknowledged_by_the_current_review(cx: &mut gpui::Te
 #[gpui::test]
 fn closed_diff_cache_is_scoped_and_bounded(cx: &mut gpui::TestAppContext) {
     let git = cx.new(|cx| ProjectGit::new("~".into(), cx));
-    let pane = cx.new(|cx| ReviewPane::new(git.clone(), Default::default(), cx));
+    let pane = cx.new(|cx| ReviewPane::new(git, Default::default(), Default::default(), cx));
     let tab = |sha: String| ReviewTab::Commit {
         cwd: "/r".into(),
         short_sha: sha.clone(),
@@ -316,13 +318,13 @@ fn closed_diff_cache_is_scoped_and_bounded(cx: &mut gpui::TestAppContext) {
     pane.update(cx, |pane, cx| {
         for i in 0..=MAX_CACHED_SOURCES {
             let mut source = pane.source(tab(i.to_string()), cx);
-            source.files = Some(Vec::new());
-            git.update(cx, |git, cx| review_cache(git).remember(&source, cx));
+            source.files = Some(Arc::from([]));
+            pane.cache.remember(&source, cx);
         }
-        git.update(cx, |git, _| {
-            assert_eq!(review_cache(git).sources.len(), MAX_CACHED_SOURCES);
-            assert!(review_cache(git).take(&tab("0".into())).is_none());
-            assert!(review_cache(git).take(&tab("1".into())).is_some());
+        {
+            assert_eq!(pane.cache.0.borrow().len(), MAX_CACHED_SOURCES);
+            assert!(pane.cache.take(&tab("0".into())).is_none());
+            assert!(pane.cache.take(&tab("1".into())).is_some());
             assert!(!ReviewCache::matches(
                 &ReviewTab::Changes {
                     cwd: "/r".into(),
@@ -344,9 +346,9 @@ fn closed_diff_cache_is_scoped_and_bounded(cx: &mut gpui::TestAppContext) {
                     subject: "Test".into()
                 }
             ));
-        });
+        }
         let mut source = pane.source(tab("huge".into()), cx);
-        source.files = Some(Vec::new());
+        source.files = Some(Arc::from([]));
         source.loaded.insert(
             "huge".into(),
             Arc::new(Loaded {
@@ -362,10 +364,8 @@ fn closed_diff_cache_is_scoped_and_bounded(cx: &mut gpui::TestAppContext) {
                 error: None,
             }),
         );
-        git.update(cx, |git, cx| {
-            review_cache(git).remember(&source, cx);
-            assert!(review_cache(git).take(&source.tab).is_none());
-        });
+        pane.cache.remember(&source, cx);
+        assert!(pane.cache.take(&source.tab).is_none());
     });
 }
 #[gpui::test]
@@ -381,7 +381,7 @@ fn file_reviews_are_editable_and_view_switches_preserve_the_unsaved_document(
         cx.open_window(Default::default(), |_, cx| {
             let git = cx.new(|cx| ProjectGit::new(cwd.clone(), cx));
             cx.new(|cx| {
-                let mut pane = ReviewPane::new(git, Default::default(), cx);
+                let mut pane = ReviewPane::new(git, Default::default(), Default::default(), cx);
                 pane.open(
                     ReviewTab::File {
                         cwd: cwd.clone(),
@@ -461,9 +461,9 @@ fn file(relative: &str, staged: bool, unstaged: bool) -> ChangedFile {
 #[test]
 fn entries_put_staged_first_and_scope_to_one_side() {
     let files = [file("a", true, true), file("b", false, true)];
-    let ids: Vec<_> = entries(&files, None).into_iter().map(|e| e.0).collect();
+    let ids: Vec<_> = entries(&files, None).map(|e| e.0).collect();
     assert_eq!(ids, ["staged:a", "unstaged:a", "unstaged:b"]);
-    assert_eq!(entries(&files, Some(true)).len(), 1);
+    assert_eq!(entries(&files, Some(true)).count(), 1);
     let changes = ReviewTab::Changes {
         cwd: "/r".into(),
         path: None,

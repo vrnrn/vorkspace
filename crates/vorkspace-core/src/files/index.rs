@@ -1,21 +1,14 @@
 //! Bounded, cancellable project listing shared by mentions and Quick Open.
 //! Ported from the retired Tauri filesystem service.
 use super::Ignore;
-use crate::scm::git_cmd;
+use crate::scm::git_output_capped;
 use crate::shell_env::dirs_home;
 use crate::shell_env::expand_home;
 use crate::shell_env::path_to_js;
 use serde::{Deserialize, Serialize};
 use std::{
-    io::Read,
     path::{Path, PathBuf},
-    process::Stdio,
-    sync::{
-        atomic::{AtomicBool, Ordering},
-        mpsc,
-    },
-    thread,
-    time::Duration,
+    sync::atomic::{AtomicBool, Ordering},
 };
 const MAX_PROJECT_FILES: usize = 20_000;
 const MAX_WALK_DIRS: usize = 4_000;
@@ -130,121 +123,6 @@ fn git_ls_files(root: &Path, cancel: Option<&AtomicBool>) -> Option<Vec<ProjectF
         }
     }
     Some(files)
-}
-
-pub(crate) fn git_output_capped(
-    root: &Path,
-    args: &[&str],
-    max_bytes: usize,
-    cancel: Option<&AtomicBool>,
-) -> Option<(Vec<u8>, bool)> {
-    let mut child = git_cmd()
-        .arg("--no-pager")
-        .arg("-C")
-        .arg(root)
-        .args(args)
-        .env("GIT_OPTIONAL_LOCKS", "0")
-        .env("GIT_TERMINAL_PROMPT", "0")
-        .stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::null())
-        .spawn()
-        .ok()?;
-    let Some(mut stdout) = child.stdout.take() else {
-        let _ = child.kill();
-        let _ = child.wait();
-        return None;
-    };
-    let (sender, receiver) = mpsc::sync_channel(8);
-    let reader = thread::Builder::new()
-        .name("git-output-reader".to_string())
-        .spawn(move || {
-            let mut chunk = vec![0u8; 8192];
-            loop {
-                match stdout.read(&mut chunk) {
-                    Ok(0) => {
-                        let _ = sender.send(Ok(Vec::new()));
-                        break;
-                    }
-                    Ok(read) => {
-                        if sender.send(Ok(chunk[..read].to_vec())).is_err() {
-                            break;
-                        }
-                    }
-                    Err(error) => {
-                        let _ = sender.send(Err(error));
-                        break;
-                    }
-                }
-            }
-        });
-    let mut reader = match reader {
-        Ok(reader) => Some(reader),
-        Err(_) => {
-            let _ = child.kill();
-            let _ = child.wait();
-            return None;
-        }
-    };
-    let stop = |child: &mut std::process::Child, reader: &mut Option<thread::JoinHandle<()>>| {
-        let _ = child.kill();
-        let _ = child.wait();
-        // Dropping the handle detaches the reader. A killed git process can leave
-        // a shell descendant holding the pipe, so joining here would re-block the
-        // cancelled search until that unrelated descendant exits.
-        reader.take();
-    };
-
-    let mut buf = Vec::new();
-    let deadline = std::time::Instant::now() + Duration::from_secs(5);
-    loop {
-        if std::time::Instant::now() >= deadline {
-            stop(&mut child, &mut reader);
-            return None;
-        }
-        if cancel.is_some_and(|token| token.load(Ordering::Acquire)) {
-            stop(&mut child, &mut reader);
-            return None;
-        }
-        match receiver.recv_timeout(Duration::from_millis(100)) {
-            Ok(Ok(chunk)) if chunk.is_empty() => break,
-            Ok(Ok(chunk)) => {
-                let remaining = max_bytes.saturating_sub(buf.len());
-                if chunk.len() > remaining {
-                    buf.extend_from_slice(&chunk[..remaining]);
-                    stop(&mut child, &mut reader);
-                    return Some((buf, true));
-                }
-                buf.extend_from_slice(&chunk);
-            }
-            Ok(Err(_)) => {
-                stop(&mut child, &mut reader);
-                return None;
-            }
-            Err(mpsc::RecvTimeoutError::Timeout) => {
-                if cancel.is_some_and(|token| token.load(Ordering::Acquire)) {
-                    stop(&mut child, &mut reader);
-                    return None;
-                }
-            }
-            Err(mpsc::RecvTimeoutError::Disconnected) => {
-                stop(&mut child, &mut reader);
-                return None;
-            }
-        }
-    }
-    let _ = reader.take().map(thread::JoinHandle::join);
-    let status = child.wait().ok()?;
-    if git_status_ok(&status, args) {
-        Some((buf, false))
-    } else {
-        None
-    }
-}
-
-fn git_status_ok(status: &std::process::ExitStatus, args: &[&str]) -> bool {
-    status.success()
-        || (status.code() == Some(1) && matches!(args.first().copied(), Some("diff" | "grep")))
 }
 
 /// When a file walk should stop early.

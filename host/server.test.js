@@ -707,7 +707,9 @@ describe("remote host API", () => {
         line: 1,
       }),
     );
-    const gitIndex = (await run("git_diff_index", { cwd: root })).result;
+    const gitIndex = (
+      await run("git_diff_index", { cwd: root, includeVersions: true })
+    ).result;
     expect(gitIndex.files).toContainEqual(
       expect.objectContaining({
         path: "src/app.ts",
@@ -715,6 +717,7 @@ describe("remote host API", () => {
         unstaged: true,
       }),
     );
+    expect(gitIndex.fileVersions).toEqual([[null, expect.stringMatching(/^[a-f0-9]{64}$/)]]);
     expect(
       (
         await run("git_file_diff", {

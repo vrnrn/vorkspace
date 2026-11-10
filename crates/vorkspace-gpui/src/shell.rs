@@ -648,6 +648,7 @@ pub(crate) struct Shell {
     right_resize: Option<(Pixels, f32)>,
     right_slide: Option<PaneSlide>,
     reviews: HashMap<i64, Entity<crate::git_tools::review::ReviewPane>>,
+    review_cache: crate::git_tools::review::ReviewCache,
     /// A review sliding in or out: its session and pane.
     review_slide: Option<(i64, PaneSlide, Entity<crate::git_tools::review::ReviewPane>)>,
     /// A session review card's Review, opened beside its pane next frame.
@@ -1021,6 +1022,7 @@ impl Shell {
             right_resize: None,
             right_slide: None,
             reviews: HashMap::new(),
+            review_cache: Default::default(),
             review_slide: None,
             pending_review: None,
             pending_composer_focus: None,

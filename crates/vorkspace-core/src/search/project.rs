@@ -145,7 +145,7 @@ fn git_grep_capped(
 
     let args: Vec<&str> = args.iter().map(String::as_str).collect();
     let (mut raw, mut truncated) =
-        match crate::files::git_output_capped(root, &args, max_bytes, Some(cancel)) {
+        match crate::scm::git_output_capped(root, &args, max_bytes, Some(cancel)) {
             Some(output) => output,
             None if cancel.load(Ordering::Acquire) => {
                 return Some(SearchResult {

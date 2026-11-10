@@ -93,7 +93,8 @@ impl DiffFile {
         }
     }
     fn same_content(&self, other: &DiffFile) -> bool {
-        Arc::ptr_eq(&self.blocks, &other.blocks)
+        (Arc::ptr_eq(&self.blocks, &other.blocks)
+            || (self.blocks.is_empty() && other.blocks.is_empty()))
             && self.label == other.label
             && self.binary == other.binary
             && self.too_large == other.too_large

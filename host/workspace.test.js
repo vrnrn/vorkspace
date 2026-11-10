@@ -6,6 +6,7 @@ import {
   realpathSync,
   rmSync,
   symlinkSync,
+  utimesSync,
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
@@ -27,6 +28,39 @@ const roots = [];
 afterEach(() => {
   for (const root of roots.splice(0))
     rmSync(root, { recursive: true, force: true });
+});
+
+it("versions only the changed side of a nested working copy", async () => {
+  const root = realpathSync.native(mkdtempSync(join(tmpdir(), "vorkspace-git-versions-")));
+  roots.push(root);
+  const nested = join(root, "nested");
+  mkdirSync(nested);
+  const git = (...args) => execFileSync("git", args, { cwd: root });
+  git("init", "-q");
+  git("config", "user.name", "Workspace Test");
+  git("config", "user.email", "workspace@example.test");
+  const name = "draft [a] => report.txt";
+  const path = join(nested, name);
+  writeFileSync(path, "base\n");
+  writeFileSync(join(root, "other.txt"), "outside\n");
+  git("add", ".");
+  git("commit", "-qm", "initial");
+  writeFileSync(path, "stage\n");
+  git("add", ".");
+  writeFileSync(path, "work1\n");
+  writeFileSync(join(root, "other.txt"), "changed elsewhere\n");
+  const before = await hostGitIndex(nested, true);
+  expect(before.files).toMatchObject([{ relative: name, staged: true, unstaged: true }]);
+  writeFileSync(path, "work2\n");
+  utimesSync(path, 60, 60);
+  const after = await hostGitIndex(nested, true);
+  expect(after.files).toEqual(before.files);
+  expect(after.fileVersions[0][0]).toBe(before.fileVersions[0][0]);
+  expect(after.fileVersions[0][1]).not.toBe(before.fileVersions[0][1]);
+  expect(await hostFileDiff(nested, name, false)).toMatchObject({
+    original: "stage\n",
+    current: "work2\n",
+  });
 });
 it("coalesces file-index scans, expires them, and isolates different roots", async () => {
   vi.useFakeTimers();

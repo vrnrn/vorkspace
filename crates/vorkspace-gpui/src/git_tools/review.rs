@@ -16,12 +16,15 @@ use gpui::{
 };
 use serde::{Deserialize, Serialize};
 use std::{
+    cell::RefCell,
     collections::{HashMap, VecDeque},
     path::PathBuf,
+    rc::Rc,
     sync::{
         Arc,
         atomic::{AtomicU64, Ordering},
     },
+    time::Duration,
 };
 use vorkspace_core::{
     diff,
@@ -31,6 +34,7 @@ use vorkspace_ui::radius;
 use vorkspace_ui::{file_icons::file_type_icon, pane_motion::PaneReveal, theme::*};
 
 const CONCURRENCY: usize = 4;
+const PUBLISH_INTERVAL: Duration = Duration::from_millis(16);
 const MAX_CACHED_SOURCES: usize = 8;
 const MAX_CACHED_TEXT_BYTES: usize = 32 * 1024 * 1024;
 
@@ -198,21 +202,21 @@ struct Source {
     editor: Option<Entity<FileEditor>>,
     editor_mode: bool,
     _editor_events: Option<Subscription>,
-    files: Option<Vec<ChangedFile>>,
+    files: Option<Arc<[ChangedFile]>>,
     error: Option<String>,
     loaded: HashMap<String, Arc<Loaded>>,
     generation: Arc<AtomicU64>,
     complete: bool,
-    loading: bool,
     refresh_pending: bool,
-    _tasks: Vec<Task<()>>,
+    load: Option<Task<()>>,
+    publish: Option<Task<()>>,
     _events: Subscription,
 }
 impl Source {
     fn cancel(&mut self) {
         self.generation.fetch_add(1, Ordering::SeqCst);
-        self._tasks.clear();
-        self.loading = false;
+        self.load = None;
+        self.publish = None;
         self.refresh_pending = false;
     }
 
@@ -225,21 +229,12 @@ impl Source {
 
 /// Closed diff tabs retain their models, viewport and completed highlights.
 /// Unsaved edits and comments stay with their original pane.
-fn review_cache(git: &mut ProjectGit) -> &mut ReviewCache {
-    git.review_cache
-        .get_or_insert_with(|| Box::new(ReviewCache::default()))
-        .downcast_mut()
-        .expect("only the review surface writes this slot")
-}
-
-#[derive(Default)]
-pub(crate) struct ReviewCache {
-    sources: VecDeque<CachedSource>,
-}
+#[derive(Clone, Default)]
+pub(crate) struct ReviewCache(Rc<RefCell<VecDeque<CachedSource>>>);
 struct CachedSource {
     tab: ReviewTab,
     view: Entity<DiffView>,
-    files: Option<Vec<ChangedFile>>,
+    files: Option<Arc<[ChangedFile]>>,
     loaded: HashMap<String, Arc<Loaded>>,
     complete: bool,
     text_bytes: usize,
@@ -262,14 +257,12 @@ impl ReviewCache {
             _ => false,
         }
     }
-    fn take(&mut self, tab: &ReviewTab) -> Option<CachedSource> {
-        let ix = self
-            .sources
-            .iter()
-            .position(|s| Self::matches(&s.tab, tab))?;
-        self.sources.remove(ix)
+    fn take(&self, tab: &ReviewTab) -> Option<CachedSource> {
+        let mut sources = self.0.borrow_mut();
+        let ix = sources.iter().position(|s| Self::matches(&s.tab, tab))?;
+        sources.remove(ix)
     }
-    fn remember(&mut self, source: &Source, cx: &gpui::App) {
+    fn remember(&self, source: &Source, cx: &gpui::App) {
         if source.editor.is_some()
             || source.files.is_none()
             || source.error.is_some()
@@ -292,11 +285,12 @@ impl ReviewCache {
                     })
             })
             .sum();
-        self.sources.retain(|s| !Self::matches(&s.tab, &source.tab));
+        let mut sources = self.0.borrow_mut();
+        sources.retain(|s| !Self::matches(&s.tab, &source.tab));
         if text_bytes > MAX_CACHED_TEXT_BYTES {
             return;
         }
-        self.sources.push_back(CachedSource {
+        sources.push_back(CachedSource {
             tab: source.tab.clone(),
             view: source.view.clone(),
             files: source.files.clone(),
@@ -304,16 +298,17 @@ impl ReviewCache {
             complete: source.complete,
             text_bytes,
         });
-        while self.sources.len() > MAX_CACHED_SOURCES
-            || self.sources.iter().map(|s| s.text_bytes).sum::<usize>() > MAX_CACHED_TEXT_BYTES
+        while sources.len() > MAX_CACHED_SOURCES
+            || sources.iter().map(|s| s.text_bytes).sum::<usize>() > MAX_CACHED_TEXT_BYTES
         {
-            self.sources.pop_front();
+            sources.pop_front();
         }
     }
 }
 
 pub(crate) struct ReviewPane {
     git: Entity<ProjectGit>,
+    cache: ReviewCache,
     focus: FocusHandle,
     /// Bodies replaced before the next paint may still own keyboard focus.
     retiring_focus: Vec<FocusHandle>,
@@ -356,58 +351,89 @@ impl Drop for ReviewPane {
     }
 }
 
-/// workingTreeDiffEntries: staged entries first, or just one side.
-fn entries(files: &[ChangedFile], staged: Option<bool>) -> Vec<(String, bool, ChangedFile)> {
+/// Staged entries first, or just the requested side.
+fn entries(
+    files: &[ChangedFile],
+    staged: Option<bool>,
+) -> impl Iterator<Item = (String, bool, &ChangedFile)> {
     let kinds: &[bool] = match staged {
         Some(true) => &[true],
         Some(false) => &[false],
         None => &[true, false],
     };
-    let mut out = Vec::new();
-    for &kind in kinds {
-        for file in files {
-            if (kind && file.staged) || (!kind && file.unstaged) {
-                let id = format!(
-                    "{}:{}",
-                    if kind { "staged" } else { "unstaged" },
-                    file.relative
-                );
-                out.push((id, kind, file.clone()));
+    kinds.iter().flat_map(move |&kind| {
+        files
+            .iter()
+            .filter(move |file| if kind { file.staged } else { file.unstaged })
+            .map(move |file| (entry_id(kind, &file.relative), kind, file))
+    })
+}
+
+fn entry_id(staged: bool, relative: &str) -> String {
+    let side = if staged { "staged" } else { "unstaged" };
+    format!("{side}:{relative}")
+}
+
+enum FileReader {
+    Checkout(scm::WorktreeReview),
+    Commit(scm::CommitReview),
+    Session { cwd: String, id: String },
+}
+
+impl FileReader {
+    fn file(&self, relative: &str, staged: Option<bool>) -> Result<FileDiff, String> {
+        match self {
+            Self::Checkout(reader) => reader.file(relative, staged == Some(true)),
+            Self::Commit(reader) => reader.file(relative),
+            Self::Session { cwd, id } => {
+                let store =
+                    vorkspace_core::checkpoint::store().ok_or("Session changes are unavailable")?;
+                store.exclusive(|s| s.file_diff(id, cwd, relative))
             }
         }
     }
-    out
 }
 
-/// SessionChangesDiff's list: the recorded turn's files, as a commit lists them.
-type Listed = (Vec<ChangedFile>, Option<HashMap<String, FileDiffVersion>>);
+struct Listed {
+    files: Vec<ChangedFile>,
+    versions: Option<HashMap<String, FileDiffVersion>>,
+    reader: FileReader,
+}
+
 fn session_files(cwd: &str, session: i64) -> Result<Listed, String> {
     let store = vorkspace_core::checkpoint::store().ok_or("Session changes are unavailable")?;
-    let status = store.exclusive(|s| s.status(&session.to_string(), cwd))?;
-    Ok((
-        status
-            .files
-            .into_iter()
-            .map(|f| ChangedFile {
-                path: f.path,
-                relative: f.relative,
-                status: f.status,
-                additions: f.additions,
-                deletions: f.deletions,
-                staged: false,
-                unstaged: true,
-            })
-            .collect(),
-        None,
-    ))
-}
-fn session_file_diff(cwd: &str, session: i64, relative: &str) -> Result<FileDiff, String> {
-    let store = vorkspace_core::checkpoint::store().ok_or("Session changes are unavailable")?;
-    store.exclusive(|s| s.file_diff(&session.to_string(), cwd, relative))
+    let id = session.to_string();
+    let status = store.exclusive(|s| s.status(&id, cwd))?;
+    let files = status
+        .files
+        .into_iter()
+        .map(|f| ChangedFile {
+            path: f.path,
+            relative: f.relative,
+            status: f.status,
+            additions: f.additions,
+            deletions: f.deletions,
+            staged: false,
+            unstaged: true,
+        })
+        .collect();
+    Ok(Listed {
+        files,
+        versions: None,
+        reader: FileReader::Session {
+            cwd: cwd.to_owned(),
+            id,
+        },
+    })
 }
 
 impl ReviewPane {
-    pub(crate) fn new(git: Entity<ProjectGit>, state: ReviewState, cx: &mut Context<Self>) -> Self {
+    pub(crate) fn new(
+        git: Entity<ProjectGit>,
+        cache: ReviewCache,
+        state: ReviewState,
+        cx: &mut Context<Self>,
+    ) -> Self {
         let subscriptions = vec![
             cx.subscribe(&git, |this, _, _: &GitChanged, cx| {
                 this.refresh(cx);
@@ -418,6 +444,7 @@ impl ReviewPane {
         ];
         let mut this = Self {
             git,
+            cache,
             focus: cx.focus_handle(),
             retiring_focus: Vec::new(),
             state: ReviewState {
@@ -451,7 +478,7 @@ impl ReviewPane {
         this
     }
     fn source(&mut self, tab: ReviewTab, cx: &mut Context<Self>) -> Source {
-        let cached = self.git.update(cx, |git, _| review_cache(git).take(&tab));
+        let cached = self.cache.take(&tab);
         let view = cached
             .as_ref()
             .map_or_else(|| cx.new(DiffView::new), |s| s.view.clone());
@@ -503,22 +530,24 @@ impl ReviewPane {
                 cx.notify();
             })
         });
+        let (files, loaded, complete) = cached.map_or_else(
+            || (None, HashMap::new(), false),
+            |cached| (cached.files, cached.loaded, cached.complete),
+        );
         Source {
             editor_mode,
             editor,
             _editor_events: editor_events,
             tab,
             view,
-            files: cached.as_ref().and_then(|s| s.files.clone()),
+            files,
             error: None,
-            loaded: cached
-                .as_ref()
-                .map_or_else(HashMap::new, |s| s.loaded.clone()),
+            loaded,
             generation: Arc::new(AtomicU64::new(0)),
-            complete: cached.is_some_and(|s| s.complete),
-            loading: false,
+            complete,
             refresh_pending: false,
-            _tasks: Vec::new(),
+            load: None,
+            publish: None,
             _events: events,
         }
     }
@@ -644,8 +673,7 @@ impl ReviewPane {
         }
         let mut removed = self.sources.remove(ix);
         removed.retire(cx);
-        self.git
-            .update(cx, |git, cx| review_cache(git).remember(&removed, cx));
+        self.cache.remember(&removed, cx);
         if self.state.active >= ix && self.state.active > 0 {
             self.state.active -= 1;
         }
@@ -676,8 +704,7 @@ impl ReviewPane {
         let source = self.sources.remove(keep);
         for mut removed in self.sources.drain(..) {
             removed.retire(cx);
-            self.git
-                .update(cx, |git, cx| review_cache(git).remember(&removed, cx));
+            self.cache.remember(&removed, cx);
         }
         self.sources.push(source);
         self.state.active = 0;
@@ -934,12 +961,13 @@ impl ReviewPane {
         let was = self.visible;
         self.visible = visible;
         if !visible && was {
+            self.flush_publication(cx);
             for source in &mut self.sources {
                 source.cancel();
             }
         }
         for (ix, source) in self.sources.iter_mut().enumerate() {
-            if ix != self.state.active && source.loading {
+            if ix != self.state.active && source.load.is_some() {
                 source.cancel();
             }
             if let Some(editor) = &source.editor {
@@ -956,6 +984,7 @@ impl ReviewPane {
         }
     }
     pub(crate) fn cache_closed(&mut self, cx: &mut Context<Self>) {
+        self.flush_publication(cx);
         self.closed = true;
         self.visible = false;
         for source in &mut self.sources {
@@ -963,8 +992,7 @@ impl ReviewPane {
             if let Some(editor) = &source.editor {
                 editor.update(cx, |editor, cx| editor.set_visible(false, cx));
             }
-            self.git
-                .update(cx, |git, cx| review_cache(git).remember(source, cx));
+            self.cache.remember(source, cx);
         }
     }
     /// Focus and Git changes reread the working tree; commits never change.
@@ -985,7 +1013,7 @@ impl ReviewPane {
             return;
         }
         for (ix, source) in self.sources.iter_mut().enumerate() {
-            if ix != self.state.active && source.loading {
+            if ix != self.state.active && source.load.is_some() {
                 source.cancel();
             }
             if let Some(editor) = &source.editor {
@@ -1007,17 +1035,16 @@ impl ReviewPane {
         if source.complete && matches!(source.tab, ReviewTab::Commit { .. }) {
             return;
         }
-        if source.loading {
+        if source.load.is_some() {
             source.refresh_pending = true;
             return;
         }
-        source.loading = true;
         let generation = source.generation.fetch_add(1, Ordering::SeqCst) + 1;
         let tab = source.tab.clone();
         let counter = source.generation.clone();
         let known_index = match &tab {
             ReviewTab::Changes { cwd, .. } if self.git.read(cx).project() == cwd => {
-                self.git.read(cx).index.clone()
+                self.git.read(cx).snapshot()
             }
             _ => None,
         };
@@ -1028,12 +1055,22 @@ impl ReviewPane {
                     ReviewTab::File { .. } => unreachable!(),
                     ReviewTab::Changes { cwd, .. } => {
                         let root = PathBuf::from(cwd);
-                        let index = scm::review_index(&root, known_index.as_ref())?;
-                        let versions = scm::file_diff_versions(&root, &index).ok();
-                        Ok((index.files, versions))
+                        let reader = scm::WorktreeReview::open(&root)?;
+                        let scm::DiffSnapshot { index, versions } =
+                            reader.snapshot(known_index.as_deref())?;
+                        Ok(Listed {
+                            files: index.files,
+                            versions,
+                            reader: FileReader::Checkout(reader),
+                        })
                     }
                     ReviewTab::Commit { cwd, sha, .. } => {
-                        scm::commit_files(&PathBuf::from(cwd), sha).map(|files| (files, None))
+                        let reader = scm::CommitReview::open(&PathBuf::from(cwd), sha)?;
+                        Ok(Listed {
+                            files: reader.files()?,
+                            versions: None,
+                            reader: FileReader::Commit(reader),
+                        })
                     }
                     ReviewTab::Session { cwd, session, .. } => session_files(cwd, *session),
                 }
@@ -1050,14 +1087,17 @@ impl ReviewPane {
                     return None;
                 }
                 match listed {
-                    Ok((files, versions)) => {
+                    Ok(Listed {
+                        files,
+                        versions,
+                        reader,
+                    }) => {
                         source.error = None;
                         let order: Vec<(String, Option<bool>, ChangedFile)> = match &tab {
                             ReviewTab::File { .. } => unreachable!(),
                             ReviewTab::Changes { path, staged, .. } => {
                                 let mut entries: Vec<_> = entries(&files, *staged)
-                                    .into_iter()
-                                    .map(|(id, kind, file)| (id, Some(kind), file))
+                                    .map(|(id, kind, file)| (id, Some(kind), file.clone()))
                                     .collect();
                                 // The focused file loads first.
                                 if let Some(at) = path.as_ref().and_then(|p| {
@@ -1092,31 +1132,32 @@ impl ReviewPane {
                         let retained: std::collections::HashSet<_> =
                             order.iter().map(|e| e.0.clone()).collect();
                         source.loaded.retain(|id, _| retained.contains(id));
-                        source.files = Some(files);
+                        source.files = Some(files.into());
                         this.publish(cx);
-                        Some((order, versions))
+                        Some((order, versions, reader))
                     }
                     Err(error) => {
                         source.error = Some(error);
-                        source.files = Some(Vec::new());
-                        source.loading = false;
+                        source.files = Some(Arc::from([]));
+                        source.load = None;
                         source.refresh_pending = false;
                         cx.notify();
                         None
                     }
                 }
             });
-            let Ok(Some((order, versions))) = order else {
+            let Ok(Some((order, versions, reader))) = order else {
                 return;
             };
             let queue = Arc::new(std::sync::Mutex::new(order.into_iter()));
             let versions = Arc::new(versions);
+            let reader = Arc::new(reader);
             let mut workers = Vec::new();
             for _ in 0..CONCURRENCY {
                 let queue = queue.clone();
                 let versions = versions.clone();
                 let counter = counter.clone();
-                let tab = tab.clone();
+                let reader = reader.clone();
                 let this = this.clone();
                 let mut cx = cx.clone();
                 workers.push(async move {
@@ -1143,31 +1184,18 @@ impl ReviewPane {
                         let version = versions.as_ref().as_ref().and_then(|v| v.get(&id)).cloned();
                         if previous.as_ref().is_some_and(|p| {
                             p.error.is_none()
-                                && (matches!(tab, ReviewTab::Commit { .. })
+                                && (matches!(reader.as_ref(), FileReader::Commit(_))
                                     || (version.is_some() && p.version == version))
                         }) {
                             continue;
                         }
-                        let tab = tab.clone();
+                        let reader = reader.clone();
                         let relative = file.relative.clone();
                         let work_counter = counter.clone();
                         let loaded = cx
                             .background_executor()
                             .spawn(async move {
-                                let diff = match &tab {
-                                    ReviewTab::File { .. } => unreachable!(),
-                                    ReviewTab::Changes { cwd, .. } => scm::file_diff(
-                                        &PathBuf::from(cwd),
-                                        &relative,
-                                        staged == Some(true),
-                                    ),
-                                    ReviewTab::Commit { cwd, sha, .. } => {
-                                        scm::commit_file_diff(&PathBuf::from(cwd), sha, &relative)
-                                    }
-                                    ReviewTab::Session { cwd, session, .. } => {
-                                        session_file_diff(cwd, *session, &relative)
-                                    }
-                                };
+                                let diff = reader.file(&relative, staged);
                                 if work_counter.load(Ordering::SeqCst) != generation {
                                     return None;
                                 }
@@ -1226,14 +1254,7 @@ impl ReviewPane {
                             if counter.load(Ordering::SeqCst) != generation {
                                 return;
                             }
-                            if let Some(source) = this
-                                .sources
-                                .iter_mut()
-                                .find(|s| Arc::ptr_eq(&s.generation, &counter))
-                            {
-                                source.loaded.insert(id, loaded);
-                            }
-                            this.publish(cx);
+                            this.file_loaded(&counter, id, loaded, cx);
                         });
                     }
                 });
@@ -1241,6 +1262,7 @@ impl ReviewPane {
             futures_join_all(workers).await;
             let _ = this.update(cx, |this, cx| {
                 let mut refresh = false;
+                let mut publish = false;
                 if let Some(source) = this
                     .sources
                     .iter_mut()
@@ -1248,8 +1270,12 @@ impl ReviewPane {
                     && counter.load(Ordering::SeqCst) == generation
                 {
                     source.complete = source.loaded.values().all(|l| l.error.is_none());
-                    source.loading = false;
+                    source.load = None;
+                    publish = source.publish.take().is_some();
                     refresh = std::mem::take(&mut source.refresh_pending);
+                }
+                if publish {
+                    this.publish(cx);
                 }
                 if refresh {
                     this.load_active(cx);
@@ -1257,11 +1283,56 @@ impl ReviewPane {
             });
         });
         if let Some(source) = self.sources.get_mut(ix) {
-            source._tasks = vec![task];
+            source.load = Some(task);
         }
     }
 
-    /// WorkingTreeDiff's and CommitDiff's file models.
+    fn file_loaded(
+        &mut self,
+        owner: &Arc<AtomicU64>,
+        id: String,
+        loaded: Arc<Loaded>,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(source) = self
+            .sources
+            .get_mut(self.state.active)
+            .filter(|source| Arc::ptr_eq(&source.generation, owner))
+        else {
+            return;
+        };
+        source.loaded.insert(id, loaded);
+        if source.publish.is_none() {
+            // The source is current immediately. Merge completions arriving
+            // in the same frame before rebuilding the whole review layout.
+            let owner = owner.clone();
+            let generation = owner.load(Ordering::SeqCst);
+            source.publish = Some(cx.spawn(async move |this, cx| {
+                cx.background_executor().timer(PUBLISH_INTERVAL).await;
+                let _ = this.update(cx, |this, cx| {
+                    if owner.load(Ordering::SeqCst) == generation
+                        && this
+                            .sources
+                            .get(this.state.active)
+                            .is_some_and(|source| Arc::ptr_eq(&source.generation, &owner))
+                    {
+                        this.flush_publication(cx);
+                    }
+                });
+            }));
+        }
+    }
+
+    fn flush_publication(&mut self, cx: &mut Context<Self>) {
+        if self
+            .sources
+            .get_mut(self.state.active)
+            .is_some_and(|source| source.publish.take().is_some())
+        {
+            self.publish(cx);
+        }
+    }
+
     fn publish(&mut self, cx: &mut Context<Self>) {
         let ix = self.state.active;
         let Some(source) = self.sources.get(ix) else {
@@ -1271,10 +1342,10 @@ impl ReviewPane {
             cx.notify();
             return;
         };
+        let empty = Arc::<Vec<diff::Block>>::default();
         let models: Vec<DiffFile> = match &source.tab {
             ReviewTab::File { .. } => return,
             ReviewTab::Changes { staged, .. } => entries(files, *staged)
-                .into_iter()
                 .map(|(id, kind, file)| {
                     let loaded = source.loaded.get(&id);
                     let unchanged = loaded.is_some_and(|l| {
@@ -1333,11 +1404,11 @@ impl ReviewPane {
                                 0
                             }),
                         blocks: if unchanged {
-                            Arc::new(Vec::new())
+                            empty.clone()
                         } else {
                             loaded
                                 .and_then(|l| l.unified.clone())
-                                .unwrap_or_else(|| Arc::new(Vec::new()))
+                                .unwrap_or_else(|| empty.clone())
                         },
                         can_stage: !kind,
                         can_discard: !kind,
@@ -1379,7 +1450,7 @@ impl ReviewPane {
                         deletions: loaded
                             .filter(|l| l.unified.is_some())
                             .map_or(file.deletions as u32, |l| l.deletions),
-                        blocks: unified.unwrap_or_else(|| Arc::new(Vec::new())),
+                        blocks: unified.unwrap_or_else(|| empty.clone()),
                         can_stage: false,
                         can_discard: false,
                         can_stage_hunk: false,
@@ -1395,7 +1466,6 @@ impl ReviewPane {
             ReviewTab::Changes { path, staged, .. } => (
                 path.as_ref().and_then(|p| {
                     entries(files, *staged)
-                        .into_iter()
                         .find(|(_, kind, f)| {
                             staged.is_none_or(|s| s == *kind) && (&f.path == p || &f.relative == p)
                         })
