@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
-import { captureVoxMicrophone, listVoxMicrophones, saveVoxMicrophone } from "./microphone.js";
+import { captureVoxMicrophone, listVoxMicrophones } from "./microphone.js";
 vi.mock("./microphone.js", () => ({
-  captureVoxMicrophone: vi.fn(), listVoxMicrophones: vi.fn(), saveVoxMicrophone: vi.fn(),
+  captureVoxMicrophone: vi.fn(), listVoxMicrophones: vi.fn(),
 }));
 let hide, track, stream, peer, channel, audio, posts, polls;
 const reply = (value) => ({ ok: true, json: async () => value });
@@ -25,7 +25,7 @@ beforeEach(() => {
   vi.stubGlobal("Audio", vi.fn(function () { return audio; }));
   vi.stubGlobal("window", { addEventListener: vi.fn((type, fn) => { if (type === "pagehide") hide = fn; }) });
   vi.stubGlobal("fetch", vi.fn(async (url, options) => {
-    if (url === "./config") return reply({ microphone: { id: "built-in" }, silent: true });
+    if (url === "./config") return reply({ microphone: { id: "builtin", label: "Built-in Microphone" }, silent: true });
     if (url === "./event") { posts.push(JSON.parse(options.body)); return reply({ ok: true }); }
     if (url === "./events") return new Promise((resolve) => polls.push((value) => resolve(reply(value))));
     throw new Error(`Unexpected route: ${url}`);
@@ -38,7 +38,9 @@ async function start() {
 }
 it("exchanges only media SDP and stops all local media on End", async () => {
   await start();
-  expect(saveVoxMicrophone).toHaveBeenCalledWith({ id: "built-in" });
+  expect(captureVoxMicrophone).toHaveBeenCalledWith(
+    { id: "builtin", label: "Built-in Microphone" }, expect.any(Function),
+  );
   expect(audio.muted).toBe(true);
   expect(posts).toContainEqual({ type: "offer", sdp: "local-sdp" });
   polls.shift()({ type: "answer", sdp: "remote-sdp" });

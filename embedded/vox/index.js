@@ -2,10 +2,10 @@
 import {
   captureVoxMicrophone,
   listVoxMicrophones,
-  saveVoxMicrophone,
 } from "./microphone.js";
 
 let stopped = false, connected = false, stream, peer, channel, audio;
+const control = new AbortController();
 async function post(event) {
   const response = await fetch("./event", {
     method: "POST",
@@ -17,6 +17,7 @@ async function post(event) {
 function stop() {
   if (stopped) return;
   stopped = true;
+  control.abort();
   stream?.getTracks().forEach((track) => track.stop());
   if (channel) {
     channel.onclose = null;
@@ -42,7 +43,7 @@ function fail(error) {
 }
 async function controls() {
   while (!stopped) {
-    const response = await fetch("./events");
+    const response = await fetch("./events", { signal: control.signal });
     if (!response.ok) throw new Error("Native voice controller disconnected");
     const command = await response.json();
     if (stopped) return;
@@ -64,8 +65,7 @@ async function start() {
   if (!response.ok) throw new Error("Native voice controller disconnected");
   const config = await response.json();
   if (stopped) return;
-  saveVoxMicrophone(config.microphone);
-  const captured = await captureVoxMicrophone(() => !stopped);
+  const captured = await captureVoxMicrophone(config.microphone, () => !stopped);
   if (stopped) { captured.getTracks().forEach((track) => track.stop()); return; }
   stream = captured;
   peer = new RTCPeerConnection();
