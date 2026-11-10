@@ -96,6 +96,15 @@ impl SharedRoster {
         }
     }
 
+    fn ids(roster: &Roster) -> Vec<String> {
+        roster
+            .bots
+            .iter()
+            .filter(|bot| !bot.is_minion())
+            .map(|bot| bot.id.clone())
+            .collect()
+    }
+
     /// Preserve command receipt ordering while publishing the roster even
     /// when the originating window closes or its later receipt write fails.
     pub(super) fn save<T: Send + 'static>(

@@ -802,9 +802,9 @@ impl Bots {
                 .chats
                 .keys()
                 .filter(|id| {
-                    self.roster
-                        .get(id)
-                        .is_some_and(|bot| !bot.outbox.is_empty())
+                    self.roster.get(id).is_some_and(|bot| {
+                        !bot.outbox.is_empty() || !bot.pending_reports.is_empty()
+                    })
                 })
                 .cloned()
                 .collect::<Vec<_>>();

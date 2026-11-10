@@ -14,14 +14,14 @@ impl Bots {
                 self.roster.is_active(&bot.id)
                     && (!bot.is_minion() || (self.prefs.bots && self.prefs.minions))
                     && !self.chats.contains_key(&bot.id)
-                    && bot.outbox.first().is_some_and(|message| {
-                        message.error.is_none() && self.persisted_messages.contains(&message.id)
-                    })
-                    && bot.outbox.iter().any(|message| {
-                        message.peer.is_some()
-                            && message.error.is_none()
-                            && self.persisted_messages.contains(&message.id)
-                    })
+                    && (!bot.pending_reports.is_empty()
+                        || bot.outbox.first().is_some_and(|message| {
+                            message.error.is_none() && self.persisted_messages.contains(&message.id)
+                        }) && bot.outbox.iter().any(|message| {
+                            message.peer.is_some()
+                                && message.error.is_none()
+                                && self.persisted_messages.contains(&message.id)
+                        }))
             })
             .map(|bot| bot.id.clone())
             .collect::<Vec<_>>();

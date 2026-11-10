@@ -22,6 +22,46 @@ struct Setup {
 }
 
 #[gpui::test]
+fn a_peer_reports_to_a_bot_conversation_parked_in_another_window(cx: &mut TestAppContext) {
+    let s = setup_bot(cx);
+    close_bot_pane(&s, cx);
+    let (store, project) = (s.store.clone(), s.project.clone());
+    let peer = cx.update(|cx| {
+        cx.open_window(Default::default(), |_, cx| {
+            cx.new(|cx| Shell::new(store, vec![], project, None, cx))
+        })
+        .unwrap()
+    });
+    cx.run_until_parked();
+    s.manager.read_with(cx, |bots, cx| {
+        assert!(bots.active.is_none());
+        assert!(bots.chats[&s.id].read(cx).ready_for_external(cx));
+    });
+    peer.update(cx, |shell, _, cx| {
+        shell.bot_manager().update(cx, |bots, cx| {
+            bots.roster
+                .get_mut(&s.id)
+                .unwrap()
+                .pending_reports
+                .push("A report from the peer window".into());
+            bots.save(cx);
+        });
+    })
+    .unwrap();
+    cx.run_until_parked();
+    s.manager.read_with(cx, |bots, cx| {
+        assert!(
+            bots.chats[&s.id]
+                .read(cx)
+                .bot_rows(cx)
+                .iter()
+                .any(|row| row.text == "A report from the peer window")
+        );
+        assert!(bots.roster.get(&s.id).unwrap().pending_reports.is_empty());
+    });
+}
+
+#[gpui::test]
 fn bot_session_and_document_requests_leave_the_island_as_a_browser(cx: &mut TestAppContext) {
     let s = setup(cx);
     let opened = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
