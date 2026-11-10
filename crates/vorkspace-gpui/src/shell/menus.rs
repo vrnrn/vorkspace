@@ -105,17 +105,18 @@ impl Shell {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> (SharedString, Vec<MenuItem>, f32, MenuStyle) {
-        if let Some(menu) = self.terminal_menu_items(target, cx) {
-            return menu;
-        }
         let title = |id: &i64| {
             self.session_summary(*id, cx)
                 .map(|_| self.session_metadata(*id, cx).display_title())
                 .unwrap_or_default()
         };
         match target {
-            // Answered by terminal_menu_items above.
-            MenuTarget::TerminalTab(_) => ("".into(), Vec::new(), 160., MenuStyle::Explorer),
+            MenuTarget::TerminalTab(id) => (
+                "Terminal tab actions".into(),
+                self.terminal_tab_menu(*id),
+                160.,
+                MenuStyle::Explorer,
+            ),
             MenuTarget::Tabs(tabs) => {
                 let selected = self.active_title_tab(cx);
                 let mut items: Vec<MenuItem> = tabs
@@ -391,7 +392,7 @@ impl Shell {
             return;
         }
         match target {
-            MenuTarget::TerminalTab(ix) => self.run_terminal_tab_menu(ix, action, window, cx),
+            MenuTarget::TerminalTab(id) => self.run_terminal_tab_menu(id, action, window, cx),
             MenuTarget::TerminalDock => {
                 let side = match action {
                     "top" => DockSide::Top,

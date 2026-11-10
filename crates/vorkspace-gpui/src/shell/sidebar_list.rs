@@ -3,6 +3,46 @@ use super::*;
 use vorkspace_ui::radius;
 
 impl Shell {
+    pub(super) fn selected_sidebar_destination(&self) -> Option<SidebarNavigation> {
+        if self
+            .workspace
+            .active
+            .and_then(|id| self.workspace.app_panes.get(&id))
+            .is_some_and(|pane| pane.content == crate::workspace::AppPane::Codebase)
+        {
+            return Some(SidebarNavigation::Codebase);
+        }
+        if self.active_terminal_tab.is_some() {
+            return None;
+        }
+        match self.active_app_view? {
+            app_views::AppView::Connector(provider) => Some(SidebarNavigation::Connector(provider)),
+            app_views::AppView::Notes => Some(SidebarNavigation::Notes),
+            app_views::AppView::Automations => Some(SidebarNavigation::Automations),
+            app_views::AppView::Todos => Some(SidebarNavigation::Todos),
+            app_views::AppView::Inbox => None,
+        }
+    }
+
+    pub(super) fn sidebar_destination_unread(&self, item: SidebarNavigation, cx: &App) -> bool {
+        matches!(item, SidebarNavigation::Connector(provider) if self.connector_unread(provider, cx))
+    }
+
+    pub(super) fn open_sidebar_destination(
+        &mut self,
+        item: SidebarNavigation,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        match item {
+            SidebarNavigation::Connector(provider) => self.open_connector(provider, window, cx),
+            SidebarNavigation::Notes => self.open_notes(window, cx),
+            SidebarNavigation::Codebase => self.open_codebase(window, cx),
+            SidebarNavigation::Automations => self.open_automations(window, cx),
+            SidebarNavigation::Todos => self.open_todos(window, cx),
+        }
+    }
+
     fn available_sidebar_navigation(&self, cx: &App) -> Vec<SidebarNavigation> {
         let enabled = self.enabled_connectors(cx);
         SidebarNavigation::normalize(&self.workspace.sidebar_navigation_order)
@@ -214,25 +254,20 @@ impl Shell {
             )
             .child({
                 // Gathered first: the glide builds the rows when it renders.
+                let selected = self.selected_sidebar_destination();
                 let rows: Vec<_> = self
                     .visible_sidebar_navigation(cx)
                     .into_iter()
                     .map(|item| {
-                        let label = item.label();
-                        let unread = Connector::ALL
-                            .into_iter()
-                            .find(|provider| provider.label() == label)
-                            .is_some_and(|provider| self.connector_unread(provider, cx));
                         (
-                            label,
-                            item.icon(),
-                            self.app_view_label() == Some(label),
-                            unread,
-                            self.sidebar_hover == Some(label),
+                            item,
+                            selected == Some(item),
+                            self.sidebar_destination_unread(item, cx),
+                            self.sidebar_hover == Some(item),
                         )
                     })
                     .collect();
-                let selected_index = rows.iter().position(|row| row.2);
+                let selected_index = rows.iter().position(|row| row.1);
                 let shell = cx.entity().downgrade();
                 vorkspace_ui::glide::GlideList::new(
                     "sidebar-navigation-glide",
@@ -244,7 +279,8 @@ impl Shell {
                         let ready = glide.ready();
                         rows.into_iter()
                             .enumerate()
-                            .map(|(index, (label, glyph, selected, unread, hovered))| {
+                            .map(|(index, (item, selected, unread, hovered))| {
+                                let label = item.label();
                                 let clicked = shell.clone();
                                 let hovering = shell.clone();
                                 div()
@@ -277,11 +313,13 @@ impl Shell {
                                         s.bg(vorkspace_ui::fluid::hover(0.08))
                                             .text_color(content(1.))
                                     })
-                                    .child(icon(glyph, 16.).text_color(content(if selected {
-                                        0.7
-                                    } else {
-                                        0.35
-                                    })))
+                                    .child(
+                                        icon(item.icon(), 16.).text_color(content(if selected {
+                                            0.7
+                                        } else {
+                                            0.35
+                                        })),
+                                    )
                                     .child(div().flex_1().child(label))
                                     .when(unread, |row| {
                                         row.child(
@@ -289,40 +327,15 @@ impl Shell {
                                         )
                                     })
                                     .on_click(move |_, window, cx| {
-                                        let _ =
-                                            clicked.update(
-                                                cx,
-                                                |this: &mut Shell, cx| match label {
-                                                    "GitHub" => this.open_connector(
-                                                        Connector::Github,
-                                                        window,
-                                                        cx,
-                                                    ),
-                                                    "GitLab" => this.open_connector(
-                                                        Connector::Gitlab,
-                                                        window,
-                                                        cx,
-                                                    ),
-                                                    "Jira" => this.open_connector(
-                                                        Connector::Jira,
-                                                        window,
-                                                        cx,
-                                                    ),
-                                                    "Notes" => this.open_notes(window, cx),
-                                                    "Codebase" => this.open_codebase(window, cx),
-                                                    "Automations" => {
-                                                        this.open_automations(window, cx)
-                                                    }
-                                                    "To-dos" => this.open_todos(window, cx),
-                                                    _ => (),
-                                                },
-                                            );
+                                        let _ = clicked.update(cx, |this, cx| {
+                                            this.open_sidebar_destination(item, window, cx);
+                                        });
                                     })
                                     .on_hover(move |hovered, _, cx| {
                                         let _ = hovering.update(cx, |this: &mut Shell, cx| {
                                             if *hovered {
-                                                this.sidebar_hover = Some(label);
-                                            } else if this.sidebar_hover == Some(label) {
+                                                this.sidebar_hover = Some(item);
+                                            } else if this.sidebar_hover == Some(item) {
                                                 this.sidebar_hover = None;
                                             }
                                             this.sidebar_frame.update(cx, |_, cx| cx.notify());

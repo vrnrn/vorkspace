@@ -2213,7 +2213,10 @@ fn sidebar_hover_updates_labels_without_rebuilding_the_chat(cx: &mut TestAppCont
     })
     .unwrap();
     cx.run_until_parked();
-    assert_eq!(root.read_with(cx, |s, _| s.sidebar_hover), Some("GitHub"));
+    assert_eq!(
+        root.read_with(cx, |s, _| s.sidebar_hover),
+        Some(SidebarNavigation::Connector(Connector::Github))
+    );
     let notes = gpui::VisualTestContext::from_window(window.into(), cx)
         .debug_bounds("sidebar-navigation-Notes")
         .unwrap();
@@ -2222,7 +2225,10 @@ fn sidebar_hover_updates_labels_without_rebuilding_the_chat(cx: &mut TestAppCont
     })
     .unwrap();
     cx.run_until_parked();
-    assert_eq!(root.read_with(cx, |s, _| s.sidebar_hover), Some("Notes"));
+    assert_eq!(
+        root.read_with(cx, |s, _| s.sidebar_hover),
+        Some(SidebarNavigation::Notes)
+    );
     assert_eq!(transcript.read_with(cx, |t, _| t.render_passes), before);
 }
 #[gpui::test]

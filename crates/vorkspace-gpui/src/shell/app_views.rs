@@ -9,20 +9,6 @@ impl Shell {
         self.active_app_view.is_some() || self.active_terminal_tab.is_some()
     }
 
-    pub(super) fn app_view_label(&self) -> Option<&'static str> {
-        if self
-            .workspace
-            .active
-            .and_then(|id| self.workspace.app_panes.get(&id))
-            .is_some_and(|p| p.content == crate::workspace::AppPane::Codebase)
-        {
-            return Some("Codebase");
-        }
-        if self.active_terminal_tab.is_some() {
-            return Some("Terminal");
-        }
-        self.active_app_view.map(AppView::label)
-    }
     pub(super) fn leave_app_views(&mut self, cx: &mut Context<Self>) {
         if let Some(AppView::Connector(provider)) = self.active_app_view
             && let Some(page) = self.connector_pages.get(&provider)

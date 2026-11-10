@@ -488,13 +488,6 @@ impl TerminalDock {
             active
         };
     }
-    /// onCloseOtherProjectTerminals: `keep` is left, and active.
-    pub fn keep_only(&mut self, keep: usize) {
-        if keep < self.terminals.len() {
-            self.terminals = vec![self.terminals.swap_remove(keep)];
-            self.active = 0;
-        }
-    }
     pub fn set_side(&mut self, side: DockSide) {
         if side != self.side {
             // A dock moved across axes starts from that axis's default.

@@ -583,7 +583,7 @@ fn terminal_docks_add_close_move_and_clamp_like_project_terminal() {
     assert_eq!(s.docks["/k"].terminals, ["/w"]);
 }
 #[test]
-fn terminal_docks_reorder_keeping_the_active_terminal_and_close_others() {
+fn terminal_docks_reorder_keeping_the_active_terminal() {
     let mut dock = TerminalDock::default();
     for cwd in ["/a", "/b", "/c", "/d"] {
         dock.add(cwd.into());
@@ -602,11 +602,6 @@ fn terminal_docks_reorder_keeping_the_active_terminal_and_close_others() {
     dock.reorder(3, 1);
     assert_eq!(dock.terminals, ["/b", "/a", "/c", "/d"]);
     assert_eq!(dock.active, 3);
-    dock.keep_only(2);
-    assert_eq!(
-        (dock.terminals.clone(), dock.active),
-        (vec!["/c".to_string()], 0)
-    );
 }
 #[test]
 fn restore_keeps_project_selection_and_prunes_stale_project_focus() {

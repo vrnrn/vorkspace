@@ -302,7 +302,7 @@ pub(crate) enum MenuTarget {
     /// ProjectTerminalDock's Move Terminal menu.
     TerminalDock,
     /// A dock terminal tab's context menu.
-    TerminalTab(usize),
+    TerminalTab(gpui::EntityId),
 }
 pub(crate) struct ShellMenu {
     pub(crate) target: MenuTarget,
@@ -565,7 +565,7 @@ pub(crate) struct Shell {
     project_rail_toggle_focus: FocusHandle,
     sidebar_focus: FocusHandle,
     query: String,
-    sidebar_hover: Option<&'static str>,
+    sidebar_hover: Option<SidebarNavigation>,
     tab_hover: Option<i64>,
     /// Tab animations: opening and closing title tabs, with each tab's last label.
     title_tab_motion: vorkspace_ui::tab_motion::TabMotion<TitleTab, ()>,

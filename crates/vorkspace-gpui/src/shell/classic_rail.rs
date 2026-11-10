@@ -391,6 +391,7 @@ impl Shell {
             let meta = self.session_metadata(*id, cx);
             meta.responding() || meta.needs_approval()
         });
+        let selected_item = self.selected_sidebar_destination();
         rail.child(
             div()
                 .id("classic-compact-actions")
@@ -435,68 +436,46 @@ impl Shell {
                         })),
                 )
                 .children(
-                    std::iter::once(("Search", "search"))
-                        .chain(
-                            self.visible_sidebar_navigation(cx)
-                                .into_iter()
-                                .map(|item| (item.label(), item.icon())),
-                        )
-                        .map(|(label, glyph)| {
-                            let selected = if label == "Search" {
-                                self.app_search.is_some()
-                            } else {
-                                self.app_view_label() == Some(label)
+                    std::iter::once(None)
+                        .chain(self.visible_sidebar_navigation(cx).into_iter().map(Some))
+                        .map(|item| {
+                            let (label, glyph, selected, unread) = match item {
+                                Some(item) => (
+                                    item.label(),
+                                    item.icon(),
+                                    selected_item == Some(item),
+                                    self.sidebar_destination_unread(item, cx),
+                                ),
+                                None => ("Search", "search", self.app_search.is_some(), false),
                             };
-                            let connector = Connector::ALL
-                                .into_iter()
-                                .find(|provider| provider.label() == label);
-                            let unread = connector
-                                .is_some_and(|provider| self.connector_unread(provider, cx));
-                            icon_button(
-                                if label == "Terminal" {
-                                    "terminal"
+                            icon_button(label, label, glyph)
+                                .debug_selector(move || format!("sidebar-navigation-{label}"))
+                                .aria_label(if unread {
+                                    format!("{label}, new items")
                                 } else {
-                                    label
-                                },
-                                label,
-                                glyph,
-                            )
-                            .debug_selector(move || format!("sidebar-navigation-{label}"))
-                            .aria_label(if unread {
-                                format!("{label}, new items")
-                            } else {
-                                label.into()
-                            })
-                            .aria_selected(selected)
-                            .focusable()
-                            .tab_stop(true)
-                            .size(px(32.))
-                            .relative()
-                            .when(selected, |d| d.bg(content(0.1)))
-                            .when(unread, |d| {
-                                d.child(
-                                    div()
-                                        .absolute()
-                                        .right(px(3.))
-                                        .top(px(3.))
-                                        .size(px(5.))
-                                        .rounded_full()
-                                        .bg(accent_color()),
-                                )
-                            })
-                            .on_click(cx.listener(
-                                move |this, _, window, cx| match label {
-                                    "Search" => this.focus_search(window, cx),
-                                    "GitHub" => this.open_connector(Connector::Github, window, cx),
-                                    "GitLab" => this.open_connector(Connector::Gitlab, window, cx),
-                                    "Jira" => this.open_connector(Connector::Jira, window, cx),
-                                    "Notes" => this.open_notes(window, cx),
-                                    "Codebase" => this.open_codebase(window, cx),
-                                    "Automations" => this.open_automations(window, cx),
-                                    "To-dos" => this.open_todos(window, cx),
-                                    _ => (),
-                                },
-                            ))
+                                    label.into()
+                                })
+                                .aria_selected(selected)
+                                .focusable()
+                                .tab_stop(true)
+                                .size(px(32.))
+                                .relative()
+                                .when(selected, |d| d.bg(content(0.1)))
+                                .when(unread, |d| {
+                                    d.child(
+                                        div()
+                                            .absolute()
+                                            .right(px(3.))
+                                            .top(px(3.))
+                                            .size(px(5.))
+                                            .rounded_full()
+                                            .bg(accent_color()),
+                                    )
+                                })
+                                .on_click(cx.listener(move |this, _, window, cx| match item {
+                                    Some(item) => this.open_sidebar_destination(item, window, cx),
+                                    None => this.focus_search(window, cx),
+                                }))
                         }),
                 )
                 // Then the vorkspace's Bots and its Sessions, in the expanded

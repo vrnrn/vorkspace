@@ -2,7 +2,7 @@ use vorkspace_ui::radius;
 // Project terminal dock, tab actions and resize interactions.
 use super::*;
 use crate::{
-    popover::{Anchor, MenuAction, MenuItem, MenuStyle},
+    popover::{Anchor, MenuAction, MenuItem},
     terminal::Terminal,
     workspace::{DockSide, TerminalDock},
 };
@@ -22,6 +22,16 @@ pub(super) struct DockTabDrag {
     offset: Pixels,
     active: bool,
     bounds: Vec<Bounds<Pixels>>,
+    order: Vec<EntityId>,
+}
+
+impl DockTabDrag {
+    fn matches(&self, live: &[Entity<Terminal>]) -> bool {
+        self.order
+            .iter()
+            .copied()
+            .eq(live.iter().map(Entity::entity_id))
+    }
 }
 
 /// Where a tab is drawn now, easing toward `target` (the title strip's
@@ -67,49 +77,69 @@ impl Shell {
             .cloned()
             .unwrap_or_default()
     }
-    pub(super) fn terminal_tab_menu(&self, ix: usize) -> Vec<MenuItem> {
-        let count = self
-            .workspace
-            .docks
+    fn dock_terminal_index(&self, id: EntityId) -> Option<usize> {
+        self.terminals
+            .get(&self.workspace.project)?
+            .iter()
+            .position(|t| t.entity_id() == id)
+    }
+
+    pub(super) fn terminal_tab_menu(&self, id: EntityId) -> Vec<MenuItem> {
+        let live = self.dock_terminal_index(id).is_some();
+        let multiple = self
+            .terminals
             .get(&self.workspace.project)
-            .map_or(0, |d| d.terminals.len());
+            .is_some_and(|t| t.len() > 1);
         vec![
-            MenuAction::new("close", "Close").into(),
+            MenuAction::new("close", "Close").disabled(!live).into(),
             MenuAction::new("close-others", "Close Others")
-                .disabled(count < 2 || ix >= count)
+                .disabled(!live || !multiple)
                 .into(),
         ]
     }
     pub(super) fn run_terminal_tab_menu(
         &mut self,
-        ix: usize,
+        id: EntityId,
         action: &str,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        match action {
-            "close" => self.close_terminal(ix, window, cx),
-            "close-others" => self.close_other_terminals(ix, window, cx),
-            _ => {}
-        }
+        let keep = match action {
+            "close" => None,
+            "close-others" => Some(id),
+            _ => return,
+        };
+        self.request_dock_close(id, keep, window, cx);
     }
-    /// confirmCloseTerminals: the terminals still running something ask first.
-    fn close_other_terminals(&mut self, keep: usize, window: &mut Window, cx: &mut Context<Self>) {
+
+    fn request_dock_close(
+        &mut self,
+        id: EntityId,
+        keep: Option<EntityId>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if self.dock_terminal_index(id).is_none() {
+            return;
+        }
         let project = self.workspace.project.clone();
         let live = self.live_terminals();
-        let Some(kept) = live.get(keep).cloned() else {
-            return;
-        };
-        let running: Vec<(String, String)> = live
-            .iter()
-            .enumerate()
-            .filter(|(ix, _)| *ix != keep)
-            .filter_map(|(_, terminal)| {
-                let t = terminal.read(cx);
-                let process = t.foreground.as_deref()?.trim().to_owned();
-                (!process.is_empty()).then(|| (t.title.clone(), process))
-            })
-            .collect();
+        let mut closing = Vec::new();
+        let mut running = Vec::new();
+        for terminal in &live {
+            let terminal_id = terminal.entity_id();
+            let selected = match keep {
+                Some(keep) => terminal_id != keep,
+                None => terminal_id == id,
+            };
+            if selected {
+                closing.push(terminal_id);
+                let terminal = terminal.read(cx);
+                if let Some(process) = terminal.foreground_process() {
+                    running.push((terminal.title.clone(), process));
+                }
+            }
+        }
         let message = match running.as_slice() {
             [] => None,
             [(label, process)] => Some(format!(
@@ -124,7 +154,7 @@ impl Shell {
             )),
         };
         let Some(message) = message else {
-            self.keep_terminal(&project, &kept, window, cx);
+            self.finish_dock_close(&project, &closing, keep, window, cx);
             return;
         };
         let answer = window.prompt(
@@ -137,36 +167,62 @@ impl Shell {
         cx.spawn_in(window, async move |this, cx| {
             if matches!(answer.await, Ok(0)) {
                 let _ = this.update_in(cx, |this, window, cx| {
-                    this.keep_terminal(&project, &kept, window, cx)
+                    this.finish_dock_close(&project, &closing, keep, window, cx)
                 });
             }
         })
         .detach();
     }
-    fn keep_terminal(
+    fn finish_dock_close(
         &mut self,
         project: &str,
-        kept: &Entity<Terminal>,
+        closing: &[EntityId],
+        keep: Option<EntityId>,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let Some(ix) = self
-            .terminals
-            .get(project)
-            .and_then(|t| t.iter().position(|e| e == kept))
-        else {
+        let current = self.workspace.project == project;
+        let had_focus = current && self.dock_focused(window, cx).is_some();
+        let (Some(live), Some(dock)) = (
+            self.terminals.get_mut(project),
+            self.workspace.docks.get_mut(project),
+        ) else {
             return;
         };
-        let had_focus = self.dock_focused(window, cx).is_some();
-        if let Some(live) = self.terminals.get_mut(project) {
-            live.retain(|e| e == kept);
+        if live.len() != dock.terminals.len()
+            || keep.is_some_and(|id| live.iter().all(|t| t.entity_id() != id))
+        {
+            return;
         }
-        if let Some(dock) = self.workspace.docks.get_mut(project) {
-            dock.keep_only(ix);
+        let mut changed = false;
+        for ix in (0..live.len()).rev() {
+            if closing.contains(&live[ix].entity_id()) {
+                live.remove(ix);
+                dock.close(ix);
+                changed = true;
+            }
         }
-        self.dock_shifts.clear();
-        if had_focus {
-            self.focus_terminal(window, cx);
+        if !changed {
+            return;
+        }
+        if let Some(ix) = keep.and_then(|id| live.iter().position(|t| t.entity_id() == id)) {
+            dock.active = ix;
+        }
+        let empty = live.is_empty();
+        if empty {
+            dock.open = false;
+        }
+        if current {
+            self.dock_drag = None;
+            self.dock_shifts.clear();
+            if empty {
+                self.slide_dock(false);
+                if had_focus {
+                    self.focus_active(window, cx);
+                }
+            } else if had_focus {
+                self.focus_terminal(window, cx);
+            }
         }
         self.persist(cx);
         cx.notify();
@@ -174,14 +230,19 @@ impl Shell {
     /// SurfaceTabs selects a tab as it is pressed, then lets it be dragged.
     fn start_dock_drag(
         &mut self,
-        ix: usize,
+        id: EntityId,
         event: &MouseDownEvent,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
         self.dock_skip_click = false;
+        self.dock_drag = None;
+        let Some(ix) = self.dock_terminal_index(id) else {
+            return;
+        };
         self.select_terminal(ix, window, cx);
-        let count = self.live_terminals().len();
+        let live = self.live_terminals();
+        let count = live.len();
         if count < 2 {
             return;
         }
@@ -198,13 +259,19 @@ impl Shell {
             offset: px(0.),
             active: false,
             bounds,
+            order: live.iter().map(Entity::entity_id).collect(),
         });
     }
     pub(super) fn move_dock_drag(&mut self, event: &MouseMoveEvent, cx: &mut Context<Self>) {
+        let live = self
+            .terminals
+            .get(&self.workspace.project)
+            .map(Vec::as_slice)
+            .unwrap_or_default();
         let Some(drag) = self.dock_drag.as_mut() else {
             return;
         };
-        if event.pressed_button != Some(MouseButton::Left) {
+        if event.pressed_button != Some(MouseButton::Left) || !drag.matches(live) {
             self.dock_drag = None;
             cx.notify();
             return;
@@ -238,13 +305,13 @@ impl Shell {
         let Some(drag) = self.dock_drag.take() else {
             return;
         };
-        if !drag.active || drag.from == drag.to {
+        let live = self.live_terminals();
+        if !drag.active || drag.from == drag.to || !drag.matches(&live) {
             cx.notify();
             return;
         }
         let project = self.workspace.project.clone();
         let now = Instant::now();
-        let live = self.live_terminals();
         // Each tab glides from where it is drawn into its new slot.
         let drawn: Vec<(EntityId, f32)> = live
             .iter()
@@ -316,6 +383,13 @@ impl Shell {
         cx: &mut Context<Self>,
     ) -> AnyElement {
         let live = self.live_terminals();
+        if self
+            .dock_drag
+            .as_ref()
+            .is_some_and(|drag| !drag.matches(&live))
+        {
+            self.dock_drag = None;
+        }
         let hide = match dock.side {
             DockSide::Bottom => "chevron-down",
             DockSide::Top => "chevron-up",
@@ -386,6 +460,7 @@ impl Shell {
                             .iter()
                             .enumerate()
                             .map(|(ix, terminal)| {
+                                let id = terminal.entity_id();
                                 let t = terminal.read(cx);
                                 let label: SharedString = t.title.clone().into();
                                 let description =
@@ -422,14 +497,14 @@ impl Shell {
                                         MouseButton::Left,
                                         cx.listener(
                                             move |this, event: &MouseDownEvent, window, cx| {
-                                                this.start_dock_drag(ix, event, window, cx)
+                                                this.start_dock_drag(id, event, window, cx)
                                             },
                                         ),
                                     )
                                     .on_mouse_down(
                                         MouseButton::Middle,
                                         cx.listener(move |this, _, window, cx| {
-                                            this.close_terminal(ix, window, cx)
+                                            this.request_dock_close(id, None, window, cx)
                                         }),
                                     )
                                     .on_mouse_down(
@@ -437,9 +512,12 @@ impl Shell {
                                         cx.listener(
                                             move |this, event: &MouseDownEvent, window, cx| {
                                                 cx.stop_propagation();
+                                                let Some(ix) = this.dock_terminal_index(id) else {
+                                                    return;
+                                                };
                                                 this.select_terminal(ix, window, cx);
                                                 this.open_menu(
-                                                    MenuTarget::TerminalTab(ix),
+                                                    MenuTarget::TerminalTab(id),
                                                     Anchor::Point(event.position),
                                                     window,
                                                     cx,
@@ -492,7 +570,9 @@ impl Shell {
                                                 if std::mem::take(&mut this.dock_skip_click) {
                                                     return;
                                                 }
-                                                this.focus_terminal(window, cx);
+                                                if let Some(ix) = this.dock_terminal_index(id) {
+                                                    this.select_terminal(ix, window, cx);
+                                                }
                                             })),
                                     )
                                     .child(
@@ -530,7 +610,7 @@ impl Shell {
                                             })
                                             .on_click(cx.listener(move |this, _, window, cx| {
                                                 cx.stop_propagation();
-                                                this.close_terminal(ix, window, cx);
+                                                this.request_dock_close(id, None, window, cx);
                                             })),
                                     )
                                     .into_any_element()
@@ -639,25 +719,13 @@ impl Shell {
             )
             .into_any_element()
     }
-    pub(super) fn terminal_menu_items(
-        &self,
-        target: &MenuTarget,
-        _cx: &App,
-    ) -> Option<(SharedString, Vec<MenuItem>, f32, MenuStyle)> {
-        match target {
-            MenuTarget::TerminalTab(ix) => Some((
-                "File tab actions".into(),
-                self.terminal_tab_menu(*ix),
-                160.,
-                MenuStyle::Explorer,
-            )),
-            _ => None,
-        }
-    }
 }
 
 const NEW_TERMINAL_LABEL: &str = "New terminal (⌘`)";
 const HIDE_TERMINAL_LABEL: &str = "Hide terminal (⌘J)";
+
+#[cfg(test)]
+mod tests;
 
 impl Shell {
     /// newTerminalCwd: the focused session's worktree, else its folder, else
@@ -807,12 +875,15 @@ impl Shell {
         cx: &mut Context<Self>,
     ) {
         if let Some(dock) = self.workspace.docks.get_mut(&self.workspace.project) {
-            dock.active = ix.min(dock.terminals.len().saturating_sub(1));
-            self.dock_tab_scroll.scroll_to_item(dock.active);
+            let active = ix.min(dock.terminals.len().saturating_sub(1));
+            if dock.active != active {
+                dock.active = active;
+                self.dock_tab_scroll.scroll_to_item(active);
+                self.persist(cx);
+                cx.notify();
+            }
         }
         self.focus_terminal(window, cx);
-        self.persist(cx);
-        cx.notify();
     }
     /// confirmCloseTerminal: a terminal running something asks first.
     pub(super) fn close_terminal(
@@ -821,73 +892,14 @@ impl Shell {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let project = self.workspace.project.clone();
-        let Some(terminal) = self
+        if let Some(id) = self
             .terminals
-            .get(&project)
+            .get(&self.workspace.project)
             .and_then(|t| t.get(ix))
-            .cloned()
-        else {
-            return;
-        };
-        let (process, label) = {
-            let t = terminal.read(cx);
-            (t.foreground.clone(), project_name(&t.cwd))
-        };
-        let Some(process) = process else {
-            self.remove_terminal(&project, ix, window, cx);
-            return;
-        };
-        let answer = window.prompt(
-            gpui::PromptLevel::Warning,
-            &format!("\"{process}\" is still running in {label}. Close this terminal anyway?"),
-            None,
-            &["Close", "Cancel"],
-            cx,
-        );
-        cx.spawn_in(window, async move |this, cx| {
-            if matches!(answer.await, Ok(0)) {
-                let _ = this.update_in(cx, |this, window, cx| {
-                    if let Some(ix) = this
-                        .terminals
-                        .get(&project)
-                        .and_then(|t| t.iter().position(|e| *e == terminal))
-                    {
-                        this.remove_terminal(&project, ix, window, cx);
-                    }
-                });
-            }
-        })
-        .detach();
-    }
-    pub(super) fn remove_terminal(
-        &mut self,
-        project: &str,
-        ix: usize,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        let had_focus = self.dock_focused(window, cx).is_some();
-        if let Some(live) = self.terminals.get_mut(project)
-            && ix < live.len()
+            .map(Entity::entity_id)
         {
-            live.remove(ix);
+            self.request_dock_close(id, None, window, cx);
         }
-        let Some(dock) = self.workspace.docks.get_mut(project) else {
-            return;
-        };
-        if !dock.close(ix) {
-            // The last terminal closes the dock; it slides shut empty.
-            dock.open = false;
-            self.slide_dock(false);
-            if had_focus {
-                self.focus_active(window, cx);
-            }
-        } else if had_focus {
-            self.focus_terminal(window, cx);
-        }
-        self.persist(cx);
-        cx.notify();
     }
     pub(super) fn set_dock_side(&mut self, side: DockSide, cx: &mut Context<Self>) {
         let viewport = self.viewport();
