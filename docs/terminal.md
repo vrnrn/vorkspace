@@ -36,7 +36,7 @@ Run `npm run test:rust` for the terminal engine and desktop checks. To focus on 
 
 ```sh
 cargo nextest run --locked --cargo-profile verify -p vorkspace-terminal
-cargo nextest run --locked --cargo-profile verify -p vorkspace-gpui -E 'test(terminal::tests)'
+cargo nextest run --locked --cargo-profile verify -p vorkspace-gpui -E 'test(terminal::)'
 npm run target:prune
 ```
 

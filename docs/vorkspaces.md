@@ -49,7 +49,7 @@ The rail's options menu no longer has an Activity switch. The expanded rail list
 
 - Vorkspace definitions and Bot membership are saved under the `vorkspaces` setting. The shared roster commits each Bot and its backing session before a window can run that conversation.
 - The `workspace-windows` setting holds window layouts, project availability, and shared preferences. The focused layout also feeds the older `workspace` setting for compatibility.
-- The scheduler lease lets one window fire reminders and automations. The shared Bot roster also gives one manager responsibility for Habit scheduling.
+- AppCore owns the reminder schedule across windows. A window lease coordinates automations, and the shared Bot roster assigns Habit scheduling to one manager.
 - A conversation has one live owner. Opening it in another window raises its owner. Once the owner closes, another window can load the saved conversation. Session metadata changes reach the other windows without opening their transcripts.
 - Remote-host connections, the native Dock badge, and the agent app bridge are shared. The bridge routes a call to the window running the calling session, falling back to the oldest window.
 
