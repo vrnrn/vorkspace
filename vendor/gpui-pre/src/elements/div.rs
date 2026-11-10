@@ -1402,6 +1402,12 @@ pub trait StatefulInteractiveElement: InteractiveElement {
         self
     }
 
+    /// Expose a focusable text value that cannot be edited.
+    fn aria_read_only(mut self, read_only: bool) -> Self {
+        self.interactivity().aria.read_only = read_only;
+        self
+    }
+
     /// Set the expanded state for this element.
     fn aria_expanded(mut self, expanded: bool) -> Self {
         self.interactivity().aria.expanded = Some(expanded);
@@ -2116,6 +2122,7 @@ pub(crate) struct AriaProperties {
     pub(crate) keyshortcuts: Option<SharedString>,
     pub(crate) selected: Option<bool>,
     pub(crate) disabled: bool,
+    pub(crate) read_only: bool,
     pub(crate) expanded: Option<bool>,
     pub(crate) toggled: Option<accesskit::Toggled>,
     pub(crate) numeric_value: Option<f64>,
@@ -3602,6 +3609,9 @@ impl Interactivity {
             node.set_disabled();
         } else if !self.click_listeners.is_empty() {
             node.add_action(accesskit::Action::Click);
+        }
+        if self.aria.read_only {
+            node.set_read_only();
         }
         if self.tracked_focus_handle.is_some() || self.focusable {
             node.add_action(accesskit::Action::Focus);

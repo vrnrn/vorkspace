@@ -1611,6 +1611,7 @@ impl Element for InputElement {
 }
 impl Render for Input {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let input = cx.weak_entity();
         div()
             .id("native-composer")
             .relative()
@@ -1622,10 +1623,21 @@ impl Render for Input {
                 Role::MultilineTextInput
             })
             .aria_label(self.label.clone())
+            .aria_read_only(self.read_only)
             .aria_value(if self.secret {
                 "*".repeat(self.content.chars().count()).into()
             } else {
                 self.content.clone()
+            })
+            .when(!self.read_only, |d| {
+                d.on_a11y_action(gpui::AccessibleAction::SetValue, move |data, window, cx| {
+                    if let Some(gpui::accesskit::ActionData::Value(value)) = data {
+                        let _ = input.update(cx, |input, cx| {
+                            let range = 0..input.content.encode_utf16().count();
+                            input.replace_text_in_range(Some(range), value, window, cx);
+                        });
+                    }
+                })
             })
             .tab_index(0)
             .w_full()
