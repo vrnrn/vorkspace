@@ -288,7 +288,7 @@ impl Shell {
                 .bg(vorkspace_ui::fluid::scrim(0.4))
                 .child(
                     popover("project-background-modal", anchor)
-                        .modal_surface(self.workspace.classic_layout)
+                        .modal_surface()
                         .width(width)
                         .gap(0.)
                         .max_height(viewport.height.as_f32() - 32.)
@@ -326,24 +326,22 @@ impl Shell {
             let p = &self.workspace.preferences;
             appearance.background = p.chat_background_settings();
         }
-        let classic = self.workspace.classic_layout;
         chat.update(cx, |session, cx| {
             session.set_project_appearance(appearance.clone(), cx);
-            session.set_classic_layout(classic, cx);
+            session.set_classic_layout(true, cx);
         });
         let settings = appearance.background.filter(|b| b.opacity(empty) > 0.);
         if settings.is_none() {
             self.backgrounds.remove(&id);
         }
         let background = settings.map(|settings| {
-            let clip = (!self.workspace.classic_layout).then(|| self.background_card.clone());
             let background = self
                 .backgrounds
                 .entry(id)
                 .or_insert_with(|| cx.new(|_| ProjectBackground::default()))
                 .clone();
             background.update(cx, |background, cx| {
-                background.configure(Some(settings), empty, clip, cx)
+                background.configure(Some(settings), empty, None, cx)
             });
             background
         });

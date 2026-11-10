@@ -7,7 +7,7 @@ use std::{
     sync::Arc,
     time::{Duration, Instant},
 };
-use vorkspace_core::scm::{self, CheckoutStamp, DiffIndex, DiffStats};
+use vorkspace_core::scm::{self, CheckoutStamp, DiffIndex};
 
 const POLL: Duration = Duration::from_secs(2);
 const FULL_REFRESH: Duration = Duration::from_secs(20);
@@ -77,7 +77,6 @@ impl CheckoutCatalog {
 
 pub(super) struct Snapshot {
     pub(super) index: Arc<DiffIndex>,
-    pub(super) stats: DiffStats,
     pub(super) statuses: StatusMap,
     bytes: usize,
 }
@@ -105,11 +104,6 @@ impl Snapshot {
                 })
                 .sum::<usize>();
         Self {
-            stats: DiffStats {
-                files: index.files.len() as i64,
-                additions: index.additions,
-                deletions: index.deletions,
-            },
             statuses,
             index: Arc::new(index),
             bytes,

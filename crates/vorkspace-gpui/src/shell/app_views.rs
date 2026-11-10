@@ -499,20 +499,13 @@ impl Shell {
         self.show_app_view(AppView::Automations, window, cx);
     }
 
-    pub(super) fn note_to_chat(
-        &mut self,
-        note: vorkspace_core::notes::Note,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        let cwd = note
-            .source_cwd
-            .clone()
-            .filter(|path| !path.is_empty())
-            .unwrap_or_else(|| self.workspace.project.clone());
-        let kind = self.default_kind();
-        let store = self.store.clone();
-        let settings = vorkspace_core::agent::Settings {
+    fn app_session_defaults(
+        &self,
+        kind: Kind,
+        cwd: &str,
+        cx: &App,
+    ) -> vorkspace_core::agent::Settings {
+        vorkspace_core::agent::Settings {
             model: self
                 .workspace
                 .preferences
@@ -528,11 +521,25 @@ impl Shell {
                 .map(vorkspace_core::agent::AccessMode::from_id)
                 .unwrap_or_default(),
             account: crate::accounts::get(cx)
-                .map(|accounts| accounts.read(cx).selected(kind, &cwd))
+                .map(|accounts| accounts.read(cx).selected(kind, cwd))
                 .unwrap_or_default(),
             ..Default::default()
-        };
-        self.leave_app_views(cx);
+        }
+    }
+
+    pub(super) fn note_to_chat(
+        &mut self,
+        note: vorkspace_core::notes::Note,
+        cx: &mut Context<Self>,
+    ) {
+        let cwd = note
+            .source_cwd
+            .clone()
+            .filter(|path| !path.is_empty())
+            .unwrap_or_else(|| self.workspace.project.clone());
+        let kind = self.default_kind();
+        let store = self.store.clone();
+        let settings = self.app_session_defaults(kind, &cwd, cx);
         self.navigation_revision += 1;
         let revision = self.navigation_revision;
         let mut install = self.session_install(cx);
@@ -575,8 +582,6 @@ impl Shell {
             });
         })
         .detach();
-        self.update_chat_visibility(cx);
-        self.focus_active(window, cx);
     }
 
     fn start_inbox_session(
@@ -591,26 +596,7 @@ impl Shell {
             item.project_path.clone()
         };
         let kind = self.default_kind();
-        let settings = vorkspace_core::agent::Settings {
-            model: self
-                .workspace
-                .preferences
-                .default_models
-                .get(kind.id())
-                .cloned(),
-            effort: crate::conversation::preferred_effort(kind.id(), cx),
-            access: self
-                .workspace
-                .preferences
-                .default_access
-                .as_deref()
-                .map(vorkspace_core::agent::AccessMode::from_id)
-                .unwrap_or_default(),
-            account: crate::accounts::get(cx)
-                .map(|accounts| accounts.read(cx).selected(kind, &cwd))
-                .unwrap_or_default(),
-            ..Default::default()
-        };
+        let settings = self.app_session_defaults(kind, &cwd, cx);
         let store = self.store.clone();
         self.navigation_revision += 1;
         let revision = self.navigation_revision;

@@ -14,14 +14,6 @@ impl Shell {
         }
     }
 
-    pub(super) fn classic_tab_for_tool(tab: RightTab) -> SidebarTab {
-        match tab {
-            RightTab::Files => SidebarTab::Files,
-            RightTab::Changes => SidebarTab::Changes,
-            RightTab::Graph => SidebarTab::Graph,
-        }
-    }
-
     pub(super) fn select_classic_sidebar(
         &mut self,
         tab: SidebarTab,

@@ -1,7 +1,7 @@
 //! Window checkout selection and its projection of the shared checkout catalog.
-use gpui::{AppContext, Context, Entity, EventEmitter, Subscription};
+use gpui::{Context, Entity, EventEmitter, Subscription};
 use std::{collections::HashMap, sync::Arc};
-use vorkspace_core::scm::{DiffIndex, DiffStats};
+use vorkspace_core::scm::DiffIndex;
 
 mod checkout;
 pub(crate) use checkout::CheckoutCatalog;
@@ -126,19 +126,12 @@ impl ProjectGit {
             .as_ref()
             .map(|snapshot| snapshot.index.clone())
     }
-    pub(crate) fn stats(&self) -> Option<&DiffStats> {
-        self.snapshot.as_ref().map(|snapshot| &snapshot.stats)
-    }
     pub(crate) fn statuses(&self) -> Option<&StatusMap> {
         self.snapshot.as_ref().map(|snapshot| &snapshot.statuses)
     }
     pub(crate) fn available(&self) -> bool {
         !self.project.is_empty() && self.project != "~"
     }
-    pub(crate) fn has_changes(&self) -> bool {
-        self.stats().is_some_and(|stats| stats.files > 0)
-    }
-
     /// Publish the selected checkout's own state immediately, including when
     /// it is still loading. Peer windows keep their independent selections.
     pub(crate) fn set_project(&mut self, project: String, cx: &mut Context<Self>) {
@@ -234,7 +227,7 @@ impl ProjectGit {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use gpui::TestAppContext;
+    use gpui::{AppContext, TestAppContext};
     use vorkspace_core::scm::ChangedFile;
     fn file(path: &str, status: &str) -> ChangedFile {
         ChangedFile {

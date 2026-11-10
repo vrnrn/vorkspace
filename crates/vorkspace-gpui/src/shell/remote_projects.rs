@@ -533,7 +533,7 @@ impl Shell {
                 .bg(vorkspace_ui::fluid::scrim(0.3))
                 .child(
                     popover("remote-project-modal", anchor)
-                        .modal_surface(self.workspace.classic_layout)
+                        .modal_surface()
                         .width(width)
                         .max_height(viewport.height.as_f32() * 0.7)
                         .gap(0.)

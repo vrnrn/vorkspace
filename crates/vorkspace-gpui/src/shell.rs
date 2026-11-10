@@ -76,7 +76,7 @@ use crate::{
     },
     resource_pressure::{ResourceMonitor, StopSession},
     response_actions::Transfer,
-    right_panel::{PanelEvent, RightPanel},
+    right_panel::RightPanel,
     terminal::{Terminal, TerminalEvent},
     usage_footer::UsageFooter,
     workspace::{
@@ -84,10 +84,10 @@ use crate::{
     },
 };
 use gpui::{
-    AnyElement, App, Bounds, BoxShadow, ClipboardItem, Context, CursorStyle, DispatchPhase, Entity,
-    FocusHandle, Focusable, FontWeight, KeyBinding, MouseButton, MouseDownEvent, MouseMoveEvent,
-    MouseUpEvent, PathPromptOptions, Pixels, Point, Role, ScrollHandle, SharedString,
-    StyleRefinement, Subscription, Window, actions, canvas, div, prelude::*, px, rgb, rgba,
+    AnyElement, App, Bounds, BoxShadow, ClipboardItem, Context, CursorStyle, Entity, FocusHandle,
+    Focusable, FontWeight, KeyBinding, MouseButton, MouseDownEvent, MouseMoveEvent,
+    PathPromptOptions, Pixels, Point, Role, ScrollHandle, SharedString, StyleRefinement,
+    Subscription, Window, actions, div, prelude::*, px, rgb, rgba,
 };
 use session_groups::local_reminder_label;
 use std::{
@@ -319,14 +319,9 @@ const SELECTED_TAB_MIN_WIDTH: f32 = 112.;
 const TAB_CLOSE_MIN_WIDTH: f32 = 72.;
 /// The new-tab button and its leading margin.
 const STRIP_NEW_TAB: f32 = TAB_PLATE_HEIGHT + 2.;
-const CORNER_TABS_LEAD: f32 = 7.;
-const CORNER_CONTROL_GAP: f32 = 4.;
-const CORNER_BUTTONS_WIDTH: f32 = 48. + 2. * CORNER_CONTROL_GAP;
 // TitleBar.tsx's labels, with their shortcuts.
 const TOGGLE_SIDEBAR_LABEL: &str = "Toggle Rail (⌘B)";
 const TOGGLE_EXPLORER_LABEL: &str = "Toggle Sidebar (⇧⌘B)";
-const TOGGLE_RIGHT_PANEL_LABEL: &str = "Toggle right sidebar (⌘⇧B)";
-const TOGGLE_RIGHT_PANEL_DOT_LABEL: &str = "Toggle right sidebar (⌘⇧B, uncommitted changes)";
 const MOD: &str = "⌘";
 const REVEAL_LABEL: &str = "Reveal in Finder";
 
@@ -383,7 +378,6 @@ struct SashDrag {
 enum ResizeTarget {
     Sidebar,
     ProjectRail,
-    RightPanel,
     Dock(String),
     /// A pane sash, with its group's length in pixels.
     Sash {
@@ -616,10 +610,7 @@ pub(crate) struct Shell {
     rail_search_open: bool,
     vorkspace_anchor: AnchorSlot,
     backgrounds: HashMap<i64, Entity<crate::project_background::ProjectBackground>>,
-    background_card: AnchorSlot,
     /// Each project's working grid in the rail, by project path.
-    project_marks: HashMap<String, Entity<vorkspace_ui::session_mark::ProjectMark>>,
-
     project_anchor: AnchorSlot,
     sidebar_options_anchor: AnchorSlot,
     history: VisitHistory,
@@ -645,8 +636,6 @@ pub(crate) struct Shell {
     resize: Option<(Pixels, f32)>,
     pub(crate) git: Entity<crate::git_status::ProjectGit>,
     pub(crate) right_panel: Option<Entity<RightPanel>>,
-    right_resize: Option<(Pixels, f32)>,
-    right_slide: Option<PaneSlide>,
     reviews: HashMap<i64, Entity<crate::git_tools::review::ReviewPane>>,
     review_cache: crate::git_tools::review::ReviewCache,
     /// A review sliding in or out: its session and pane.
@@ -679,9 +668,7 @@ pub(crate) struct Shell {
     dock_tab_motion: vorkspace_ui::tab_motion::TabMotion<gpui::EntityId, SharedString>,
     dock_drag: Option<terminal_dock::DockTabDrag>,
     /// The right panel's drawn width this frame, 0 while it is hidden.
-    right_drawn: f32,
     /// Classic: the corner tab opening out and the one folding away.
-    corner_reveal: Option<crate::project_tabs::TabReveal>,
     dock_shifts: HashMap<gpui::EntityId, TabShift>,
     dock_skip_click: bool,
     dock_tab_scroll: ScrollHandle,
@@ -856,11 +843,6 @@ impl Shell {
         let git_project = workspace.project.clone();
         let checkouts = app_core.read(cx).checkouts.clone();
         let git = cx.new(|cx| crate::git_status::ProjectGit::shared(git_project, checkouts, cx));
-        let git_observation = cx.observe(&git, |this, _, cx| {
-            // The title bar's dot and the panel's tab label follow its stats.
-            let _ = this;
-            cx.notify();
-        });
         let resources = cx.new(ResourceMonitor::new);
         let resource_observation = cx.observe(&resources, |_, _, cx| cx.notify());
         let resource_stops = cx.subscribe(&resources, |this, _, StopSession(id), cx| {
@@ -996,8 +978,6 @@ impl Shell {
             rail_search_open: false,
             vorkspace_anchor: AnchorSlot::default(),
             backgrounds: HashMap::new(),
-            background_card: AnchorSlot::default(),
-            project_marks: HashMap::new(),
 
             project_anchor: AnchorSlot::default(),
             sidebar_options_anchor: AnchorSlot::default(),
@@ -1020,8 +1000,6 @@ impl Shell {
             resize: None,
             git,
             right_panel: None,
-            right_resize: None,
-            right_slide: None,
             reviews: HashMap::new(),
             review_cache: Default::default(),
             review_slide: None,
@@ -1046,20 +1024,13 @@ impl Shell {
             dock_hover: None,
             dock_tab_motion: Default::default(),
             dock_drag: None,
-            right_drawn: 0.,
-            corner_reveal: None,
             dock_shifts: HashMap::new(),
             dock_skip_click: false,
             dock_tab_scroll: ScrollHandle::new(),
             move_terminal_anchor: AnchorSlot::default(),
             viewport_width: 1200.,
             viewport_height: 800.,
-            observations: vec![
-                git_observation,
-                resource_observation,
-                resource_stops,
-                sidebar_search_events,
-            ],
+            observations: vec![resource_observation, resource_stops, sidebar_search_events],
             render_passes: 0,
         };
         this.scan_external_editors(cx);
@@ -2632,10 +2603,10 @@ impl Render for Shell {
             cx.window_appearance(),
             gpui::WindowAppearance::Light | gpui::WindowAppearance::VibrantLight
         );
-        if configure(p, system_light, self.workspace.classic_layout) {
+        if configure(p, system_light, true) {
             cx.refresh_windows();
         }
-        let glass = window_glass(p, system_light, self.workspace.classic_layout);
+        let glass = window_glass(p, system_light, true);
         let blur = if glass { p.sidebar_blur.min(100) } else { 0 };
         if self.window_glass != Some(glass) || self.window_blur != Some(blur) {
             self.window_glass = Some(glass);
@@ -2750,38 +2721,13 @@ impl Render for Shell {
         self.viewport_width = window.viewport_size().width.as_f32();
         self.viewport_height = window.viewport_size().height.as_f32();
         self.ensure_right_panel(window, cx);
-        let full = self.workspace.right_panel_width;
-        let right_width = match &self.right_slide {
-            Some(slide) => {
-                let (width, done) = slide.at(vorkspace_ui::clock::Instant::now());
-                if done {
-                    self.right_slide = None;
-                    self.sync_right_panel(cx);
-                    if self.workspace.right_panel_open
-                        && !self.bot_active(cx)
-                        && let Some(panel) = self.right_panel.clone()
-                    {
-                        panel.update(cx, |p, cx| p.finish_opening(window, cx));
-                    }
-                } else {
-                    window.request_animation_frame();
-                }
-                width
-            }
-            None => full,
-        };
-        let right_shown = self.right_panel_shown(cx);
-        self.right_drawn = if right_shown { right_width } else { 0. };
         let poll_git = self.window_active && !self.bot_active(cx);
         self.git.update(cx, |git, cx| {
             git.set_polling(poll_git && git.available(), cx)
         });
         if let Some(panel) = &self.right_panel {
-            let tab_width = self.project_tabs_width(cx);
-            panel.update(cx, |p, cx| {
-                p.set_top_inset(0., cx);
-                p.set_tab_width(tab_width, cx);
-                p.set_show_excluded(self.workspace.preferences.show_excluded_files, cx);
+            panel.update(cx, |panel, cx| {
+                panel.set_show_excluded(self.workspace.preferences.show_excluded_files, cx);
             });
         }
         self.sync_right_panel(cx);
@@ -3021,10 +2967,10 @@ impl Render for Shell {
                         return;
                     }
                     if this.menu.is_none()
-                        && this.right_panel_shown(cx)
+                        && this.workspace.sidebar_visible
                         && !this.bot_active(cx)
+                        && this.classic_tool_tab() == Some(crate::panel_kit::RightTab::Files)
                         && let Some(panel) = &this.right_panel
-                        && panel.read(cx).tab() == crate::panel_kit::RightTab::Files
                     {
                         let explorer = panel.read(cx).explorer.clone();
                         if explorer.update(cx, |explorer, cx| explorer.close_search(window, cx)) {
@@ -3064,21 +3010,17 @@ impl Render for Shell {
                 }),
             )
             .on_action(cx.listener(|this, _: &ToggleSidebar, _, cx| this.toggle_project_rail(cx)))
-            .on_action(cx.listener(|this, _: &ToggleRightPanel, window, cx| {
-                this.toggle_right_panel(window, cx)
-            }))
+            .on_action(
+                cx.listener(|this, _: &ToggleRightPanel, window, cx| {
+                    this.toggle_sidebar(window, cx)
+                }),
+            )
             .on_action(cx.listener(|this, _: &SearchFiles, window, cx| {
                 if this.app_view_open() || this.settings.is_some() || this.bot_active(cx) {
                     return;
                 }
                 this.close_app_search(window, cx);
-                this.ensure_right_panel(window, cx);
-                if let Some(panel) = &this.right_panel {
-                    panel.update(cx, |panel, cx| {
-                        panel.select(crate::panel_kit::RightTab::Files, cx)
-                    });
-                }
-                this.set_right_panel_open(true, window, cx);
+                this.select_classic_sidebar(crate::workspace::SidebarTab::Files, window, cx);
                 if let Some(panel) = &this.right_panel {
                     let explorer = panel.read(cx).explorer.clone();
                     explorer.update(cx, |explorer, cx| explorer.open_search(window, cx));
@@ -3162,8 +3104,7 @@ impl Render for Shell {
                 }),
             )
             .relative()
-            .child(self.right_panel_resize_watch(cx))
-            .children(self.layout_body(sidebar_width, right_shown, right_width, full, window, cx))
+            .child(self.layout_body(sidebar_width, window, cx))
             .children(self.classic_session_preview(cx))
             .child(self.notices_overlay(cx))
             .children(self.menu.as_ref().map(|open| {

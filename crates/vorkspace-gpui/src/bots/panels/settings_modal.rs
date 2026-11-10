@@ -90,7 +90,7 @@ impl Bots {
                             .ignore(menu.surface_region())
                             .ignore(menu.submenu_region())
                     })
-                    .modal_surface(true)
+                    .modal_surface()
                     .without_animation()
                     .priority(70)
                     .width(width)

@@ -1480,7 +1480,7 @@ impl Shell {
                             px((size.height.as_f32() - height) / 2.),
                         )),
                     )
-                    .modal_surface(true)
+                    .modal_surface()
                     .without_animation()
                     .priority(60)
                     .width(width)

@@ -958,7 +958,7 @@ impl Shell {
                 .bg(vorkspace_ui::fluid::scrim(0.4))
                 .child(
                     popover("link-work-item-modal", anchor)
-                        .modal_surface(self.workspace.classic_layout)
+                        .modal_surface()
                         .width(width)
                         .gap(0.)
                         .priority(60)

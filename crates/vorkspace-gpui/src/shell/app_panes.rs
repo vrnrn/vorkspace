@@ -80,8 +80,7 @@ impl Shell {
         });
         Some(view.clone().into_any_element())
     }
-    /// Surrounding project tools follow the displayed layout, never the focused
-    /// leaf. Focusing a note beside a session must not resize either pane.
+    #[cfg(test)]
     pub(super) fn has_session_panes(&self) -> bool {
         self.workspace.active_tab().is_some_and(|tab| {
             self.workspace
@@ -323,7 +322,7 @@ impl Shell {
                 }
                 crate::notes::Event::OpenTab(id) => this.open_note_tab(id.clone(), window, cx),
                 crate::notes::Event::OpenSource(id) => this.open(*id, window, cx),
-                crate::notes::Event::AddToChat(note) => this.note_to_chat(note.clone(), window, cx),
+                crate::notes::Event::AddToChat(note) => this.note_to_chat(note.clone(), cx),
                 crate::notes::Event::Notice(message) => {
                     this.error = Some(message.clone());
                     cx.notify();

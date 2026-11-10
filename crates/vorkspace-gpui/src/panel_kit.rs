@@ -73,13 +73,6 @@ pub(crate) enum RightTab {
     Graph,
 }
 impl RightTab {
-    pub(crate) fn label(self) -> &'static str {
-        match self {
-            Self::Files => "Explorer",
-            Self::Changes => "Changes",
-            Self::Graph => "History",
-        }
-    }
     /// loadRightPanelTabOrder: unique known tabs, the missing ones appended.
     pub(crate) fn normalize(order: &[RightTab]) -> Vec<RightTab> {
         let mut out = Vec::new();
@@ -237,64 +230,6 @@ pub(crate) fn format_integer(value: i64) -> String {
         out.push(ch);
     }
     if value < 0 { format!("-{out}") } else { out }
-}
-
-pub(crate) fn diff_stat_width(stats: Option<&vorkspace_core::scm::DiffStats>) -> f32 {
-    let added = format_integer(stats.map_or(0, |s| s.additions.max(0)));
-    let deleted = format_integer(stats.map_or(0, |s| s.deletions.max(0)));
-    // Tabular digits at 10px, the signs, a 6px gap and 6px padding per side.
-    (added.len() + deleted.len() + 2) as f32 * 6.5 + 18.
-}
-
-pub(crate) fn diff_stat(
-    stats: Option<&vorkspace_core::scm::DiffStats>,
-    width: f32,
-) -> Stateful<gpui::Div> {
-    let added = format_integer(stats.map_or(0, |s| s.additions.max(0)));
-    let deleted = format_integer(stats.map_or(0, |s| s.deletions.max(0)));
-    let scale = ((width - 18.) / (diff_stat_width(stats) - 18.)).clamp(0.1, 1.);
-    // A clean tree reads as quiet zeros, not as green and red changes.
-    let clean = stats.is_none_or(|s| s.additions <= 0 && s.deletions <= 0);
-    let (add, del) = if clean {
-        (content(0.35), content(0.35))
-    } else {
-        (
-            vorkspace_ui::theme::diff_foreground(true),
-            vorkspace_ui::theme::diff_foreground(false),
-        )
-    };
-    div()
-        .id("project-diff-stat")
-        .debug_selector(|| "project-diff-stat".into())
-        .role(Role::Button)
-        .aria_label(format!(
-            "Open Changes: {added} lines added, {deleted} lines deleted"
-        ))
-        .w(px(width))
-        .h(px(24.))
-        .flex_shrink_0()
-        .flex()
-        .items_center()
-        .justify_end()
-        .gap(px(6.))
-        .px_1p5()
-        .rounded(px(radius::CONTROL))
-        .whitespace_nowrap()
-        .text_size(px(10. * scale))
-        .font_weight(FontWeight::MEDIUM)
-        .font_features(tabular())
-        .font_family(vorkspace_ui::fonts::MONO)
-        // The counts roll to each new total rather than jumping.
-        .child(div().text_color(add).child(vorkspace_ui::fluid::Count::new(
-            "project-diff-added",
-            stats.map_or(0, |s| s.additions.max(0)),
-            |n| format!("+{}", format_integer(n)),
-        )))
-        .child(div().text_color(del).child(vorkspace_ui::fluid::Count::new(
-            "project-diff-deleted",
-            stats.map_or(0, |s| s.deletions.max(0)),
-            |n| format!("-{}", format_integer(n)),
-        )))
 }
 
 /// A path as people read it: under the home folder it starts with `~`.

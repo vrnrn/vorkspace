@@ -1033,7 +1033,7 @@ fn resizing_project_rail_with_working_session_marks_keeps_cached_paint_valid(
                 cx.emit(SessionChanged::Loaded);
             });
             shell.focus_active(w, cx);
-            shell.toggle_right_panel(w, cx);
+            shell.toggle_sidebar(w, cx);
             for _ in 0..30 {
                 shell.workspace.tabs.extend([a, b]);
             }
@@ -2737,6 +2737,40 @@ fn selected_file_reference_preserves_the_live_draft_and_requests_focus(cx: &mut 
 }
 pub(super) fn window(cx: &mut TestAppContext) -> (WindowHandle<Shell>, i64, i64) {
     window_with_scale(cx, 100)
+}
+
+#[gpui::test]
+fn escape_closes_explorer_search_before_stopping_a_turn(cx: &mut TestAppContext) {
+    cx.update(bind_keys);
+    let (window, _, id) = window(cx);
+    let visual = &mut gpui::VisualTestContext::from_window(window.into(), cx);
+    window
+        .update(visual, |shell, window, cx| {
+            let chat = shell.sessions[&id].clone();
+            chat.update(cx, |chat, cx| {
+                chat.busy = true;
+                window.focus(&chat.input.read(cx).focus_handle(cx), cx);
+                cx.notify();
+            });
+        })
+        .unwrap();
+    visual.simulate_keystrokes("cmd-shift-f");
+    visual.run_until_parked();
+    assert!(visual.debug_bounds("explorer-project-search").is_some());
+    window
+        .update(visual, |shell, window, cx| {
+            let input = &shell.sessions[&id].read(cx).input;
+            window.focus(&input.read(cx).focus_handle(cx), cx);
+        })
+        .unwrap();
+    visual.simulate_keystrokes("escape");
+    visual.run_until_parked();
+    assert!(visual.debug_bounds("explorer-project-search").is_none());
+    window
+        .update(visual, |shell, _, cx| {
+            assert!(shell.sessions[&id].read(cx).busy);
+        })
+        .unwrap();
 }
 pub(super) fn window_with_scale(
     cx: &mut TestAppContext,

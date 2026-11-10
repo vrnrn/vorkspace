@@ -38,7 +38,7 @@ fn project() {
 }
 
 fn right_tab(shell: &mut Shell, tab: RightTab, window: &mut Window, cx: &mut Context<Shell>) {
-    shell.set_right_panel_open(true, window, cx);
+    shell.select_classic_sidebar(crate::workspace::SidebarTab::Files, window, cx);
     if let Some(panel) = &shell.right_panel {
         panel.update(cx, |panel, cx| panel.select(tab, cx));
     }

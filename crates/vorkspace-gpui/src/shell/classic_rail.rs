@@ -80,8 +80,7 @@ impl Shell {
     /// or a left sidebar. The divider turns into that rule rather than
     /// meeting it at a right angle.
     pub(super) fn rail_meets_title_rule(&self) -> bool {
-        self.workspace.classic_layout
-            && !self.workspace.project_rail_open
+        !self.workspace.project_rail_open
             && self.settings.is_none()
             && self.classic_rail_width() > 0.
     }
@@ -95,34 +94,12 @@ impl Shell {
         cx.notify();
     }
 
-    pub(super) fn hide_project_marks(&mut self, cx: &mut Context<Self>) {
-        self.retain_project_marks(|_| false, cx);
-    }
-
-    fn retain_project_marks(
-        &mut self,
-        mut visible: impl FnMut(&str) -> bool,
-        cx: &mut Context<Self>,
-    ) {
-        self.project_marks.retain(|path, mark| {
-            if visible(path) {
-                true
-            } else {
-                mark.update(cx, |mark, _| mark.hide());
-                false
-            }
-        });
-    }
-
     pub(super) fn classic_project_rail(
         &mut self,
         _window: &mut Window,
         cx: &mut Context<Self>,
     ) -> AnyElement {
         let width = self.classic_rail_width();
-        if width <= 0. || self.settings.is_some() || !self.workspace.project_rail_open {
-            self.hide_project_marks(cx);
-        }
         // Early-return layouts must stop the card's presentation clock too.
         if width <= 0. || self.settings.is_some() {
             self.live_agents.update(cx, |activity, _| activity.hide());
@@ -198,7 +175,6 @@ impl Shell {
         let _ = self.workspace.migrate_project_rail();
         // The rail lists the vorkspace's sessions rather than its projects;
         // projects are picked from the sidebar header within the vorkspace.
-        self.retain_project_marks(|_| false, cx);
         let bots = self.bots.clone().map(|bots| {
             bots.update(cx, |bots, cx| {
                 div().child(bots.rail(None, cx)).into_any_element()

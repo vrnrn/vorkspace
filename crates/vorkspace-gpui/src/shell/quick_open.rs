@@ -101,7 +101,7 @@ impl Shell {
                 .bg(vorkspace_ui::fluid::scrim(0.35))
                 .child(
                     popover("quick-open-modal", anchor)
-                        .modal_surface(self.workspace.classic_layout)
+                        .modal_surface()
                         .width(width)
                         .gap(0.)
                         .priority(80)
@@ -120,7 +120,8 @@ mod tests {
     use super::*;
     use gpui::TestAppContext;
     #[gpui::test]
-    fn titlebar_search_opens_files_and_sidebar_search_opens_global_search(cx: &mut TestAppContext) {
+    fn file_search_shortcut_and_global_search_keep_the_composer_draft(cx: &mut TestAppContext) {
+        cx.update(super::super::bind_keys);
         let (window, _, active) = crate::shell::tests::window(cx);
         window
             .update(cx, |shell, _, cx| {
@@ -129,48 +130,32 @@ mod tests {
             })
             .unwrap();
         let visual = &mut gpui::VisualTestContext::from_window(window.into(), cx);
-        for classic in [false, true] {
-            window
-                .update(visual, |shell, _, cx| {
-                    shell.workspace.classic_layout = classic;
-                    shell.invalidate_chrome(cx);
-                    cx.notify();
-                })
-                .unwrap();
-            visual.run_until_parked();
-            // The inset layout has a titlebar button; the original layout
-            // reaches file search through ⌘P alone.
-            match visual.debug_bounds("titlebar-file-search") {
-                Some(search) => visual.simulate_click(search.center(), Default::default()),
-                None => window
-                    .update(visual, |shell, w, cx| shell.open_quick_open(false, w, cx))
-                    .unwrap(),
-            }
-            visual.run_until_parked();
-            window
-                .update(visual, |shell, w, cx| {
-                    assert!(shell.quick_open.is_some());
-                    assert!(shell.app_search.is_none());
-                    assert_eq!(
-                        shell.sessions[&active].read(cx).input.read(cx).content,
-                        "keep this draft"
-                    );
-                    shell.close_quick_open(w, cx);
-                })
-                .unwrap();
-            visual.run_until_parked();
-            let search = visual.debug_bounds("sidebar-search-field").unwrap();
-            visual.simulate_click(search.center(), Default::default());
-            visual.run_until_parked();
-            window
-                .update(visual, |shell, w, cx| {
-                    assert!(shell.app_search.is_some());
-                    assert!(shell.quick_open.is_none());
-                    shell.close_app_search(w, cx);
-                })
-                .unwrap();
-            visual.run_until_parked();
-        }
+        visual.run_until_parked();
+        visual.simulate_keystrokes("cmd-p");
+        visual.run_until_parked();
+        window
+            .update(visual, |shell, w, cx| {
+                assert!(shell.quick_open.is_some());
+                assert!(shell.app_search.is_none());
+                assert_eq!(
+                    shell.sessions[&active].read(cx).input.read(cx).content,
+                    "keep this draft"
+                );
+                shell.close_quick_open(w, cx);
+            })
+            .unwrap();
+        visual.run_until_parked();
+        let search = visual.debug_bounds("sidebar-search-field").unwrap();
+        visual.simulate_click(search.center(), Default::default());
+        visual.run_until_parked();
+        window
+            .update(visual, |shell, w, cx| {
+                assert!(shell.app_search.is_some());
+                assert!(shell.quick_open.is_none());
+                shell.close_app_search(w, cx);
+            })
+            .unwrap();
+        visual.run_until_parked();
     }
     #[gpui::test]
     fn cmd_p_and_command_palette_preserve_the_composer_draft(cx: &mut TestAppContext) {

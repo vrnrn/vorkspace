@@ -3,6 +3,42 @@ use crate::shell::tests::window;
 use gpui::TestAppContext;
 
 #[gpui::test]
+fn failed_note_handoff_keeps_the_notes_pane_active(cx: &mut TestAppContext) {
+    let (window, _, _) = window(cx);
+    let active = window
+        .update(cx, |shell, window, cx| {
+            let note = locked(&shell.store)
+                .unwrap()
+                .upsert_note(&vorkspace_core::notes::NoteUpsert {
+                    id: "disconnected-note".into(),
+                    title: "Keep reading".into(),
+                    source_cwd: Some("remote://unavailable/repo".into()),
+                    ..Default::default()
+                })
+                .unwrap();
+            shell.open_notes(window, cx);
+            let active = shell.workspace.active;
+            shell.note_to_chat(note, cx);
+            assert_eq!(shell.active_app_view, Some(AppView::Notes));
+            active
+        })
+        .unwrap();
+    cx.run_until_parked();
+    window
+        .update(cx, |shell, _, _| {
+            assert_eq!(shell.workspace.active, active);
+            assert_eq!(shell.active_app_view, Some(AppView::Notes));
+            assert!(
+                shell
+                    .error
+                    .as_deref()
+                    .is_some_and(|error| error.contains("Open this folder"))
+            );
+        })
+        .unwrap();
+}
+
+#[gpui::test]
 fn codebase_navigation_keeps_the_selected_project_and_worktree(cx: &mut TestAppContext) {
     let (window, _, _) = window(cx);
     let directory = tempfile::tempdir().unwrap();

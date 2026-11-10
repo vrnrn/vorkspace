@@ -579,26 +579,14 @@ impl Shell {
         }
         px(0.)
     }
-    /// The tab strip's width: between the navigation and TitleBar.tsx's right
-    /// panel toggle, `pl-1.5 pr-3` clear of the edge.
-    pub(super) fn tabs_width(&self, window: &Window, cx: &App) -> f32 {
+    pub(super) fn tabs_width(&self, window: &Window) -> f32 {
         let sidebar = self.docked_sidebar_width();
-        let trailing = if self.workspace.classic_layout {
-            self.right_drawn + self.strip_trail(cx)
-        } else {
-            self.toggle_room(cx)
-        };
-        // Tabs begin after the project rail and its optional left sidebar.
-        let lead = if self.workspace.classic_layout {
-            let divider = if sidebar > 0. { 1. } else { 0. };
-            self.classic_rail_width() + sidebar + divider + self.strip_lead(window)
-        } else {
-            self.navigation_width(window)
-        };
-        (window.viewport_size().width.as_f32() - lead - trailing).max(0.)
+        let divider = if sidebar > 0. { 1. } else { 0. };
+        let lead = self.classic_rail_width() + sidebar + divider + self.strip_lead(window);
+        (window.viewport_size().width.as_f32() - lead - STRIP_TRAIL).max(0.)
     }
     pub(super) fn tabs(&mut self, window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
-        let viewport = self.tabs_width(window, cx);
+        let viewport = self.tabs_width(window);
         let all_tabs = self.visible_tabs(cx);
         let count = all_tabs.len();
         let selected = self.active_title_tab(cx);

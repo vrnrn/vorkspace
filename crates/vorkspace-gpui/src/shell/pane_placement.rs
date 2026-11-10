@@ -71,9 +71,7 @@ impl Shell {
                     && self.workspace.active_tab().is_some()
             })
             .map_or(0., |dock| dock.size);
-        let expected =
-            (self.viewport_width - self.classic_rail_width() - self.right_drawn - sidebar - dock)
-                .max(0.);
+        let expected = (self.viewport_width - self.classic_rail_width() - sidebar - dock).max(0.);
         self.pane_viewport
             .get()
             .map_or(expected, |bounds| bounds.size.width.as_f32().min(expected))
@@ -681,7 +679,7 @@ impl Shell {
                 let min = self.open_rail_floor().clamp(180., 360.);
                 (self.workspace.project_rail_width.max(min), min, 360., 1.)
             }
-            ResizeTarget::Sidebar | ResizeTarget::RightPanel => {
+            ResizeTarget::Sidebar => {
                 let (min, max) = (crate::right_panel::WIDTH_MIN, crate::right_panel::WIDTH_MAX);
                 let max = max.min((self.viewport_width * 0.5).floor()).max(min);
                 (self.workspace.right_panel_width, min, max, 1.)
@@ -709,9 +707,7 @@ impl Shell {
     pub(super) fn set_resize(&mut self, target: &ResizeTarget, value: f32) {
         match target {
             ResizeTarget::ProjectRail => self.workspace.project_rail_width = value,
-            ResizeTarget::Sidebar | ResizeTarget::RightPanel => {
-                self.workspace.right_panel_width = value
-            }
+            ResizeTarget::Sidebar => self.workspace.right_panel_width = value,
             ResizeTarget::Dock(project) => {
                 if let Some(dock) = self.workspace.docks.get_mut(project) {
                     dock.size = value;
@@ -772,7 +768,6 @@ impl Shell {
             self.pane_sash.take().is_some(),
             self.resize.take().is_some(),
             self.project_rail_drag.take().is_some(),
-            self.right_resize.take().is_some(),
             self.dock_resize.take().is_some(),
         ]
         .contains(&true);

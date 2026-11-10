@@ -37,7 +37,6 @@ mod pickers;
 mod popover;
 mod project_background;
 mod project_settings;
-mod project_tabs;
 mod resource_pressure;
 mod response_actions;
 mod right_panel;

@@ -5,11 +5,10 @@ use super::Shell;
 use crate::{
     popover::{Anchor, popover},
     resource_pressure::SessionInfo,
-    right_panel::RightPanel,
 };
 use gpui::{
-    AnyElement, Context, CursorStyle, Entity, MouseButton, MouseDownEvent, StyleRefinement, Window,
-    div, prelude::*, px,
+    AnyElement, Context, CursorStyle, MouseButton, MouseDownEvent, StyleRefinement, Window, div,
+    prelude::*, px,
 };
 use std::collections::HashMap;
 use vorkspace_ui::theme::*;
@@ -22,47 +21,22 @@ impl Shell {
     pub(super) fn layout_body(
         &mut self,
         sidebar_width: f32,
-        right_shown: bool,
-        right_width: f32,
-        full: f32,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) -> Vec<AnyElement> {
-        self.resources
-            .update(cx, |resources, cx| resources.set_classic(true, cx));
-        vec![self.classic_body(sidebar_width, right_shown, right_width, full, window, cx)]
-    }
-    fn classic_body(
-        &mut self,
-        sidebar_width: f32,
-        right_shown: bool,
-        right_width: f32,
-        full: f32,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> AnyElement {
-        let card = self.workspace_content(false, right_width, full, window, cx);
-        // A non-classic project panel retains its saved width.
-        let panel = self
-            .right_panel
-            .clone()
-            .filter(|_| right_shown && self.settings.is_none())
-            .map(|panel| self.right_panel_frame(panel, right_width, full, cx));
+        self.resources
+            .update(cx, |resources, cx| resources.set_classic(true, cx));
+        let card = self.workspace_content(window, cx);
         // Every workspace destination shares the title row. Settings keeps
         // its own header above the parked workspace.
-        let project_tools = self.has_session_panes();
         // Collapsed navigation can extend past the rail. Keep its drag row
         // above page headers so the controls cannot cover their inputs.
         let tab_bar = self.titlebar(window, cx);
         let navigation = self.navigation(window, cx);
         let rail_width = self.classic_rail_width();
-        // At zero width the cached rail is not rendered, so it cannot stop
-        // presentation tasks itself.
         if rail_width <= 0. {
-            self.hide_project_marks(cx);
+            self.live_agents.update(cx, |activity, _| activity.hide());
         }
-        let corner =
-            (self.settings.is_none() && project_tools).then(|| self.panel_toggle(window, cx));
         let header = self.classic_workspace_header(cx);
         // Sessions, Explorer and Changes sit beside the rail on the left.
         let sidebar_navigation_row = self.rail_overhang(window) > 0.;
@@ -158,31 +132,8 @@ impl Shell {
                     ),
             )
             .children(self.sidebar_resize(cx))
-            .children(panel.map(|panel| div().h_full().bg(pane_fill()).child(panel)))
             .child(div().absolute().top_0().left_0().child(navigation))
-            .child(
-                div()
-                    .absolute()
-                    .top_0()
-                    .right_0()
-                    .h(px(TITLE_BAR_HEIGHT))
-                    .children(corner),
-            )
             .into_any_element()
-    }
-    /// Project tools have their own header.
-    pub(super) fn corner_room(&self, cx: &gpui::App) -> f32 {
-        // The open sidebar's header holds them instead (`classic_corner`).
-        let _ = cx;
-        6.
-    }
-    pub(super) fn classic_corner(
-        &self,
-        _window: &mut Window,
-        cx: &mut Context<Self>,
-    ) -> AnyElement {
-        let _ = cx;
-        div().into_any_element()
     }
     pub(super) fn sidebar_uncached(&self) -> bool {
         self.sidebar_slide.is_some()
@@ -231,15 +182,7 @@ impl Shell {
                 .into_any_element()
         })
     }
-    /// The workspace body, its error banner and the right panel beside them.
-    fn workspace_content(
-        &mut self,
-        right_shown: bool,
-        right_width: f32,
-        full: f32,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) -> gpui::Div {
+    fn workspace_content(&mut self, window: &mut Window, cx: &mut Context<Self>) -> gpui::Div {
         if let Some(settings) = &self.settings {
             return div()
                 .flex_1()
@@ -249,33 +192,20 @@ impl Shell {
                 .overflow_hidden()
                 .child(settings.clone());
         }
-        let panel: Option<Entity<RightPanel>> = self
-            .right_panel
-            .clone()
-            .filter(|_| right_shown && self.settings.is_none());
-        div()
-            .flex_1()
-            .min_h_0()
-            .overflow_hidden()
-            .flex()
-            .child(self.background_card.probe())
-            .child(
-                div().flex_1().min_w_0().h_full().flex().flex_col().child(
-                    div()
-                        .flex_1()
-                        .min_h_0()
-                        .min_w_0()
-                        // Every project lands on a blank session, as in
-                        // vorkspace; this is empty only while one is created.
-                        .child({
-                            let body = self.workspace_body(window, cx);
-                            self.with_dock(body, window, cx)
-                        }),
-                ),
-            )
-            .when_some(panel, |d, panel| {
-                d.child(self.right_panel_frame(panel, right_width, full, cx))
-            })
+        div().flex_1().min_h_0().overflow_hidden().flex().child(
+            div().flex_1().min_w_0().h_full().flex().flex_col().child(
+                div()
+                    .flex_1()
+                    .min_h_0()
+                    .min_w_0()
+                    // Every project lands on a blank session, as in
+                    // vorkspace; this is empty only while one is created.
+                    .child({
+                        let body = self.workspace_body(window, cx);
+                        self.with_dock(body, window, cx)
+                    }),
+            ),
+        )
     }
     /// Modal.tsx at size `sm` with `fitViewport`: 420px, centred.
     pub(super) fn resource_modal(
@@ -320,7 +250,7 @@ impl Shell {
                 .bg(vorkspace_ui::fluid::scrim(0.4))
                 .child(
                     popover("running-work-modal", anchor)
-                        .modal_surface(self.workspace.classic_layout)
+                        .modal_surface()
                         .width(width)
                         .gap(0.)
                         .max_height(viewport.height.as_f32() - 32.)

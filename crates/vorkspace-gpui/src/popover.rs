@@ -307,7 +307,7 @@ pub(crate) struct Popover {
     ignore: Vec<AnchorSlot>,
     on_dismiss: Option<Dismiss>,
     consume_outside_press: bool,
-    modal_classic: Option<bool>,
+    modal: bool,
     animate: bool,
     /// A tooltip: solid ink with paper text instead of the glass card.
     tip: bool,
@@ -326,7 +326,7 @@ pub(crate) fn popover(id: impl Into<ElementId>, anchor: Anchor) -> Popover {
         ignore: Vec::new(),
         on_dismiss: None,
         consume_outside_press: true,
-        modal_classic: None,
+        modal: false,
         animate: true,
         tip: false,
         fit: (None, None),
@@ -351,8 +351,8 @@ impl Popover {
         self
     }
     /// Modal.tsx: 16px corners, a 7% rule and the shared dialog tint.
-    pub(crate) fn modal_surface(mut self, classic: bool) -> Self {
-        self.modal_classic = Some(classic);
+    pub(crate) fn modal_surface(mut self) -> Self {
+        self.modal = true;
         self
     }
     pub(crate) fn align(mut self, align: Align) -> Self {
@@ -442,17 +442,13 @@ impl Popover {
         let (viewport_width, viewport_height) = (viewport.width, viewport.height);
         let radius = if self.tip {
             vorkspace_ui::fluid::TIP_RADIUS
-        } else if self.modal_classic.is_some() {
+        } else if self.modal {
             radius::MODAL
         } else {
             radius::SURFACE
         };
-        let border = if self.modal_classic.is_some() {
-            0.07
-        } else {
-            0.1
-        };
-        let tint = if self.modal_classic.is_some() {
+        let border = if self.modal { 0.07 } else { 0.1 };
+        let tint = if self.modal {
             let mut fill = vorkspace_ui::theme::pane_fill();
             fill.a = 0.55;
             fill
