@@ -14,6 +14,7 @@ pub(super) struct State {
     pub(super) error: Option<String>,
     resolving: bool,
     submission: Option<PendingSubmission>,
+    send_after_restore: Option<u64>,
 }
 
 struct PendingSubmission {
@@ -56,6 +57,7 @@ impl State {
             error: None,
             resolving: false,
             submission: None,
+            send_after_restore: None,
         }
     }
     pub(super) fn flush(&self) -> Result<(), String> {
@@ -66,6 +68,7 @@ impl State {
     /// prevent delayed hydration or Drop from recreating an orphan draft.
     pub(super) fn discard(&mut self) {
         self.timer = None;
+        self.send_after_restore = None;
         let mut writer = self.writer.lock().unwrap_or_else(|e| e.into_inner());
         writer.discarded = true;
         writer.pending = None;
@@ -78,6 +81,12 @@ impl State {
     }
     pub(super) fn submitting(&self) -> bool {
         self.submission.is_some()
+    }
+    pub(super) fn waiting_to_submit(&self) -> bool {
+        self.send_after_restore.is_some()
+    }
+    pub(super) fn cancel_waiting_send(&mut self) -> bool {
+        self.send_after_restore.take().is_some()
     }
     pub(super) fn forget_recovery(&self, owner: &str) {
         self.writer
@@ -145,7 +154,7 @@ fn hydrate(
         }
         (state.store.clone(), state.id)
     };
-    let (saved, recoveries) = {
+    let (saved, mut recoveries) = {
         let store = locked(&store)?;
         (store.composer_draft(id)?, store.composer_recoveries(id)?)
     };
@@ -155,6 +164,19 @@ fn hydrate(
         return Ok(current_record(&state));
     }
     if let Some(saved) = &saved {
+        if state.pending.as_ref().is_some_and(|pending| {
+            !saved.deleted && !same_submission_input(&saved.payload, pending)
+        }) {
+            // An editor can accept typing before its first read arrives. Keep
+            // the unseen saved version recoverable before publishing that edit.
+            let recovery = vorkspace_core::store::ComposerRecovery {
+                owner: format!("previous-{}", state.owner),
+                revision: saved.revision,
+                payload: saved.payload.clone(),
+            };
+            locked(&store)?.save_composer_recovery(id, recovery.clone())?;
+            recoveries.push(recovery);
+        }
         state.revision = saved.revision;
         state.base = saved.payload.clone();
         state.deleted = saved.deleted;
@@ -163,6 +185,7 @@ fn hydrate(
             if let Some(fields) = pending.as_object() {
                 merged.extend(fields.clone());
             }
+            merged.remove("botSubmission");
             state.pending = Some(Value::Object(merged));
         }
     }
@@ -209,6 +232,19 @@ fn same_submission_input(a: &Value, b: &Value) -> bool {
             })
 }
 impl Conversation {
+    pub(super) fn defer_send_until_composer_ready(&mut self, cx: &mut Context<Self>) -> bool {
+        if !self.composer_draft.hydrating {
+            return false;
+        }
+        let input = self.input.read(cx);
+        if !input.is_composing() && (input.has_message_text() || !self.attachments.is_empty()) {
+            self.persist_composer(cx);
+            self.composer_draft.send_after_restore = Some(self.composer_draft.generation());
+            cx.notify();
+        }
+        true
+    }
+
     pub(super) fn composer_submission_pending(&mut self, cx: &mut Context<Self>) -> bool {
         if !self.composer_draft.submitting() {
             return false;
@@ -644,61 +680,66 @@ impl Conversation {
         });
         cx.spawn(async move |this, cx| {
             let result = work.await;
-            let _ = this.update(cx, |this, cx| match result {
-                Ok(saved) => {
-                    this.composer_draft.hydrating = false;
-                    cx.notify();
-                    if !this.composer_draft.touched
-                        && let Some(saved) = saved
-                        && !saved.deleted
+            let _ = this.update(cx, |this, cx| {
+                this.composer_draft.hydrating = false;
+                this.apply_composer_load(result, cx);
+                if this.composer_draft.waiting_to_submit() {
+                    this.capture_composer(cx);
+                }
+                if let Some(generation) = this.composer_draft.send_after_restore.take() {
+                    if this.composer_draft.error.is_none()
+                        && this.composer_draft.generation() == generation
+                        && !this.input.read(cx).is_composing()
                     {
-                        let published = match this.composer_is_published_bot_draft(&saved) {
-                            Ok(published) => published,
-                            Err(error) => {
-                                this.status = format!("Could not verify saved draft: {error}. Your input was preserved.");
-                                this.composer_draft.error = Some(this.status.clone());
-                                cx.notify();
-                                return;
-                            }
-                        };
-                        if published {
-                            // The saved card/outbox owns exactly this old input.
-                            // A newer revision, even with identical text, stays put.
-                            this.persist_composer(cx);
-                            return;
-                        }
-                        this.composer_draft.restoring = true;
-                        let payload = &saved.payload;
-                        this.attachments = payload["attachments"]
-                            .as_array()
-                            .into_iter()
-                            .flatten()
-                            .filter_map(|file| file["path"].as_str().map(std::path::PathBuf::from))
-                            .collect();
-                        this.input.update(cx, |input, cx| {
-                            input.set_text(payload["text"].as_str().unwrap_or_default().into(), cx);
-                            let start = payload["selectionStart"].as_u64().unwrap_or(0) as usize;
-                            let end =
-                                payload["selectionEnd"].as_u64().unwrap_or(start as u64) as usize;
-                            input.select_utf16(start..end, cx);
-                        });
-                        this.completion.update(cx, |completion, cx| {
-                            completion.restore_mcp_tags(&payload["mcpTags"], cx)
-                        });
-                        this.composer_draft.restoring = false;
-                        cx.notify();
-                    } else if this.composer_draft.touched {
-                        this.persist_composer(cx);
+                        this.send(cx);
+                    }
+                    if !this.external_submission_pending() {
+                        cx.emit(SessionChanged::Settled);
                     }
                 }
-                Err(error) => {
-                    this.status = format!("Could not restore composer: {error}");
-                    this.composer_draft.error = Some(this.status.clone());
-                    cx.notify();
-                }
+                cx.notify();
             });
         })
         .detach();
+    }
+
+    fn apply_composer_load(
+        &mut self,
+        result: Result<Option<vorkspace_core::store::ComposerDraft>, String>,
+        cx: &mut Context<Self>,
+    ) {
+        match result {
+            Ok(saved) => {
+                if !self.composer_draft.touched
+                    && let Some(saved) = saved
+                    && !saved.deleted
+                {
+                    let published = match self.composer_is_published_bot_draft(&saved) {
+                        Ok(published) => published,
+                        Err(error) => {
+                            self.status = format!(
+                                "Could not verify saved draft: {error}. Your input was preserved."
+                            );
+                            self.composer_draft.error = Some(self.status.clone());
+                            return;
+                        }
+                    };
+                    if published {
+                        // The saved card/outbox owns exactly this old input.
+                        // A newer revision, even with identical text, stays put.
+                        self.persist_composer(cx);
+                        return;
+                    }
+                    self.install_composer_payload(&saved.payload, cx);
+                } else if self.composer_draft.touched {
+                    self.persist_composer(cx);
+                }
+            }
+            Err(error) => {
+                self.status = format!("Could not restore composer: {error}");
+                self.composer_draft.error = Some(self.status.clone());
+            }
+        }
     }
     pub(super) fn capture_composer(&mut self, cx: &mut Context<Self>) -> bool {
         if self.composer_draft.restoring {
@@ -751,7 +792,11 @@ impl Conversation {
             && current["selectionEnd"].as_u64() == Some(selection.end as u64);
         // Moving the caret while this version is offered must not publish
         // another unsent copy of the same input after its receipt commits.
-        if same_input && (same_selection || self.composer_draft.submitting()) {
+        if same_input
+            && (same_selection
+                || self.composer_draft.submitting()
+                || self.composer_draft.waiting_to_submit())
+        {
             return false;
         }
         let mut payload = state.base.as_object().cloned().unwrap_or_default();

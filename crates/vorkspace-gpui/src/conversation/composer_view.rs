@@ -24,11 +24,16 @@ impl Conversation {
         if self.cancel_edit_last_turn(cx) {
             return;
         }
-        if self.busy || self.ticket_context.pending() {
+        if self.busy || self.ticket_context.pending() || self.composer_draft.waiting_to_submit() {
             self.stop(cx);
         }
     }
     pub(super) fn stop(&mut self, cx: &mut Context<Self>) {
+        if self.composer_draft.cancel_waiting_send() {
+            self.notification_cancelled = true;
+            cx.emit(SessionChanged::Settled);
+            cx.notify();
+        }
         let ticket_pending = self.ticket_context.pending();
         self.ticket_context.cancel();
         if ticket_pending {
@@ -755,7 +760,8 @@ impl Conversation {
         let ticket_pending = self.ticket_context.pending();
         let bot = self.settings.bot.is_some();
         let busy = !bot
-            && (ticket_pending
+            && (self.composer_draft.waiting_to_submit()
+                || ticket_pending
                 || (self.responding() && (!has_value || self.composer_version_offered())));
         let offering = self.composer_draft.submitting();
         let draft = self.draft_active(cx);

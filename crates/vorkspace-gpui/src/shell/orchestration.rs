@@ -137,7 +137,7 @@ impl Shell {
                         && let Some(view) = self.sessions.get(&id)
                     {
                         let view = view.read(cx);
-                        if !view.busy {
+                        if !view.external_submission_pending() {
                             let (success, report) = view.external_outcome(cx);
                             task.report = report;
                             task.state = if success { State::Done } else { State::Failed };

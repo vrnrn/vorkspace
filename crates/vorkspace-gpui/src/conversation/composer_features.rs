@@ -545,6 +545,7 @@ impl Conversation {
     /// well as the provider, including submissions deferred by the editor.
     pub(crate) fn external_submission_pending(&self) -> bool {
         self.busy
+            || self.composer_draft.waiting_to_submit()
             || self.ticket_context.pending()
             || self.stopping
             || self.preparing_worktree

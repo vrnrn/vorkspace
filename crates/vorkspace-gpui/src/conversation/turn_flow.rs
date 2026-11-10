@@ -91,6 +91,9 @@ impl Conversation {
             self.defer_history_action(|this, cx| this.send(cx), cx);
             return;
         }
+        if self.defer_send_until_composer_ready(cx) {
+            return;
+        }
         if self.submit_edited(cx) {
             return;
         }
