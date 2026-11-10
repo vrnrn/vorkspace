@@ -47,6 +47,12 @@ fn prettier_and_emmet_keep_cursor_bytes_and_the_frontend_defaults() {
     let result = emmet("a.tsx", ".container>span", 15).unwrap().unwrap();
     assert!(result.formatted.contains("className=\"container\""));
     assert!(result.formatted[result.cursor..].starts_with("</span>"));
+    let oversized = "div*50>span*50";
+    assert!(
+        emmet("a.html", oversized, oversized.len())
+            .unwrap()
+            .is_none()
+    );
 }
 #[test]
 fn completions_snippets_and_folds_use_the_frontend_languages() {

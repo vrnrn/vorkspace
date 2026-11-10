@@ -861,6 +861,50 @@ impl Drop for Accounts {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[gpui::test]
+    fn a_failed_preference_save_never_changes_the_conversation_account(
+        cx: &mut gpui::TestAppContext,
+    ) {
+        use std::{cell::Cell, rc::Rc};
+        use vorkspace_core::store::Store;
+
+        let dir = tempfile::tempdir().unwrap();
+        let database = dir.path().join("vorkspace.db");
+        drop(Store::open_vorkspace(&database).unwrap());
+        let store = Arc::new(std::sync::Mutex::new(
+            Store::read_vorkspace(&database).unwrap(),
+        ));
+        let mut book = Book::default();
+        let target = book.add(Kind::Codex, "Other").unwrap();
+        let center = cx.new(|cx| Accounts::new(dir.path().into(), book, store, cx));
+        let events = Rc::new(Cell::new(0));
+        let seen = events.clone();
+        let _subscription = cx.update(|cx| {
+            cx.subscribe(&center, move |_, event: &AccountEvent, _| {
+                if matches!(event, AccountEvent::Select { .. }) {
+                    seen.set(seen.get() + 1);
+                }
+            })
+        });
+        center.update(cx, |center, cx| {
+            center.choose(Kind::Codex, target.id, "/fixture".into(), Some(1), cx);
+        });
+        cx.run_until_parked();
+        center.update(cx, |center, _| {
+            assert_eq!(
+                center.book.selected(Kind::Codex, "/fixture"),
+                accounts::DEFAULT
+            );
+            assert!(
+                center
+                    .error
+                    .as_deref()
+                    .is_some_and(|error| error.contains("read-only"))
+            );
+        });
+        assert_eq!(events.get(), 0);
+    }
+
     #[test]
     fn usage_cache_preserves_stale_data_on_errors_and_separates_accounts_and_pi_billing() {
         let snapshot = Snapshot {
