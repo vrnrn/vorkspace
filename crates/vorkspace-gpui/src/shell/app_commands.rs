@@ -600,13 +600,7 @@ impl Shell {
                 .send(Err("Operator can only access this thread's project.".into()));
             return;
         }
-        let mut inherited = caller.settings.clone();
-        inherited.operator = false;
-        inherited.orchestrator = false;
-        inherited.environment.clear();
-        inherited.attachments.clear();
-        inherited.handoff = None;
-        inherited.turns.clear();
+        let inherited = caller.settings.for_child_launch(true, true);
         let provider = caller.summary.provider.clone();
         let needs_admission = locked(&self.store)
             .and_then(|store| store.app_command_known(call.session, &call.request_id))

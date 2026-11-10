@@ -6,6 +6,9 @@ fn settings() -> Settings {
         effort: Some("low".into()),
         worktree_cwd: Some("/other-project".into()),
         operator: true,
+        text_only: true,
+        native_prompt_id: Some("source-prompt".into()),
+        disable_claude_hooks: true,
         ..Default::default()
     }
 }
@@ -16,6 +19,9 @@ fn explicit_launch_settings_are_preserved_and_ephemeral_capabilities_are_not_inh
     assert_eq!(launch.settings.effort.as_deref(), Some("high"));
     assert_eq!(launch.settings.model_settings["custom"], "kept");
     assert!(!launch.settings.operator);
+    assert!(!launch.settings.text_only);
+    assert!(launch.settings.native_prompt_id.is_none());
+    assert!(!launch.settings.disable_claude_hooks);
     assert!(launch.settings.worktree_cwd.is_none());
     assert!(matches!(launch.workspace, Workspace::New(_)));
     let inherited = Launch::parse(

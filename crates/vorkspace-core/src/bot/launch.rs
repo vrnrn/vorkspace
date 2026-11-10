@@ -26,9 +26,8 @@ pub struct CreatedWorktree {
 }
 impl CreatedWorktree {
     pub(crate) fn capture(project: &str, path: &str) -> Result<Self, String> {
-        let snapshot = crate::git::snapshot(Path::new(project))?;
-        let tree = snapshot
-            .worktrees
+        let worktrees = crate::git::worktrees(Path::new(project))?;
+        let tree = worktrees
             .iter()
             .find(|tree| crate::files::path_key(&tree.path) == crate::files::path_key(path))
             .ok_or(
@@ -53,9 +52,8 @@ impl CreatedWorktree {
                     .into(),
             ));
         }
-        let snapshot = crate::git::snapshot(Path::new(&self.project)).map_err(preserved)?;
-        let tree = snapshot
-            .worktrees
+        let worktrees = crate::git::worktrees(Path::new(&self.project)).map_err(preserved)?;
+        let tree = worktrees
             .iter()
             .find(|tree| crate::files::path_key(&tree.path) == crate::files::path_key(&self.path))
             .ok_or_else(|| preserved("its ownership is unavailable".into()))?;
@@ -94,46 +92,17 @@ impl Launch {
         source_provider: &str,
         source_project: &str,
         project: &str,
-        mut settings: Settings,
+        settings: Settings,
         default_reveal: bool,
     ) -> Result<Self, String> {
         super::api::validate("sessions.start", input)?;
         let prompt = text(input, "prompt", 65536)?.ok_or("Provide prompt")?;
         let provider = text(input, "harness", 64)?.unwrap_or_else(|| source_provider.into());
         let provider = Kind::parse(&provider).ok_or("Unknown provider")?;
-        let same = provider.id() == source_provider;
-        if !same {
-            settings.account = Default::default();
-            settings.model = None;
-            settings.effort = None;
-            settings.model_settings.clear();
-            settings.fast = false;
-            settings.service_tier = None;
-            settings.thinking = None;
-        }
-        settings.bot = None;
-        settings.bot_message_id = None;
-        settings.bot_sent_at = None;
-        settings.internal_message = false;
-        settings.environment.clear();
-        settings.attachments.clear();
-        settings.turns.clear();
-        settings.handoff = None;
-        settings.pending_provider_switch = None;
-        settings.prepared_prompt = None;
-        settings.turn_model = None;
-        settings.remote_action = None;
-        settings.usage_limit = None;
-        settings.operator = false;
-        settings.orchestrator = false;
-        settings.plan = false;
-        settings.new_worktree = false;
-        settings.worktree_base = None;
-        settings.worktree_removed = false;
-        settings.revision = 0;
-        if crate::files::path_key(project) != crate::files::path_key(source_project) {
-            settings.worktree_cwd = None;
-        }
+        let mut settings = settings.for_child_launch(
+            provider.id() == source_provider,
+            crate::files::path_key(project) == crate::files::path_key(source_project),
+        );
         if let Some(model) = text(input, "model", 512)? {
             if model
                 .split_once(':')
@@ -241,8 +210,8 @@ impl Launch {
             }
             Workspace::Existing(cwd) => self.settings.worktree_cwd = Some(existing(project, cwd)?),
             Workspace::New(base) => {
-                let snapshot = crate::git::snapshot(Path::new(project))?;
                 if crate::files::remote::is_remote(Path::new(project)) {
+                    let snapshot = crate::git::snapshot(Path::new(project))?;
                     if base != "HEAD" && !snapshot.branches.iter().any(|b| b.name == *base) {
                         return Err("Choose HEAD or a listed branch for a remote worktree".into());
                     }
@@ -274,9 +243,8 @@ impl Launch {
     }
 }
 fn existing(project: &str, cwd: &str) -> Result<String, String> {
-    let snapshot = crate::git::snapshot(Path::new(project))?;
-    let tree = snapshot
-        .worktrees
+    let worktrees = crate::git::worktrees(Path::new(project))?;
+    let tree = worktrees
         .iter()
         .find(|tree| {
             !tree.missing && crate::files::path_key(&tree.path) == crate::files::path_key(cwd)

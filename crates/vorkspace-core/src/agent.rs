@@ -148,6 +148,30 @@ pub struct Settings {
     pub pending_provider_switch: Option<ProviderSwitch>,
     pub turns: std::collections::HashMap<usize, TurnInfo>,
 }
+impl Settings {
+    /// A new delegated conversation inherits execution choices without the
+    /// source turn's capabilities, history, or saved continuation.
+    pub fn for_child_launch(&self, same_provider: bool, same_project: bool) -> Self {
+        let mut child = Self {
+            access: self.access,
+            ..Self::default()
+        };
+        if same_provider {
+            child.account.clone_from(&self.account);
+            child.model.clone_from(&self.model);
+            child.effort.clone_from(&self.effort);
+            child.fast = self.fast;
+            child.service_tier.clone_from(&self.service_tier);
+            child.thinking = self.thinking;
+            child.model_settings.clone_from(&self.model_settings);
+        }
+        if same_project {
+            child.worktree_cwd.clone_from(&self.worktree_cwd);
+        }
+        child
+    }
+}
+
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 #[serde(default)]
 pub struct ProviderSwitch {
