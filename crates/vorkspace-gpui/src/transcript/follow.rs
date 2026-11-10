@@ -215,7 +215,7 @@ impl TranscriptView {
     /// Height lost by rows easing closed, such as work folding behind its
     /// line. Their motion already eases it; following must not ease it again.
     pub(super) fn closing_shrink(&self, measured: &FollowMeasure, previous: &FollowMeasure) -> f32 {
-        if measured.resized_from(previous) {
+        if self.motions.is_empty() || measured.resized_from(previous) {
             return 0.;
         }
         let before: HashMap<_, _> = previous.rows.iter().copied().collect();

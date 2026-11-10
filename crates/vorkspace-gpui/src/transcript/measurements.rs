@@ -6,6 +6,7 @@ struct LayoutStyle {
     text: gpui::TextStyle,
     rem: Pixels,
     scale: f32,
+    file_base: Option<String>,
 }
 
 #[derive(Default)]
@@ -24,6 +25,27 @@ impl Measurements {
         self.rows.clear();
         self.retained.clear();
     }
+
+    pub(super) fn rebuild_tail(&mut self, start: usize, old: &[UiRow], new: &[UiRow]) {
+        self.rows.clear();
+        if self.retained.is_empty() {
+            return;
+        }
+        let unchanged: HashSet<_> = old
+            .iter()
+            .zip(new)
+            .filter(|(old, new)| {
+                self.retained.contains_key(&old.key) && same_prose_height(old, new)
+            })
+            .map(|(row, _)| row.key)
+            .collect();
+        self.retained
+            .retain(|key, _| key.0 < start || unchanged.contains(key));
+    }
+
+    pub(super) fn rebuilt(&mut self, row_count: usize) {
+        self.row_count = row_count;
+    }
 }
 
 impl TranscriptView {
@@ -32,6 +54,7 @@ impl TranscriptView {
             text: window.text_style(),
             rem: window.rem_size(),
             scale: window.scale_factor(),
+            file_base: self.file_link_base.clone(),
         };
         if self.measurements.style.as_ref() != Some(&style) {
             // GPUI retains measured item heights independently of text styling.
@@ -96,6 +119,44 @@ impl TranscriptView {
         }
         height
     }
+}
+
+fn same_prose_height(old: &UiRow, new: &UiRow) -> bool {
+    if old.key != new.key
+        || old.key.1 == 16
+        || old.first
+        || new.first
+        || old.last != new.last
+        || old.work
+        || new.work
+        || old.in_phase()
+        || new.in_phase()
+    {
+        return false;
+    }
+    let (Body::Markdown(old), Body::Markdown(new)) = (&old.body, &new.body) else {
+        return false;
+    };
+    let (
+        Part::Text {
+            runs: old_runs,
+            heading: old_heading,
+        },
+        Part::Text {
+            runs: new_runs,
+            heading: new_heading,
+        },
+    ) = (&old.part, &new.part)
+    else {
+        return false;
+    };
+    old_runs == new_runs
+        && old_heading == new_heading
+        && old.indent == new.indent
+        && old.quote == new.quote
+        && old.marker == new.marker
+        && old.gap == new.gap
+        && old.infer_file_links == new.infer_file_links
 }
 
 fn stable_height(

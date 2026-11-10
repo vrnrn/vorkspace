@@ -187,7 +187,6 @@ impl TranscriptView {
         self.rebuild(start, cx);
     }
     pub(super) fn rebuild(&mut self, start: usize, cx: &mut Context<Self>) {
-        self.measurements.clear();
         #[cfg(test)]
         {
             self.rebuild_passes += 1;
@@ -342,6 +341,18 @@ impl TranscriptView {
                 .unwrap_or(self.rows.len())
         };
         let old_count = self.rows.len();
+        let streaming_prose = self.streaming
+            && !self.bot
+            && !layout_changed
+            && self.messages.last().is_some_and(|last| {
+                last.start == source_start
+                    && last.role == "assistant"
+                    && self
+                        .source
+                        .get(source_start)
+                        .is_some_and(|row| row.role == "assistant")
+            })
+            && current_end == self.source.len();
         self.invalidate_message_indices(display_start);
         let old_rows = self.rows.split_off(display_start);
         let previous_cards = cards::Previous::new(&old_rows, &self.messages);
@@ -896,6 +907,14 @@ impl TranscriptView {
             }
         }
         let target = self.rows.split_off(display_start);
+        if streaming_prose {
+            // A growing answer replaces its presentation rows, but earlier
+            // paragraphs can still use the same height at this width.
+            self.measurements
+                .rebuild_tail(source_start, &old_rows, &target);
+        } else {
+            self.measurements.clear();
+        }
         let merged = if self.visible {
             let replaced_work = self
                 .fold_targets
@@ -917,6 +936,7 @@ impl TranscriptView {
         };
         self.phase_toggle = None;
         self.rows.extend(merged);
+        self.measurements.rebuilt(self.rows.len());
         // The preserved prefix cannot acquire a windowed phase from a suffix
         // update unless it already owned a window or scroll state.
         let phase_start = if self.windowed_phases.is_empty() && self.phase_scrolls.is_empty() {

@@ -179,7 +179,6 @@ impl TranscriptView {
         let now = self.frame_now;
         if self.visible
             && (resized
-                || (self.streaming && !vorkspace_ui::clock::suppress_endless_animation_frames())
                 || !self.motions.is_empty()
                 || self.agent_panels.animating()
                 || self.prompt_rise.is_some_and(|(_, born)| {
@@ -204,7 +203,9 @@ impl TranscriptView {
             return;
         }
         let mut changed_phases = HashSet::new();
-        for start in self.agent_panels.animate() {
+        let panels = self.agent_panels.animate();
+        let heights_changed = !panels.is_empty() || !self.motions.is_empty();
+        for start in panels {
             for (ix, row) in self.rows.iter().enumerate() {
                 if row.key.0 == start {
                     self.list.remeasure_items(ix..ix + 1);
@@ -277,8 +278,10 @@ impl TranscriptView {
                 *born = None;
             }
         }
-        self.list
-            .remeasure_items(self.footer_ix()..self.footer_ix() + 1);
+        if heights_changed {
+            self.list
+                .remeasure_items(self.footer_ix()..self.footer_ix() + 1);
+        }
         cx.notify();
     }
 }
