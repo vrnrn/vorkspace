@@ -25,6 +25,9 @@ impl TranscriptView {
             let ix = start + ix;
             let bytes = row.text.capacity().saturating_add(row.role.capacity());
             if ix < self.source.len() {
+                if !row.first || row.role != "assistant" {
+                    self.reveals.active.remove(&ix);
+                }
                 let old = &self.source[ix];
                 if self.bot
                     && self.streaming
@@ -47,6 +50,9 @@ impl TranscriptView {
                 self.source.push(row);
             }
             self.source_bytes = self.source_bytes.saturating_add(bytes);
+        }
+        if !self.visible || !self.smooth_reveal {
+            self.reveals.settle_through(self.source.len());
         }
         self.visuals.retain(|&start, _| {
             self.source
@@ -204,6 +210,7 @@ impl TranscriptView {
         if let Some(at) = (current_turn..current_end)
             .rev()
             .find(|&i| self.source[i].role == "assistant" && self.source[i].first)
+            && (self.should_pace(at) || self.reveals.active.contains_key(&at))
         {
             let end = (at + 1..current_end)
                 .find(|&i| self.source[i].first)
@@ -212,7 +219,7 @@ impl TranscriptView {
                 .iter()
                 .map(|r| r.text.as_str())
                 .collect();
-            self.prepare_reveal(at, end, &text, true, now);
+            self.prepare_reveal(at, end, &text, now);
         }
         let candidate = (current_turn..current_end).rev().find(|&i| {
             self.source[i].role == "assistant" && self.source[i].first && self.answer_visible(i)
@@ -223,14 +230,15 @@ impl TranscriptView {
                 .any(|r| r.role == "tool")
         });
         let layout_changed = self.fold_targets.get(&current_turn).copied().flatten() != target;
-        let known_message = self.messages.iter().any(|m| {
-            m.start <= start
-                && m.role == "assistant"
-                && self
-                    .source
-                    .get(start)
-                    .is_some_and(|r| r.role == "assistant")
-        });
+        let known_message = self
+            .source
+            .get(start)
+            .is_some_and(|r| r.role == "assistant")
+            && self
+                .messages
+                .iter()
+                .take_while(|m| m.start <= start)
+                .any(|m| m.role == "assistant");
         let mut message_ix = self
             .messages
             .partition_point(|m| m.start <= start)
@@ -265,12 +273,18 @@ impl TranscriptView {
                 message_ix -= 1;
             }
         }
+        let run_message = self.messages.partition_point(|m| m.start < current_turn);
+        let old_run_start = self.messages[run_message..]
+            .iter()
+            .filter_map(|m| m.display_start)
+            .min()
+            .unwrap_or(self.rows.len());
         if self.source[current_turn..current_end].iter().any(|row| {
             row.role == "tool"
                 && row.first
                 && serde_json::from_str::<ToolCall>(&row.text)
                     .is_ok_and(|call| matches!(call.panel(), Some(Panel::Agent(_))))
-        }) || self.rows.iter().any(|row| {
+        }) || self.rows[old_run_start..].iter().any(|row| {
             self.messages
                 .get(row.message)
                 .is_some_and(|message| message.run == current_turn)
@@ -319,17 +333,17 @@ impl TranscriptView {
         let display_start = if message_ix == 0 {
             0
         } else {
-            // A hidden opening message can inherit a pinned run's later
-            // position. Cut before every displayed row in the source suffix,
-            // including work that now appears above that run.
+            // Pinned work can move out of source order. Cut before the
+            // earliest displayed row owned by the rebuilt suffix.
             self.messages[message_ix..]
                 .iter()
-                .map(|message| message.display_start)
+                .filter_map(|message| message.display_start)
                 .min()
                 .unwrap_or(self.rows.len())
         };
         let old_count = self.rows.len();
-        let old_rows = self.rows[display_start..].to_vec();
+        self.invalidate_message_indices(display_start);
+        let old_rows = self.rows.split_off(display_start);
         let previous_cards = cards::Previous::new(&old_rows, &self.messages);
         let mut previous: HashMap<_, _> = self
             .messages
@@ -337,7 +351,6 @@ impl TranscriptView {
             .into_iter()
             .map(|m| (m.start, m))
             .collect();
-        self.rows.truncate(display_start);
         if display_start == 0 && (self.history_start > 0 || self.storage_has_older()) {
             self.rows.push(UiRow {
                 key: (self.history_start, 8),
@@ -360,6 +373,9 @@ impl TranscriptView {
         let mut has_work = false;
         let mut ready = false;
         let mut receipt_start = None;
+        let last_prompt = (self.bot && self.streaming)
+            .then(|| self.source.iter().rposition(Row::is_prompt))
+            .flatten();
         while at < self.source.len() {
             let mut end = at + 1;
             while end < self.source.len() && !self.source[end].first {
@@ -634,10 +650,14 @@ impl TranscriptView {
                         thought_phase: None,
                     });
                 }
-                self.prepare_reveal(at, end, &text, role == "assistant", now);
-                let paced = self.reveals.get_mut(&at).unwrap();
-                parser.set_text(paced.text());
-                let tree = if paced.behind() || (self.streaming && end == self.source.len()) {
+                if role == "assistant" {
+                    self.prepare_reveal(at, end, &text, now);
+                }
+                let paced = self.reveals.active.get(&at).filter(|_| role == "assistant");
+                parser.set_text(paced.map_or(text.as_str(), PacedText::text));
+                let tree = if paced.is_some_and(PacedText::behind)
+                    || (self.streaming && end == self.source.len())
+                {
                     parser.display_tree()
                 } else {
                     parser.tree().clone()
@@ -650,8 +670,10 @@ impl TranscriptView {
                 {
                     self.rows
                         .extend(markdown::rows(&block.block).into_iter().map(|mut row| {
-                            row.word_start = word_cursor;
-                            word_cursor += markdown::word_count(&row);
+                            if paced.is_some() {
+                                row.word_start = word_cursor;
+                                word_cursor += markdown::word_count(&row);
+                            }
                             UiRow {
                                 key: (0, 0),
                                 body: Body::Markdown(row),
@@ -664,7 +686,14 @@ impl TranscriptView {
                             }
                         }));
                 }
-                paced.words(word_cursor, now);
+                if let Some(paced) = self
+                    .reveals
+                    .active
+                    .get_mut(&at)
+                    .filter(|_| role == "assistant")
+                {
+                    paced.words(word_cursor, now);
+                }
             } else {
                 let text_rows = if let Some(text) = display_text {
                     let mut transcript = vorkspace_core::transcript::Transcript::default();
@@ -743,7 +772,7 @@ impl TranscriptView {
             }
             self.messages.push(Message {
                 start: at,
-                display_start: first,
+                display_start: None,
                 role,
                 parser,
                 under_line: has_work && final_answer == Some(at),
@@ -756,8 +785,7 @@ impl TranscriptView {
                 attachments,
                 peer: peer_origin,
             });
-            let last_prompt = self.source.iter().rposition(|r| r.is_prompt());
-            if self.bot && is_prompt && self.streaming && last_prompt.is_some_and(|p| end > p) {
+            if is_prompt && last_prompt.is_some_and(|p| end > p) {
                 // The running turn keeps the user's messages together above its work.
                 self.push_pending(at);
             }
@@ -911,7 +939,7 @@ impl TranscriptView {
             }) && self.phases.get(&group).copied().unwrap_or(true);
             scroll.enable(enabled);
         }
-        self.index_messages();
+        self.index_messages_from(display_start);
         // Preserve surviving indices and scroll offsets while the tail reflows.
         let common = old_count.min(self.rows.len());
         if display_start < common {
@@ -944,53 +972,21 @@ impl TranscriptView {
         }
         cx.notify();
     }
-    pub(super) fn prepare_reveal(
-        &mut self,
-        at: usize,
-        end: usize,
-        text: &str,
-        assistant: bool,
-        now: Instant,
-    ) {
-        let paced = self.reveals.entry(at).or_insert_with(|| {
-            PacedText::new(
-                text,
-                self.visible
-                    && self.smooth_reveal
-                    && self.streaming
-                    && at >= self.live_start
-                    && assistant,
-                now,
-            )
-        });
-        paced.update(text, now);
-        if !self.visible || !self.smooth_reveal {
-            paced.settle(now);
-        }
-        paced.step(now, self.streaming && end == self.source.len());
-    }
-    pub(super) fn answer_visible(&self, answer: usize) -> bool {
-        if self.source[answer].text.trim().is_empty() {
-            return false;
-        }
-        if answer < self.live_start || !self.visible || !self.smooth_reveal {
-            return true;
-        }
-        self.reveals
-            .get(&answer)
-            .map_or(!self.streaming, |r| !r.text().trim().is_empty())
-    }
-    pub(super) fn index_messages(&mut self) {
-        let mut first = HashMap::new();
-        for (ix, row) in self.rows.iter().enumerate() {
-            first.entry(row.message).or_insert(ix);
-        }
-        let mut next = self.rows.len();
-        for (ix, message) in self.messages.iter_mut().enumerate().rev() {
-            if let Some(at) = first.get(&ix) {
-                next = *at;
+    pub(super) fn invalidate_message_indices(&mut self, start: usize) {
+        for row in &self.rows[start..] {
+            if let Some(message) = self.messages.get_mut(row.message)
+                && message.display_start.is_some_and(|at| at >= start)
+            {
+                message.display_start = None;
             }
-            message.display_start = next;
+        }
+    }
+
+    pub(super) fn index_messages_from(&mut self, start: usize) {
+        for (ix, row) in self.rows.iter().enumerate().skip(start) {
+            if let Some(message) = self.messages.get_mut(row.message) {
+                message.display_start.get_or_insert(ix);
+            }
         }
     }
     pub(super) fn reconcile(

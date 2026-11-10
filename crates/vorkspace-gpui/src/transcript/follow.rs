@@ -26,11 +26,12 @@ impl TranscriptView {
             .rposition(|r| r.is_prompt())
             .map_or(0, |ix| ix + 1);
         let prompt = self.prompt_start(self.bot_group_start(turn));
-        let group = self
-            .messages
-            .iter()
-            .find(|m| m.start >= prompt)
-            .map_or(0, |m| m.display_start);
+        let message = self.messages.partition_point(|m| m.start < prompt);
+        let group = if message < self.messages.len() {
+            self.message_display_start(message)
+        } else {
+            0
+        };
         let tail = self.rows.len().saturating_sub(FOLLOW_ROWS);
         let baseline = group.max(tail);
         // Include the previous anchor for the handover to a new turn. Store only
@@ -40,7 +41,8 @@ impl TranscriptView {
             .measured
             .as_ref()
             .and_then(|m| m.rows.first())
-            .and_then(|(key, _)| self.rows[..baseline].iter().position(|r| r.key == *key))
+            .filter(|(key, _)| self.rows.get(baseline).is_none_or(|row| row.key != *key))
+            .and_then(|(key, _)| self.rows[..baseline].iter().rposition(|r| r.key == *key))
             .unwrap_or(baseline);
         let mut measured = FollowMeasure {
             viewport: self.viewport.size,

@@ -410,6 +410,7 @@ impl TranscriptView {
                     markdown::Tone::Normal
                 },
                 self.reveals
+                    .active
                     .get(&message_start)
                     .map(|r| r.births.as_slice()),
                 self.frame_now,

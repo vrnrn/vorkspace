@@ -566,7 +566,7 @@ impl TranscriptView {
         self.phase_layouts.clear();
         self.attachment_images.clear();
         self.visuals.clear();
-        self.reveals.clear();
+        self.reveals.settle_through(len);
         self.motions.clear();
         self.entrances.clear();
         self.hover_rows.clear();
@@ -633,7 +633,7 @@ impl TranscriptView {
         self.visuals = HashMap::new();
         self.messages = Vec::new();
         self.rows = Vec::new();
-        self.reveals = HashMap::new();
+        self.reveals = Default::default();
         self.phase_layouts = HashMap::new();
         self.motions = HashMap::new();
         self.entrances = HashMap::new();

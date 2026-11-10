@@ -63,10 +63,10 @@ pub(super) struct Outline {
 impl Outline {
     /// Patches only replace or extend the source from `start`.
     pub(super) fn patched(&mut self, source: &[vorkspace_core::transcript::Row], start: usize) {
-        self.prompts.retain(|&ix| ix < start);
-        let from = self.prompts.last().map_or(0, |&ix| ix + 1).max(start);
+        self.prompts
+            .truncate(self.prompts.partition_point(|&ix| ix < start));
         self.prompts.extend(
-            (from..source.len()).filter(|&ix| source[ix].first && source[ix].role == "user"),
+            (start..source.len()).filter(|&ix| source[ix].first && source[ix].role == "user"),
         );
     }
 }
@@ -78,11 +78,8 @@ impl TranscriptView {
             .messages
             .binary_search_by_key(&start, |m| m.start)
             .ok()?;
-        let first = self.messages[message].display_start;
-        let end = self
-            .messages
-            .get(message + 1)
-            .map_or(self.rows.len(), |m| m.display_start);
+        let first = self.message_display_start(message);
+        let end = self.message_display_start(message + 1);
         (end > first).then_some((first, end))
     }
     /// Read after the list lays out, like the React rail's deferred measure.
@@ -104,8 +101,17 @@ impl TranscriptView {
         if self.list.is_following_tail() || max - scrolled <= NEAR_END {
             return Some(last);
         }
+        let top = self.list.logical_scroll_top().item_ix;
+        // Prompts keep source order even when work is reordered inside a
+        // turn. All rows strictly before the logical top are above the view.
+        let first_candidate = prompts.partition_point(|&prompt| {
+            let after = self
+                .messages
+                .partition_point(|message| message.start <= prompt);
+            self.message_display_start(after) <= top
+        });
         let mut above = None;
-        for &prompt in prompts {
+        for &prompt in &prompts[first_candidate..] {
             let Some((first, end)) = self.prompt_rows(prompt) else {
                 continue;
             };
@@ -119,7 +125,15 @@ impl TranscriptView {
             }
             return Some(prompt);
         }
-        above.or(prompts.first().copied())
+        above
+            .or_else(|| {
+                prompts[..first_candidate]
+                    .iter()
+                    .rev()
+                    .copied()
+                    .find(|&prompt| self.prompt_rows(prompt).is_some())
+            })
+            .or_else(|| prompts.first().copied())
     }
     fn hover_prompt(&mut self, prompt: usize, cx: &mut Context<Self>) {
         self.outline.hovered = Some(prompt);
@@ -173,20 +187,20 @@ impl TranscriptView {
         let active_ix = self
             .outline
             .active
-            .and_then(|active| prompts.iter().position(|&p| p == active));
+            .and_then(|active| prompts.binary_search(&active).ok());
         let (start, end, gap) = bar_stack(prompts.len(), active_ix, budget);
-        let bars: Vec<usize> = prompts[start..end].to_vec();
+        let bars = &prompts[start..end];
         let hover_ix = self
             .outline
             .hovered
-            .and_then(|hovered| bars.iter().position(|&p| p == hovered));
+            .and_then(|hovered| bars.binary_search(&hovered).ok());
         let now = Instant::now();
         self.outline
             .tweens
-            .retain(|prompt, _| bars.contains(prompt));
+            .retain(|prompt, _| bars.binary_search(prompt).is_ok());
         self.outline
             .anchors
-            .retain(|prompt, _| bars.contains(prompt));
+            .retain(|prompt, _| bars.binary_search(prompt).is_ok());
         let mut animating = false;
         let mut rail = div()
             .id("prompt-outline")

@@ -119,7 +119,7 @@ fn work_title(model: Option<&str>, elapsed_ms: Option<u64>, live: bool) -> Strin
 
 struct Message {
     start: usize,
-    display_start: usize,
+    display_start: Option<usize>,
     role: String,
     parser: MarkdownParser,
     under_line: bool,
@@ -500,7 +500,7 @@ pub(crate) struct TranscriptView {
     windowed_phases: HashSet<usize>,
     phase_max_height: Pixels,
     work_folds: HashMap<usize, bool>,
-    reveals: HashMap<usize, PacedText>,
+    reveals: streaming_frames::Reveals,
     live_start: usize,
     motions: HashMap<(usize, usize), Motion>,
     reflow: vorkspace_ui::reflow_motion::ReflowMotion,
@@ -752,6 +752,12 @@ impl TranscriptView {
     fn footer_ix(&self) -> usize {
         self.rows.len()
     }
+    fn message_display_start(&self, index: usize) -> usize {
+        self.messages[index..]
+            .iter()
+            .find_map(|message| message.display_start)
+            .unwrap_or(self.rows.len())
+    }
     /// The first row of the prompt block that opens `turn`.
     fn prompt_start(&self, turn: usize) -> usize {
         prompt_start(&self.source, turn)
@@ -848,7 +854,7 @@ impl TranscriptView {
             windowed_phases: HashSet::new(),
             phase_max_height: px(280.),
             work_folds: HashMap::new(),
-            reveals: HashMap::new(),
+            reveals: Default::default(),
             live_start: 0,
             motions: HashMap::new(),
             reflow: Default::default(),
@@ -907,9 +913,7 @@ impl TranscriptView {
             self.anchor_turn = None;
         }
         if !self.smooth_reveal {
-            for reveal in self.reveals.values_mut() {
-                reveal.settle(Instant::now());
-            }
+            self.reveals.settle_through(self.source.len());
         }
         self.rebuild(0, cx);
         cx.notify();
@@ -919,12 +923,12 @@ impl TranscriptView {
             return;
         }
         self.selection.hide();
-        let now = Instant::now();
         // Settled tabs retain their parsed rows, measured heights and scroll
         // anchor. Only undisplayed text or outgoing animation rows need a
         // source rebuild when visibility changes.
         let rebuild_from = self
             .reveals
+            .active
             .iter()
             .filter(|(_, reveal)| reveal.behind())
             .map(|(&at, _)| at)
@@ -948,9 +952,7 @@ impl TranscriptView {
         self.prompt_rise_pending = false;
         self.entrances.clear();
         self.follow = Follow::default();
-        for reveal in self.reveals.values_mut() {
-            reveal.settle(now);
-        }
+        self.reveals.settle_through(self.source.len());
         self.visible = false;
         for scroll in self.phase_scrolls.values_mut() {
             scroll.enable(false);

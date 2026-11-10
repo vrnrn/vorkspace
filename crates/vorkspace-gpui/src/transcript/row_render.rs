@@ -700,7 +700,7 @@ impl TranscriptView {
                 self.messages
                     .binary_search_by_key(&prompt, |m| m.start)
                     .ok()
-                    .map(|message| self.messages[message].display_start)
+                    .map(|message| self.message_display_start(message))
             }
         })
     }
