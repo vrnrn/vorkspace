@@ -883,7 +883,7 @@ impl Conversation {
                             } else {
                                 format!(
                                     "What should we work on in {}?",
-                                    self.project_appearance.label(&self.summary.cwd)
+                                    crate::workspace::project_name(&self.summary.cwd)
                                 )
                             }),
                     )

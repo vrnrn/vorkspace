@@ -139,9 +139,9 @@ fn project_backgrounds_keep_independent_opacities_and_native_overrides() {
     )]);
     let mut workspace = json!({});
     source.apply_workspace(&mut workspace);
-    let appearance: crate::project_appearance::ProjectAppearance =
-        serde_json::from_value(workspace["project_appearance"]["/work"].clone()).unwrap();
-    let background = appearance.background.unwrap();
+    let background: crate::project_appearance::Background =
+        serde_json::from_value(workspace["project_appearance"]["/work"]["background"].clone())
+            .unwrap();
     assert!((background.empty_opacity - 0.2).abs() < 1e-6);
     assert!((background.session_opacity - 0.4).abs() < 1e-6);
     assert_eq!(background.scope, crate::project_appearance::Scope::Empty);

@@ -1,10 +1,10 @@
 use super::*;
 use crate::settings::ProjectNotifications;
 use crate::{
+    background_settings::{BackgroundDialog, Event, Owner},
     project_background::ProjectBackground,
-    project_settings::{BackgroundDialog, Event, project_icon},
+    project_mark::project_icon,
 };
-use vorkspace_core::project_appearance::ProjectAppearance;
 
 pub(super) struct OpenBackground {
     pub(super) view: Entity<BackgroundDialog>,
@@ -13,17 +13,6 @@ pub(super) struct OpenBackground {
     _events: Subscription,
 }
 impl Shell {
-    /// A project's look: its folder name and hashed color, over the active
-    /// vorkspace's chat background. Projects have no customization.
-    pub(super) fn appearance(&self, _path: &str) -> ProjectAppearance {
-        ProjectAppearance {
-            background: self
-                .workspace
-                .active_vorkspace()
-                .and_then(|v| v.background.clone()),
-            ..Default::default()
-        }
-    }
     /// Edits a vorkspace's chat background in the background editor, in
     /// place of the vorkspace dialog, which comes back when it closes.
     pub(super) fn open_vorkspace_background(
@@ -35,19 +24,18 @@ impl Shell {
         let Some(def) = self.workspace.vorkspaces.iter().find(|v| v.id == vorkspace) else {
             return;
         };
-        let appearance = ProjectAppearance {
-            name: def.name.clone(),
-            background: def.background.clone(),
-            ..Default::default()
+        let owner = Owner::Vorkspace {
+            id: vorkspace.clone(),
+            label: def.name.clone(),
         };
-        let key = format!("vorkspace:{vorkspace}");
-        let view = cx.new(|cx| BackgroundDialog::new(key, appearance, self.store.clone(), cx));
+        let view = cx
+            .new(|cx| BackgroundDialog::new(owner, def.background.clone(), self.store.clone(), cx));
         let events = cx.subscribe_in(&view, window, {
             let vorkspace = vorkspace.clone();
             move |this, _, event: &Event, window, cx| match event {
-                Event::Changed(appearance) => {
+                Event::Changed(background) => {
                     if let Some(v) = this.workspace.vorkspace_mut(&vorkspace) {
-                        v.background = appearance.background.clone();
+                        v.background = background.clone();
                     }
                     this.backgrounds.clear();
                     this.invalidate_chrome(cx);
@@ -68,10 +56,10 @@ impl Shell {
         cx.notify();
     }
     pub(super) fn project_label(&self, path: &str) -> String {
-        ProjectAppearance::default().label(path)
+        crate::workspace::project_name(path)
     }
     pub(super) fn project_mark(&self, path: &str, side: f32) -> AnyElement {
-        project_icon(&ProjectAppearance::default(), path, side)
+        project_icon(path, side)
     }
     /// A project's settings live in its vorkspace's dialog, on its own tab.
     pub(super) fn open_project_settings(
@@ -317,20 +305,14 @@ impl Shell {
             }
             return div().flex_1().min_h_0();
         };
-        let (path, empty) = {
-            let session = chat.read(cx);
-            (session.summary.cwd.clone(), !session.summary.has_messages)
-        };
-        let mut appearance = self.appearance(&path);
-        if appearance.background.is_none() {
-            let p = &self.workspace.preferences;
-            appearance.background = p.chat_background_settings();
-        }
-        chat.update(cx, |session, cx| {
-            session.set_project_appearance(appearance.clone(), cx);
-            session.set_classic_layout(true, cx);
-        });
-        let settings = appearance.background.filter(|b| b.opacity(empty) > 0.);
+        let empty = !chat.read(cx).summary.has_messages;
+        let settings = self
+            .workspace
+            .active_vorkspace()
+            .and_then(|v| v.background.clone())
+            .or_else(|| self.workspace.preferences.chat_background_settings())
+            .filter(|background| background.opacity(empty) > 0.);
+        chat.update(cx, |session, cx| session.set_classic_layout(true, cx));
         if settings.is_none() {
             self.backgrounds.remove(&id);
         }

@@ -217,7 +217,7 @@ pub(crate) struct Bots {
     completion_work: HashSet<(String, bot::LaunchGroup)>,
     /// The open background dialog, centred in the window it opened in.
     background: Option<(
-        Entity<crate::project_settings::BackgroundDialog>,
+        Entity<crate::background_settings::BackgroundDialog>,
         Subscription,
     )>,
     backgrounds: HashMap<String, Entity<crate::project_background::ProjectBackground>>,

@@ -751,7 +751,6 @@ impl Shell {
         self.active_app_view = Some(AppView::Notes);
         if let Some(view) = self.note_tabs.get(&id) {
             view.update(cx, |view, cx| {
-                view.set_appearances(self.workspace.project_appearance.clone(), cx);
                 view.set_context(
                     self.workspace.project.clone(),
                     self.workspace.vorkspace_projects(),

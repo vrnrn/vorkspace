@@ -728,11 +728,7 @@ impl Bots {
                     .children(bot.projects.iter().enumerate().map(|(ix, project)| {
                         let remove = project.clone();
                         let owner = bot.id.clone();
-                        let appearance = self
-                            .owner
-                            .project_appearance(project, cx)
-                            .unwrap_or_default();
-                        let label = appearance.label(project);
+                        let label = crate::workspace::project_name(project);
                         let pretty = std::env::var("HOME")
                             .ok()
                             .and_then(|home| {
@@ -759,11 +755,7 @@ impl Bots {
                                     .flex()
                                     .items_center()
                                     .justify_center()
-                                    .child(crate::project_settings::project_icon(
-                                        &appearance,
-                                        project,
-                                        16.,
-                                    )),
+                                    .child(crate::project_mark::project_icon(project, 16.)),
                             )
                             .child(
                                 div()
@@ -1163,19 +1155,21 @@ impl Bots {
         cx.notify();
     }
     pub(super) fn pick_project(&mut self, id: &str, window: &mut Window, cx: &mut Context<Self>) {
-        let (projects, appearance) = self.owner.projects(cx);
+        let projects = self.owner.projects(cx);
         let bot = id.to_string();
         let paths = projects.clone();
         let mut items: Vec<MenuItem> = projects
             .into_iter()
             .enumerate()
             .map(|(ix, path)| {
-                let appearance = appearance.get(&path).cloned().unwrap_or_default();
-                MenuAction::new(format!("project:{ix}"), appearance.label(&path))
-                    .icon("folder")
-                    .icon_color(rgb(appearance.color(&path)).into())
-                    .description(path)
-                    .into()
+                MenuAction::new(
+                    format!("project:{ix}"),
+                    crate::workspace::project_name(&path),
+                )
+                .icon("folder")
+                .icon_color(rgb(vorkspace_core::project_appearance::project_color(&path)).into())
+                .description(path)
+                .into()
             })
             .collect();
         items.push(MenuItem::Separator);
@@ -1260,14 +1254,11 @@ impl Bots {
         };
         let view = cx.new(|cx| {
             BackgroundDialog::new(
-                format!("bot:{id}"),
-                ProjectAppearance {
-                    name: bot.label(),
-                    color: Some(bot.color),
-                    mascot: Some(bot.mascot),
-                    background: bot.background,
-                    ..Default::default()
+                crate::background_settings::Owner::Bot {
+                    id: id.to_owned(),
+                    label: bot.label(),
                 },
+                bot.background,
                 self.store.clone(),
                 cx,
             )
@@ -1277,11 +1268,11 @@ impl Bots {
             &view,
             window,
             move |this, _, event: &BackgroundEvent, window, cx| match event {
-                BackgroundEvent::Changed(appearance) => {
+                BackgroundEvent::Changed(background) => {
                     this.edit_settings_bot(
                         &id,
                         |bot| {
-                            bot.background = appearance.background.clone();
+                            bot.background = background.clone();
                         },
                         cx,
                     );

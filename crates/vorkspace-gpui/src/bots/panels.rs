@@ -3,14 +3,12 @@ mod overview;
 mod settings_modal;
 use super::*;
 use crate::{
+    background_settings::{BackgroundDialog, Event as BackgroundEvent},
     pickers::{ModelList, ModelPicked},
     popover::{MenuAction, MenuItem, MenuStyle, Side},
-    project_settings::{BackgroundDialog, Event as BackgroundEvent},
 };
 use gpui::{Div, FontWeight};
-use vorkspace_core::project_appearance::{
-    ProjectAppearance, TEXTURE_PALETTES, default_foreground_color,
-};
+use vorkspace_core::project_appearance::{TEXTURE_PALETTES, default_foreground_color};
 #[derive(Clone, Copy, PartialEq)]
 pub(super) enum SettingsSection {
     General,

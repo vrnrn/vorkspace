@@ -80,9 +80,6 @@ impl WindowLayouts {
                 continue;
             };
             layout
-                .project_appearance
-                .clone_from(&legacy.project_appearance);
-            layout
                 .desktop_project_preferences
                 .clone_from(&legacy.desktop_project_preferences);
             layout

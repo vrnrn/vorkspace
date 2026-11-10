@@ -1380,7 +1380,6 @@ impl Shell {
             .insert(id, cx.new(|_| SessionMark::new(summary.provider.clone())));
         self.tab_marks
             .insert(id, cx.new(|_| SessionMark::tab(summary.provider.clone())));
-        let appearance = self.appearance(&summary.cwd);
         let existing = self
             .bot_conversations
             .borrow()
@@ -1400,7 +1399,6 @@ impl Shell {
             }
             view.team_histories = Some(self.team_histories.clone());
             view.refresh_team_history(cx);
-            view.set_project_appearance(appearance, cx);
             view.transcript.update(cx, |transcript, cx| {
                 transcript.apply_preferences(&self.workspace.preferences, cx);
                 if new_view {
@@ -1515,7 +1513,7 @@ impl Shell {
         let provider = session.summary.provider.clone();
         let cwd = session.summary.cwd.clone();
         // A working session's grid takes its project's colour.
-        let color = self.appearance(&cwd).color(&cwd);
+        let color = vorkspace_core::project_appearance::project_color(&cwd);
         self.live_agents.update(cx, |activity, _| {
             activity.record(id, busy, self.unseen_finished.contains(&id));
         });

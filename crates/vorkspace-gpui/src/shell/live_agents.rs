@@ -3,7 +3,6 @@
 use super::*;
 use gpui::{ListAlignment, ListOffset, ListState, list};
 use std::time::Duration;
-use vorkspace_core::project_appearance::ProjectAppearance;
 use vorkspace_ui::clock::Instant;
 use vorkspace_ui::radius;
 
@@ -43,7 +42,6 @@ struct Agent {
     title: String,
     project: String,
     cwd: String,
-    appearance: ProjectAppearance,
     activity: Option<String>,
     provider: String,
     status: Status,
@@ -475,11 +473,7 @@ impl LiveAgents {
                     .flex()
                     .items_center()
                     .gap_2()
-                    .child(crate::project_settings::project_icon(
-                        &agent.appearance,
-                        &agent.cwd,
-                        8.,
-                    ))
+                    .child(crate::project_mark::project_icon(&agent.cwd, 8.))
                     .child(
                         div()
                             .debug_selector(move || format!("live-agent-{id}-title"))
@@ -853,7 +847,6 @@ impl Shell {
                     title: metadata.display_title(),
                     project: self.project_label(&metadata.summary.cwd),
                     cwd: metadata.summary.cwd.clone(),
-                    appearance: self.appearance(&metadata.summary.cwd),
                     activity: self
                         .sessions
                         .get(&id)

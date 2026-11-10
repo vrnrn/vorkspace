@@ -249,7 +249,6 @@ pub(crate) struct Conversation {
     pub(crate) bot_turn: u64,
     pub(crate) submission_generation: u64,
     bot_ui: bot::ChatState,
-    project_appearance: vorkspace_core::project_appearance::ProjectAppearance,
     classic_layout: bool,
     catalog: Vec<Model>,
     catalog_epoch: u64,
@@ -356,16 +355,6 @@ impl Conversation {
     pub(crate) fn set_beside_pane(&mut self, beside: bool, cx: &mut Context<Self>) {
         if self.beside_pane != beside {
             self.beside_pane = beside;
-            cx.notify();
-        }
-    }
-    pub(crate) fn set_project_appearance(
-        &mut self,
-        appearance: vorkspace_core::project_appearance::ProjectAppearance,
-        cx: &mut Context<Self>,
-    ) {
-        if self.project_appearance != appearance {
-            self.project_appearance = appearance;
             cx.notify();
         }
     }
@@ -574,7 +563,6 @@ impl Conversation {
                 effort: preferred_effort(&summary.provider, cx),
                 ..Default::default()
             },
-            project_appearance: Default::default(),
             classic_layout: false,
             catalog: Vec::new(),
             catalog_epoch: 0,

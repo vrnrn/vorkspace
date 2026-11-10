@@ -129,7 +129,7 @@ impl Notes {
                     .child(
                         note.source_cwd
                             .as_deref()
-                            .map(|path| self.project_mark(path, page::ICON_SIZE))
+                            .map(|path| crate::project_mark::project_icon(path, page::ICON_SIZE))
                             .unwrap_or_else(|| icon("folder", page::ICON_SIZE).into_any_element()),
                     )
                     .child(
@@ -555,7 +555,7 @@ impl Notes {
                                                             .items_center()
                                                             .gap_1p5()
                                                             .child(
-                                                                self.project_mark(
+                                                                crate::project_mark::project_icon(
                                                                     note.source_cwd
                                                                         .as_deref()
                                                                         .unwrap_or(""),

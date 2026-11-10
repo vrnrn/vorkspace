@@ -1,4 +1,4 @@
-//! A project's folder mark and the chat background editor vorkspaces use.
+//! Edit the background owned by a vorkspace or Bot.
 use crate::{
     popover::{Align, Anchor, AnchorSlot, popover},
     project_background::ProjectBackground,
@@ -8,35 +8,14 @@ use gpui::{
     MouseDownEvent, MouseMoveEvent, PathPromptOptions, Role, SharedString, Subscription, Window,
     div, prelude::*, px, rgb,
 };
-use vorkspace_core::project_appearance::{
-    Background, Effect, ProjectAppearance, Scope, import_image,
-};
+use vorkspace_core::project_appearance::{Background, Effect, Scope, import_image};
 use vorkspace_runtime::runtime::{Database, locked};
 use vorkspace_ui::radius;
 use vorkspace_ui::theme::*;
 
 pub(crate) enum Event {
-    Changed(ProjectAppearance),
+    Changed(Option<Background>),
     Close,
-}
-
-/// A project's mark: a folder tinted with the color its path hashes to.
-/// Projects carry no customization of their own; the vorkspace does.
-pub(crate) fn project_icon(
-    _appearance: &ProjectAppearance,
-    project: &str,
-    side: f32,
-) -> AnyElement {
-    if project.starts_with("remote://") {
-        return icon("internet", side)
-            .text_color(content(0.7))
-            .into_any_element();
-    }
-    let color = ProjectAppearance::default().color(project);
-    icon("folder", side)
-        .text_color(rgb(color))
-        .flex_shrink_0()
-        .into_any_element()
 }
 
 fn button(
@@ -66,10 +45,37 @@ fn button(
         .child(label)
 }
 
+pub(crate) enum Owner {
+    Vorkspace { id: String, label: String },
+    Bot { id: String, label: String },
+}
+impl Owner {
+    fn asset_namespace(&self) -> String {
+        match self {
+            Self::Vorkspace { id, .. } => format!("vorkspace:{id}"),
+            Self::Bot { id, .. } => format!("bot:{id}"),
+        }
+    }
+
+    fn label(&self) -> &str {
+        match self {
+            Self::Vorkspace { label, .. } | Self::Bot { label, .. } => label,
+        }
+    }
+
+    fn scope_description(&self) -> &'static str {
+        match self {
+            Self::Vorkspace { .. } => {
+                "An image here takes precedence over the global background in this vorkspace."
+            }
+            Self::Bot { .. } => "An image here appears behind this Bot's chat.",
+        }
+    }
+}
+
 pub(crate) struct BackgroundDialog {
-    project: String,
+    owner: Owner,
     store: Database,
-    appearance: ProjectAppearance,
     background: Background,
     preview: Entity<ProjectBackground>,
     focus: FocusHandle,
@@ -84,8 +90,6 @@ pub(crate) struct BackgroundDialog {
     effect_active: usize,
     effect_focus: FocusHandle,
     effect_trigger_focus: FocusHandle,
-    /// Inside Project settings, which supplies the title and close button.
-    embedded: bool,
     _preview_events: Subscription,
 }
 impl EventEmitter<Event> for BackgroundDialog {}
@@ -96,19 +100,17 @@ impl Focusable for BackgroundDialog {
 }
 impl BackgroundDialog {
     pub(crate) fn new(
-        project: String,
-        appearance: ProjectAppearance,
+        owner: Owner,
+        background: Option<Background>,
         store: Database,
         cx: &mut Context<Self>,
     ) -> Self {
-        let background = appearance.background.clone().unwrap_or_default();
         let preview = cx.new(|_| ProjectBackground::preview());
         let preview_events = cx.observe(&preview, |_, _, cx| cx.notify());
         Self {
-            project,
+            owner,
             store,
-            appearance,
-            background,
+            background: background.unwrap_or_default(),
             preview,
             _preview_events: preview_events,
             bounds: AnchorSlot::default(),
@@ -123,14 +125,12 @@ impl BackgroundDialog {
             dragging: None,
             busy: false,
             error: None,
-            embedded: false,
         }
     }
     fn save(&mut self, cx: &mut Context<Self>) {
         self.background.normalize();
-        self.appearance.background =
-            (!self.background.path.is_empty()).then(|| self.background.clone());
-        cx.emit(Event::Changed(self.appearance.clone()));
+        let background = (!self.background.path.is_empty()).then(|| self.background.clone());
+        cx.emit(Event::Changed(background));
         cx.notify();
     }
     fn choose(&mut self, cx: &mut Context<Self>) {
@@ -146,7 +146,7 @@ impl BackgroundDialog {
             multiple: false,
             prompt: Some("Choose background image".into()),
         });
-        let project = self.project.clone();
+        let namespace = self.owner.asset_namespace();
         let store = self.store.clone();
         cx.spawn(async move |this, cx| {
             let result = match picker.await {
@@ -158,7 +158,7 @@ impl BackgroundDialog {
                                 .data_dir()
                                 .map(|path| path.join("project-images"))
                                 .ok_or("Background images need a database on disk.")?;
-                            import_image(&source, &directory, &project, false).map(Some)
+                            import_image(&source, &directory, &namespace, false).map(Some)
                         })
                         .await
                 }
@@ -627,7 +627,6 @@ impl BackgroundDialog {
 impl Render for BackgroundDialog {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let has_image = !self.background.path.is_empty();
-        let embedded = self.embedded;
         let settings = has_image.then(|| self.background.clone());
         self.preview.update(cx, |preview, cx| {
             preview.configure(settings, true, None, cx)
@@ -636,39 +635,181 @@ impl Render for BackgroundDialog {
             .error
             .clone()
             .or_else(|| self.preview.read(cx).error.clone());
-        div().id("project-background-dialog").debug_selector(||"project-background-dialog".into())
-            .role(Role::Dialog).aria_label("Background image").track_focus(&self.focus)
-            .relative().min_h_0().when(!self.embedded, |d| d.max_h(px(window.viewport_size().height.as_f32()-34.)))
-            .flex().flex_col().text_color(content(1.))
+        div()
+            .id("project-background-dialog")
+            .debug_selector(|| "project-background-dialog".into())
+            .role(Role::Dialog)
+            .aria_label("Background image")
+            .track_focus(&self.focus)
+            .relative()
+            .min_h_0()
+            .max_h(px(window.viewport_size().height.as_f32() - 34.))
+            .flex()
+            .flex_col()
+            .text_color(content(1.))
             .child(self.bounds.layout_probe())
-            .on_key_down(cx.listener(|this,event:&gpui::KeyDownEvent,window,cx| {
-                if event.keystroke.key=="escape" {
-                    if this.effect_open {this.close_effect(window,cx);} else {cx.emit(Event::Close);}
-                    window.prevent_default();cx.stop_propagation();
+            .on_key_down(cx.listener(|this, event: &gpui::KeyDownEvent, window, cx| {
+                if event.keystroke.key == "escape" {
+                    if this.effect_open {
+                        this.close_effect(window, cx);
+                    } else {
+                        cx.emit(Event::Close);
+                    }
+                    window.prevent_default();
+                    cx.stop_propagation();
                 }
             }))
-            .on_mouse_up(MouseButton::Left,cx.listener(|this,_,_,_|this.dragging=None))
-            .when(!self.embedded, |d| d.child(div().debug_selector(||"background-dialog-header".into()).flex_shrink_0().flex().items_start().gap_2().px_4().pt_3()
-                .child(div().min_w_0().flex_1().pt(px(2.)).flex().flex_col()
-                    .child(div().debug_selector(||"background-dialog-title".into()).text_size(px(16.)).line_height(px(20.)).font_weight(gpui::FontWeight::SEMIBOLD).child("Background image"))
-                    .child(div().mt(px(2.)).min_w_0().truncate().text_size(px(12.)).line_height(px(16.5)).text_color(content(0.5)).child(format!("Choose a background image for {}",self.appearance.label(&self.project)))))
-                .child(icon_button("close-project-background","Close background settings","close").debug_selector(|| "close-project-background".into()).size(px(28.)).on_click(cx.listener(|_,_,_,cx|cx.emit(Event::Close))))))
-            .child(div().id("background-dialog-body").debug_selector(||"background-dialog-body".into())
-                .min_h_0().overflow_y_scroll().flex().flex_col().gap_5().map(|d| if embedded { d.px_5().py_4() } else { d.p_4() })
-                .child(div().flex_shrink_0().flex().flex_col()
-                    .child(div().debug_selector(||"background-dialog-preview".into()).h(px(162.)).flex_shrink_0().overflow_hidden().rounded(px(radius::SURFACE)).border_1().border_color(content(0.1))
-                        .bg(if self.background.effect==Effect::GradientBlur {rgb(0x171717).into()} else {content(0.05)})
-                        .child(div().relative().h(px(160.)).child(self.preview.clone()).when(!has_image,|d|d.flex().items_center().justify_center().child(div().text_size(px(12.)).text_color(content(0.4)).child("No background selected")))))
-                    .child(button("choose-project-background",if self.busy{"Saving image…"}else if has_image{"Change image"}else{"Choose image"})
-                        .mt_2().flex_shrink_0().on_click(cx.listener(|this,_,_,cx|this.choose(cx))))
-                    .child(div().mt(px(6.)).text_size(px(11.)).line_height(px(17.875)).text_color(content(0.45))
-                        .child(if has_image{"This image overrides the global background for this vorkspace."}else{"An image here shows behind this vorkspace's chats instead of the global background."}))
-                    .when_some(error,|d,error|d.child(div().mt(px(6.)).text_size(px(12.)).line_height(px(18.)).text_color(vorkspace_ui::theme::danger()).child(error))))
-                .when(has_image,|d|d.child(self.effect_row(cx)))
-                // Placement and strength only mean something once there is an image.
-                .when(has_image,|d|d.child(self.scope_row(cx)).child(self.slider(true,cx)).child(self.slider(false,cx)))
-                .when(has_image,|d|d.child(button("remove-project-background","Remove background image").flex_shrink_0().text_color(vorkspace_ui::theme::danger())
-                    .on_click(cx.listener(|this,_,_,cx|{this.background=Background::default();this.effect_open=false;this.error=None;this.save(cx);}))))
+            .on_mouse_up(
+                MouseButton::Left,
+                cx.listener(|this, _, _, _| this.dragging = None),
+            )
+            .child(
+                div()
+                    .debug_selector(|| "background-dialog-header".into())
+                    .flex_shrink_0()
+                    .flex()
+                    .items_start()
+                    .gap_2()
+                    .px_4()
+                    .pt_3()
+                    .child(
+                        div()
+                            .min_w_0()
+                            .flex_1()
+                            .pt(px(2.))
+                            .flex()
+                            .flex_col()
+                            .child(
+                                div()
+                                    .debug_selector(|| "background-dialog-title".into())
+                                    .text_size(px(16.))
+                                    .line_height(px(20.))
+                                    .font_weight(gpui::FontWeight::SEMIBOLD)
+                                    .child("Background image"),
+                            )
+                            .child(
+                                div()
+                                    .mt(px(2.))
+                                    .min_w_0()
+                                    .truncate()
+                                    .text_size(px(12.))
+                                    .line_height(px(16.5))
+                                    .text_color(content(0.5))
+                                    .child(format!(
+                                        "Choose a background image for {}",
+                                        self.owner.label()
+                                    )),
+                            ),
+                    )
+                    .child(
+                        icon_button(
+                            "close-project-background",
+                            "Close background settings",
+                            "close",
+                        )
+                        .debug_selector(|| "close-project-background".into())
+                        .size(px(28.))
+                        .on_click(cx.listener(|_, _, _, cx| cx.emit(Event::Close))),
+                    ),
+            )
+            .child(
+                div()
+                    .id("background-dialog-body")
+                    .debug_selector(|| "background-dialog-body".into())
+                    .min_h_0()
+                    .overflow_y_scroll()
+                    .flex()
+                    .flex_col()
+                    .gap_5()
+                    .p_4()
+                    .child(
+                        div()
+                            .flex_shrink_0()
+                            .flex()
+                            .flex_col()
+                            .child(
+                                div()
+                                    .debug_selector(|| "background-dialog-preview".into())
+                                    .h(px(162.))
+                                    .flex_shrink_0()
+                                    .overflow_hidden()
+                                    .rounded(px(radius::SURFACE))
+                                    .border_1()
+                                    .border_color(content(0.1))
+                                    .bg(if self.background.effect == Effect::GradientBlur {
+                                        rgb(0x171717).into()
+                                    } else {
+                                        content(0.05)
+                                    })
+                                    .child(
+                                        div()
+                                            .relative()
+                                            .h(px(160.))
+                                            .child(self.preview.clone())
+                                            .when(!has_image, |d| {
+                                                d.flex().items_center().justify_center().child(
+                                                    div()
+                                                        .text_size(px(12.))
+                                                        .text_color(content(0.4))
+                                                        .child("No background selected"),
+                                                )
+                                            }),
+                                    ),
+                            )
+                            .child(
+                                button(
+                                    "choose-project-background",
+                                    if self.busy {
+                                        "Saving image…"
+                                    } else if has_image {
+                                        "Change image"
+                                    } else {
+                                        "Choose image"
+                                    },
+                                )
+                                .mt_2()
+                                .flex_shrink_0()
+                                .on_click(cx.listener(|this, _, _, cx| this.choose(cx))),
+                            )
+                            .child(
+                                div()
+                                    .mt(px(6.))
+                                    .text_size(px(11.))
+                                    .line_height(px(17.875))
+                                    .text_color(content(0.45))
+                                    .child(self.owner.scope_description()),
+                            )
+                            .when_some(error, |d, error| {
+                                d.child(
+                                    div()
+                                        .mt(px(6.))
+                                        .text_size(px(12.))
+                                        .line_height(px(18.))
+                                        .text_color(vorkspace_ui::theme::danger())
+                                        .child(error),
+                                )
+                            }),
+                    )
+                    .when(has_image, |d| d.child(self.effect_row(cx)))
+                    // Placement and strength only mean something once there is an image.
+                    .when(has_image, |d| {
+                        d.child(self.scope_row(cx))
+                            .child(self.slider(true, cx))
+                            .child(self.slider(false, cx))
+                    })
+                    .when(has_image, |d| {
+                        d.child(
+                            button("remove-project-background", "Remove background image")
+                                .flex_shrink_0()
+                                .text_color(vorkspace_ui::theme::danger())
+                                .on_click(cx.listener(|this, _, _, cx| {
+                                    this.background = Background::default();
+                                    this.effect_open = false;
+                                    this.error = None;
+                                    this.save(cx);
+                                })),
+                        )
+                    }),
             )
             .children(self.effect_popup(cx))
     }

@@ -12,7 +12,7 @@ Use the project name at the top of the sidebar to switch projects. The button be
 
 Opening a conversation from another vorkspace through Search or the Back shortcut switches to a vorkspace that contains it. A new session starts in the checkout shown by the chat you are working in. Connector automations keep watching their projects while you work in another vorkspace.
 
-**Manage vorkspaces…** also has a tab for each project in the vorkspace, with its code-index and notification settings. It lets you rename a vorkspace, pick its color and a chat background picture shown behind all its sessions, add or remove its folders and Bots, switch to it, or delete it. You always keep at least one.
+**Manage vorkspaces…** also has a tab for each project in the vorkspace, with its code-index and notification settings. It lets you rename a vorkspace, pick its color and a chat background picture shown behind all its sessions, add or remove its folders and Bots, switch to it, or delete it. You always keep at least one. A picture you choose here takes precedence over the global chat picture. Bots have their own chat pictures.
 
 Under **Look**, type up to two **Icon letters** to tell your vorkspaces apart at a glance. Leave the field blank to use the first letter of the vorkspace name. Each project shows its folder name and a folder icon with an automatic color.
 

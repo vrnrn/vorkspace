@@ -821,8 +821,6 @@ pub(crate) enum ProjectPicked {
 /// ProjectPickerPopover: a search field over the projects, the current one
 /// first and checked, and "New project" at the foot.
 pub(crate) struct ProjectPicker {
-    appearance:
-        std::collections::HashMap<String, vorkspace_core::project_appearance::ProjectAppearance>,
     projects: Vec<String>,
     current: String,
     active: usize,
@@ -844,7 +842,6 @@ impl ProjectPicker {
             projects.insert(0, first);
         }
         Self {
-            appearance: Default::default(),
             projects,
             current: current.into(),
             active: 0,
@@ -860,28 +857,13 @@ impl ProjectPicker {
         self.allow_remote = true;
         self
     }
-    pub(crate) fn appearance(
-        mut self,
-        appearance: std::collections::HashMap<
-            String,
-            vorkspace_core::project_appearance::ProjectAppearance,
-        >,
-    ) -> Self {
-        self.appearance = appearance;
-        self
-    }
-    fn label(&self, path: &str) -> String {
-        self.appearance
-            .get(path)
-            .map_or_else(|| project_name(path), |a| a.label(path))
-    }
     fn matches(&self, cx: &gpui::App) -> Vec<String> {
         let query = self.search.read(cx).content.to_lowercase();
         self.projects
             .iter()
             .filter(|path| {
                 query.is_empty()
-                    || format!("{}\n{}", self.label(path), path)
+                    || format!("{}\n{}", project_name(path), path)
                         .to_lowercase()
                         .contains(&query)
             })
@@ -927,7 +909,7 @@ impl Render for ProjectPicker {
                 div()
                     .id(("project-option", ix))
                     .role(Role::ListBoxOption)
-                    .aria_label(self.label(&path))
+                    .aria_label(project_name(&path))
                     .aria_description(path.clone())
                     .aria_selected(current)
                     .cursor(CursorStyle::Arrow)
@@ -963,11 +945,7 @@ impl Render for ProjectPicker {
                                         .text_color(content(0.6))
                                         .into_any_element()
                                 } else {
-                                    crate::project_settings::project_icon(
-                                        &self.appearance.get(&path).cloned().unwrap_or_default(),
-                                        &path,
-                                        14.,
-                                    )
+                                    crate::project_mark::project_icon(&path, 14.)
                                 }
                             }),
                     )
@@ -979,7 +957,7 @@ impl Render for ProjectPicker {
                             .truncate()
                             .text_size(px(13.))
                             .font_weight(gpui::FontWeight::MEDIUM)
-                            .child(self.label(&path)),
+                            .child(project_name(&path)),
                     )
                     .child(
                         div()

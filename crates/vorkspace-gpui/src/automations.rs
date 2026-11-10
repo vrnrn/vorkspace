@@ -113,7 +113,6 @@ pub(crate) struct Automations {
     database: Option<Database>,
     cwd: String,
     projects: Vec<String>,
-    appearances: HashMap<String, vorkspace_core::project_appearance::ProjectAppearance>,
     automations: Vec<Automation>,
     runs: Vec<AutomationRun>,
     selected: Option<String>,
@@ -177,7 +176,6 @@ impl Automations {
             database: None,
             cwd,
             projects,
-            appearances: HashMap::new(),
             automations: Vec::new(),
             runs: Vec::new(),
             selected: None,
@@ -220,26 +218,6 @@ impl Automations {
     }
     pub(crate) fn set_database(&mut self, database: Database) {
         self.database = Some(database);
-    }
-    pub(crate) fn set_appearances(
-        &mut self,
-        appearances: HashMap<String, vorkspace_core::project_appearance::ProjectAppearance>,
-        cx: &mut Context<Self>,
-    ) {
-        self.appearances = appearances;
-        cx.notify();
-    }
-    fn project_label(&self, path: &str) -> String {
-        self.appearances
-            .get(path)
-            .map_or_else(|| project_name(path), |appearance| appearance.label(path))
-    }
-    fn project_mark(&self, path: &str, side: f32) -> AnyElement {
-        crate::project_settings::project_icon(
-            &self.appearances.get(path).cloned().unwrap_or_default(),
-            path,
-            side,
-        )
     }
     pub(crate) fn set_context(
         &mut self,
@@ -795,10 +773,7 @@ impl Automations {
         let Some(editor) = &self.editor else {
             return;
         };
-        let picker = cx.new(|cx| {
-            ProjectPicker::new(&self.projects, &editor.draft.cwd, cx)
-                .appearance(self.appearances.clone())
-        });
+        let picker = cx.new(|cx| ProjectPicker::new(&self.projects, &editor.draft.cwd, cx));
         self.picker_subscription = Some(cx.subscribe_in(
             &picker,
             window,
@@ -963,12 +938,15 @@ impl Automations {
                                 .flex()
                                 .items_center()
                                 .gap(px(4.))
-                                .child(self.project_mark(&automation.cwd, page::ICON_SIZE))
+                                .child(crate::project_mark::project_icon(
+                                    &automation.cwd,
+                                    page::ICON_SIZE,
+                                ))
                                 .child(
                                     div()
                                         .flex_1()
                                         .truncate()
-                                        .child(self.project_label(&automation.cwd)),
+                                        .child(project_name(&automation.cwd)),
                                 )
                                 .child(provider_icon(kind.id(), page::ICON_SIZE))
                                 .child(

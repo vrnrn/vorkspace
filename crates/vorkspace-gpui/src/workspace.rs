@@ -364,7 +364,6 @@ pub(crate) struct Workspace {
     pub classic_layout: bool,
     pub preferences: vorkspace_ui::preferences::Preferences,
     pub session_filters: vorkspace_core::session_filters::Filters,
-    pub project_appearance: HashMap<String, vorkspace_core::project_appearance::ProjectAppearance>,
     /// Last desktop source values, used to reconcile subsequent desktop changes
     /// while retaining deliberate native project and preference edits.
     pub desktop_project_preferences: Option<serde_json::Value>,
@@ -548,7 +547,6 @@ impl Default for Workspace {
             classic_layout: true,
             preferences: vorkspace_ui::preferences::Preferences::default(),
             session_filters: Default::default(),
-            project_appearance: Default::default(),
             desktop_project_preferences: None,
             desktop_workspace_snapshot: None,
             desktop_preferences_metadata: None,
@@ -646,9 +644,6 @@ impl Workspace {
         {
             state.project = cwd.into();
         }
-        // Projects are no longer customized: each is a folder in the color
-        // its path hashes to, with its folder name. Old customizations go.
-        state.project_appearance.clear();
         let mut first_in_project = None;
         let sessions: HashMap<_, _> = sessions
             .inspect(|&(id, path)| {

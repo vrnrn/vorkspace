@@ -135,99 +135,12 @@ pub fn normalize_badge_shape(shape: &str) -> &'static str {
     }
 }
 
-fn default_textured() -> bool {
-    true
-}
-fn is_true(value: &bool) -> bool {
-    *value
-}
-
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-#[serde(default, rename_all = "camelCase")]
-pub struct ProjectAppearance {
-    pub name: String,
-    pub color: Option<u32>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub fg_color: Option<u32>,
-    #[serde(default = "default_textured", skip_serializing_if = "is_true")]
-    pub textured: bool,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub seed: Option<u32>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub grid: Option<u8>,
-    pub mascot: Option<String>,
-    pub logo: Option<String>,
-    pub background: Option<Background>,
-}
-impl Default for ProjectAppearance {
-    fn default() -> Self {
-        Self {
-            name: String::new(),
-            color: None,
-            fg_color: None,
-            textured: true,
-            seed: None,
-            grid: None,
-            mascot: None,
-            logo: None,
-            background: None,
-        }
-    }
-}
-impl ProjectAppearance {
-    pub fn label(&self, project: &str) -> String {
-        if self.name.trim().is_empty() {
-            Path::new(project)
-                .file_name()
-                .map_or_else(|| project.into(), |s| s.to_string_lossy().into_owned())
-        } else {
-            self.name.clone()
-        }
-    }
-    pub fn color(&self, project: &str) -> u32 {
-        self.color.filter(|c| *c <= 0xffffff).unwrap_or_else(|| {
-            let hash = project
-                .encode_utf16()
-                .fold(0u32, |h, c| h.wrapping_mul(31).wrapping_add(c.into()));
-            COLORS[(hash as usize % (COLORS.len() - 1)) + 1]
-        })
-    }
-    pub fn fg_color(&self, project: &str) -> u32 {
-        self.fg_color
-            .filter(|c| *c <= 0xffffff)
-            .unwrap_or_else(|| default_foreground_color(self.color(project)))
-    }
-    pub fn seed(&self, project: &str) -> u32 {
-        self.seed
-            .filter(|&s| s > 0)
-            .unwrap_or_else(|| default_seed_for(project))
-    }
-    pub fn grid(&self) -> u8 {
-        self.grid.unwrap_or(4).clamp(2, 8)
-    }
-    pub fn mascot(&self, project: &str) -> usize {
-        self.mascot
-            .as_ref()
-            .and_then(|name| MASCOTS.iter().position(|m| *m == name))
-            .unwrap_or_else(|| {
-                let hash = project
-                    .encode_utf16()
-                    .fold(0u32, |h, c| h.wrapping_mul(131).wrapping_add(c.into()));
-                hash as usize % MASCOTS.len()
-            })
-    }
-    pub fn normalize(&mut self) {
-        self.name = self.name.trim().chars().take(200).collect();
-        self.color = self.color.filter(|c| *c <= 0xffffff);
-        self.fg_color = self.fg_color.filter(|c| *c <= 0xffffff);
-        self.seed = self.seed.filter(|&s| s > 0);
-        self.grid = self.grid.map(|g| g.clamp(2, 8));
-        self.mascot = self.mascot.take().filter(|s| MASCOTS.contains(&s.as_str()));
-        if let Some(background) = &mut self.background {
-            background.normalize();
-        }
-        self.background = self.background.take().filter(|b| !b.path.trim().is_empty());
-    }
+/// Stable folder color keyed by the project path.
+pub fn project_color(project: &str) -> u32 {
+    let hash = project.encode_utf16().fold(0u32, |hash, unit| {
+        hash.wrapping_mul(31).wrapping_add(unit.into())
+    });
+    COLORS[(hash as usize % (COLORS.len() - 1)) + 1]
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]

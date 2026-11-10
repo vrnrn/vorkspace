@@ -6,7 +6,7 @@ use crate::{
 use gpui::{
     AnyElement, App, Context, Entity, EventEmitter, FocusHandle, Focusable, HighlightStyle,
     MouseButton, MouseMoveEvent, Pixels, Point, Render, Role, ScrollHandle, StyledText,
-    Subscription, Task, Window, div, img, point, prelude::*, px, relative,
+    Subscription, Task, Window, div, point, prelude::*, px, relative,
 };
 use std::{
     collections::HashMap,
@@ -23,7 +23,6 @@ use vorkspace_core::{
     transcript::Row,
 };
 use vorkspace_runtime::runtime::{Database, locked};
-use vorkspace_ui::radius;
 use vorkspace_ui::theme::*;
 
 pub(crate) enum Event {
@@ -36,7 +35,6 @@ pub(crate) struct Sources {
     pub live: HashMap<i64, Arc<Vec<Row>>>,
     pub projects: Vec<String>,
     pub recent: Vec<String>,
-    pub logos: HashMap<String, String>,
 }
 pub(crate) struct SearchView {
     pub(crate) input: Entity<Input>,
@@ -46,7 +44,6 @@ pub(crate) struct SearchView {
     live: HashMap<i64, Arc<Vec<Row>>>,
     projects: Arc<Vec<String>>,
     recent: Arc<Vec<String>>,
-    logos: HashMap<String, String>,
     files: Arc<Vec<vorkspace_core::files::ProjectFile>>,
     visible: bool,
     listing_pending: bool,
@@ -107,7 +104,6 @@ impl SearchView {
             live: sources.live,
             projects: Arc::new(sources.projects),
             recent: Arc::new(sources.recent),
-            logos: sources.logos,
             files: Arc::default(),
             visible: true,
             listing_pending: false,
@@ -151,7 +147,6 @@ impl SearchView {
             self.live = sources.live;
             self.projects = Arc::new(sources.projects);
             self.recent = Arc::new(sources.recent);
-            self.logos = sources.logos;
             self.live_revision += 1;
             self.reload_files(cx);
             self.refresh(cx);
@@ -560,16 +555,7 @@ impl Render for SearchView {
                         false,
                         16.,
                     ),
-                    Target::Project(path) => self
-                        .logos
-                        .get(path)
-                        .map(|logo| {
-                            img(std::path::PathBuf::from(logo))
-                                .size(px(14.))
-                                .rounded(px(radius::SMALL))
-                                .into_any_element()
-                        })
-                        .unwrap_or_else(|| icon("folder", 14.).into_any_element()),
+                    Target::Project(path) => crate::project_mark::project_icon(path, 14.),
                 };
                 let text = StyledText::new(hit.title.clone()).with_highlights(
                     hit.highlights.iter().cloned().map(|range| {

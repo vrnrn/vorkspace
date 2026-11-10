@@ -151,12 +151,6 @@ impl Shell {
                 .get(cwd)
                 .cloned()
                 .unwrap_or_default(),
-            logos: self
-                .workspace
-                .project_appearance
-                .iter()
-                .filter_map(|(path, a)| a.logo.clone().map(|logo| (path.clone(), logo)))
-                .collect(),
         }
     }
 

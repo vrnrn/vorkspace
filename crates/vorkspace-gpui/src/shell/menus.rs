@@ -262,7 +262,6 @@ impl Shell {
                         &self.workspace.project,
                         cx,
                     )
-                    .appearance(self.workspace.project_appearance.clone())
                     .allow_remote()
                 });
                 events.push(cx.subscribe_in(

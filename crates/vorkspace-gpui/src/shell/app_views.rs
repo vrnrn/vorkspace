@@ -133,7 +133,6 @@ impl Shell {
             let cwd = self.workspace.project.clone();
             let projects = self.workspace.vorkspace_projects();
             notes.update(cx, |notes, cx| {
-                notes.set_appearances(self.workspace.project_appearance.clone(), cx);
                 notes.set_context(cwd, projects, cx);
                 notes.configure_recording(&self.workspace.preferences.hidden_providers, cx);
                 notes.set_active(true, cx);
@@ -392,7 +391,6 @@ impl Shell {
                 .unwrap_or_default();
             inbox.update(cx, |inbox, cx| {
                 inbox.set_bots(bots, cx);
-                inbox.set_appearances(self.workspace.project_appearance.clone(), cx);
             });
         }
     }
@@ -468,7 +466,6 @@ impl Shell {
             let cwd = self.workspace.project.clone();
             let projects = self.workspace.vorkspace_projects();
             view.update(cx, |view, cx| {
-                view.set_appearances(self.workspace.project_appearance.clone(), cx);
                 let connections = self
                     .inbox
                     .as_ref()

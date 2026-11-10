@@ -517,7 +517,6 @@ fn sample_agent(id: i64, status: Status, activity: Option<&str>) -> Agent {
         title: format!("Session {id}"),
         project: "vorkspace".into(),
         cwd: "/work/vorkspace".into(),
-        appearance: Default::default(),
         activity: activity.map(str::to_owned),
         provider: "codex".into(),
         status,

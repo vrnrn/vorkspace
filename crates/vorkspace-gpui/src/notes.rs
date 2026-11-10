@@ -62,7 +62,6 @@ pub(crate) struct Notes {
     project_open: bool,
     cwd: String,
     projects: Vec<String>,
-    appearances: HashMap<String, vorkspace_core::project_appearance::ProjectAppearance>,
     source: bool,
     modes: HashMap<String, bool>,
     document: Option<Entity<Document>>,
@@ -211,7 +210,6 @@ impl Notes {
             project_open: false,
             cwd: String::new(),
             projects: Vec::new(),
-            appearances: HashMap::new(),
             source: false,
             modes: HashMap::new(),
             document: None,
@@ -349,23 +347,6 @@ impl Notes {
         } else {
             title.into()
         }
-    }
-
-    pub(crate) fn set_appearances(
-        &mut self,
-        appearances: HashMap<String, vorkspace_core::project_appearance::ProjectAppearance>,
-        cx: &mut Context<Self>,
-    ) {
-        self.appearances = appearances;
-        cx.notify();
-    }
-
-    fn project_mark(&self, path: &str, side: f32) -> AnyElement {
-        crate::project_settings::project_icon(
-            &self.appearances.get(path).cloned().unwrap_or_default(),
-            &project_name(path),
-            side,
-        )
     }
 
     fn highlight_source(&self, cx: &mut Context<Self>) {

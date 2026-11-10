@@ -546,11 +546,14 @@ impl Automations {
                                 .max_w_full()
                                 .flex_shrink_1()
                                 .child(self.project_anchor.probe())
-                                .child(self.project_mark(&draft.cwd, page::ICON_SIZE))
+                                .child(crate::project_mark::project_icon(
+                                    &draft.cwd,
+                                    page::ICON_SIZE,
+                                ))
                                 .child(div().min_w_0().truncate().child(if draft.cwd.is_empty() {
                                     "Choose project".into()
                                 } else {
-                                    self.project_label(&draft.cwd)
+                                    project_name(&draft.cwd)
                                 }))
                                 .child(
                                     icon("chevron-down", page::ICON_SIZE)

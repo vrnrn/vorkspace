@@ -291,14 +291,6 @@ enum CommentStyle {
 }
 
 impl Inbox {
-    fn project_mark(&self, path: &str, side: f32) -> AnyElement {
-        crate::project_settings::project_icon(
-            &self.appearances.get(path).cloned().unwrap_or_default(),
-            &project_name(std::path::Path::new(path)),
-            side,
-        )
-    }
-
     /// A disabled or unconnected source has no items to open, so its page is
     /// only the explanation and the way to connect, across the full width.
     fn unavailable(&self) -> bool {
@@ -497,7 +489,10 @@ impl Inbox {
                                     .items_center()
                                     .gap(px(4.))
                                     .when(!tracker && !item.project_path.is_empty(), |d| {
-                                        d.child(self.project_mark(&item.project_path, 12.))
+                                        d.child(crate::project_mark::project_icon(
+                                            &item.project_path,
+                                            12.,
+                                        ))
                                     })
                                     .child(div().min_w_0().truncate().child(source)),
                             )

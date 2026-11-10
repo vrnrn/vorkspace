@@ -57,8 +57,6 @@ pub(crate) struct Inbox {
     projects: Vec<PathBuf>,
     /// Polling is app-wide. A window's list and destinations use `projects`.
     poll_projects: Vec<PathBuf>,
-    appearances:
-        std::collections::HashMap<String, vorkspace_core::project_appearance::ProjectAppearance>,
     state: ViewState,
     preferences: Entity<saved_preferences::SavedPreferences>,
     saved_state: ViewState,
@@ -278,7 +276,6 @@ impl Inbox {
             store,
             poll_projects: projects.clone(),
             projects,
-            appearances: Default::default(),
             saved_state: state.clone(),
             state,
             preferences,
@@ -387,22 +384,6 @@ impl Inbox {
         if self.poll_projects != poll_projects {
             self.poll_projects = poll_projects;
             self.refresh(cx);
-        }
-    }
-    pub(crate) fn set_appearances(
-        &mut self,
-        appearances: std::collections::HashMap<
-            String,
-            vorkspace_core::project_appearance::ProjectAppearance,
-        >,
-        cx: &mut Context<Self>,
-    ) {
-        if self.appearances != appearances {
-            self.appearances = appearances;
-            if self.owner.is_none() {
-                self.publish_pages(cx);
-            }
-            cx.notify();
         }
     }
     pub(crate) fn set_active(&mut self, active: bool, cx: &mut Context<Self>) {
@@ -865,7 +846,6 @@ impl Inbox {
             page.snapshot = self.snapshot.clone();
             page.sessions = self.sessions.clone();
             page.bots = self.bots.clone();
-            page.appearances = self.appearances.clone();
             page.loading = self.loading;
             page
         });
@@ -913,7 +893,6 @@ impl Inbox {
             page.snapshot = self.snapshot.clone();
             page.sessions = self.sessions.clone();
             page.bots = self.bots.clone();
-            page.appearances = self.appearances.clone();
             page.loading = self.loading;
             page.selected = Some(item.key());
             page.pinned_item = Some(item);
@@ -1034,18 +1013,7 @@ impl Inbox {
                 return;
             };
             let root = owner.read(cx);
-            let (
-                state,
-                snapshot,
-                sessions,
-                projects,
-                service,
-                cwd,
-                bots,
-                appearances,
-                loading,
-                pages,
-            ) = (
+            let (state, snapshot, sessions, projects, service, cwd, bots, loading, pages) = (
                 root.state.clone(),
                 root.snapshot.clone(),
                 root.sessions.clone(),
@@ -1053,7 +1021,6 @@ impl Inbox {
                 root.service.clone(),
                 root.start_project.clone(),
                 root.bots.clone(),
-                root.appearances.clone(),
                 root.loading,
                 root.pages.values().cloned().collect::<Vec<_>>(),
             );
@@ -1069,7 +1036,6 @@ impl Inbox {
                         page.start_project = cwd.clone();
                     }
                     page.set_bots(bots.clone(), cx);
-                    page.set_appearances(appearances.clone(), cx);
                     page.loading = loading;
                     // Disabled/temporarily unavailable providers retain selection,
                     // details and drafts. Their page identity never changes.

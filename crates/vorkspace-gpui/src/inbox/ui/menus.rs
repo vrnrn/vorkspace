@@ -129,7 +129,7 @@ impl Inbox {
                         project_name(project),
                         !f.hidden_projects.contains(&key),
                     )
-                    .child(self.project_mark(&key, 12.))
+                    .child(crate::project_mark::project_icon(&key, 12.))
                     .on_click(cx.listener(move |this, _, _, cx| {
                         toggle(&mut this.state.filters.hidden_projects, key.clone());
                         this.filters_changed(false, cx);
@@ -385,7 +385,10 @@ impl Inbox {
                 project_name(project),
                 self.start_bot.is_none() && *project == self.start_project,
             )
-            .child(self.project_mark(&project.to_string_lossy(), 14.))
+            .child(crate::project_mark::project_icon(
+                &project.to_string_lossy(),
+                14.,
+            ))
             .on_click(cx.listener(move |this, _, _, cx| {
                 this.start_project = path.clone();
                 this.start_bot = None;

@@ -53,32 +53,21 @@ fn effects_keep_cover_dimensions_fade_and_change_pixels() {
     );
 }
 #[test]
-fn project_settings_normalize_and_round_trip_without_crossing_projects() {
-    let mut appearance = ProjectAppearance {
-        name: "  My project  ".into(),
-        color: Some(0xff000000),
-        mascot: Some("missing".into()),
-        background: Some(Background {
-            path: "a.png".into(),
-            empty_opacity: f32::NAN,
-            session_opacity: 4.,
-            scope: Scope::Empty,
-            ..Default::default()
-        }),
+fn background_settings_normalize_and_round_trip() {
+    let mut background = Background {
+        path: "a.png".into(),
+        empty_opacity: f32::NAN,
+        session_opacity: 4.,
+        scope: Scope::Empty,
         ..Default::default()
     };
-    appearance.normalize();
-    assert_eq!(appearance.label("/tmp/project"), "My project");
-    assert_eq!(appearance.color, None);
-    assert_eq!(appearance.mascot, None);
-    let background = appearance.background.as_ref().unwrap();
+    background.normalize();
     assert_eq!(background.opacity(true), 0.24);
     assert_eq!(background.opacity(false), 0.);
     assert_eq!(background.session_opacity, 0.65);
     assert_eq!(
-        serde_json::from_str::<ProjectAppearance>(&serde_json::to_string(&appearance).unwrap())
-            .unwrap(),
-        appearance
+        serde_json::from_str::<Background>(&serde_json::to_string(&background).unwrap()).unwrap(),
+        background
     );
 }
 #[test]

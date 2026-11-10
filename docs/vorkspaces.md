@@ -31,7 +31,7 @@ F2 renames a card. Delete removes the selected conversations. Hovering in the co
 
 ## Customization
 
-Customization belongs to the vorkspace. Under **Look**, **Icon letters** accepts up to two letters. Clearing the field restores the automatic initial from the vorkspace name. Projects show a folder icon in the color its path hashes to, under its folder name; older per-project names, logos, colors and backgrounds are dropped on load. Each project has its own tab in **Manage vorkspaces…**, holding its Codebase Memory and Notifications settings; **Project settings…** opens that tab. The vorkspace's chat background is drawn behind every session while that vorkspace is active.
+Customization belongs to the vorkspace. Under **Look**, **Icon letters** accepts up to two letters. Clearing the field restores the automatic initial from the vorkspace name. Projects show a folder icon in the color its path hashes to, under its folder name; older per-project names, logos, colors and backgrounds are dropped on load. Each project has its own tab in **Manage vorkspaces…**, holding its Codebase Memory and Notifications settings; **Project settings…** opens that tab. The active vorkspace's chat background takes precedence over the global chat background. A Bot chat uses its own background setting. The desktop resolves chat backgrounds at those owners and derives project icons from the project path.
 
 ## Sidebar toggle
 
