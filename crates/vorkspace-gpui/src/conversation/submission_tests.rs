@@ -332,7 +332,7 @@ fn send_keeps_the_composer_until_dispatch_and_keeps_failed_attempts_in_history(
                 view.send(cx);
                 assert!(view.busy);
                 assert_eq!(view.input.read(cx).content.as_ref(), text.as_str());
-                assert_eq!(view.attachments, [attachment.clone()]);
+                assert_eq!(view.attachments, std::slice::from_ref(&attachment));
                 assert!(view.transcript.read(cx).source_rows().is_empty());
                 let store = locked(&view.store).unwrap();
                 let saved = store.composer_draft(view.summary.id).unwrap().unwrap();
@@ -347,7 +347,7 @@ fn send_keeps_the_composer_until_dispatch_and_keeps_failed_attempts_in_history(
                 assert!(!view.busy);
                 assert_ne!(view.status, UNCONFIRMED_TURN);
                 assert_eq!(view.input.read(cx).content.as_ref(), text.as_str());
-                assert_eq!(view.attachments, [attachment.clone()]);
+                assert_eq!(view.attachments, std::slice::from_ref(&attachment));
                 let rows = view.transcript.read(cx).source_rows();
                 assert_eq!(
                     rows.iter()
@@ -368,7 +368,10 @@ fn send_keeps_the_composer_until_dispatch_and_keeps_failed_attempts_in_history(
                     .iter()
                     .find(|row| row.role == attachments::ROLE)
                     .unwrap();
-                assert_eq!(attachments::paths(manifest).unwrap(), [attachment.clone()]);
+                assert_eq!(
+                    attachments::paths(manifest).unwrap(),
+                    std::slice::from_ref(&attachment)
+                );
                 assert_eq!(
                     rows,
                     locked(&view.store)
