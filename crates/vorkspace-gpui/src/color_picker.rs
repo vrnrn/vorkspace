@@ -66,8 +66,13 @@ pub(crate) struct ColorPicker {
     hex: Entity<Input>,
     sv: AnchorSlot,
     hue: AnchorSlot,
-    drag: Option<bool>,
+    drag: Option<ColorControl>,
     _change: Subscription,
+}
+#[derive(Clone, Copy)]
+enum ColorControl {
+    Hue,
+    SaturationBrightness,
 }
 impl EventEmitter<Picked> for ColorPicker {}
 impl ColorPicker {
@@ -84,6 +89,7 @@ impl ColorPicker {
             if text.len() == 7
                 && text.starts_with('#')
                 && let Ok(color) = u32::from_str_radix(&text[1..], 16)
+                && color != this.hsv.hex()
             {
                 this.hsv = Hsv::from_hex(color);
                 cx.emit(Picked(color));
@@ -100,32 +106,62 @@ impl ColorPicker {
         }
     }
     pub(crate) fn set_color(&mut self, color: u32, cx: &mut Context<Self>) {
-        self.hsv = Hsv::from_hex(color);
-        let text = format!("#{color:06x}");
-        // The enclosing editor mirrors Picked back into this picker. Rewriting
-        // an unchanged hex field emits Changed again and never settles.
-        if self.hex.read(cx).content.as_ref() == text {
-            return;
+        if self.hsv.hex() != color {
+            self.set_hsv(Hsv::from_hex(color), cx);
         }
-        self.hex.update(cx, |field, cx| field.set_text(text, cx));
+    }
+    fn set_hsv(&mut self, hsv: Hsv, cx: &mut Context<Self>) {
+        let previous = self.hsv.hex();
+        self.hsv = hsv;
+        let color = hsv.hex();
+        if previous != color {
+            let text = format!("#{color:06x}");
+            self.hex.update(cx, |field, cx| field.set_text(text, cx));
+            cx.emit(Picked(color));
+        }
         cx.notify();
     }
-    fn pick(&mut self, hue: bool, position: gpui::Point<gpui::Pixels>, cx: &mut Context<Self>) {
-        let Some(bounds) = (if hue { self.hue.get() } else { self.sv.get() }) else {
+    fn pick(
+        &mut self,
+        control: ColorControl,
+        position: gpui::Point<gpui::Pixels>,
+        cx: &mut Context<Self>,
+    ) {
+        let anchor = match control {
+            ColorControl::Hue => &self.hue,
+            ColorControl::SaturationBrightness => &self.sv,
+        };
+        let Some(bounds) = anchor.get() else {
             return;
         };
-        let x = ((position.x - bounds.left()) / bounds.size.width).clamp(0., 1.);
-        if hue {
-            self.hsv.h = x.min(0.99999);
-        } else {
-            self.hsv.s = x;
-            self.hsv.v = 1. - ((position.y - bounds.top()) / bounds.size.height).clamp(0., 1.);
+        if bounds.size.width <= px(0.) || bounds.size.height <= px(0.) {
+            return;
         }
-        let color = self.hsv.hex();
-        self.hex
-            .update(cx, |field, cx| field.set_text(format!("#{color:06x}"), cx));
-        cx.emit(Picked(color));
-        cx.notify();
+        let x = ((position.x - bounds.left()) / bounds.size.width).clamp(0., 1.);
+        let mut hsv = self.hsv;
+        match control {
+            ColorControl::Hue => hsv.h = x.min(0.99999),
+            ColorControl::SaturationBrightness => {
+                hsv.s = x;
+                hsv.v = 1. - ((position.y - bounds.top()) / bounds.size.height).clamp(0., 1.);
+            }
+        }
+        self.set_hsv(hsv, cx);
+    }
+    fn nudge(&mut self, control: ColorControl, key: &str, cx: &mut Context<Self>) {
+        let mut hsv = self.hsv;
+        let step = 0.01;
+        match (control, key) {
+            (ColorControl::Hue, "left" | "down") => hsv.h = (hsv.h - step).max(0.),
+            (ColorControl::Hue, "right" | "up") => hsv.h = (hsv.h + step).min(0.99999),
+            (ColorControl::SaturationBrightness, "left") => hsv.s = (hsv.s - step).max(0.),
+            (ColorControl::SaturationBrightness, "right") => hsv.s = (hsv.s + step).min(1.),
+            (ColorControl::SaturationBrightness, "down") => hsv.v = (hsv.v - step).max(0.),
+            (ColorControl::SaturationBrightness, "up") => hsv.v = (hsv.v + step).min(1.),
+            _ => return,
+        }
+        self.set_hsv(hsv, cx);
+        cx.stop_propagation();
     }
 }
 impl gpui::Render for ColorPicker {
@@ -166,8 +202,8 @@ impl gpui::Render for ColorPicker {
                                 let _ = moving.update(cx, |picker, cx| {
                                     if event.pressed_button != Some(MouseButton::Left) {
                                         picker.drag = None;
-                                    } else if let Some(hue) = picker.drag {
-                                        picker.pick(hue, event.position, cx);
+                                    } else if let Some(control) = picker.drag {
+                                        picker.pick(control, event.position, cx);
                                     }
                                 });
                             }
@@ -187,7 +223,19 @@ impl gpui::Render for ColorPicker {
                 div()
                     .id("bot-color-sv")
                     .role(Role::Slider)
+                    .map(tab_reachable)
                     .aria_label("Saturation and brightness")
+                    .aria_value(format!(
+                        "{:.0}% saturation, {:.0}% brightness",
+                        self.hsv.s * 100.,
+                        self.hsv.v * 100.,
+                    ))
+                    .aria_description(
+                        "Left and right change saturation. Up and down change brightness.",
+                    )
+                    .on_key_down(cx.listener(|this, event: &gpui::KeyDownEvent, _, cx| {
+                        this.nudge(ColorControl::SaturationBrightness, &event.keystroke.key, cx);
+                    }))
                     .relative()
                     .h(px(112.))
                     .w_full()
@@ -216,8 +264,8 @@ impl gpui::Render for ColorPicker {
                     .on_mouse_down(
                         MouseButton::Left,
                         cx.listener(|this, event: &gpui::MouseDownEvent, _, cx| {
-                            this.drag = Some(false);
-                            this.pick(false, event.position, cx);
+                            this.drag = Some(ColorControl::SaturationBrightness);
+                            this.pick(ColorControl::SaturationBrightness, event.position, cx);
                             cx.stop_propagation();
                         }),
                     ),
@@ -226,7 +274,15 @@ impl gpui::Render for ColorPicker {
                 div()
                     .id("bot-color-hue")
                     .role(Role::Slider)
+                    .map(tab_reachable)
                     .aria_label("Hue")
+                    .aria_numeric_value(f64::from(self.hsv.h) * 360.)
+                    .aria_min_numeric_value(0.)
+                    .aria_max_numeric_value(360.)
+                    .aria_numeric_value_step(3.6)
+                    .on_key_down(cx.listener(|this, event: &gpui::KeyDownEvent, _, cx| {
+                        this.nudge(ColorControl::Hue, &event.keystroke.key, cx);
+                    }))
                     .relative()
                     .mt_2()
                     .h(px(12.))
@@ -272,8 +328,8 @@ impl gpui::Render for ColorPicker {
                     .on_mouse_down(
                         MouseButton::Left,
                         cx.listener(|this, event: &gpui::MouseDownEvent, _, cx| {
-                            this.drag = Some(true);
-                            this.pick(true, event.position, cx);
+                            this.drag = Some(ColorControl::Hue);
+                            this.pick(ColorControl::Hue, event.position, cx);
                             cx.stop_propagation();
                         }),
                     ),
@@ -351,5 +407,26 @@ mod tests {
         ] {
             assert_eq!(Hsv::from_hex(color).hex(), color);
         }
+    }
+
+    #[gpui::test]
+    fn changing_hue_in_gray_survives_the_parent_mirroring_the_color(cx: &mut gpui::TestAppContext) {
+        let picker = cx.new(|cx| ColorPicker::new(0x808080, cx));
+        picker.update(cx, |picker, cx| {
+            for _ in 0..60 {
+                picker.nudge(ColorControl::Hue, "right", cx);
+            }
+            picker.set_color(0x808080, cx);
+            assert_eq!(picker.hsv.hex(), 0x808080);
+            for _ in 0..50 {
+                picker.nudge(ColorControl::SaturationBrightness, "right", cx);
+            }
+            let color = picker.hsv.hex();
+            assert!(color & 0xff > (color >> 16) & 0xff);
+            assert_eq!(
+                picker.hex.read(cx).content.as_ref(),
+                format!("#{color:06x}")
+            );
+        });
     }
 }
