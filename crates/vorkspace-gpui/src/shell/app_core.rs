@@ -14,6 +14,7 @@
 //! Leases name the window that holds them and are re-validated at every
 //! claim: a lease whose window closed is free. A window also releases the lease
 //! when it drops the loaded conversation.
+mod inbox_feed;
 mod layouts;
 mod notifications;
 mod preferences;
@@ -99,7 +100,8 @@ pub(crate) struct AppCore {
     scheduler: Option<WeakEntity<Shell>>,
     reminders: reminders::ReminderSchedule,
     pub(super) github_activity: Entity<crate::notifications::github_activity::GithubActivity>,
-    pub(super) inbox_links: Entity<crate::inbox::SessionLinks>,
+    inbox_links: Entity<crate::inbox::SessionLinks>,
+    inbox_feed: Option<Entity<crate::inbox::InboxFeed>>,
     linked_activity_clock: Option<gpui::Task<()>>,
     linked_activity_started_at: u64,
     pub(super) notification_permission: crate::notifications::delivery::Permission,
@@ -246,6 +248,7 @@ impl AppCore {
                 reminders: reminders::ReminderSchedule::new(reminders),
                 github_activity,
                 inbox_links,
+                inbox_feed: None,
                 linked_activity_clock: None,
                 linked_activity_started_at: vorkspace_core::time::now_ms(),
                 notification_permission: crate::notifications::delivery::Permission::Unsupported,

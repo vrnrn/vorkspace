@@ -268,7 +268,7 @@ pub struct Checks {
     pub head_oid: String,
     pub checks: Vec<Check>,
 }
-#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
 pub struct Status {
     pub connected: bool,
@@ -278,7 +278,7 @@ pub struct Status {
     pub site: String,
     pub email: String,
 }
-#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct OptionRow {
     pub id: String,
     pub name: String,
@@ -475,30 +475,20 @@ impl ViewState {
             .collect::<Vec<_>>();
         paths.sort();
         paths.dedup();
-        let mut jira = self.hidden_jira_projects.clone();
-        jira.sort();
-        format!(
-            "{}:{}:{}:{}:{}",
-            self.connectors
-                .enabled_providers()
-                .map(|provider| {
-                    let filters = self.filters_for(provider);
-                    format!(
-                        "{provider}:{}:{}",
-                        filters.assigned_to_me,
-                        filters.fetch_state()
-                    )
-                })
-                .collect::<Vec<_>>()
-                .join(","),
-            paths.join("|"),
-            self.connectors
-                .enabled_providers()
-                .collect::<Vec<_>>()
-                .join(","),
-            jira.join(","),
-            serde_json::to_string(&self.jira_filter).unwrap_or_default()
-        )
+        let filters = self
+            .connectors
+            .enabled_providers()
+            .map(|provider| {
+                let filters = self.filters_for(provider);
+                (provider, filters.assigned_to_me, filters.fetch_state())
+            })
+            .collect::<Vec<_>>();
+        let jira = self.connectors.enabled("jira").then(|| {
+            let mut hidden = self.hidden_jira_projects.iter().collect::<Vec<_>>();
+            hidden.sort_unstable();
+            (&self.jira_filter, hidden)
+        });
+        serde_json::to_string(&(paths, filters, jira)).expect("encode connector list scope")
     }
     pub fn normalize_source(&mut self) {
         if !self.connectors.enabled(&self.source) {
@@ -511,7 +501,7 @@ impl ViewState {
         }
     }
 }
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Snapshot {
     pub items: Vec<Item>,
     pub errors: BTreeMap<String, String>,
@@ -534,6 +524,10 @@ pub struct Observation {
     pub changed: Vec<Item>,
 }
 impl NotificationTracker {
+    pub fn reset_provider(&mut self, provider: &str) {
+        self.primed.remove(provider);
+    }
+
     pub fn observe(&mut self, snapshot: &Snapshot, scope: String) -> Vec<Item> {
         self.observe_snapshot(snapshot, scope).appeared
     }

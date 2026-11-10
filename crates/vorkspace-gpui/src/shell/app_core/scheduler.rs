@@ -92,17 +92,4 @@ impl Shell {
         let me = cx.weak_entity();
         core.update(cx, |core, _| core.claim_scheduler(&me))
     }
-
-    pub(in crate::shell) fn scheduler_window(
-        &self,
-        cx: &Context<Self>,
-    ) -> Option<WeakEntity<Self>> {
-        self.app_core
-            .as_ref()?
-            .read(cx)
-            .scheduler
-            .as_ref()
-            .filter(|owner| **owner != cx.weak_entity())
-            .cloned()
-    }
 }

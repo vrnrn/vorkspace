@@ -54,7 +54,7 @@ fn fixture(cx: &mut TestAppContext) -> WindowHandle<Fixture> {
             let item = Item { provider: "github".into(), kind: "pr".into(), state: "open".into(), number: 7, ..Default::default() };
             let inbox = cx.new(|cx| {
                 let store = Arc::new(Mutex::new(vorkspace_core::store::Store::open(std::path::Path::new(":memory:")).unwrap()));
-                let mut view = Inbox::new_inner(store, vec![], PathBuf::from("/private/tmp/inbox-regression"), false, cx);
+                let mut view = Inbox::new_for_test(store, vec![], PathBuf::from("/private/tmp/inbox-regression"), cx);
                 Rc::make_mut(&mut view.snapshot).items = vec![item.clone()]; view.selected = Some(item.key());
                 view.details = Some(Details { body: "Description".into(), ..Default::default() });
                 let comments = (0..100).map(|ix| model::Comment {
@@ -94,11 +94,10 @@ fn inbox_window_at_width(cx: &mut TestAppContext, width: f32) -> WindowHandle<In
                         vorkspace_core::store::Store::open(std::path::Path::new(":memory:"))
                             .unwrap(),
                     ));
-                    Inbox::new_inner(
+                    Inbox::new_for_test(
                         store,
                         vec![],
                         PathBuf::from("/private/tmp/inbox-connectors"),
-                        false,
                         cx,
                     )
                 })
@@ -232,11 +231,10 @@ fn a_narrow_connector_tile_uses_its_width_inside_a_wide_window(cx: &mut TestAppC
                             .unwrap(),
                     ));
                     let inbox = cx.new(|cx| {
-                        let mut inbox = Inbox::new_inner(
+                        let mut inbox = Inbox::new_for_test(
                             store,
                             vec![],
                             PathBuf::from("/private/tmp/inbox-tile"),
-                            false,
                             cx,
                         );
                         Rc::make_mut(&mut inbox.snapshot).items = vec![item];
@@ -364,8 +362,8 @@ fn connector_pages_keep_drafts_filters_scroll_and_pending_details_with_one_obser
     let output = changes.clone();
     let _events = window
         .update(cx, |root, _, cx| {
-            let subscription = cx.subscribe(&cx.entity(), move |_, _, event: &Event, _| {
-                if matches!(event, Event::Activity { .. }) {
+            let subscription = cx.subscribe(&root.feed, move |_, _, event: &FeedEvent, _| {
+                if matches!(event, FeedEvent::Discovered { .. }) {
                     output.set(output.get() + 1);
                 }
             });
@@ -381,8 +379,8 @@ fn connector_pages_keep_drafts_filters_scroll_and_pending_details_with_one_obser
                 .errors
                 .insert("github".into(), "Temporarily unavailable".into());
             snapshot.items.retain(|item| item.provider != "github");
-            root.generation = 7;
-            root.finish_refresh(7, root.state.fetch_scope(&root.projects), snapshot, cx);
+            let generation = root.stage_fixture_poll(cx);
+            root.finish_fixture_poll(generation, snapshot, cx);
             subscription
         })
         .unwrap();
@@ -390,7 +388,7 @@ fn connector_pages_keep_drafts_filters_scroll_and_pending_details_with_one_obser
     assert_eq!(
         changes.get(),
         1,
-        "only the root observes and emits activity"
+        "the shared feed emits once for both provider pages"
     );
     cx.update(|cx| {
         for (page, source, draft, time) in [
@@ -726,11 +724,10 @@ fn pinned_item_page_renders_detail_without_a_library_list(cx: &mut TestAppContex
                     vorkspace_core::store::Store::open(std::path::Path::new(":memory:")).unwrap(),
                 ));
                 let root = cx.new(|cx| {
-                    let mut root = Inbox::new_inner(
+                    let mut root = Inbox::new_for_test(
                         store,
                         vec![],
                         PathBuf::from("/private/tmp/inbox-pinned"),
-                        false,
                         cx,
                     );
                     Rc::make_mut(&mut root.snapshot).items = vec![item.clone()];
@@ -889,7 +886,7 @@ fn disabling_a_source_removes_controls_unread_and_selection_and_rejects_inflight
             ..Default::default()
         })
         .collect::<Vec<_>>();
-    let old_scope = window
+    let generation = window
         .update(cx, |inbox, _, cx| {
             Rc::make_mut(&mut inbox.snapshot).items = items.clone();
             inbox.state.seen.seeded = true;
@@ -904,9 +901,7 @@ fn disabling_a_source_removes_controls_unread_and_selection_and_rejects_inflight
             }
             inbox.selected = Some(items[0].key());
             inbox.details = Some(Details::default());
-            inbox.loading = true;
-            inbox.generation = 7;
-            let old_scope = inbox.state.fetch_scope(&inbox.projects);
+            let generation = inbox.stage_fixture_poll(cx);
             inbox.set_connector_enabled("github", false, cx).unwrap();
             assert_eq!(inbox.unread_count(), 2);
             assert_eq!(inbox.state.source, "gitlab");
@@ -920,7 +915,7 @@ fn disabling_a_source_removes_controls_unread_and_selection_and_rejects_inflight
                 ["gitlab"]
             );
             assert!(!model::Connectors::load(&locked(&inbox.store).unwrap()).enabled("github"));
-            old_scope
+            generation
         })
         .unwrap();
     let visual = &mut gpui::VisualTestContext::from_window(window.into(), cx);
@@ -946,7 +941,7 @@ fn disabling_a_source_removes_controls_unread_and_selection_and_rejects_inflight
                 .into(),
                 ..Default::default()
             };
-            inbox.finish_refresh(7, old_scope, stale, cx);
+            inbox.finish_fixture_poll(generation, stale, cx);
             assert!(inbox.snapshot.items.is_empty());
             assert!(inbox.connection_statuses().is_empty());
             for provider in ["github", "linear", "azuredevops"] {
@@ -960,7 +955,7 @@ fn disabling_a_source_removes_controls_unread_and_selection_and_rejects_inflight
         .update(visual, |inbox, _, _| {
             assert!(
                 !inbox.loading,
-                "the replacement all-disabled refresh must complete without adapters"
+                "the stale poll must release its loading state with all connectors disabled"
             );
             assert!(inbox.snapshot.items.is_empty() && inbox.snapshot.connections.is_empty());
         })
@@ -975,8 +970,8 @@ fn own_successful_revision_is_read_suppressed_and_later_remote_revision_can_chim
     let output = changes.clone();
     let _subscription = window
         .update(cx, |inbox, _, cx| {
-            let subscription = cx.subscribe(&cx.entity(), move |_, _, event: &Event, _| {
-                if let Event::Activity { changed, .. } = event {
+            let subscription = cx.subscribe(&inbox.feed, move |_, _, event: &FeedEvent, _| {
+                if let FeedEvent::Discovered { changed, .. } = event {
                     output.borrow_mut().push(changed.len());
                 }
             });
@@ -988,11 +983,9 @@ fn own_successful_revision_is_read_suppressed_and_later_remote_revision_can_chim
                 updated_at: "2026-10-22T10:00:00Z".into(),
                 ..Default::default()
             };
-            inbox.generation = 1;
-            let scope = inbox.state.fetch_scope(&inbox.projects);
-            inbox.finish_refresh(
-                1,
-                scope.clone(),
+            let generation = inbox.stage_fixture_poll(cx);
+            inbox.finish_fixture_poll(
+                generation,
                 Snapshot {
                     items: vec![item.clone()],
                     ..Default::default()
@@ -1001,9 +994,9 @@ fn own_successful_revision_is_read_suppressed_and_later_remote_revision_can_chim
             );
             item.updated_at = "2026-10-22T11:00:00Z".into();
             inbox.record_self_activity(item.key(), item.updated_ms(), cx);
-            inbox.finish_refresh(
-                1,
-                scope.clone(),
+            let generation = inbox.stage_fixture_poll(cx);
+            inbox.finish_fixture_poll(
+                generation,
                 Snapshot {
                     items: vec![item.clone()],
                     ..Default::default()
@@ -1012,13 +1005,13 @@ fn own_successful_revision_is_read_suppressed_and_later_remote_revision_can_chim
             );
             assert!(!inbox.state.seen.unseen(&item));
             assert!(
-                inbox.self_activity.is_empty(),
+                inbox.feed.read(cx).mutation_revision(&item.key()).is_none(),
                 "coalesced own mutations are consumed by one remote revision"
             );
             item.updated_at = "2026-10-22T12:00:00Z".into();
-            inbox.finish_refresh(
-                1,
-                scope,
+            let generation = inbox.stage_fixture_poll(cx);
+            inbox.finish_fixture_poll(
+                generation,
                 Snapshot {
                     items: vec![item],
                     ..Default::default()
@@ -1088,8 +1081,8 @@ fn a_coalesced_external_revision_is_never_consumed_as_own_activity(cx: &mut Test
     let output = changes.clone();
     let _subscription = window
         .update(cx, |inbox, _, cx| {
-            let subscription = cx.subscribe(&cx.entity(), move |_, _, event: &Event, _| {
-                if let Event::Activity { changed, .. } = event {
+            let subscription = cx.subscribe(&inbox.feed, move |_, _, event: &FeedEvent, _| {
+                if let FeedEvent::Discovered { changed, .. } = event {
                     output.borrow_mut().push(changed.len());
                 }
             });
@@ -1101,11 +1094,9 @@ fn a_coalesced_external_revision_is_never_consumed_as_own_activity(cx: &mut Test
                 updated_at: "2026-10-22T10:00:00Z".into(),
                 ..Default::default()
             };
-            inbox.generation = 1;
-            let scope = inbox.state.fetch_scope(&inbox.projects);
-            inbox.finish_refresh(
-                1,
-                scope.clone(),
+            let generation = inbox.stage_fixture_poll(cx);
+            inbox.finish_fixture_poll(
+                generation,
                 Snapshot {
                     items: vec![item.clone()],
                     ..Default::default()
@@ -1115,32 +1106,35 @@ fn a_coalesced_external_revision_is_never_consumed_as_own_activity(cx: &mut Test
             let own = model::timestamp_ms("2026-10-22T11:00:00Z");
             inbox.record_self_activity(item.key(), 0, cx);
             assert!(
-                inbox.self_activity.is_empty(),
+                inbox.feed.read(cx).mutation_revision(&item.key()).is_none(),
                 "an uncertain receipt cannot suppress anything"
             );
             inbox.record_self_activity(item.key(), own, cx);
             inbox.record_self_activity(item.key(), own - 1, cx);
             assert_eq!(
-                inbox.self_activity[&item.key()].0,
-                own,
+                inbox.feed.read(cx).mutation_revision(&item.key()),
+                Some(own),
                 "older completions cannot overwrite the newer receipt"
             );
             // A poll started before the write can still return the old snapshot.
-            inbox.finish_refresh(
-                1,
-                scope.clone(),
+            let generation = inbox.stage_fixture_poll(cx);
+            inbox.finish_fixture_poll(
+                generation,
                 Snapshot {
                     items: vec![item.clone()],
                     ..Default::default()
                 },
                 cx,
             );
-            assert_eq!(inbox.self_activity[&item.key()].0, own);
+            assert_eq!(
+                inbox.feed.read(cx).mutation_revision(&item.key()),
+                Some(own)
+            );
             // The own revision is never polled: another person's update arrives first.
             item.updated_at = "2026-10-22T12:00:00Z".into();
-            inbox.finish_refresh(
-                1,
-                scope,
+            let generation = inbox.stage_fixture_poll(cx);
+            inbox.finish_fixture_poll(
+                generation,
                 Snapshot {
                     items: vec![item.clone()],
                     ..Default::default()
@@ -1148,12 +1142,12 @@ fn a_coalesced_external_revision_is_never_consumed_as_own_activity(cx: &mut Test
                 cx,
             );
             assert!(inbox.state.seen.unseen(&item));
-            assert!(inbox.self_activity.is_empty());
+            assert!(inbox.feed.read(cx).mutation_revision(&item.key()).is_none());
             subscription
         })
         .unwrap();
     cx.run_until_parked();
-    assert_eq!(*changes.borrow(), vec![0, 0, 1]);
+    assert_eq!(*changes.borrow(), vec![0, 1]);
 }
 #[gpui::test]
 fn saved_bot_destination_is_preselected_and_explicit_project_choice_wins(cx: &mut TestAppContext) {

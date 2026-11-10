@@ -28,7 +28,11 @@ impl AppCore {
         shared
     }
 
-    fn remember_preference(&mut self, edit: impl FnOnce(&mut Preferences), cx: &mut Context<Self>) {
+    pub(super) fn remember_preference(
+        &mut self,
+        edit: impl FnOnce(&mut Preferences),
+        cx: &mut Context<Self>,
+    ) {
         let Some(shared) = &mut self.layouts.shared else {
             return;
         };

@@ -11,7 +11,7 @@ use crate::notifications::{
     linked_activity::{LinkedActivity, LinkedActivityEvent},
     platform, reminders,
 };
-use crate::settings::ProjectNotifications;
+use crate::settings::{Preferences, ProjectNotifications};
 use std::time::Duration;
 
 pub(super) struct State {
@@ -68,53 +68,22 @@ impl State {
 }
 
 impl Shell {
-    pub(super) fn inbox_activity(
-        &mut self,
-        projects: &[vorkspace_core::inbox::NotificationProject],
+    pub(super) fn chime_inbox_activity(
+        &self,
+        connectors: &vorkspace_core::inbox::Connectors,
         changed: &[vorkspace_core::inbox::Item],
-        cx: &mut Context<Self>,
+        cx: &App,
     ) {
-        let previous = &self.workspace.preferences.notification_projects;
-        let mut catalog = previous.as_array().cloned().unwrap_or_default();
-        for project in projects {
-            let mut value = serde_json::to_value(project).unwrap();
-            if let Some(old) = catalog
-                .iter_mut()
-                .find(|entry| entry["id"].as_str() == Some(&project.id))
-            {
-                let mut paths = old["paths"].as_array().cloned().unwrap_or_default();
-                for path in &project.paths {
-                    let path = serde_json::Value::String(path.clone());
-                    if !paths.contains(&path) {
-                        paths.push(path);
-                    }
-                }
-                value["paths"] = serde_json::Value::Array(paths);
-                *old = value;
-            } else {
-                catalog.push(value);
-            }
-        }
-        let catalog = serde_json::Value::Array(catalog);
-        if &catalog != previous {
-            self.workspace.preferences.notification_projects = catalog;
-            self.persist(cx);
-            self.sync_settings(cx);
-        }
-        let connectors = self
-            .inbox
-            .as_ref()
-            .map(|inbox| inbox.read(cx).connector_preferences())
-            .unwrap_or_default();
-        if self.holds_scheduler(cx)
-            && crate::notifications::inbox::should_chime(
-                &self.workspace.preferences,
-                &connectors,
-                changed,
-                self.notification_state.sounds_enabled_at,
-                vorkspace_core::time::now_ms(),
-            )
-        {
+        let preferences = cx
+            .try_global::<Preferences>()
+            .unwrap_or(&self.workspace.preferences);
+        if crate::notifications::inbox::should_chime(
+            preferences,
+            connectors,
+            changed,
+            self.notification_state.sounds_enabled_at,
+            vorkspace_core::time::now_ms(),
+        ) {
             crate::sound::play(crate::sound::Cue::LinkedActivity, self.store.clone());
         }
     }

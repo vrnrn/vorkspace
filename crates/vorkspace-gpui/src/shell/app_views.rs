@@ -334,10 +334,6 @@ impl Shell {
                     self.start_inbox_session(item.as_ref().clone(), prompt.clone(), cx);
                 }
             }
-            inbox::Event::ItemsChanged(items) => self.inbox_automation_events(items.clone(), cx),
-            inbox::Event::Activity { projects, changed } => {
-                self.inbox_activity(projects, changed, cx)
-            }
         }
     }
     pub(super) fn ensure_background_inbox(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -350,15 +346,20 @@ impl Shell {
                 .collect();
             let cwd = self.workspace.project.clone().into();
             let poll_projects = self.inbox_poll_projects();
-            let links = self
+            let (links, feed) = self
                 .app_core
                 .as_ref()
                 .expect("registered workspace window")
-                .read(cx)
-                .inbox_links
-                .clone();
+                .update(cx, |core, cx| core.inbox_sources(cx));
             let view = cx.new(|cx| {
-                inbox::Inbox::new(self.store.clone(), projects, cwd, poll_projects, links, cx)
+                inbox::Inbox::new(
+                    self.store.clone(),
+                    projects,
+                    cwd,
+                    poll_projects,
+                    (&links, &feed),
+                    cx,
+                )
             });
             self.subscribe_connector(&view, window, cx);
             self.app_view_events

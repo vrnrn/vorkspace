@@ -145,7 +145,7 @@ impl Shell {
                         if has_events {
                             this.ensure_background_inbox(window, cx);
                         }
-                        this.inbox_automation_events(Vec::new(), cx);
+                        this.drain_inbox_automation_events(cx);
                     }
                     Err(error) => {
                         this.error = Some(format!("Could not evaluate automations: {error}"));
@@ -157,24 +157,9 @@ impl Shell {
         .detach();
     }
 
-    pub(super) fn inbox_automation_events(
-        &mut self,
-        items: Vec<vorkspace_core::inbox::Item>,
-        cx: &mut Context<Self>,
-    ) {
+    pub(super) fn drain_inbox_automation_events(&mut self, cx: &mut Context<Self>) {
         let core = self.app_core.clone().expect("registered workspace window");
-        let incoming = !items.is_empty();
-        if incoming {
-            core.update(cx, |core, cx| core.queue_automation_events(items, cx));
-        }
         if !self.holds_scheduler(cx) {
-            if incoming && let Some(owner) = self.scheduler_window(cx) {
-                cx.defer(move |cx| {
-                    let _ = owner.update(cx, |shell, cx| {
-                        shell.inbox_automation_events(Vec::new(), cx)
-                    });
-                });
-            }
             return;
         }
         if self.automation_state.events_polling {

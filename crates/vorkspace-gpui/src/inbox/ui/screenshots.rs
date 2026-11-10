@@ -24,7 +24,7 @@ const AVATAR: &str = "fixture:initials";
 
 fn fixture(provider: &str, narrow_detail: bool, cx: &mut Context<Inbox>) -> Inbox {
     let store = Arc::new(Mutex::new(Store::open(Path::new(":memory:")).unwrap()));
-    let mut inbox = Inbox::new_inner(store, vec![], PathBuf::from(PROJECT), false, cx);
+    let mut inbox = Inbox::new_for_test(store, vec![], PathBuf::from(PROJECT), cx);
     inbox.state.source = provider.into();
     inbox.state.seen.seeded = true;
     Rc::make_mut(&mut inbox.snapshot).connections.insert(

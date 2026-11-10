@@ -1,9 +1,9 @@
-//! Connector fetch owner and retained provider pages, backed by native adapters
-//! and the desktop app's existing credential files.
+//! Window-local connector panes and their retained detail state.
 mod avatar;
 mod catalog;
 mod diff;
 mod document;
+mod feed;
 mod saved_preferences;
 mod ui;
 
@@ -16,8 +16,7 @@ use gpui::{
     App, AppContext, Context, Entity, EventEmitter, FocusHandle, Focusable, ListAlignment,
     ListState, Pixels, ScrollHandle, Subscription, WeakEntity, px,
 };
-use std::{path::PathBuf, time::Duration};
-use std::{rc::Rc, time::Instant};
+use std::{path::PathBuf, rc::Rc};
 use vorkspace_core::inbox::{
     self as model, Checks, Details, Diff, Item, Service, Snapshot, Thread, ViewState,
 };
@@ -25,6 +24,7 @@ use vorkspace_runtime::runtime::{Database, locked};
 use vorkspace_ui::theme::*;
 
 pub(crate) use catalog::SessionLinks;
+pub(crate) use feed::{FeedEvent, InboxFeed};
 
 pub(crate) enum Event {
     Close,
@@ -34,11 +34,6 @@ pub(crate) enum Event {
         item: Box<Item>,
         prompt: String,
         bot: Option<String>,
-    },
-    ItemsChanged(Vec<Item>),
-    Activity {
-        projects: Vec<model::NotificationProject>,
-        changed: Vec<Item>,
     },
 }
 
@@ -56,15 +51,13 @@ struct PostedComment {
 }
 
 pub(crate) struct Inbox {
-    /// Only the root owns list polling, observation and durable shared state.
-    /// Pages retain their own async detail work and inputs for their lifetime.
+    /// The root retains the pane entities. Each pane owns its details and inputs.
     owner: Option<WeakEntity<Inbox>>,
+    feed: Entity<InboxFeed>,
     pages: std::collections::HashMap<String, Entity<Inbox>>,
     store: Database,
     service: Service,
     projects: Vec<PathBuf>,
-    /// Polling is app-wide. A window's list and destinations use `projects`.
-    poll_projects: Vec<PathBuf>,
     state: ViewState,
     preferences: Entity<saved_preferences::SavedPreferences>,
     saved_state: ViewState,
@@ -111,7 +104,6 @@ pub(crate) struct Inbox {
     expanded_comments: std::collections::HashSet<String>,
     merge_action: String,
     reply: Option<(String, String)>,
-    generation: u64,
     detail_generation: u64,
     extra_request: u64,
     filters_open: bool,
@@ -139,10 +131,6 @@ pub(crate) struct Inbox {
     confirm_action: Option<String>,
     resize_start: Option<(f32, f32)>,
     active: bool,
-    refresh_queued: bool,
-    notifications: model::NotificationTracker,
-    self_activity: std::collections::HashMap<String, (i64, Instant)>,
-    last_refresh: Instant,
     _subscriptions: Vec<Subscription>,
 }
 
@@ -159,13 +147,22 @@ impl Inbox {
         projects: Vec<PathBuf>,
         cwd: PathBuf,
         poll_projects: Vec<PathBuf>,
-        links: Entity<SessionLinks>,
+        shared: (&Entity<SessionLinks>, &Entity<InboxFeed>),
         cx: &mut Context<Self>,
     ) -> Self {
-        let mut inbox = Self::new_inner(store, projects, cwd, !cfg!(test), cx);
-        inbox.poll_projects = poll_projects;
+        let (links, feed) = shared;
+        let mut inbox = Self::new_inner(store, projects, cwd, feed.clone(), cx);
+        let root = cx.entity_id();
+        feed.update(cx, |feed, cx| feed.set_scope(root, poll_projects, cx));
+        cx.observe(feed, Self::adopt_feed).detach();
+        cx.subscribe(feed, |this, _, event: &FeedEvent, cx| {
+            if matches!(event, FeedEvent::DetailTick) {
+                this.refresh_active_details(cx);
+            }
+        })
+        .detach();
         inbox.sessions = links.read(cx).index();
-        cx.observe(&links, |this, links, cx| {
+        cx.observe(links, |this, links, cx| {
             this.sessions = links.read(cx).index();
             this.publish_pages(cx);
             cx.notify();
@@ -177,7 +174,7 @@ impl Inbox {
         store: Database,
         mut projects: Vec<PathBuf>,
         cwd: PathBuf,
-        poll: bool,
+        feed: Entity<InboxFeed>,
         cx: &mut Context<Self>,
     ) -> Self {
         if !cwd.as_os_str().is_empty() && !projects.contains(&cwd) {
@@ -191,16 +188,23 @@ impl Inbox {
             .unwrap_or_else(|| cwd.clone());
         cx.observe(&preferences, |this, owner, cx| {
             let saved = owner.read(cx).state.clone();
-            let scope = this.state.fetch_scope(&this.poll_projects);
             this.adopt_preferences(&saved, true, cx);
-            if this.owner.is_none()
-                && !cfg!(test)
-                && scope != this.state.fetch_scope(&this.poll_projects)
-            {
-                this.refresh(cx);
-            }
         })
         .detach();
+        let entity = cx.entity_id();
+        let feed_on_release = feed.downgrade();
+        cx.on_release(move |_, cx| {
+            let _ = feed_on_release.update(cx, |feed, cx| feed.release(entity, cx));
+        })
+        .detach();
+        let (snapshot, loading, connection_revision) = {
+            let shared = feed.read(cx);
+            (
+                shared.snapshot.clone(),
+                shared.loading(),
+                shared.connection_revision,
+            )
+        };
         let placeholder = crate::controls::page::secondary_ink();
         let search = cx.new(|cx| Input::field("Filter items", "Filter items", placeholder, cx));
         let comment = cx.new(Input::inbox_comment);
@@ -238,54 +242,9 @@ impl Inbox {
                 }
             }),
         ];
-        if poll {
-            cx.spawn(async move |this, cx| {
-                if this.update(cx, |this, cx| this.refresh(cx)).is_err() {
-                    return;
-                }
-                loop {
-                    cx.background_executor()
-                        .timer(Duration::from_secs(30))
-                        .await;
-                    if this
-                        .update(cx, |this, cx| {
-                            let interval = Duration::from_secs(
-                                if this.pages.values().any(|page| page.read(cx).active) {
-                                    120
-                                } else {
-                                    300
-                                },
-                            );
-                            if this.last_refresh.elapsed() >= interval {
-                                this.refresh(cx);
-                            }
-                            for page in this.pages.values() {
-                                page.update(cx, |page, cx| {
-                                    if page.active
-                                        && page.selected.is_some()
-                                        && !page.detail_loading
-                                        && !page.posting
-                                        && !page.acting
-                                    {
-                                        page.load_detail(false, cx);
-                                        if page.tab == Tab::Checks && !page.extra_loading {
-                                            page.checks = None;
-                                            page.set_tab(Tab::Checks, cx);
-                                        }
-                                    }
-                                });
-                            }
-                        })
-                        .is_err()
-                    {
-                        break;
-                    }
-                }
-            })
-            .detach();
-        }
         Self {
             owner: None,
+            feed,
             pages: Default::default(),
             service: Service {
                 cwd: if cwd.is_dir() {
@@ -296,12 +255,11 @@ impl Inbox {
                 data_dir,
             },
             store,
-            poll_projects: projects.clone(),
             projects,
             saved_state: state.clone(),
             state,
             preferences,
-            snapshot: Default::default(),
+            snapshot,
             sessions: Default::default(),
             publication_queued: false,
             focus: cx.focus_handle(),
@@ -328,7 +286,7 @@ impl Inbox {
             diff_view,
             checks: None,
             tab: Tab::Summary,
-            loading: false,
+            loading,
             detail_loading: false,
             extra_loading: false,
             posting: false,
@@ -341,7 +299,6 @@ impl Inbox {
             expanded_comments: Default::default(),
             merge_action: "merge".into(),
             reply: None,
-            generation: 0,
             detail_generation: 0,
             extra_request: 0,
             filters_open: false,
@@ -353,7 +310,7 @@ impl Inbox {
             connect_email,
             connect_token,
             connecting: false,
-            connection_revision: 0,
+            connection_revision,
             connect_error: None,
             start_project: cwd,
             bots: vec![],
@@ -369,10 +326,6 @@ impl Inbox {
             confirm_action: None,
             resize_start: None,
             active: false,
-            refresh_queued: false,
-            notifications: model::NotificationTracker::default(),
-            self_activity: Default::default(),
-            last_refresh: Instant::now(),
             _subscriptions: subscriptions,
         }
     }
@@ -405,16 +358,18 @@ impl Inbox {
             self.publish_pages(cx);
             cx.notify();
         }
-        if self.poll_projects != poll_projects {
-            self.poll_projects = poll_projects;
-            self.refresh(cx);
-        }
+        let root = cx.entity_id();
+        self.feed
+            .update(cx, |feed, cx| feed.set_scope(root, poll_projects, cx));
     }
     pub(crate) fn set_active(&mut self, active: bool, cx: &mut Context<Self>) {
         if self.active == active {
             return;
         }
         self.active = active;
+        let entity = cx.entity_id();
+        self.feed
+            .update(cx, |feed, _| feed.set_active(entity, active));
         if active {
             if let Some(item) = self.item() {
                 self.state.seen.mark(&item);
@@ -474,7 +429,6 @@ impl Inbox {
         })?;
         self.adopt_preferences(&saved, true, cx);
         self.publish_pages(cx);
-        self.refresh(cx);
         cx.notify();
         Ok(())
     }
@@ -483,7 +437,7 @@ impl Inbox {
         if !visible {
             self.state.hidden_jira_projects.push(id.into());
         }
-        self.filters_changed(true, cx);
+        self.filters_changed(cx);
     }
     pub(crate) fn set_default_bot(
         &mut self,
@@ -549,16 +503,9 @@ impl Inbox {
             )
         })?;
         self.adopt_preferences(&saved, true, cx);
-        let snapshot = Rc::make_mut(&mut self.snapshot);
-        snapshot
-            .items
-            .retain(|item| self.state.connectors.enabled(&item.provider));
-        snapshot
-            .connections
-            .retain(|key, _| self.state.connectors.enabled(key));
-        snapshot
-            .errors
-            .retain(|key, _| self.state.connectors.enabled(key));
+        self.feed
+            .update(cx, |feed, cx| feed.preferences_changed(cx));
+        self.adopt_feed(self.feed.clone(), cx);
         if self.item().is_none() {
             self.selected = None;
             self.narrow_detail = false;
@@ -584,7 +531,6 @@ impl Inbox {
         }
         self.save(cx);
         self.publish_pages(cx);
-        self.refresh(cx);
         cx.notify();
         Ok(())
     }
@@ -613,135 +559,109 @@ impl Inbox {
     }
 
     pub(crate) fn refresh(&mut self, cx: &mut Context<Self>) {
-        if let Some(owner) = self.owner.clone() {
-            let _ = owner.update(cx, |owner, cx| owner.refresh(cx));
+        self.feed.update(cx, |feed, cx| feed.refresh(true, cx));
+    }
+
+    fn adopt_feed(&mut self, feed: Entity<InboxFeed>, cx: &mut Context<Self>) {
+        let shared = feed.read(cx);
+        let loading = shared.loading();
+        let connection_revision = shared.connection_revision;
+        let snapshot_changed = !Rc::ptr_eq(&self.snapshot, &shared.snapshot);
+        let loading_changed = self.loading != loading;
+        if !snapshot_changed && !loading_changed && self.connection_revision == connection_revision
+        {
             return;
         }
-        if self.loading {
-            self.refresh_queued = true;
-            return;
+        self.snapshot = shared.snapshot.clone();
+        self.loading = loading;
+        self.connection_revision = connection_revision;
+        if snapshot_changed {
+            if self
+                .item()
+                .is_none_or(|item| item.provider != self.state.source)
+            {
+                self.selected = None;
+                self.narrow_detail = false;
+                self.details = None;
+                self.document = None;
+                self.comments.clear();
+            }
+            if self.active
+                && let Some(item) = self.item()
+            {
+                self.state.seen.mark(&item);
+                self.save(cx);
+            } else if self.active
+                && let Some(key) = self.first_visible_key(cx)
+            {
+                self.select(key, cx);
+            }
         }
-        self.loading = true;
-        self.publish_pages(cx);
-        self.last_refresh = Instant::now();
-        self.generation += 1;
-        let generation = self.generation;
-        let service = self.service.clone();
-        let state = self.state.clone();
-        let projects = self.poll_projects.clone();
-        let scope = state.fetch_scope(&projects);
-        let task = cx
-            .background_executor()
-            .spawn(async move { service.list(&projects, &state) });
-        cx.spawn(async move |this, cx| {
-            let snapshot = task.await;
-            let _ = this.update(cx, |this, cx| {
-                this.finish_refresh(generation, scope, snapshot, cx)
+        if snapshot_changed || loading_changed {
+            self.publish_pages(cx);
+        }
+        cx.notify();
+    }
+
+    fn refresh_active_details(&self, cx: &mut Context<Self>) {
+        for page in self.pages.values() {
+            if !page.read(cx).active {
+                continue;
+            }
+            page.update(cx, |page, cx| {
+                if page.selected.is_none() || page.detail_loading || page.posting || page.acting {
+                    return;
+                }
+                page.load_detail(false, cx);
+                if page.tab == Tab::Checks && !page.extra_loading {
+                    page.checks = None;
+                    page.set_tab(Tab::Checks, cx);
+                }
             });
-        })
-        .detach();
-        cx.notify();
+        }
     }
-    fn finish_refresh(
-        &mut self,
-        generation: u64,
-        scope: String,
-        mut snapshot: Snapshot,
+
+    #[cfg(test)]
+    fn new_for_test(
+        store: Database,
+        projects: Vec<PathBuf>,
+        cwd: PathBuf,
         cx: &mut Context<Self>,
-    ) {
-        if self.generation != generation {
-            return;
-        }
-        self.loading = false;
-        if scope != self.state.fetch_scope(&self.poll_projects) {
-            self.refresh_queued = false;
-            self.refresh(cx);
-            return;
-        }
-        let observation = self.notifications.observe_snapshot(&snapshot, scope);
-        self.self_activity
-            .retain(|_, (_, time)| time.elapsed() < Duration::from_secs(600));
-        let changed = observation
-            .changed
-            .into_iter()
-            .filter(|item| {
-                let own_revision = self
-                    .self_activity
-                    .get(&item.key())
-                    .map(|(revision, _)| *revision);
-                // A stale poll must not consume a pending receipt; a later
-                // external revision must never be classified as our mutation.
-                if own_revision.is_some_and(|revision| item.updated_ms() >= revision) {
-                    self.self_activity.remove(&item.key());
-                }
-                if own_revision == Some(item.updated_ms()) {
-                    self.state.seen.mark(item);
-                    false
-                } else {
-                    self.state.connectors.enabled(&item.provider)
-                        && self
-                            .state
-                            .filters_for(&item.provider)
-                            .matches(item, &item.provider, "")
-                }
-            })
-            .collect();
-        // A temporary outage must not erase the last usable provider list.
-        for provider in snapshot.errors.keys() {
-            snapshot.items.extend(
-                self.snapshot
-                    .items
-                    .iter()
-                    .filter(|i| &i.provider == provider)
-                    .cloned(),
-            );
-        }
-        snapshot
-            .items
-            .sort_by_key(|item| std::cmp::Reverse(item.updated_ms()));
-        self.state.seen.seed(&snapshot.items);
-        self.snapshot = Rc::new(snapshot);
-        if self.active
-            && let Some(item) = self.item()
-        {
-            self.state.seen.mark(&item);
-        }
-        self.save(cx);
-        let projects = self
-            .snapshot
-            .items
-            .iter()
-            .map(|item| {
-                let project = item.notification_project();
-                (project.id.clone(), project)
-            })
-            .collect::<std::collections::BTreeMap<_, _>>()
-            .into_values()
-            .collect();
-        cx.emit(Event::Activity { projects, changed });
-        cx.emit(Event::ItemsChanged(observation.appeared));
-        self.publish_pages(cx);
-        if self
-            .item()
-            .is_none_or(|item| item.provider != self.state.source)
-        {
-            self.selected = None;
-            self.narrow_detail = false;
-            self.details = None;
-            self.document = None;
-            self.comments.clear();
-        }
-        if self.active
-            && self.selected.is_none()
-            && let Some(key) = self.first_visible_key(cx)
-        {
-            self.select(key, cx);
-        }
-        if std::mem::take(&mut self.refresh_queued) {
-            self.refresh(cx);
-        }
-        cx.notify();
+    ) -> Self {
+        let poll_projects = if projects.is_empty() {
+            vec![cwd.clone()]
+        } else {
+            projects.clone()
+        };
+        let data_dir = locked(&store)
+            .ok()
+            .and_then(|db| db.data_dir().map(PathBuf::from))
+            .unwrap_or_else(|| cwd.clone());
+        let feed = cx.new(|cx| InboxFeed::new(&store, data_dir, cx));
+        let links = cx.new(|_| SessionLinks::default());
+        Self::new(store, projects, cwd, poll_projects, (&links, &feed), cx)
     }
+
+    #[cfg(test)]
+    fn stage_fixture_poll(&mut self, cx: &mut Context<Self>) -> u64 {
+        let generation = self.feed.update(cx, |feed, cx| {
+            feed.snapshot = self.snapshot.clone();
+            feed.stage_fixture_poll(cx)
+        });
+        self.adopt_feed(self.feed.clone(), cx);
+        generation
+    }
+
+    #[cfg(test)]
+    fn finish_fixture_poll(&mut self, generation: u64, snapshot: Snapshot, cx: &mut Context<Self>) {
+        self.feed.update(cx, |feed, cx| {
+            feed.finish_fixture_poll(generation, snapshot, cx)
+        });
+        let saved = self.preferences.read(cx).state.clone();
+        self.adopt_preferences(&saved, true, cx);
+        self.adopt_feed(self.feed.clone(), cx);
+    }
+
     fn project_preferences(saved: &ViewState, source: Option<&str>) -> ViewState {
         let mut state = saved.clone();
         if let Some(source) = source {
@@ -829,9 +749,7 @@ impl Inbox {
         self.state.source = source.into();
         self.state.filters = self.state.filters_for(source).clone();
         self.save(cx);
-        if self.last_refresh.elapsed() >= Duration::from_secs(120) {
-            self.refresh(cx);
-        }
+        self.feed.update(cx, |feed, cx| feed.refresh_if_stale(cx));
     }
     pub(crate) fn provider_unread_count(&self, provider: &str) -> usize {
         self.snapshot
@@ -855,7 +773,7 @@ impl Inbox {
                 self.store.clone(),
                 self.projects.clone(),
                 self.start_project.clone(),
-                false,
+                self.feed.clone(),
                 cx,
             );
             page.owner = Some(owner);
@@ -902,7 +820,7 @@ impl Inbox {
                 } else {
                     PathBuf::from(&item.project_path)
                 },
-                false,
+                self.feed.clone(),
                 cx,
             );
             page.owner = Some(owner);
@@ -1365,47 +1283,11 @@ impl Inbox {
         .detach();
         cx.notify();
     }
-    fn record_self_activity(&mut self, key: String, revision: i64, cx: &mut Context<Self>) {
-        if let Some(owner) = self.owner.clone() {
-            let _ = owner.update(cx, |owner, cx| {
-                owner.record_self_activity(key, revision, cx)
-            });
-            return;
-        }
-        // Some providers omit receipt metadata. Keep uncertain revisions audible
-        // rather than swallowing whichever external change happens to arrive next.
-        if revision > 0
-            && self
-                .self_activity
-                .get(&key)
-                .is_none_or(|(old, _)| revision >= *old)
-        {
-            self.self_activity.insert(key, (revision, Instant::now()));
-        }
+    fn record_self_activity(&self, key: String, revision: i64, cx: &mut Context<Self>) {
+        self.feed
+            .update(cx, |feed, _| feed.note_mutation(key, revision));
     }
-    fn update_item_summary(&mut self, item: Item, cx: &mut Context<Self>) {
-        let key = item.key();
-        let mut changed = false;
-        if let Some(index) = self
-            .snapshot
-            .items
-            .iter()
-            .position(|old| old.key() == key && old.updated_ms() <= item.updated_ms())
-            && self.snapshot.items[index] != item
-        {
-            Rc::make_mut(&mut self.snapshot).items[index] = item.clone();
-            changed = true;
-        }
-        if let Some(pinned) = self.pinned_item.as_mut() {
-            changed |= Self::refresh_pinned_summary(pinned, &item);
-        }
-        if changed && self.owner.is_none() {
-            self.publish_pages(cx);
-        }
-        if changed {
-            cx.notify();
-        }
-    }
+
     fn post_comment(&mut self, cx: &mut Context<Self>) {
         if self.posting {
             return;
@@ -1554,22 +1436,27 @@ impl Inbox {
             cx.notify();
             return;
         }
-        self.connecting = true;
-        self.connection_revision += 1;
-        if let Some(owner) = self.owner.clone() {
-            let _ = owner.update(cx, |owner, cx| {
-                owner.connection_revision += 1;
-                cx.notify();
-            });
+        if let Err(error) = self
+            .feed
+            .update(cx, |feed, cx| feed.begin_connection(&provider, cx))
+        {
+            self.connect_error = Some(error);
+            cx.notify();
+            return;
         }
+        self.connecting = true;
         self.connect_error = None;
         let service = self.service.clone();
         let source = provider.clone();
+        let feed = self.feed.clone();
         let task = cx
             .background_executor()
             .spawn(async move { service.connect(&source, url, email, token) });
         cx.spawn(async move |this, cx| {
             let result = task.await;
+            let _ = feed.update(cx, |feed, cx| {
+                feed.finish_connection(&provider, result.as_ref().ok().cloned(), cx);
+            });
             let _ = this.update(cx, |this, cx| {
                 this.connecting = false;
                 if !this.state.connectors.enabled(&provider) {
@@ -1579,14 +1466,15 @@ impl Inbox {
                 }
                 match result {
                     Ok(status) => {
-                        let connected = status.connected;
-                        Rc::make_mut(&mut this.snapshot).connections.insert(provider.clone(), status);
                         this.connect_token.update(cx, |input, cx| input.set_text(String::new(), cx));
-                        if connected || disconnect {
+                        if status.connected || disconnect {
                             this.connect_provider = None;
-                            if connected { this.change_source(provider, cx); }
-                            this.refresh(cx);
-                        } else { this.connect_error = Some("GitHub is not connected. Run “gh auth login” in a terminal, then check again.".into()); }
+                            if status.connected {
+                                this.change_source(provider, cx);
+                            }
+                        } else {
+                            this.connect_error = Some("GitHub is not connected. Run “gh auth login” in a terminal, then check again.".into());
+                        }
                     }
                     Err(error) => this.connect_error = Some(error),
                 }
@@ -1617,17 +1505,14 @@ impl Inbox {
                 match result {
                     Ok(item) => {
                         this.record_self_activity(key.clone(), item.updated_ms(), cx);
-                        if let Some(owner) = this.owner.clone() {
-                            let shared = item.clone();
-                            let _ = owner.update(cx, |owner, cx| {
-                                owner.update_item_summary(shared, cx);
-                            });
+                        if let Some(pinned) = this.pinned_item.as_mut() {
+                            Self::refresh_pinned_summary(pinned, &item);
                         }
-                        this.update_item_summary(item.clone(), cx);
+                        let merged = item.state.eq_ignore_ascii_case("merged");
+                        this.feed.update(cx, |feed, cx| feed.update_item(item, cx));
                         if this.selected.as_ref() == Some(&key) {
-                            this.action_notice = (merging
-                                && !item.state.eq_ignore_ascii_case("merged"))
-                            .then(|| "Merge queued or auto-merge enabled.".into());
+                            this.action_notice = (merging && !merged)
+                                .then(|| "Merge queued or auto-merge enabled.".into());
                             this.confirm_action = None;
                             if !this.release_pending {
                                 this.load_detail(false, cx);

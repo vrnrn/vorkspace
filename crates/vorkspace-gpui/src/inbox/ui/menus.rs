@@ -17,15 +17,12 @@ impl Inbox {
                 && self.state.jira_filter.mode != "jql"
                 && !self.state.hidden_jira_projects.is_empty())
     }
-    pub(crate) fn filters_changed(&mut self, refetch: bool, cx: &mut Context<Self>) {
+    pub(crate) fn filters_changed(&mut self, cx: &mut Context<Self>) {
         self.save(cx);
         if self.active
             && let Some(key) = self.first_visible_key(cx)
         {
             self.select(key, cx);
-        }
-        if refetch {
-            self.refresh(cx);
         }
         cx.notify();
     }
@@ -47,7 +44,7 @@ impl Inbox {
                 )
                 .on_click(cx.listener(|this, _, _, cx| {
                     this.state.filters.assigned_to_me = !this.state.filters.assigned_to_me;
-                    this.filters_changed(true, cx);
+                    this.filters_changed(cx);
                 }))
                 .into_any_element(),
             );
@@ -63,7 +60,7 @@ impl Inbox {
                 menu_row(format!("inbox-time-{time}"), label, f.time == time)
                     .on_click(cx.listener(move |this, _, _, cx| {
                         this.state.filters.time = time.into();
-                        this.filters_changed(false, cx);
+                        this.filters_changed(cx);
                     }))
                     .into_any_element(),
             );
@@ -89,7 +86,7 @@ impl Inbox {
                             "Closed" => s.closed = !s.closed,
                             _ => s.merged = !s.merged,
                         }
-                        this.filters_changed(true, cx);
+                        this.filters_changed(cx);
                     }))
                     .into_any_element(),
             );
@@ -115,7 +112,7 @@ impl Inbox {
                     )
                     .on_click(cx.listener(move |this, _, _, cx| {
                         toggle(&mut this.state.filters.hidden_kinds, kind.into());
-                        this.filters_changed(false, cx);
+                        this.filters_changed(cx);
                     }))
                     .into_any_element(),
                 );
@@ -132,7 +129,7 @@ impl Inbox {
                     .child(crate::project_mark::project_icon(&key, 12.))
                     .on_click(cx.listener(move |this, _, _, cx| {
                         toggle(&mut this.state.filters.hidden_projects, key.clone());
-                        this.filters_changed(false, cx);
+                        this.filters_changed(cx);
                     }))
                     .into_any_element(),
                 );
@@ -152,7 +149,7 @@ impl Inbox {
                     )
                     .on_click(cx.listener(move |this, _, _, cx| {
                         toggle(&mut this.state.hidden_jira_projects, id.clone());
-                        this.filters_changed(true, cx);
+                        this.filters_changed(cx);
                     }))
                     .into_any_element(),
                 );
@@ -166,7 +163,7 @@ impl Inbox {
                 .on_click(cx.listener(|this, _, _, cx| {
                     this.state.filters = model::Filters::default();
                     this.state.hidden_jira_projects.clear();
-                    this.filters_changed(true, cx);
+                    this.filters_changed(cx);
                 }))
                 .into_any_element(),
         );
