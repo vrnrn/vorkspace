@@ -257,13 +257,19 @@ impl Service {
                 }
             }
         }
+        let listening = self.status.phase == DictationPhase::Listening;
         if let Some(panel) = self.panel {
             let _ = panel.update(cx, |p, _, cx| {
                 p.status = self.status.clone();
+                if !listening {
+                    p.level = 0.;
+                }
                 cx.notify();
             });
         }
-        if self.meter.is_none() {
+        if !listening {
+            self.meter = None;
+        } else if self.meter.is_none() {
             self.meter = Some(cx.spawn(async move |this, cx| {
                 loop {
                     cx.background_executor()
@@ -272,11 +278,7 @@ impl Service {
                     if this
                         .update(cx, |s, cx| {
                             let Some(panel) = s.panel else { return false };
-                            let level = if s.status.phase == DictationPhase::Listening {
-                                unsafe { vorkspace_dictation_level() }.clamp(0., 1.)
-                            } else {
-                                0.
-                            };
+                            let level = unsafe { vorkspace_dictation_level() }.clamp(0., 1.);
                             let _ = panel.update(cx, |p, _, cx| {
                                 let next = p.level + (level - p.level) * 0.45;
                                 if (next - p.level).abs() > 0.005 {
