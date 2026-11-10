@@ -206,7 +206,11 @@ impl Shell {
                         bots.update(cx, |bots, cx| bots.focus_chat_window(&bot.id, cx))
                     });
                     if !routed {
-                        self.open_owned_bot(&bot.id, window, cx);
+                        if self.workspace.bot_hidden_in_vorkspace(&bot.id) {
+                            self.open_owned_bot(&bot.id, window, cx);
+                        } else {
+                            self.click_bot_tab(&bot.id, window, cx);
+                        }
                     }
                 } else {
                     self.open(id, window, cx);
