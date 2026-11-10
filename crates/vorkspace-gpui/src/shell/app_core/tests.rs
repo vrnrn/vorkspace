@@ -258,29 +258,21 @@ fn scheduler_delivers_a_reminder_created_in_another_window(cx: &mut TestAppConte
                 .unwrap();
             let id = session.id;
             shell.add(session, cx);
-            shell.store_write("set reminder", cx, move |store| {
-                store.set_reminders(&[id], 1)
-            });
-            shell.poll_reminders(cx);
+            shell.edit_reminder(
+                ReminderEdit::Schedule {
+                    sessions: vec![id],
+                    due_at: 1,
+                },
+                cx,
+            );
             id
         })
         .unwrap();
     cx.run_until_parked();
     a.update(cx, |shell, _, cx| {
-        assert!(shell.session_summaries.contains_key(&id));
-        assert!(shell.reminders.is_empty());
-        assert!(
-            locked(&shell.store).unwrap().reminders().unwrap()[0]
-                .fired_at
-                .is_none()
-        );
-        shell.poll_reminders(cx);
-    })
-    .unwrap();
-    cx.run_until_parked();
-    a.update(cx, |shell, _, cx| {
         let durable = locked(&shell.store).unwrap().reminders().unwrap();
-        assert_eq!(durable, shell.reminders);
+        assert!(shell.session_summaries.contains_key(&id));
+        assert_eq!(durable.as_slice(), shell.reminders(cx));
         assert_eq!(durable[0].session_id, id);
         assert!(durable[0].fired_at.is_some());
         shell.sync_notices(cx);
@@ -314,8 +306,10 @@ fn scheduler_delivers_a_reminder_created_in_another_window(cx: &mut TestAppConte
         );
     })
     .unwrap();
-    a.update(cx, |shell, _, _| assert!(shell.reminders.is_empty()))
-        .unwrap();
+    a.update(cx, |shell, _, cx| {
+        assert_eq!(shell.reminders(cx)[0].due_at, later);
+    })
+    .unwrap();
 }
 
 #[gpui::test]

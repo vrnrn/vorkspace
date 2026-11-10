@@ -52,12 +52,8 @@ impl LinkedActivity {
         self.can_delete = can_delete;
         cx.notify();
     }
-    /// Archive/delete callbacks acknowledge only after successful completion.
-    pub(crate) fn finish_cleanup(&mut self, succeeded: bool, cx: &mut Context<Self>) {
+    pub(crate) fn finish_cleanup(&mut self, cx: &mut Context<Self>) {
         self.cleanup = None;
-        if succeeded && let Some(card) = &self.card {
-            cx.emit(LinkedActivityEvent::Acknowledge(card.session));
-        }
         cx.notify();
     }
 }

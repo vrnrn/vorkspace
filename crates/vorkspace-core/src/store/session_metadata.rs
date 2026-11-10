@@ -12,7 +12,6 @@ pub struct SessionSidebarMetadata {
     pub started_by: HashMap<i64, i64>,
     pub orchestrations: HashMap<i64, orchestration::Summary>,
     pub groups: HashMap<String, session_groups::Groups>,
-    pub reminders: Vec<super::Reminder>,
 }
 
 /// Scalar sidebar fields, including sessions with no live conversation view.
@@ -119,7 +118,6 @@ impl Store {
                         .map(|groups| (project.clone(), groups))
                 })
                 .collect(),
-            reminders: self.reminders().unwrap_or_default(),
         }
     }
 }

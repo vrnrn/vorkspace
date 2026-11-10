@@ -3,8 +3,67 @@ use super::*;
 use crate::notifications::github_activity::{
     self, GithubActivity, GithubActivityEvent, LinkedSession,
 };
+use crate::notifications::{
+    delivery::{Permission, Target},
+    platform,
+};
 
 impl AppCore {
+    pub(in crate::shell) fn start_native_notifications(&mut self, cx: &mut Context<Self>) {
+        if self.notification_clicks.is_some() || !platform::initialize() {
+            return;
+        }
+        if self.notification_permission == Permission::Unsupported {
+            self.notification_permission = Permission::Prompt;
+        }
+        self.refresh_notification_permission(cx);
+        let clicks = platform::clicks();
+        self.notification_clicks = Some(cx.spawn(async move |core, cx| {
+            while let Ok(target) = clicks.recv().await {
+                let id = match target {
+                    Target::Session(id) | Target::Reminder { session_id: id, .. } => id,
+                };
+                let routed = cx.update(|cx| {
+                    let Some(core) = core.upgrade() else {
+                        return false;
+                    };
+                    let Some(shell) = core.read(cx).route(id, cx) else {
+                        return false;
+                    };
+                    shell.update(cx, |shell, cx| shell.open_notice_target(target, cx));
+                    true
+                });
+                if !routed {
+                    // Keep a click received during window teardown for the
+                    // next workspace window.
+                    platform::queue_click(target);
+                    break;
+                }
+            }
+        }));
+    }
+
+    pub(in crate::shell) fn set_notification_permission(&mut self, permission: Permission) {
+        self.notification_permission_probe = None;
+        self.notification_permission = permission;
+    }
+
+    pub(in crate::shell) fn refresh_notification_permission(&mut self, cx: &mut Context<Self>) {
+        if self.notification_permission_probe.is_some() {
+            return;
+        }
+        let result = platform::permission();
+        self.notification_permission_probe = Some(cx.spawn(async move |core, cx| {
+            let result = result.recv().await;
+            let _ = core.update(cx, |core, _| {
+                core.notification_permission_probe = None;
+                if let Ok(permission) = result {
+                    core.notification_permission = permission;
+                }
+            });
+        }));
+    }
+
     pub(super) fn observe_linked_activity(feed: &Entity<GithubActivity>, cx: &mut Context<Self>) {
         cx.subscribe(feed, |core, feed, event, cx| match event {
             GithubActivityEvent::Acknowledged(encoded) => {

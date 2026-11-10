@@ -2,9 +2,8 @@
 //! folders and deletion, and the grouped list they shape.
 use super::*;
 use chrono::{Local, NaiveDateTime, TimeZone};
-use vorkspace_core::{
-    session_groups::{format_reminder, parse_github_work_item, reminder_at, reminder_presets},
-    store::Reminder,
+use vorkspace_core::session_groups::{
+    format_reminder, parse_github_work_item, reminder_at, reminder_presets,
 };
 use vorkspace_ui::radius;
 
@@ -131,16 +130,7 @@ impl Shell {
         })
         .detach();
     }
-    pub(super) fn store_write(
-        &mut self,
-        what: &'static str,
-        cx: &mut Context<Self>,
-        write: impl FnOnce(&mut vorkspace_core::store::Store) -> Result<(), String> + Send + 'static,
-    ) {
-        self.write_session_group(what, Vec::new(), cx, write);
-    }
-
-    fn write_session_group(
+    pub(super) fn write_session_group(
         &mut self,
         what: &'static str,
         changed: Vec<i64>,
@@ -253,7 +243,11 @@ impl Shell {
             .iter()
             .all(|id| self.session_metadata(*id, cx).summary.archived);
         let mut items = Vec::new();
-        if self.reminders.iter().any(|r| ids.contains(&r.session_id)) {
+        if self
+            .reminders(cx)
+            .iter()
+            .any(|r| ids.contains(&r.session_id))
+        {
             items.push(
                 MenuAction::new("reminder:cancel", "Cancel reminder")
                     .icon("circle-x")
@@ -370,7 +364,7 @@ impl Shell {
             "link-work-item" => self.open_link_dialog(id, window, cx),
             "reminder:cancel" => {
                 let occurrences: Vec<_> = self
-                    .reminders
+                    .reminders(cx)
                     .iter()
                     .filter(|reminder| ids.contains(&reminder.session_id))
                     .map(|reminder| (reminder.session_id, reminder.due_at))
@@ -386,16 +380,13 @@ impl Shell {
                 else {
                     return;
                 };
-                self.reminders.retain(|r| !ids.contains(&r.session_id));
-                self.reminders.extend(ids.iter().map(|id| Reminder {
-                    session_id: *id,
-                    due_at,
-                    fired_at: None,
-                }));
-                self.invalidate_chrome(cx);
-                self.store_write("set the reminder", cx, move |s| {
-                    s.set_reminders(&ids, due_at)
-                });
+                self.edit_reminder(
+                    app_core::ReminderEdit::Schedule {
+                        sessions: ids,
+                        due_at,
+                    },
+                    cx,
+                );
             }
             "archive" => {
                 let archived = !ids
@@ -416,7 +407,7 @@ impl Shell {
     pub(super) fn dismiss_due_reminder(&mut self, id: i64, cx: &mut Context<Self>) {
         let now = vorkspace_core::time::now_ms();
         let Some(due) = self
-            .reminders
+            .reminders(cx)
             .iter()
             .find(|r| r.session_id == id && r.due_at <= now)
             .map(|r| r.due_at)
@@ -424,109 +415,6 @@ impl Shell {
             return;
         };
         self.clear_notification_reminder(id, due, cx);
-    }
-
-    pub(super) fn poll_reminders(&mut self, cx: &mut Context<Self>) {
-        if self.notification_state.reminder_error.is_some()
-            || self.reminder_poll_in_flight
-            || !self.holds_scheduler(cx)
-        {
-            return;
-        }
-        self.reminder_poll_in_flight = true;
-        let before = self.reminders.clone();
-        let known: HashSet<_> = before
-            .iter()
-            .map(|r| r.session_id)
-            .filter(|id| self.session_summaries.contains_key(id))
-            .collect();
-        let store = self.store.clone();
-        let previous = self.group_writes.take();
-        self.group_writes = Some(cx.spawn(async move |this, cx| {
-            if let Some(previous) = previous {
-                previous.await;
-            }
-            if !this
-                .update(cx, |shell, _| {
-                    if shell.notification_state.reminder_error.is_some() {
-                        shell.reminder_poll_in_flight = false;
-                        return false;
-                    }
-                    true
-                })
-                .unwrap_or(false)
-            {
-                return;
-            }
-            let work = cx.background_executor().spawn(async move {
-                let mut store = locked(&store)?;
-                let now = vorkspace_core::time::now_ms();
-                let mut reminders = store.reminders()?;
-                let missing: HashSet<_> = reminders
-                    .iter()
-                    .filter(|r| r.due_at <= now && !known.contains(&r.session_id))
-                    .map(|r| r.session_id)
-                    .collect();
-                let summaries = if missing.is_empty() {
-                    Vec::new()
-                } else {
-                    store
-                        .sessions()?
-                        .into_iter()
-                        .filter(|s| missing.contains(&s.id))
-                        .collect()
-                };
-                let claimed = store.claim_due_reminders(&reminders, now)?;
-                let fired: HashSet<_> = claimed.iter().map(|r| r.session_id).collect();
-                for reminder in &mut reminders {
-                    if fired.contains(&reminder.session_id) {
-                        reminder.fired_at = Some(now);
-                    }
-                }
-                Ok::<_, String>((reminders, claimed, summaries))
-            });
-            let result = work.await;
-            let _ = this.update(cx, |this, cx| {
-                this.reminder_poll_in_flight = false;
-                match result {
-                    Ok((mut reminders, mut claimed, summaries)) => {
-                        // Keep edits made here while the ordered store read was pending.
-                        // Rows absent in both local snapshots can still be due in the store.
-                        if this.reminders != before {
-                            let before: HashMap<_, _> =
-                                before.iter().map(|r| (r.session_id, r)).collect();
-                            let local: HashMap<_, _> =
-                                this.reminders.iter().map(|r| (r.session_id, r)).collect();
-                            let unchanged = |id| before.get(&id) == local.get(&id);
-                            reminders.retain(|r| unchanged(r.session_id));
-                            reminders.extend(
-                                this.reminders
-                                    .iter()
-                                    .filter(|r| !unchanged(r.session_id))
-                                    .cloned(),
-                            );
-                            claimed.retain(|r| unchanged(r.session_id));
-                        }
-                        if reminders == this.reminders && claimed.is_empty() {
-                            return;
-                        }
-                        this.reminders = reminders;
-                        for summary in summaries {
-                            this.session_summaries.entry(summary.id).or_insert(summary);
-                        }
-                        for reminder in claimed {
-                            this.deliver_reminder_notice(reminder.session_id, reminder.due_at, cx);
-                        }
-                    }
-                    Err(error) => {
-                        this.notification_state.reminder_error =
-                            Some(format!("Could not deliver reminders: {error}"));
-                    }
-                }
-                this.invalidate_chrome(cx);
-                cx.notify();
-            });
-        }));
     }
 
     fn report_session_delete_error(&mut self, id: i64, reason: &str) {
@@ -595,6 +483,7 @@ impl Shell {
             let _ = this.update(cx, |this, cx| {
                 this.deleting.remove(&id);
                 this.release_session_deletion(id, cx);
+                this.complete_linked_cleanup(id, result.is_ok(), cx);
                 match result {
                     Ok(()) => this.forget_session(id, cx),
                     Err(error) => this.report_session_delete_error(id, &error),
@@ -641,7 +530,7 @@ impl Shell {
         self.busy_sessions.remove(&id);
         self.unseen_finished.remove(&id);
         self.selected_sessions.remove(&id);
-        self.reminders.retain(|r| r.session_id != id);
+        self.poll_reminders(cx);
         self.workspace.project_focus.retain(|_, s| *s != id);
         self.history
             .prune(&self.workspace.open_sessions(), self.workspace.active);

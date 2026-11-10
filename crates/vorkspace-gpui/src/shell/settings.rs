@@ -343,6 +343,11 @@ impl Shell {
                         .harness
                         .update(cx, |notice, cx| notice.check_now(hidden, cx));
                 }
+                SettingsEvent::NotificationPermission(permission) => {
+                    if let Some(core) = &this.app_core {
+                        core.update(cx, |core, _| core.set_notification_permission(*permission));
+                    }
+                }
                 SettingsEvent::Changed(prefs) => {
                     window.set_ui_scale(prefs.interface_scale(), cx);
                     for (enabled, view) in
@@ -503,7 +508,7 @@ impl Shell {
             let prefs = self.workspace.preferences.clone();
             vox.update(cx, |v, cx| v.preferences(&prefs, cx));
         }
-        self.refresh_notification_permission();
+        self.refresh_notification_permission(cx);
         self.configure_quick_composer(cx);
         crate::menu_bar::refresh(&self.workspace.preferences, cx);
         vorkspace_core::cli::initialize(&self.workspace.preferences.binary_paths);

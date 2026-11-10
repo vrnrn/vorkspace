@@ -8,11 +8,11 @@ use crate::notifications::{
     file_error::{FileActionError, FileActionErrorEvent},
     github_activity::{self, GithubActivity, GithubActivityEvent},
     harness_updates::{HarnessUpdates, HarnessUpdatesEvent},
-    linked_activity::{Cleanup, LinkedActivity, LinkedActivityEvent},
+    linked_activity::{LinkedActivity, LinkedActivityEvent},
     platform, reminders,
 };
 use crate::settings::ProjectNotifications;
-use std::{sync::mpsc::Receiver, time::Duration};
+use std::time::Duration;
 
 pub(super) struct State {
     pub region: AnchorSlot,
@@ -21,13 +21,10 @@ pub(super) struct State {
     pub reminders: Entity<reminders::View>,
     pub installed: Entity<InstalledUpdateNotice>,
     pub file_error: Entity<FileActionError>,
-    pub reminder_error: Option<String>,
     pub github: Entity<GithubActivity>,
     linked: HashMap<i64, Entity<LinkedActivity>>,
-    linked_cleanup: HashMap<i64, Cleanup>,
+    linked_cleanup: HashSet<i64>,
     pub(super) whats_new: Option<(Entity<WhatsNew>, Subscription, FocusHandle)>,
-    permission: Permission,
-    permission_probe: Option<Receiver<Permission>>,
     announcements: approvals::InputAnnouncements,
     #[cfg(test)]
     spoken: Vec<String>,
@@ -36,8 +33,7 @@ pub(super) struct State {
     badge: usize,
     sounds_enabled: bool,
     sounds_enabled_at: u64,
-    next_mute_expiry: Option<u64>,
-    poll: Option<gpui::Task<()>>,
+    mute_expiry: Option<(u64, gpui::Task<()>)>,
 }
 
 impl State {
@@ -54,13 +50,10 @@ impl State {
             reminders: cx.new(|_| reminders::View::default()),
             installed: cx.new(|_| InstalledUpdateNotice::new(None)),
             file_error: cx.new(|_| FileActionError::new()),
-            reminder_error: None,
             github,
             linked: HashMap::new(),
-            linked_cleanup: HashMap::new(),
+            linked_cleanup: HashSet::new(),
             whats_new: None,
-            permission: Permission::Unsupported,
-            permission_probe: None,
             announcements: Default::default(),
             #[cfg(test)]
             spoken: Vec::new(),
@@ -69,8 +62,7 @@ impl State {
             badge: 0,
             sounds_enabled: workspace.preferences.sounds,
             sounds_enabled_at: 0,
-            next_mute_expiry: None,
-            poll: None,
+            mute_expiry: None,
         }
     }
 }
@@ -127,8 +119,10 @@ impl Shell {
         }
     }
 
-    pub(super) fn refresh_notification_permission(&mut self) {
-        self.notification_state.permission_probe = Some(platform::permission());
+    pub(super) fn refresh_notification_permission(&self, cx: &mut Context<Self>) {
+        if let Some(core) = &self.app_core {
+            core.update(cx, |core, cx| core.refresh_notification_permission(cx));
+        }
     }
 
     /// Call from SessionChanged, so a turn beginning and ending between render
@@ -302,58 +296,11 @@ impl Shell {
 
     pub(super) fn start_native_notifications(&mut self, cx: &mut Context<Self>) {
         self.set_window_badge(0, cx);
-        if platform::initialize() {
-            self.notification_state.permission = Permission::Prompt;
-            self.notification_state.permission_probe = Some(platform::permission());
+        if let Some(core) = &self.app_core {
+            core.update(cx, |core, cx| core.start_native_notifications(cx));
         }
         self.notification_state.badge = 0;
         self.process_notification_inputs(cx);
-        self.notification_state.poll = Some(cx.spawn(async move |this, cx| {
-            loop {
-                cx.background_executor().timer(Duration::from_secs(1)).await;
-                if this
-                    .update(cx, |this, cx| {
-                        let permission = this
-                            .notification_state
-                            .permission_probe
-                            .as_ref()
-                            .and_then(|rx| rx.try_recv().ok());
-                        if let Some(permission) = permission {
-                            this.notification_state.permission = permission;
-                            this.notification_state.permission_probe = None;
-                            cx.notify();
-                        }
-                        if this.holds_scheduler(cx) {
-                            for target in platform::drain_clicks() {
-                                this.open_notice_target(target, cx);
-                            }
-                        }
-                        // Known reminders keep one-second precision. The session
-                        // clock also discovers schedules saved by other windows.
-                        let now = vorkspace_core::time::now_ms();
-                        if this
-                            .reminders
-                            .iter()
-                            .any(|r| r.due_at <= now && r.fired_at.is_none())
-                        {
-                            this.poll_reminders(cx);
-                        }
-                        this.settle_linked_cleanup(cx);
-                        if this
-                            .notification_state
-                            .next_mute_expiry
-                            .is_some_and(|at| now >= at)
-                        {
-                            this.notification_state.next_mute_expiry = None;
-                            cx.notify();
-                        }
-                    })
-                    .is_err()
-                {
-                    break;
-                }
-            }
-        }));
     }
 
     pub(super) fn notification_chats(&self, cx: &App) -> Vec<Entity<Conversation>> {
@@ -558,9 +505,8 @@ impl Shell {
                 cx,
             );
         }
+        self.schedule_mute_expiry(now, cx);
         let prefs = &self.workspace.preferences;
-        self.notification_state.next_mute_expiry =
-            delivery::next_mute_expiry(&prefs.project_notifications, now);
         self.notification_state.approvals.update(cx, |notices, cx| {
             notices.sync(
                 &snapshots,
@@ -578,7 +524,7 @@ impl Shell {
             )
         });
         let due = self
-            .reminders
+            .reminders(cx)
             .iter()
             .filter(|r| r.due_at <= now)
             .filter_map(|r| {
@@ -594,9 +540,35 @@ impl Shell {
                     })
             })
             .collect();
-        let error = self.notification_state.reminder_error.clone();
+        let error = self.reminder_error(cx).map(str::to_owned);
         self.notification_state.reminders.update(cx, |notices, cx| {
             notices.sync(due, error, prefs.notifications, cx)
+        });
+    }
+
+    fn schedule_mute_expiry(&mut self, now: u64, cx: &mut Context<Self>) {
+        let expiry =
+            delivery::next_mute_expiry(&self.workspace.preferences.project_notifications, now);
+        if self
+            .notification_state
+            .mute_expiry
+            .as_ref()
+            .map(|(at, _)| *at)
+            == expiry
+        {
+            return;
+        }
+        self.notification_state.mute_expiry = expiry.map(|at| {
+            let task = cx.spawn(async move |this, cx| {
+                cx.background_executor()
+                    .timer(Duration::from_millis(at - now))
+                    .await;
+                let _ = this.update(cx, |this, cx| {
+                    this.notification_state.mute_expiry = None;
+                    cx.notify();
+                });
+            });
+            (at, task)
         });
     }
 
@@ -618,20 +590,23 @@ impl Shell {
         );
     }
 
-    pub(super) fn deliver_reminder_notice(&mut self, id: i64, due_at: u64, cx: &mut Context<Self>) {
-        if let Some(summary) = self.session_summaries.get(&id).cloned() {
-            self.dispatch_notice(
-                &summary,
-                "reminders",
-                Target::Reminder {
-                    session_id: id,
-                    due_at,
-                },
-                &summary.title,
-                None,
-                cx,
-            );
-        }
+    pub(super) fn deliver_reminder_notice(
+        &mut self,
+        summary: &Session,
+        due_at: u64,
+        cx: &mut Context<Self>,
+    ) {
+        self.dispatch_notice(
+            summary,
+            "reminders",
+            Target::Reminder {
+                session_id: summary.id,
+                due_at,
+            },
+            &summary.title,
+            None,
+            cx,
+        );
     }
 
     fn dispatch_notice(
@@ -654,7 +629,11 @@ impl Shell {
         }
         let notify = delivery::should_notify(
             prefs.notifications,
-            self.notification_state.permission,
+            self.app_core
+                .as_ref()
+                .map_or(Permission::Unsupported, |core| {
+                    core.read(cx).notification_permission
+                }),
             self.window_active,
             category != "reminders" && self.notice_session_visible(summary.id, cx),
         );
@@ -709,7 +688,7 @@ impl Shell {
         .detach();
     }
 
-    fn open_notice_target(&mut self, target: Target, cx: &mut Context<Self>) {
+    pub(super) fn open_notice_target(&mut self, target: Target, cx: &mut Context<Self>) {
         let core = self.app_core.clone();
         cx.spawn(async move |this, cx| {
             let id = match target {
@@ -726,17 +705,10 @@ impl Shell {
             let show = |shell: &mut Self, window: &mut Window, cx: &mut Context<Self>| {
                 shell.show_notice_target(target, window, cx)
             };
-            if let Some(opened) = owner.and_then(|owner| owner.update_in(cx, show).ok()) {
-                if opened && let Target::Reminder { session_id, due_at } = target {
-                    let _ = this.update(cx, |shell, cx| {
-                        shell
-                            .reminders
-                            .retain(|r| r.session_id != session_id || r.due_at != due_at);
-                        shell.invalidate_chrome(cx);
-                        cx.notify();
-                    });
-                }
-            } else {
+            if owner
+                .and_then(|owner| owner.update_in(cx, show).ok())
+                .is_none()
+            {
                 let _ = this.update_in(cx, show);
             }
         })
@@ -796,21 +768,10 @@ impl Shell {
         if !self.session_summaries.contains_key(&id) {
             return false;
         }
-        // Opening normally dismisses the current reminder. A notice only
-        // acknowledges its own occurrence, after navigation succeeds.
-        let preserved = due
-            .and_then(|_| self.reminders.iter().position(|r| r.session_id == id))
-            .map(|ix| (ix, self.reminders.remove(ix)));
         let revision = self.navigation_revision;
-        self.open(id, window, cx);
-        if let Some((ix, reminder)) = preserved {
-            self.reminders.insert(ix, reminder);
-        }
+        self.open_with_reminder(id, due, window, cx);
         if self.navigation_revision == revision || self.workspace.active != Some(id) {
             return false;
-        }
-        if let Some(due) = due {
-            self.clear_notification_reminder(id, due, cx);
         }
         window.activate_window();
         true
@@ -822,48 +783,13 @@ impl Shell {
         expected: u64,
         cx: &mut Context<Self>,
     ) {
-        let removed = self
-            .reminders
-            .iter()
-            .find(|r| r.session_id == id && r.due_at == expected)
-            .cloned();
-        self.reminders
-            .retain(|r| !(r.session_id == id && r.due_at == expected));
-        platform::dismiss(
-            &Target::Reminder {
-                session_id: id,
+        self.edit_reminder(
+            app_core::ReminderEdit::Clear {
+                session: id,
                 due_at: expected,
-            }
-            .tag(0),
+            },
+            cx,
         );
-        let store = self.store.clone();
-        let previous = self.group_writes.take();
-        self.group_writes = Some(cx.spawn(async move |this, cx| {
-            if let Some(previous) = previous {
-                previous.await;
-            }
-            let work = cx.background_executor().spawn(async move {
-                locked(&store).and_then(|s| s.clear_reminders(&[id], Some(expected)))
-            });
-            let result = work.await;
-            let _ = this.update(cx, |this, cx| {
-                match result {
-                    Err(error) => {
-                        if let Some(removed) = removed
-                            && !this.reminders.iter().any(|r| r.session_id == id)
-                        {
-                            this.reminders.push(removed);
-                        }
-                        this.notification_state.reminder_error = Some(error);
-                    }
-                    Ok(()) => this.notification_state.reminder_error = None,
-                }
-                this.invalidate_chrome(cx);
-                cx.notify();
-            });
-        }));
-        self.invalidate_chrome(cx);
-        cx.notify();
     }
 
     fn snooze_notification_reminder(
@@ -873,72 +799,20 @@ impl Shell {
         due_at: u64,
         cx: &mut Context<Self>,
     ) {
-        if !self
-            .reminders
-            .iter()
-            .any(|r| r.session_id == id && r.due_at == expected)
-        {
-            return;
-        }
-        let store = self.store.clone();
-        let previous = self.group_writes.take();
-        self.group_writes = Some(cx.spawn(async move |this, cx| {
-            if let Some(previous) = previous {
-                previous.await;
-            }
-            let work = cx.background_executor().spawn(async move {
-                locked(&store).and_then(|s| s.snooze_reminder_if(id, expected, due_at))
-            });
-            let result = work.await;
-            let _ = this.update(cx, |this, cx| match result {
-                Ok(_) => {
-                    platform::dismiss(
-                        &Target::Reminder {
-                            session_id: id,
-                            due_at: expected,
-                        }
-                        .tag(0),
-                    );
-                    this.notification_state.reminder_error = None;
-                    this.reload_notification_reminders(cx);
-                }
-                Err(error) => {
-                    this.notification_state.reminder_error = Some(error);
-                    cx.notify();
-                }
-            });
-        }));
+        self.edit_reminder(
+            app_core::ReminderEdit::Snooze {
+                session: id,
+                due_at: expected,
+                until: due_at,
+            },
+            cx,
+        );
     }
 
-    fn reload_notification_reminders(&mut self, cx: &mut Context<Self>) {
-        let expected_snapshot = self.reminders.clone();
-        let store = self.store.clone();
-        let previous = self.group_writes.take();
-        self.group_writes = Some(cx.spawn(async move |this, cx| {
-            if let Some(previous) = previous {
-                previous.await;
-            }
-            let work = cx
-                .background_executor()
-                .spawn(async move { locked(&store).and_then(|s| s.reminders()) });
-            let result = work.await;
-            let _ = this.update(cx, |this, cx| {
-                match result {
-                    Ok(reminders) => {
-                        // Preserve a newer optimistic schedule/cancel while its
-                        // ordered write waits behind this reload operation.
-                        if this.reminders == expected_snapshot {
-                            this.reminders = reminders;
-                        }
-                        this.notification_state.reminder_error = None;
-                        this.poll_reminders(cx);
-                    }
-                    Err(error) => this.notification_state.reminder_error = Some(error),
-                }
-                this.invalidate_chrome(cx);
-                cx.notify();
-            });
-        }));
+    fn reload_notification_reminders(&self, cx: &mut Context<Self>) {
+        if let Some(core) = &self.app_core {
+            core.update(cx, |core, cx| core.retry_reminders(cx));
+        }
     }
 
     pub(super) fn open_whats_new(&mut self, version: String, cx: &mut Context<Self>) {
@@ -1085,28 +959,22 @@ impl Shell {
         }
     }
 
-    fn settle_linked_cleanup(&mut self, cx: &mut Context<Self>) {
-        if self.notification_state.linked_cleanup.is_empty() {
+    pub(super) fn complete_linked_cleanup(
+        &mut self,
+        id: i64,
+        succeeded: bool,
+        cx: &mut Context<Self>,
+    ) {
+        if !self.notification_state.linked_cleanup.remove(&id) {
             return;
         }
-        let pending = self.notification_state.linked_cleanup.clone();
-        for (id, action) in pending {
-            if self.archiving.contains(&id) || self.deleting.contains(&id) {
-                continue;
-            }
-            let success = match action {
-                Cleanup::Archive => self.session_summaries.get(&id).is_some_and(|s| s.archived),
-                Cleanup::Delete => !self.session_summaries.contains_key(&id),
-            };
-            self.notification_state.linked_cleanup.remove(&id);
-            if let Some(notice) = self.notification_state.linked.get(&id).cloned() {
-                notice.update(cx, |notice, cx| notice.finish_cleanup(success, cx));
-            }
-            if success {
-                self.notification_state
-                    .github
-                    .update(cx, |feed, cx| feed.acknowledge(id, cx));
-            }
+        if let Some(notice) = self.notification_state.linked.get(&id) {
+            notice.update(cx, |notice, cx| notice.finish_cleanup(cx));
+        }
+        if succeeded {
+            self.notification_state
+                .github
+                .update(cx, |feed, cx| feed.acknowledge(id, cx));
         }
     }
 
@@ -1259,11 +1127,9 @@ impl Shell {
             LinkedActivityEvent::Archive(id) => {
                 self.toggle_archive(id, cx);
                 if self.archiving.contains(&id) {
-                    self.notification_state
-                        .linked_cleanup
-                        .insert(id, Cleanup::Archive);
+                    self.notification_state.linked_cleanup.insert(id);
                 } else if let Some(notice) = self.notification_state.linked.get(&id) {
-                    notice.update(cx, |notice, cx| notice.finish_cleanup(false, cx));
+                    notice.update(cx, |notice, cx| notice.finish_cleanup(cx));
                 }
             }
             LinkedActivityEvent::Delete(id) => {
@@ -1286,11 +1152,9 @@ impl Shell {
                             this.delete_session(id, window, cx);
                         }
                         if this.deleting.contains(&id) {
-                            this.notification_state
-                                .linked_cleanup
-                                .insert(id, Cleanup::Delete);
+                            this.notification_state.linked_cleanup.insert(id);
                         } else if let Some(notice) = this.notification_state.linked.get(&id) {
-                            notice.update(cx, |notice, cx| notice.finish_cleanup(false, cx));
+                            notice.update(cx, |notice, cx| notice.finish_cleanup(cx));
                         }
                     });
                 })

@@ -112,6 +112,7 @@ pub(crate) enum SettingsEvent {
     VoxReset,
     VoxMemory,
     CheckHarnessUpdates,
+    NotificationPermission(crate::notifications::delivery::Permission),
     ManageInboxProvider(String),
     InboxConnectorEnabled(String, bool),
     JiraFilter(vorkspace_core::inbox::JiraFilter),

@@ -11,11 +11,7 @@ use crate::{
 use chrono::{Datelike, Local, NaiveDate, NaiveDateTime, TimeZone};
 use gpui::{AnyElement, Context, Entity, Role, Subscription, Task, Window, div, prelude::*, px};
 use serde_json::{Value, json};
-use std::{
-    collections::HashSet,
-    sync::mpsc::{Receiver, TryRecvError},
-    time::Duration,
-};
+use std::{collections::HashSet, time::Duration};
 use vorkspace_ui::radius;
 use vorkspace_ui::theme::*;
 
@@ -242,8 +238,7 @@ pub(super) struct State {
     permission: Permission,
     active: bool,
     _deadline: Option<Task<()>>,
-    receiver: Option<Receiver<Permission>>,
-    _poll: Option<Task<()>>,
+    _permission_probe: Option<Task<()>>,
     selecting: bool,
     selected: HashSet<String>,
     expanded: Option<String>,
@@ -256,8 +251,7 @@ impl Default for State {
             permission: Permission::Prompt,
             active: false,
             _deadline: None,
-            receiver: None,
-            _poll: None,
+            _permission_probe: None,
             selecting: false,
             selected: HashSet::new(),
             expanded: None,
@@ -322,44 +316,22 @@ impl SettingsView {
         });
     }
     pub(super) fn probe_notification_permission(&mut self, request: bool, cx: &mut Context<Self>) {
-        self.notification_state.receiver = Some(if request {
+        let result = if request {
             platform::request_permission()
         } else {
             platform::permission()
-        });
-        self.notification_state._poll = Some(cx.spawn(async move |this, cx| {
-            loop {
-                cx.background_executor()
-                    .timer(Duration::from_millis(100))
-                    .await;
-                let done = this
-                    .update(cx, |this, cx| {
-                        let result = this
-                            .notification_state
-                            .receiver
-                            .as_ref()
-                            .map(Receiver::try_recv);
-                        match result {
-                            Some(Ok(permission)) => {
-                                this.notification_state.permission = permission;
-                                this.notification_state.receiver = None;
-                                cx.notify();
-                                true
-                            }
-                            Some(Err(TryRecvError::Empty)) => false,
-                            _ => {
-                                this.notification_state.receiver = None;
-                                true
-                            }
-                        }
-                    })
-                    .unwrap_or(true);
-                if done {
-                    break;
-                }
+        };
+        self.notification_state._permission_probe = Some(cx.spawn(async move |this, cx| {
+            if let Ok(permission) = result.recv().await {
+                let _ = this.update(cx, |this, cx| {
+                    this.notification_state.permission = permission;
+                    cx.emit(super::SettingsEvent::NotificationPermission(permission));
+                    cx.notify();
+                });
             }
         }));
     }
+
     pub(super) fn notification_permission_controls(
         &self,
         cx: &mut Context<Self>,

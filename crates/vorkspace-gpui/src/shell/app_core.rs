@@ -6,8 +6,8 @@
 //! - Vorkspace definitions, saved under their own key, so every window lists
 //!   the same vorkspaces and an edit in one appears in the others.
 //! - The committed Bot roster, which decides when membership changes.
-//! - The scheduler lease: exactly one window fires reminders and
-//!   automations. It moves to another window when its holder closes.
+//! - The reminder schedule and native notification routing belong to the app.
+//! - The automation scheduler lease moves when its window closes.
 //! - Session leases: a session is live in at most one window, so it never
 //!   gets two `Conversation`s writing one transcript or running one turn.
 //!
@@ -16,6 +16,8 @@
 //! when it drops the loaded conversation.
 mod layouts;
 mod notifications;
+mod reminders;
+pub(super) use reminders::ReminderEdit;
 mod scheduler;
 mod sessions;
 mod settings_writes;
@@ -47,6 +49,7 @@ pub(crate) struct PreparedCore {
     automation_events: HashMap<String, vorkspace_core::inbox::Item>,
     remote_dir: Option<std::path::PathBuf>,
     roster: Option<PreparedRoster>,
+    reminders: Vec<vorkspace_core::store::Reminder>,
 }
 
 impl PreparedCore {
@@ -72,6 +75,7 @@ impl PreparedCore {
             automation_events,
             remote_dir: store.data_dir().map(std::path::Path::to_path_buf),
             roster: Some(PreparedRoster::read(store)),
+            reminders: store.reminders().unwrap_or_default(),
         }
     }
 }
@@ -91,9 +95,13 @@ pub(crate) struct AppCore {
     pub(super) remote_poll: super::remote_sessions::RemotePoll,
     pub(super) quick_shortcut: crate::composer::quick_composer::Shortcut,
     scheduler: Option<WeakEntity<Shell>>,
+    reminders: reminders::ReminderSchedule,
     pub(super) github_activity: Entity<crate::notifications::github_activity::GithubActivity>,
     linked_activity_clock: Option<gpui::Task<()>>,
     linked_activity_started_at: u64,
+    pub(super) notification_permission: crate::notifications::delivery::Permission,
+    notification_permission_probe: Option<gpui::Task<()>>,
+    notification_clicks: Option<gpui::Task<()>>,
     pub(super) automation_cutoff: i64,
     pub(super) automation_recovered: bool,
     automation_events: HashMap<String, vorkspace_core::inbox::Item>,
@@ -167,6 +175,7 @@ impl AppCore {
             automation_events,
             remote_dir,
             roster,
+            reminders,
         } = prepared;
         let next_window_id = layouts
             .entries
@@ -227,9 +236,13 @@ impl AppCore {
                 remote_poll: Default::default(),
                 quick_shortcut: Default::default(),
                 scheduler: None,
+                reminders: reminders::ReminderSchedule::new(reminders),
                 github_activity,
                 linked_activity_clock: None,
                 linked_activity_started_at: vorkspace_core::time::now_ms(),
+                notification_permission: crate::notifications::delivery::Permission::Unsupported,
+                notification_permission_probe: None,
+                notification_clicks: None,
                 automation_cutoff: vorkspace_core::time::now_ms().min(i64::MAX as u64) as i64,
                 automation_recovered: false,
                 automation_events,
@@ -480,6 +493,7 @@ impl Shell {
             }
         }));
         self.observe_session_catalog(&core, cx);
+        self.observe_reminders(&core, cx);
         self.observations.push(cx.subscribe(
             &core,
             |this, _, event: &super::remote_sessions::RemoteCatalog, cx| {
@@ -487,7 +501,10 @@ impl Shell {
             },
         ));
         let me = cx.weak_entity();
-        core.update(cx, |core, _| core.register(me));
+        core.update(cx, |core, cx| {
+            core.register(me);
+            core.start_reminders(cx);
+        });
         let release = core.downgrade();
         let window = self.window_layout;
         cx.on_release(move |_, cx| {
@@ -496,6 +513,8 @@ impl Shell {
                 core.set_remote_scope(window, None, cx);
                 if !core.windows.iter().any(|window| window.upgrade().is_some()) {
                     core.linked_activity_clock = None;
+                    core.notification_clicks = None;
+                    core.reminders.stop_discovery();
                 }
             });
         })
@@ -686,7 +705,7 @@ impl Shell {
         self.take_shared_vorkspaces(&core, cx);
     }
 
-    /// Only the lease holder fires reminders and automations.
+    /// Aggregate attention from each window for the app's Dock tile.
     pub(super) fn set_window_badge(&self, badge: usize, cx: &mut Context<Self>) {
         if let Some(core) = &self.app_core {
             core.update(cx, |core, _| {

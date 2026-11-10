@@ -514,8 +514,6 @@ pub(crate) struct Shell {
     live_agents: Entity<live_agents::LiveAgents>,
     archiving: HashSet<i64>,
     groups: HashMap<String, vorkspace_core::session_groups::Groups>,
-    reminders: Vec<vorkspace_core::store::Reminder>,
-    reminder_poll_in_flight: bool,
     renaming: Option<session_groups::Renaming>,
     link_dialog: Option<session_groups::LinkDialog>,
     deleting: HashSet<i64>,
@@ -810,11 +808,7 @@ impl Shell {
                     .await;
                 if this
                     .update(cx, |this, cx| {
-                        // One window fires scheduled work for the whole app.
-                        this.poll_reminders(cx);
-                        if this.holds_scheduler(cx) {
-                            this.poll_automations(cx);
-                        }
+                        this.poll_automations(cx);
                         this.update_chat_visibility(cx);
                         if this.workspace.sidebar_visible {
                             this.notify_sidebar(cx);
@@ -878,8 +872,6 @@ impl Shell {
             live_agents,
             archiving: HashSet::new(),
             groups: sidebar_metadata.groups,
-            reminders: sidebar_metadata.reminders,
-            reminder_poll_in_flight: false,
             renaming: None,
             link_dialog: None,
             deleting: HashSet::new(),
@@ -1165,7 +1157,6 @@ impl Shell {
         this.update_chat_visibility(cx);
         this.update_usage_provider(cx);
         this.apply_preferences(cx);
-        this.poll_reminders(cx);
         this.initialize_automations(cx);
         cx.spawn(async move |this, cx| {
             let _ = this.update_in(cx, |this, window, cx| {
@@ -1548,6 +1539,7 @@ impl Shell {
             let _ = this.update_in(cx, |this, window, cx| {
                 this.archiving.remove(&id);
                 this.finish_session_metadata(&[id], cx);
+                this.complete_linked_cleanup(id, archived && result.is_ok(), cx);
                 match result {
                     Ok(()) => {
                         if let Some(summary) = this.session_summaries.get_mut(&id) {
@@ -1940,6 +1932,16 @@ impl Shell {
         self.focus.clone()
     }
     pub(crate) fn open(&mut self, id: i64, window: &mut Window, cx: &mut Context<Self>) {
+        self.open_with_reminder(id, None, window, cx);
+    }
+
+    fn open_with_reminder(
+        &mut self,
+        id: i64,
+        occurrence: Option<u64>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         if let Some(owner) = self.workspace.session_for_pane(id) {
             if self.focus_session_window(owner, cx) {
                 return;
@@ -1969,7 +1971,7 @@ impl Shell {
         }
         self.navigation_revision += 1;
         self.replace_blank_pane(id, cx);
-        self.activate_session(id, window, cx);
+        self.activate_session_with_reminder(id, occurrence, window, cx);
     }
     /// Opening a conversation that has no tab takes over a blank pane in the
     /// active tab instead of adding a tab, as in the desktop app.
@@ -2015,6 +2017,16 @@ impl Shell {
         }
     }
     fn activate_session(&mut self, id: i64, window: &mut Window, cx: &mut Context<Self>) {
+        self.activate_session_with_reminder(id, None, window, cx);
+    }
+
+    fn activate_session_with_reminder(
+        &mut self,
+        id: i64,
+        occurrence: Option<u64>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         if self.workspace.review_owners.contains_key(&id) {
             self.open_file_pane(id, window, cx);
             return;
@@ -2029,7 +2041,11 @@ impl Shell {
         self.leave_app_views(cx);
         self.leave_app_search(cx);
         self.close_preview(cx);
-        self.dismiss_due_reminder(id, cx);
+        if let Some(due_at) = occurrence {
+            self.clear_notification_reminder(id, due_at, cx);
+        } else {
+            self.dismiss_due_reminder(id, cx);
+        }
         self.history.record(id);
         self.workspace.open(id);
         self.workspace.project = project;
@@ -2689,8 +2705,8 @@ impl Render for Shell {
                                 view.update(cx, |v, cx| v.refresh_if_stale(cx));
                             }
                         }
+                        this.refresh_notification_permission(cx);
                     }
-                    this.refresh_notification_permission();
                     cx.notify();
                 }));
             self.start_native_notifications(cx);

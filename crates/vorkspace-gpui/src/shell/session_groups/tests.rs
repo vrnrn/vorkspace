@@ -13,10 +13,13 @@ fn a_reminder_survives_a_refused_open_until_its_project_is_reassigned(
                 .workspace
                 .remove_project_from_vorkspace(&vorkspace, &project);
             shell.persist(cx);
-            shell.store_write("set reminder", cx, move |store| {
-                store.set_reminders(&[reminder_session], 1)
-            });
-            shell.poll_reminders(cx);
+            shell.edit_reminder(
+                app_core::ReminderEdit::Schedule {
+                    sessions: vec![reminder_session],
+                    due_at: 1,
+                },
+                cx,
+            );
             (vorkspace, project)
         })
         .unwrap();
@@ -38,7 +41,7 @@ fn a_reminder_survives_a_refused_open_until_its_project_is_reassigned(
     window
         .update(cx, |shell, _, cx| {
             assert_eq!(shell.workspace.active, Some(current));
-            assert_eq!(shell.reminders[0].session_id, reminder_session);
+            assert_eq!(shell.reminders(cx)[0].session_id, reminder_session);
             assert_eq!(locked(&shell.store).unwrap().reminders().unwrap().len(), 1);
             shell
                 .workspace
@@ -389,15 +392,13 @@ fn links_and_reminders_validate_persist_and_clear_when_due_session_opens(cx: &mu
             assert!(shell.link_dialog.is_none());
             shell.run_menu(MenuTarget::Session(a), "reminder:cancel", None, w, cx);
             let due_at = vorkspace_core::time::now_ms().saturating_sub(1);
-            shell.reminders.push(Reminder {
-                session_id: a,
-                due_at,
-                fired_at: None,
-            });
-            shell.store_write("set test reminder", cx, move |store| {
-                store.set_reminders(&[a], due_at)
-            });
-            shell.poll_reminders(cx);
+            shell.edit_reminder(
+                app_core::ReminderEdit::Schedule {
+                    sessions: vec![a],
+                    due_at,
+                },
+                cx,
+            );
         })
         .unwrap();
     cx.run_until_parked();
@@ -409,7 +410,7 @@ fn links_and_reminders_validate_persist_and_clear_when_due_session_opens(cx: &mu
                     .is_some()
             );
             shell.open(a, w, cx);
-            assert!(shell.reminders.is_empty());
+            assert!(shell.reminders(cx).is_empty());
         })
         .unwrap();
     cx.run_until_parked();
