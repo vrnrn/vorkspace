@@ -13,7 +13,7 @@ use vorkspace_ui::radius;
 use vorkspace_ui::theme::*;
 
 enum Row {
-    Markdown(MarkdownRow, Pixels),
+    Markdown(MarkdownRow),
     Image { url: String, alt: String },
 }
 
@@ -79,7 +79,7 @@ fn append_markdown(rows: &mut Vec<Row>, text: &str, cwd: &std::path::Path) {
             // Transcript code is chunked for virtualization. A document displays
             // the whole fence in a single bordered code block instead.
             if let Part::Code { fence, lines } = &row.part
-                && let Some(Row::Markdown(previous, _)) = rows.last_mut()
+                && let Some(Row::Markdown(previous)) = rows.last_mut()
                 && let Part::Code {
                     fence: last,
                     lines: last_lines,
@@ -93,18 +93,7 @@ fn append_markdown(rows: &mut Vec<Row>, text: &str, cwd: &std::path::Path) {
             if rows.is_empty() {
                 row.gap = 0.;
             }
-            let code_width = match &row.part {
-                Part::Code { fence, .. } => px(fence
-                    .lines
-                    .iter()
-                    .map(|range| fence.code[range.clone()].chars().count())
-                    .max()
-                    .unwrap_or(0) as f32
-                    * 7.3
-                    + 48.),
-                _ => px(0.),
-            };
-            rows.push(Row::Markdown(row, code_width));
+            rows.push(Row::Markdown(row));
         }
     }
 }
@@ -189,7 +178,7 @@ impl InboxDocument {
                     .on_click(move |_, _, cx| cx.open_url(&url))
                     .into_any_element()
             }
-            Row::Markdown(row, code_width) => {
+            Row::Markdown(row) => {
                 let id: SharedString = format!("inbox-document-{ix}").into();
                 let body: AnyElement = match &row.part {
                     Part::Code { fence, lines } => div()
@@ -207,7 +196,7 @@ impl InboxDocument {
                             rendered: self.code_rendered.clone(),
                             fence: fence.clone(),
                             lines: lines.clone(),
-                            width: (*code_width).max(
+                            width: fence.width().max(
                                 (width
                                     - px(2.
                                         + if row.quote > 0 {

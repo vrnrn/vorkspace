@@ -55,6 +55,7 @@ fn activate_link(event: &ClickEvent, selection: Option<&Selection>) -> bool {
         }
 }
 use std::{
+    borrow::Cow,
     hash::{DefaultHasher, Hash, Hasher},
     ops::Range,
     sync::Arc,
@@ -96,6 +97,7 @@ pub(crate) struct Fence {
     pub start_line: usize,
     pub numbered: bool,
     pub lines: Vec<Range<usize>>,
+    longest_line: usize,
     pub truncated: bool,
     pub key: u64,
 }
@@ -140,13 +142,16 @@ impl Fence {
         }
         let mut at = 0;
         let mut lines = Vec::new();
+        let mut longest_line = 0;
         let mut truncated = false;
         for line in code.split_inclusive('\n') {
             if preview && lines.len() == SVG_PREVIEW_LINES {
                 truncated = true;
                 break;
             }
-            let end = at + line.trim_end_matches(['\n', '\r']).len();
+            let visible = line.trim_end_matches(['\n', '\r']);
+            let end = at + visible.len();
+            longest_line = longest_line.max(visible.chars().count());
             lines.push(at..end);
             at += line.len();
         }
@@ -170,6 +175,7 @@ impl Fence {
             start_line,
             numbered: !info.contains("noLineNumbers"),
             lines,
+            longest_line,
             truncated,
             key: hash.finish(),
         }
@@ -177,6 +183,10 @@ impl Fence {
 
     pub(crate) fn highlight_source(&self) -> &str {
         &self.code[..self.lines.last().unwrap().end]
+    }
+
+    pub(crate) fn width(&self) -> Pixels {
+        px(self.longest_line as f32 * 7.3 + 48.)
     }
 }
 
@@ -218,17 +228,10 @@ pub(crate) struct MarkdownRow {
 
 pub(crate) fn rows(block: &Block) -> Vec<MarkdownRow> {
     let mut rows = Vec::new();
-    flatten(block, 0, 0, None, &mut rows);
+    flatten(block, 0, 0, &mut rows);
     rows
 }
-fn flatten(
-    block: &Block,
-    indent: usize,
-    quote: usize,
-    marker: Option<String>,
-    out: &mut Vec<MarkdownRow>,
-) {
-    let first = out.len();
+fn flatten(block: &Block, indent: usize, quote: usize, out: &mut Vec<MarkdownRow>) {
     let mut add = |part, gap| {
         out.push(MarkdownRow {
             part,
@@ -302,7 +305,7 @@ fn flatten(
                 let bullet =
                     ordered_start.map_or_else(|| "•".into(), |n| format!("{}.", n + ix as u64));
                 for child in children {
-                    flatten(child, indent + 1, quote, None, out);
+                    flatten(child, indent + 1, quote, out);
                 }
                 if let Some(row) = out.get_mut(start) {
                     row.marker = Some(bullet);
@@ -312,7 +315,7 @@ fn flatten(
         }
         Block::BlockQuote { children } => {
             for child in children {
-                flatten(child, indent, quote + 1, None, out);
+                flatten(child, indent, quote + 1, out);
             }
         }
         Block::Table {
@@ -320,35 +323,32 @@ fn flatten(
             rows,
             align,
         } => {
-            let all: Vec<_> = std::iter::once(header.clone())
-                .chain(rows.iter().cloned())
-                .collect();
-            let columns = table_column_widths(&all);
-            for (ix, cells) in all.chunks(PART_LINES).enumerate() {
+            let all = std::iter::once(header).chain(rows);
+            let columns = table_column_widths(all.clone());
+            let count = rows.len() + 1;
+            let mut cells = all.cloned();
+            for at in (0..count).step_by(PART_LINES) {
                 add(
                     Part::Table {
-                        cells: cells.to_vec(),
+                        cells: cells.by_ref().take(PART_LINES).collect(),
                         columns: columns.clone(),
                         align: align.clone(),
-                        header: ix == 0,
-                        last: (ix + 1) * PART_LINES >= all.len(),
+                        header: at == 0,
+                        last: at + PART_LINES >= count,
                     },
-                    if ix == 0 { 16. } else { 0. },
+                    if at == 0 { 16. } else { 0. },
                 );
             }
         }
         Block::Rule => add(Part::Rule, 24.),
         Block::Math { tex } => add(Part::Math(tex.clone()), 16.),
     }
-    if let Some(row) = out.get_mut(first)
-        && marker.is_some()
-    {
-        row.marker = marker;
-    }
 }
 
-fn table_column_widths(rows: &[Vec<Vec<InlineRun>>]) -> Arc<[f32]> {
-    let count = rows.iter().map(Vec::len).max().unwrap_or(1).max(1);
+fn table_column_widths<'a>(
+    rows: impl Iterator<Item = &'a Vec<Vec<InlineRun>>> + Clone,
+) -> Arc<[f32]> {
+    let count = rows.clone().map(Vec::len).max().unwrap_or(1).max(1);
     let mut widths = vec![160_f32; count];
     // These are preferred flex widths, not fixed cell widths. Sample the whole
     // table once so virtualized chunks use the same columns. Short labels keep
@@ -454,6 +454,7 @@ fn inline_selected(
     let mut fonts = Vec::new();
     let mut links = Vec::new();
     let mut urls = Vec::new();
+    let fade = fade.filter(|times| !times.is_empty());
     for run in runs {
         let start = text.len();
         let style = &run.style;
@@ -484,13 +485,16 @@ fn inline_selected(
             }),
             ..Default::default()
         };
-        if !style.code && !style.math && style.link.is_none() {
+        if let Some(times) = fade
+            && !style.code
+            && !style.math
+            && style.link.is_none()
+        {
             let mut cursor = start;
             for piece in run.text.split_inclusive(char::is_whitespace) {
                 let mut highlight = highlight;
                 if !piece.trim().is_empty() {
-                    let alpha =
-                        vorkspace_ui::reveal::word_opacity(fade.and_then(|f| f.get(word)), now);
+                    let alpha = vorkspace_ui::reveal::word_opacity(times.get(word), now);
                     highlight.fade_out = Some(1. - (1. - highlight.fade_out.unwrap_or(0.)) * alpha);
                     word += 1;
                 }
@@ -812,17 +816,21 @@ pub(crate) fn body_selected(
         .line_height(px(24.));
     match &row.part {
         Part::Text { runs, heading } => {
-            let mut runs = runs.clone();
-            if *heading > 0 {
-                for run in &mut runs {
-                    run.style.bold = true;
-                }
-            }
+            let runs = if *heading > 0 {
+                Cow::Owned(
+                    runs.iter()
+                        .cloned()
+                        .map(|mut run| {
+                            run.style.bold = true;
+                            run
+                        })
+                        .collect::<Vec<_>>(),
+                )
+            } else {
+                Cow::Borrowed(runs.as_slice())
+            };
             let heading = if tone == Tone::Work { 0 } else { *heading };
             if heading > 0 {
-                for run in &mut runs {
-                    run.style.bold = true;
-                }
                 body = body
                     .text_size(px(match heading {
                         1 => 22.,
@@ -1006,15 +1014,9 @@ pub(crate) fn code_lines_selected(
         )
     });
     let start = range.start;
-    let longest = fence
-        .lines
-        .iter()
-        .map(|r| fence.code[r.clone()].chars().count())
-        .max()
-        .unwrap_or(0);
     div()
         .relative()
-        .w(px(longest as f32 * 7.3 + 48.))
+        .w(fence.width())
         .min_w_full()
         .flex()
         .flex_col()
