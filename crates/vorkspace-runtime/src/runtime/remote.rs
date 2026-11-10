@@ -29,7 +29,7 @@ fn require_ticket_context(descriptor: &Value) -> Result<(), String> {
 fn update(status: impl Into<String>, outcome: Option<TurnOutcome>) -> Update {
     Update {
         status: status.into(),
-        outcome,
+        transition: outcome.map_or(TurnTransition::Progress, TurnTransition::settled),
         ..Default::default()
     }
 }
@@ -793,7 +793,7 @@ pub fn run_with_client(
             if let Some(origin) = composer_origin {
                 // The outbox can continue independently of the observing window.
                 let _ = tx.send_blocking(Update {
-                    composer_accepted: Some(origin),
+                    transition: TurnTransition::AcceptedComposer(origin),
                     status: "Sending to Host…".into(),
                     ..Default::default()
                 });

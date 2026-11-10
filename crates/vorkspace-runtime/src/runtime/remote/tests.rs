@@ -611,7 +611,7 @@ fn explicit_stop_is_journaled_once_for_the_observed_run() {
     loop {
         let next = receive(&rx);
         if next.finished() {
-            assert_eq!(next.outcome, Some(TurnOutcome::Cancelled));
+            assert_eq!(next.settlement().unwrap().outcome, TurnOutcome::Cancelled);
             break;
         }
     }
@@ -684,7 +684,10 @@ fn stop_never_targets_a_successor_seen_during_observation() {
     assert!(!receive(&rx).finished());
     poll_started.recv_timeout(Duration::from_secs(5)).unwrap();
     cancel.store(true, Ordering::Relaxed);
-    assert_eq!(receive(&rx).outcome, Some(TurnOutcome::Superseded));
+    assert_eq!(
+        receive(&rx).settlement().unwrap().outcome,
+        TurnOutcome::Superseded
+    );
     worker.join().unwrap();
     assert!(commands.lock().unwrap().is_empty());
 }

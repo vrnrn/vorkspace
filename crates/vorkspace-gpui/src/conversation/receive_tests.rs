@@ -2,7 +2,9 @@ use super::*;
 use gpui::{TestAppContext, WindowHandle};
 use vorkspace_core::{store::Store, transcript::Row};
 
-use vorkspace_runtime::runtime::{TranscriptPatch, TurnOutcome, Update};
+use vorkspace_runtime::runtime::{
+    HistoryRecovery, TranscriptPatch, TurnOutcome, TurnSettlement, TurnTransition, Update,
+};
 
 fn synthetic_row(index: usize) -> Row {
     Row {
@@ -20,7 +22,11 @@ fn update(index: usize, finished: bool) -> Update {
             rows: vec![synthetic_row(index)],
         },
         status: format!("Synthetic status {index}"),
-        outcome: finished.then_some(TurnOutcome::Completed),
+        transition: if finished {
+            TurnTransition::settled(TurnOutcome::Completed)
+        } else {
+            TurnTransition::Progress
+        },
         ..Default::default()
     }
 }
@@ -300,7 +306,7 @@ fn stopped_bot_accepts_a_settled_snapshot_without_its_initial_imported_rows(
         provider_turn_id: Some("managed-turn".into()),
         provider_id: Some("saved-thread".into()),
         status: "Ready".into(),
-        outcome: Some(vorkspace_runtime::runtime::TurnOutcome::Completed),
+        transition: TurnTransition::settled(TurnOutcome::Completed),
         ..Default::default()
     })
     .unwrap();
@@ -417,12 +423,15 @@ fn verify_recovered_turn_refresh(cx: &mut TestAppContext, pending: bool) {
     let (tx, rx) = async_channel::bounded(1);
     start_receiver(window, rx, cx);
     tx.try_send(vorkspace_runtime::runtime::Update {
-        outcome: Some(vorkspace_runtime::runtime::TurnOutcome::Completed),
         status: "Recovered a competing version of this turn".into(),
-        history_recovery: Some(if pending {
-            vorkspace_runtime::runtime::HistoryRecovery::Unsaved
-        } else {
-            vorkspace_runtime::runtime::HistoryRecovery::Saved
+        transition: TurnTransition::Settled(TurnSettlement {
+            outcome: TurnOutcome::Completed,
+            history_recovery: Some(if pending {
+                HistoryRecovery::Unsaved
+            } else {
+                HistoryRecovery::Saved
+            }),
+            usage_limit: None,
         }),
         ..Default::default()
     })

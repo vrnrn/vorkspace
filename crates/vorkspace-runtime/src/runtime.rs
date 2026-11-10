@@ -22,7 +22,9 @@ mod persistence;
 pub mod remote;
 mod submissions;
 mod updates;
-pub use updates::{HistoryRecovery, TranscriptPatch, TurnOutcome, Update};
+pub use updates::{
+    HistoryRecovery, TranscriptPatch, TurnOutcome, TurnSettlement, TurnTransition, Update,
+};
 #[cfg(test)]
 mod ticket_context_tests;
 mod visual_discovery;
@@ -569,7 +571,7 @@ fn run_turn_using(
             // The transfer has already committed. Deliver it even if Stop is
             // concurrently draining progress updates.
             tx.send_blocking(Update {
-                composer_accepted: Some(origin),
+                transition: TurnTransition::AcceptedComposer(origin),
                 activity: activity.label(),
                 transcript: TranscriptPatch::tail(
                     turn_start,
@@ -905,7 +907,7 @@ fn run_turn_using(
                         &tx,
                         &cancel,
                         Update {
-                            composer_accepted: None,
+                            transition: TurnTransition::Progress,
                             activity: activity.label(),
                             worktree_cwd: None,
                             commands,
@@ -925,15 +927,12 @@ fn run_turn_using(
                             config_settings,
                             context: context_changed.then_some(context),
                             metrics,
-                            usage_limit: None,
                             approvals,
                             approvals_resolved,
                             questions,
                             questions_resolved,
                             handoff,
                             status,
-                            outcome: None,
-                            history_recovery: None,
                         },
                     )
                 })();
@@ -1228,11 +1227,13 @@ fn run_turn_using(
         provider_id: if pending.overlap { None } else { provider_id },
         provider_reset: provider_reset && !pending.overlap,
         context: (provider_reset && !pending.overlap).then_some(context),
-        history_recovery,
-        usage_limit: if cancelled { None } else { usage_limit },
+        transition: TurnTransition::Settled(TurnSettlement {
+            outcome,
+            history_recovery,
+            usage_limit: if cancelled { None } else { usage_limit },
+        }),
         handoff: if pending.overlap { None } else { handoff },
         status,
-        outcome: Some(outcome),
         ..Default::default()
     });
 }

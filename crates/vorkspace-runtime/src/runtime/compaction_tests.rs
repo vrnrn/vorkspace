@@ -293,10 +293,13 @@ fn bot_final_snapshot_includes_imports_when_initial_publication_is_stopped_or_sk
         assert_eq!(finished.transcript.rows()[3].text, "Terminal answer");
         assert_eq!(finished.transcript.rows()[4].text, "Managed prompt");
         if stopped {
-            assert_eq!(finished.outcome, Some(TurnOutcome::Cancelled));
+            assert_eq!(
+                finished.settlement().unwrap().outcome,
+                TurnOutcome::Cancelled
+            );
             assert_eq!(finished.status, "Ready");
         } else {
-            assert_eq!(finished.outcome, Some(TurnOutcome::Failed));
+            assert_eq!(finished.settlement().unwrap().outcome, TurnOutcome::Failed);
             assert!(finished.status.contains("CLI not found"));
             assert_eq!(finished.transcript.rows().last().unwrap().role, "error");
         }

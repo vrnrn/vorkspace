@@ -500,7 +500,7 @@ for line in sys.stdin:
         .find(|update| update.finished())
         .unwrap();
     assert_eq!(
-        finished.history_recovery,
+        finished.settlement().unwrap().history_recovery,
         Some(HistoryRecovery::Saved),
         "{}",
         finished.status

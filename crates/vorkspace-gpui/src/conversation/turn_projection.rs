@@ -1,7 +1,7 @@
 //! Apply an admitted turn's updates to a conversation without owning execution.
 use super::*;
 use vorkspace_core::store::ComposerOrigin;
-use vorkspace_runtime::runtime::Update;
+use vorkspace_runtime::runtime::{TurnOutcome, TurnTransition, Update};
 
 pub(super) struct TurnProjection {
     pub(super) generation: u64,
@@ -35,17 +35,21 @@ impl TurnProjection {
         update: Update,
         cx: &mut Context<Conversation>,
     ) {
-        let outcome = update.outcome;
-        let finished = outcome.is_some();
         let source_provider = self.source_provider.as_str();
         let source_account = self.source_account.as_str();
         if this.submission_generation != self.generation {
             return;
         }
-        let accepted = update.composer_accepted.is_some();
-        if let Some(origin) = update.composer_accepted.as_ref() {
-            this.accept_composer_submission(origin, cx);
-        }
+        let (accepted, settlement) = match update.transition {
+            TurnTransition::Progress => (false, None),
+            TurnTransition::AcceptedComposer(origin) => {
+                this.accept_composer_submission(&origin, cx);
+                (true, None)
+            }
+            TurnTransition::Settled(settlement) => (false, Some(settlement)),
+        };
+        let outcome = settlement.as_ref().map(|settlement| settlement.outcome);
+        let finished = settlement.is_some();
         if finished && let Some(origin) = self.composer_origin.as_ref() {
             this.settle_composer_submission(origin, cx);
         }
@@ -59,9 +63,7 @@ impl TurnProjection {
             this.summary.provider == source_provider && this.settings.account.id == source_account;
         if !stopping
             && source_selected
-            && (accepted
-                || update.turn_ready
-                || outcome == Some(vorkspace_runtime::runtime::TurnOutcome::Completed))
+            && (accepted || update.turn_ready || outcome == Some(TurnOutcome::Completed))
             && let Some(seed) = self.title_seed.take()
         {
             this.generate_title(&seed, cx);
@@ -82,7 +84,9 @@ impl TurnProjection {
                 completion.set_native_commands(commands, cx)
             });
         }
-        let history_recovery = update.history_recovery;
+        let history_recovery = settlement
+            .as_ref()
+            .and_then(|settlement| settlement.history_recovery);
         let activity_changed = this.activity != update.activity;
         this.activity = update.activity;
         let needed_approval = this.needs_approval();
@@ -269,8 +273,8 @@ impl TurnProjection {
         } else if !finished && !this.questions.is_empty() {
             this.status = "Waiting for your answer".into();
         }
-        if let Some(outcome) = outcome {
-            use vorkspace_runtime::runtime::TurnOutcome;
+        if let Some(settlement) = settlement {
+            let outcome = settlement.outcome;
             if this.is_remote() {
                 this.remote_state.refreshing = false;
                 this.remote_state.awaiting_successor = outcome == TurnOutcome::Superseded;
@@ -282,7 +286,7 @@ impl TurnProjection {
                 this.refresh_remote_snapshot(cx);
             }
             this.preparing_worktree = false;
-            if !stopping && let Some(limit) = update.usage_limit {
+            if !stopping && let Some(limit) = settlement.usage_limit {
                 this.settings.usage_limit = Some(limit);
             }
             if !this.is_remote() {
