@@ -1,4 +1,6 @@
 use super::*;
+use crate::automations::{claim_inbox_events, claim_inbox_events_retry, AutomationTrigger};
+use chrono::{Local, TimeZone};
 
 fn local_at(value: &str) -> i64 {
     let naive = chrono::NaiveDateTime::parse_from_str(value, "%Y-%m-%dT%H:%M:%S").unwrap();
@@ -220,6 +222,70 @@ fn recovery_returns_pending_prompts_and_cancels_interrupted_running_runs() {
         .as_deref()
         .unwrap()
         .contains("Interrupted"));
+}
+
+#[test]
+fn legacy_claim_backfill_commits_with_its_marker_and_preserves_pending_runs() {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("sessions.sqlite");
+    let mut service = Service::open(&path).unwrap();
+    let automation = save(
+        &mut service,
+        vec![AutomationTrigger::new("github", "pull_request_opened")],
+    );
+    let mut legacy = new_event_run(
+        &automation.id,
+        "github:pr:acme/app:42",
+        "github",
+        "pull_request_opened",
+        1,
+        1,
+        "Old launch prompt",
+    );
+    legacy.status = "succeeded".into();
+    legacy.completed_at = Some(2);
+    write_run(&service.conn, &legacy).unwrap();
+    let pending = service.run_now(&automation.id, 3).unwrap();
+    service
+        .conn
+        .execute_batch(
+            "DELETE FROM automation_migrations;
+         CREATE TRIGGER reject_migration BEFORE INSERT ON automation_migrations
+         BEGIN SELECT RAISE(ABORT, 'interrupted migration'); END;",
+        )
+        .unwrap();
+    service
+        .conn
+        .execute(
+            "INSERT INTO automation_runs (id, automation_id, created_at, run_json)
+         VALUES ('broken-history', ?1, 0, 'unreadable')",
+            [&automation.id],
+        )
+        .unwrap();
+    assert!(Service::open(&path).is_err());
+    assert!(!claims_backfilled(&service.conn).unwrap());
+    let claims: i64 = service
+        .conn
+        .query_row("SELECT count(*) FROM automation_event_claims", [], |row| {
+            row.get(0)
+        })
+        .unwrap();
+    assert_eq!(claims, 0);
+    service
+        .conn
+        .execute_batch("DROP TRIGGER reject_migration;")
+        .unwrap();
+    drop(service);
+
+    let mut service = Service::open(&path).unwrap();
+    assert!(claims_backfilled(&service.conn).unwrap());
+    assert!(claim_inbox_events(&mut service, &[item(42)], 4)
+        .unwrap()
+        .is_empty());
+    let recovered = service.recover(4, 5).unwrap();
+    assert_eq!(recovered.len(), 1);
+    assert_eq!(recovered[0].run.id, pending.id);
+    assert_eq!(recovered[0].run.prompt, pending.prompt);
 }
 
 #[test]

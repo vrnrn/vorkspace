@@ -292,7 +292,7 @@ impl Automations {
         let selected = self.selected.clone();
         let selected_for_work = selected.clone();
         let work = cx.background_executor().spawn(async move {
-            let mut service = service
+            let service = service
                 .lock()
                 .map_err(|_| "Automations unavailable".to_string())?;
             let list = service.list()?;

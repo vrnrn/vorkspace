@@ -118,18 +118,18 @@ impl Shell {
         let cutoff = core.read(cx).automation_cutoff;
         let work = cx.background_executor().spawn(async move {
             let mut service = service_lock(&service)?;
-            let mut runs = if recover {
-                service.recover(cutoff, now())?
-            } else {
-                Vec::new()
-            };
-            runs.extend(service.claim_due(now())?);
             let has_events = service.list()?.iter().any(|automation| {
                 automation.enabled
                     && automation.triggers.as_ref().is_some_and(|triggers| {
                         triggers.iter().any(|trigger| trigger.kind != "time")
                     })
             });
+            let mut runs = if recover {
+                service.recover(cutoff, now())?
+            } else {
+                Vec::new()
+            };
+            runs.extend(service.claim_due(now())?);
             Ok::<_, String>((runs, has_events))
         });
         cx.spawn(async move |this, cx| {

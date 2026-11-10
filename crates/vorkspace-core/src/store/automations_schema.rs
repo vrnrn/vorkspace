@@ -1,8 +1,12 @@
 //! Automation tables, created with the rest of the database.
 use rusqlite::Connection;
 
+pub(crate) const RECOVERABLE_RUN: &str = "CASE WHEN json_valid(run_json)
+          THEN json_extract(run_json, '$.status') IN ('pending', 'running')
+          ELSE 0 END";
+
 pub(crate) fn ensure_schema(conn: &Connection) -> rusqlite::Result<()> {
-    conn.execute_batch(
+    conn.execute_batch(&format!(
         "CREATE TABLE IF NOT EXISTS automations (
            id TEXT PRIMARY KEY,
            definition_json TEXT NOT NULL,
@@ -20,11 +24,16 @@ pub(crate) fn ensure_schema(conn: &Connection) -> rusqlite::Result<()> {
          );
          CREATE INDEX IF NOT EXISTS automation_runs_history_idx
            ON automation_runs (automation_id, created_at DESC);
+         CREATE INDEX IF NOT EXISTS automation_runs_recovery_idx
+           ON automation_runs (created_at, id) WHERE {RECOVERABLE_RUN};
          CREATE TABLE IF NOT EXISTS automation_event_claims (
            automation_id TEXT NOT NULL REFERENCES automations(id) ON DELETE CASCADE,
            event_key TEXT NOT NULL,
            created_at INTEGER NOT NULL,
            PRIMARY KEY (automation_id, event_key)
+         );
+         CREATE TABLE IF NOT EXISTS automation_migrations (
+           name TEXT PRIMARY KEY NOT NULL
          );",
-    )
+    ))
 }

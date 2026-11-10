@@ -362,7 +362,7 @@ impl Shell {
                 "Automations are not ready; project ownership cannot be checked yet.".into(),
             );
         };
-        let mut service = service
+        let service = service
             .try_lock()
             .map_err(|_| "Automations are busy; try again shortly.".to_string())?;
         if service.list()?.iter().any(|a| {
