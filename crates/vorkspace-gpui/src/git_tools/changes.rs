@@ -822,7 +822,7 @@ impl Changes {
             move |this, result, scope, window, cx| {
                 if this.cwd == scope.cwd {
                     this.amend = None;
-                    if this.message.read(cx).content.to_string() == submitted {
+                    if this.message.read(cx).content.as_ref() == submitted.as_str() {
                         this.message
                             .update(cx, |m, cx| m.set_text(String::new(), cx));
                     }

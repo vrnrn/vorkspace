@@ -305,6 +305,7 @@ pub(crate) fn is_indexable_root(root: &Path) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::scm::git_cmd;
     #[test]
     fn indexes_untracked_files_respects_ignores_and_cancels() {
         let temp = tempfile::tempdir().unwrap();
