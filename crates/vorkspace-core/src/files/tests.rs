@@ -119,6 +119,39 @@ fn copy_rejects_paste_into_self_through_a_symlink_alias() {
 }
 
 #[test]
+fn copy_and_delete_treat_symlinks_as_directory_entries() {
+    use std::os::unix::fs::symlink;
+    let dir = tmp();
+    let source = dir.path().join("source");
+    let outside = dir.path().join("outside");
+    std::fs::create_dir(&source).unwrap();
+    std::fs::create_dir(&outside).unwrap();
+    std::fs::write(outside.join("original.txt"), "outside").unwrap();
+    symlink("../outside", source.join("linked-folder")).unwrap();
+    symlink(".", source.join("self")).unwrap();
+    symlink("missing-target", source.join("broken")).unwrap();
+
+    let copied = PathBuf::from(copy_path(&source, dir.path()).unwrap());
+    for (name, target) in [
+        ("linked-folder", "../outside"),
+        ("self", "."),
+        ("broken", "missing-target"),
+    ] {
+        assert_eq!(
+            std::fs::read_link(copied.join(name)).unwrap(),
+            Path::new(target)
+        );
+    }
+    delete_path(&copied.join("broken")).unwrap();
+    delete_path(&copied.join("linked-folder")).unwrap();
+    assert!(std::fs::symlink_metadata(copied.join("broken")).is_err());
+    assert_eq!(
+        std::fs::read_to_string(outside.join("original.txt")).unwrap(),
+        "outside"
+    );
+}
+
+#[test]
 fn list_dir_sorts_numbered_names_naturally_with_folders_first() {
     let dir = tmp();
     for name in [

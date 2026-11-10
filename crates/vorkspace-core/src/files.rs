@@ -274,6 +274,16 @@ fn missing(path: &Path) -> String {
     format!("{}: No such file or directory", path.display())
 }
 
+fn entry_metadata(path: &Path) -> Result<std::fs::Metadata, String> {
+    std::fs::symlink_metadata(path).map_err(|error| {
+        if error.kind() == ErrorKind::NotFound {
+            missing(path)
+        } else {
+            format!("{}: {error}", path.display())
+        }
+    })
+}
+
 /// Create a file or folder under `parent`. `name` may contain `/` or `\` to
 /// nest. Returns the created path.
 pub fn create_path(parent: &Path, name: &str, is_dir: bool) -> Result<String, String> {
@@ -361,10 +371,8 @@ pub fn delete_path(path: &Path) -> Result<(), String> {
         return remote::command("delete_path", serde_json::json!({"path":path}));
     }
     let path = expand_home(path);
-    if !path.exists() {
-        return Err(missing(&path));
-    }
-    if path.is_dir() {
+    let meta = entry_metadata(&path)?;
+    if meta.is_dir() {
         std::fs::remove_dir_all(&path).map_err(|e| format!("{}: {e}", path.display()))
     } else {
         std::fs::remove_file(&path).map_err(|e| format!("{}: {e}", path.display()))
@@ -381,20 +389,18 @@ pub fn copy_path(from: &Path, dest_parent: &Path) -> Result<String, String> {
         );
     }
     let from = expand_home(from);
-    if !from.exists() {
-        return Err(missing(&from));
-    }
+    let meta = entry_metadata(&from)?;
     let dest_parent = expand_home(dest_parent);
     if !dest_parent.is_dir() {
         return Err(format!("{} is not a folder", dest_parent.display()));
     }
-    if from.is_dir() && dir_contains(&from, &dest_parent) {
+    if meta.is_dir() && dir_contains(&from, &dest_parent) {
         return Err("Cannot paste a folder into itself.".into());
     }
     let name = unique_name_in(
         &dest_parent,
         &file_label(&from, from.to_str().unwrap_or("copy")),
-    );
+    )?;
     let dest = dest_parent.join(&name);
     copy_recursive(&from, &dest)?;
     Ok(dest.to_string_lossy().into_owned())
@@ -498,7 +504,7 @@ fn split_stem_ext(name: &str) -> (&str, &str) {
     }
 }
 
-fn unique_name_in(dir: &Path, name: &str) -> String {
+fn unique_name_in(dir: &Path, name: &str) -> Result<String, String> {
     let (stem, ext) = split_stem_ext(name);
     let mut n = 0u32;
     loop {
@@ -507,8 +513,10 @@ fn unique_name_in(dir: &Path, name: &str) -> String {
             1 => format!("{stem} copy{ext}"),
             _ => format!("{stem} copy {n}{ext}"),
         };
-        if !dir.join(&candidate).exists() {
-            return candidate;
+        match std::fs::symlink_metadata(dir.join(&candidate)) {
+            Err(error) if error.kind() == ErrorKind::NotFound => return Ok(candidate),
+            Err(error) => return Err(error.to_string()),
+            Ok(_) => {}
         }
         n += 1;
         if n > 1000 {
@@ -516,13 +524,17 @@ fn unique_name_in(dir: &Path, name: &str) -> String {
                 .duration_since(UNIX_EPOCH)
                 .unwrap_or_default()
                 .as_nanos();
-            return format!("{stem} copy {stamp}{ext}");
+            return Ok(format!("{stem} copy {stamp}{ext}"));
         }
     }
 }
 
 fn copy_recursive(from: &Path, to: &Path) -> Result<(), String> {
-    let meta = std::fs::metadata(from).map_err(|e| format!("{}: {e}", from.display()))?;
+    let meta = entry_metadata(from)?;
+    if meta.is_symlink() {
+        let target = std::fs::read_link(from).map_err(|e| e.to_string())?;
+        return std::os::unix::fs::symlink(target, to).map_err(|e| e.to_string());
+    }
     if meta.is_dir() {
         std::fs::create_dir(to).map_err(|e| format!("{}: {e}", to.display()))?;
         for ent in std::fs::read_dir(from).map_err(|e| format!("{}: {e}", from.display()))? {
