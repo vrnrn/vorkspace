@@ -110,6 +110,9 @@ impl Shell {
 
 /// The shell's half of the contract `Bots` depends on.
 impl BotsHost for gpui::WeakEntity<Shell> {
+    fn open_owned_bot(&self, id: &str, window: &mut Window, cx: &mut App) {
+        let _ = self.update(cx, |shell, cx| shell.open_owned_bot(id, window, cx));
+    }
     fn remove_worktree(
         &self,
         project: String,

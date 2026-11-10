@@ -39,7 +39,7 @@ impl Render for BotPaneView {
 }
 
 impl Shell {
-    pub(crate) fn open_owned_bot(
+    pub(super) fn open_owned_bot(
         &mut self,
         bot: &str,
         window: &mut Window,

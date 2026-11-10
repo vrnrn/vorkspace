@@ -1589,16 +1589,16 @@ impl Bots {
         };
         let id = id.to_owned();
         cx.defer(move |cx| {
-            let Some(handle) = owner
-                .upgrade()
-                .and_then(|manager| manager.read(cx).parent_window)
-            else {
+            let Some(manager) = owner.upgrade() else {
                 return;
             };
-            let _ = handle.update(cx, |root, window, cx| {
-                if let Ok(shell) = root.downcast::<crate::shell::Shell>() {
-                    shell.update(cx, |shell, cx| shell.open_owned_bot(&id, window, cx));
-                }
+            let manager = manager.read(cx);
+            let Some(handle) = manager.parent_window else {
+                return;
+            };
+            let host = manager.owner.clone();
+            let _ = handle.update(cx, |_, window, cx| {
+                host.open_owned_bot(&id, window, cx);
                 vorkspace_ui::traffic_lights::show(window);
                 window.activate_window();
             });
