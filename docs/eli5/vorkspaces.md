@@ -18,4 +18,6 @@ Use **File → New Window** (⇧⌘N) to open another window in your current vor
 
 Quit the app to reopen the same window layouts next time. **Window → Close Window** (⇧⌘W) closes just the current window, while ⌘W closes a tab. Finish or stop any active work before closing the window that owns it.
 
+If a note changed in another window while you were editing it, you can save your edits as a copy or reload the latest version.
+
 The [technical guide](../vorkspaces.md) has the details.

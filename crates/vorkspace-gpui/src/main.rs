@@ -194,7 +194,7 @@ pub(crate) fn open_workspace_window(
                 )
             });
             shell.update(cx, |shell, cx| {
-                shell.observe_scale(window, cx);
+                shell.initialize_scale(window, cx);
                 shell.focus_active(window, cx);
                 // AppKit rebuilds the buttons on some titlebar changes.
                 cx.observe_window_activation(window, |_, window, _| {

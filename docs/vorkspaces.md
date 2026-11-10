@@ -50,3 +50,5 @@ The rail's options menu no longer has an Activity switch. The expanded rail list
 - Remote-host connections, the native Dock badge, and the agent app bridge are shared. The bridge routes a call to the window running the calling session, falling back to the oldest window.
 
 **Window → Close Window** (⇧⌘W) checks for active work and prompts before discarding unsaved file edits. Notes must finish saving before the window closes. The last window honors **Close to Tray** when enabled.
+
+Note editors compare each save with the version they loaded. If the note changed elsewhere, the editor keeps its draft and offers **Save a Copy** or **Discard and Reload**.

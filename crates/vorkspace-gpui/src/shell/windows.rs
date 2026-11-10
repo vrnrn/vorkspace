@@ -283,12 +283,7 @@ impl Shell {
             cx.notify();
             return false;
         }
-        if !self
-            .notes
-            .iter()
-            .chain(self.note_tabs.values())
-            .all(|note| note.update(cx, |note, cx| note.prepare_close(cx)))
-        {
+        if !self.prepare_notes_close(cx) {
             self.error = Some("A note in this window still has unsaved changes.".into());
             cx.notify();
             return false;
@@ -412,13 +407,23 @@ mod tests {
             .expect("File shortcut opens a workspace window");
         assert_eq!(workspace_windows(cx).len(), 2);
 
+        let peer_scale = std::rc::Rc::new(std::cell::Cell::new(None));
+        let observed = peer_scale.clone();
         first
             .update(cx, |shell, window, cx| {
                 shell.scale_interface(30, window, cx);
                 shell.workspace.preferences.theme = "light".into();
                 shell.persist(cx);
+                // Observe before GPUI can render the peer and correct a
+                // scale inadvertently copied from the global preferences.
+                cx.defer(move |cx| {
+                    second
+                        .update(cx, |_, window, _| observed.set(Some(window.ui_scale())))
+                        .unwrap();
+                });
             })
             .unwrap();
+        assert_eq!(peer_scale.get(), Some(1.));
         let second_handle: AnyWindowHandle = second.into();
         cx.simulate_window_resize(second_handle, size(px(860.), px(565.)));
         cx.run_until_parked();

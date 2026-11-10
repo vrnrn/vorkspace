@@ -95,10 +95,6 @@ pub(crate) struct QuickComposer {
 }
 impl EventEmitter<Launch> for QuickComposer {}
 impl QuickComposer {
-    pub(crate) fn observe_scale(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        self._subscriptions
-            .push(vorkspace_ui::preferences::observe_window_scale(window, cx));
-    }
     pub fn new(
         projects: Vec<String>,
         choice: Launch,

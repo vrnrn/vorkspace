@@ -1638,6 +1638,13 @@ impl Shell {
             .any(|pane| pane.read(cx).unsaved_files(cx))
     }
 
+    fn prepare_notes_close(&self, cx: &mut Context<Self>) -> bool {
+        self.notes
+            .iter()
+            .chain(self.note_tabs.values())
+            .all(|note| note.update(cx, |note, cx| note.prepare_close(cx)))
+    }
+
     fn scale_interface(&mut self, delta: i32, window: &mut Window, cx: &mut Context<Self>) {
         let scale = if delta == 0 {
             100
@@ -1663,7 +1670,7 @@ impl Shell {
         cx.notify();
     }
     fn request_quit(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if !self.unsaved_window_files(cx) {
+        if !self.unsaved_window_edits(cx) {
             crate::quit(cx);
             return;
         }
@@ -1673,8 +1680,8 @@ impl Shell {
         self.quit_prompted = true;
         let answer = window.prompt(
             gpui::PromptLevel::Warning,
-            "Quit with unsaved file edits?",
-            Some("Save your files before quitting to keep your changes."),
+            "Quit with unsaved edits?",
+            Some("Save your edits before quitting to keep your changes."),
             &["Quit Without Saving", "Cancel"],
             cx,
         );
@@ -1692,7 +1699,7 @@ impl Shell {
         .detach();
     }
     fn request_restart(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if !self.unsaved_window_files(cx) {
+        if !self.unsaved_window_edits(cx) {
             crate::restart(cx);
             return;
         }
@@ -1702,8 +1709,8 @@ impl Shell {
         self.quit_prompted = true;
         let answer = window.prompt(
             gpui::PromptLevel::Warning,
-            "Restart with unsaved file edits?",
-            Some("Save your files before restarting to keep your changes."),
+            "Restart with unsaved edits?",
+            Some("Save your edits before restarting to keep your changes."),
             &["Restart Without Saving", "Cancel"],
             cx,
         );

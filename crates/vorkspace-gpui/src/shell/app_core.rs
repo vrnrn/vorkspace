@@ -641,17 +641,26 @@ impl Shell {
         }
     }
 
-    pub(super) fn unsaved_window_files(&self, cx: &Context<Self>) -> bool {
-        self.unsaved_files(cx)
-            || self.app_core.as_ref().is_some_and(|core| {
-                let me = cx.weak_entity();
-                core.read(cx).windows.iter().any(|shell| {
-                    shell != &me
-                        && shell
-                            .upgrade()
-                            .is_some_and(|shell| shell.read(cx).unsaved_files(cx))
-                })
+    pub(super) fn unsaved_window_edits(&self, cx: &mut Context<Self>) -> bool {
+        if self.unsaved_files(cx) || !self.prepare_notes_close(cx) {
+            return true;
+        }
+        let Some(core) = &self.app_core else {
+            return false;
+        };
+        let me = cx.weak_entity();
+        let others: Vec<_> = core
+            .read(cx)
+            .windows
+            .iter()
+            .filter(|shell| *shell != &me)
+            .filter_map(WeakEntity::upgrade)
+            .collect();
+        others.into_iter().any(|shell| {
+            shell.update(cx, |shell, cx| {
+                shell.unsaved_files(cx) || !shell.prepare_notes_close(cx)
             })
+        })
     }
 
     /// Starts the application's agent bridge if no window has yet.

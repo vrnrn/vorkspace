@@ -622,6 +622,33 @@ impl Store {
     }
 
     pub fn upsert_note(&self, note: &NoteUpsert) -> Result<Note, String> {
+        self.prepare_note_upsert(note)?;
+        upsert_note(&self.conn, note).map_err(|e| e.to_string())
+    }
+
+    /// Save an editor's draft only over the exact note it loaded. None means
+    /// the editor started a new draft. A mismatch preserves both versions.
+    pub fn upsert_note_if_current(
+        &self,
+        note: &NoteUpsert,
+        expected: Option<&Note>,
+    ) -> Result<Option<Note>, String> {
+        self.prepare_note_upsert(note)?;
+        let tx = Transaction::new_unchecked(&self.conn, TransactionBehavior::Immediate)
+            .map_err(|e| e.to_string())?;
+        let mut current = get_content(&tx, &note.id, "note").map_err(|e| e.to_string())?;
+        if current.is_none() && self.shared.is_none() && note.id.starts_with("gpui-note-") {
+            current = self.get_note(&note.id)?;
+        }
+        if current.as_ref() != expected {
+            return Ok(None);
+        }
+        let saved = upsert_note(&tx, note).map_err(|e| e.to_string())?;
+        tx.commit().map_err(|e| e.to_string())?;
+        Ok(Some(saved))
+    }
+
+    fn prepare_note_upsert(&self, note: &NoteUpsert) -> Result<(), String> {
         valid_id(&note.id)?;
         if note.body.len() > MAX_BODY {
             return Err("Content is too large".into());
@@ -636,8 +663,7 @@ impl Store {
         if self.shared.is_some() {
             self.shared_writable()?;
         }
-        ensure_notes_table(&self.conn).map_err(|e| e.to_string())?;
-        upsert_note(&self.conn, note).map_err(|e| e.to_string())
+        ensure_notes_table(&self.conn).map_err(|e| e.to_string())
     }
 
     /// Update an existing note without changing its artifact subtype or

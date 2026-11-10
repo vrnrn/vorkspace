@@ -68,6 +68,7 @@ impl Shell {
             .unwrap_or(initial);
         choice.access = crate::conversation::default_access(cx);
         let store = self.store.clone();
+        let scale = self.workspace.preferences.interface_scale();
         let bounds = gpui::Bounds::centered(None, gpui::size(px(680.), px(230.)), cx);
         let handle = cx.open_window(
             gpui::WindowOptions {
@@ -83,7 +84,7 @@ impl Shell {
                     crate::composer::quick_composer::QuickComposer::new(projects, choice, store, cx)
                 });
                 view.update(cx, |v, cx| {
-                    v.observe_scale(window, cx);
+                    window.set_ui_scale(scale, cx);
                     v.focus(window, cx);
                 });
                 view
@@ -210,7 +211,7 @@ mod scale_tests {
         let (main, _, _) = crate::shell::tests::window(cx);
         let quick = main
             .update(cx, |shell, window, cx| {
-                shell.observe_scale(window, cx);
+                shell.initialize_scale(window, cx);
                 shell.workspace.preferences.ui_scale = 150;
                 shell.apply_preferences(cx);
                 shell.toggle_quick_composer(window, cx);

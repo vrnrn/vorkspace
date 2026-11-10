@@ -464,6 +464,19 @@ impl Shell {
             vorkspace_ui::preferences::Preferences::MIN_UI_SCALE_PERCENT,
             vorkspace_ui::preferences::Preferences::MAX_UI_SCALE_PERCENT,
         );
+        if let Some(owner) = self.native_window {
+            cx.defer(move |cx| {
+                let _ = owner.update(cx, |shell, window, cx| shell.initialize_scale(window, cx));
+            });
+        }
+        if let Some(quick) = self.quick.window {
+            let scale = self.workspace.preferences.interface_scale();
+            let _ = quick.update(cx, |_, window, cx| {
+                if window.ui_scale() != scale {
+                    window.set_ui_scale(scale, cx);
+                }
+            });
+        }
         let notes_enabled = self.workspace.preferences.notes;
         let hidden_providers = self.workspace.preferences.hidden_providers.clone();
         if let Some(notes) = &self.notes {
@@ -525,9 +538,8 @@ impl Shell {
             footer.set_remaining(self.workspace.preferences.show_remaining_usage, cx)
         });
     }
-    pub(crate) fn observe_scale(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        self.observations
-            .push(vorkspace_ui::preferences::observe_window_scale(window, cx));
+    pub(crate) fn initialize_scale(&self, window: &mut Window, cx: &mut Context<Self>) {
+        window.set_ui_scale(self.workspace.preferences.interface_scale(), cx);
     }
     fn choose_chat_background(&mut self, cx: &mut Context<Self>) {
         let prompt = cx.prompt_for_paths(PathPromptOptions {
