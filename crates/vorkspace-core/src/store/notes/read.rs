@@ -1,5 +1,6 @@
 //! Read only the note payloads requested by the library, editor or composer.
 use super::{read_note, valid_id, Note, Store};
+use crate::notes::NoteSummary;
 use rusqlite::{Connection, OptionalExtension};
 use std::collections::HashSet;
 
@@ -80,10 +81,52 @@ impl Store {
         Ok(notes)
     }
 
+    pub fn list_note_summaries(&self) -> Result<Vec<NoteSummary>, String> {
+        let mut notes = Vec::new();
+        if let Some(NoteColumns { tags, filter, .. }) = NoteColumns::discover(&self.conn)? {
+            let mut query = self
+                .conn
+                .prepare(&format!(
+                    "SELECT id,slug,title,{tags},source_cwd,updated_at FROM notes
+                     WHERE {filter} ORDER BY updated_at DESC,id ASC"
+                ))
+                .map_err(|error| error.to_string())?;
+            notes = query
+                .query_map([], |row| {
+                    let tags: String = row.get(3)?;
+                    Ok(NoteSummary {
+                        id: row.get(0)?,
+                        slug: row.get(1)?,
+                        title: row.get(2)?,
+                        tags: serde_json::from_str(&tags).unwrap_or_default(),
+                        source_cwd: row.get(4)?,
+                        updated_at: row.get(5)?,
+                    })
+                })
+                .map_err(|error| error.to_string())?
+                .collect::<rusqlite::Result<_>>()
+                .map_err(|error| error.to_string())?;
+        }
+        if self.shared.is_none() {
+            let mut ids: HashSet<_> = notes.iter().map(|note| note.id.clone()).collect();
+            for note in self.legacy_notes()?.into_iter().map(legacy_note) {
+                if ids.insert(note.id.clone()) {
+                    notes.push(note.into());
+                }
+            }
+            notes.sort_by(|a, b| b.updated_at.cmp(&a.updated_at).then(a.id.cmp(&b.id)));
+        }
+        Ok(notes)
+    }
+
     /// Identity-only view for reconciling recording links.
     pub fn note_ids(&self) -> Result<HashSet<String>, String> {
         if self.shared.is_none() {
-            return Ok(self.list_notes()?.into_iter().map(|note| note.id).collect());
+            return Ok(self
+                .list_note_summaries()?
+                .into_iter()
+                .map(|note| note.id)
+                .collect());
         }
         let Some(columns) = NoteColumns::discover(&self.conn)? else {
             return Ok(HashSet::new());
@@ -102,16 +145,38 @@ impl Store {
 
     pub fn get_note(&self, id: &str) -> Result<Option<Note>, String> {
         valid_id(id)?;
-        if self.shared.is_none() {
-            return Ok(self.list_notes()?.into_iter().find(|note| note.id == id));
+        if let Some(columns) = NoteColumns::discover(&self.conn)? {
+            let note = self
+                .conn
+                .prepare(&format!("{} AND id=?1", columns.select()))
+                .and_then(|mut query| query.query_row([id], read_note).optional())
+                .map_err(|error| error.to_string())?;
+            if note.is_some() {
+                return Ok(note);
+            }
         }
-        let Some(columns) = NoteColumns::discover(&self.conn)? else {
+        let Some(numeric) = id
+            .strip_prefix("gpui-note-")
+            .filter(|_| self.shared.is_none())
+        else {
             return Ok(None);
         };
-        self.conn
-            .prepare(&format!("{} AND id=?1", columns.select()))
-            .and_then(|mut query| query.query_row([id], read_note).optional())
-            .map_err(|error| error.to_string())
+        let raw: Option<String> = self
+            .conn
+            .query_row(
+                "SELECT value FROM native_settings WHERE key=?1",
+                [format!("note:{numeric}")],
+                |row| row.get(0),
+            )
+            .optional()
+            .map_err(|error| error.to_string())?;
+        raw.map(|value| {
+            serde_json::from_str(&value)
+                .map(legacy_note)
+                .map_err(|error| error.to_string())
+        })
+        .transpose()
+        .map(|note| note.filter(|note| note.id == id))
     }
 
     /// Resolve each unique mention in prompt order from one read snapshot.

@@ -1263,7 +1263,7 @@ fn notes_reminders_search_and_read_only_connections_use_the_same_data() {
     );
     store.conn.execute("INSERT INTO notes(id,slug,title,body,tags_json,source_session_id,source_cwd,created_at,updated_at,artifact_kind)
         VALUES('existing-note','stable-slug','Note','Body','[\"tag\"]',?1,'/project',1,2,'document')",[&source]).unwrap();
-    let mut note = store.notes().unwrap().pop().unwrap();
+    let mut note = store.response_note(store.get_note("existing-note").unwrap().unwrap());
     assert_eq!(note.source_session, id);
     note.body = "Edited note".into();
     store.save_note(&note).unwrap();

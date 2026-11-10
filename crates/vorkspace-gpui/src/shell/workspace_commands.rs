@@ -128,7 +128,7 @@ impl Shell {
                 self.app_pane_in_project(id, project, cx) && self.pane_in_scope(id, cx)
             });
             let notes = locked(&self.store)?
-                .list_notes()?
+                .list_note_summaries()?
                 .into_iter()
                 .filter(|note| {
                     note.source_cwd

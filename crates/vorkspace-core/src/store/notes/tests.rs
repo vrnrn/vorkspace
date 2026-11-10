@@ -271,13 +271,12 @@ fn response_note_facade_and_legacy_settings_share_one_saved_identity() {
     response.body = "Edited response".into();
     store.save_note(&response).unwrap();
     assert_eq!(store.list_notes().unwrap().len(), 1);
-    let compatible = store.notes().unwrap();
-    assert_eq!(compatible.len(), 1);
-    assert_eq!(compatible[0].id, response.id);
-    assert_eq!(compatible[0].body, response.body);
-    assert_eq!(compatible[0].source_session, session.id);
+    let compatible = store.response_note(store.get_note("gpui-note-123").unwrap().unwrap());
+    assert_eq!(compatible.id, response.id);
+    assert_eq!(compatible.body, response.body);
+    assert_eq!(compatible.source_session, session.id);
     store.delete_note("gpui-note-123").unwrap();
-    assert!(store.notes().unwrap().is_empty());
+    assert!(store.get_note("gpui-note-123").unwrap().is_none());
 }
 
 #[test]
@@ -285,7 +284,7 @@ fn shared_response_bridge_preserves_original_identity_slug_and_subtype() {
     let directory = tempfile::tempdir().unwrap();
     let store = Store::open_vorkspace(&directory.path().join("vorkspace.db")).unwrap();
     store.conn.execute("INSERT INTO notes(id,slug,title,body,created_at,updated_at,artifact_kind) VALUES('source-id','stable','Saved','Body',1,2,'document')", []).unwrap();
-    let mut compatible = store.notes().unwrap().pop().unwrap();
+    let mut compatible = store.response_note(store.get_note("source-id").unwrap().unwrap());
     compatible.body = "Changed".into();
     store.save_note(&compatible).unwrap();
     let saved = store.get_note("source-id").unwrap().unwrap();
@@ -317,7 +316,9 @@ fn external_note_update_keeps_pending_slug_subtype_and_recording_link() {
     let mut update = saved.upsert(true);
     update.title = "New title".into();
     update.body = "Revised".into();
-    let revised = store.update_note_preserving_artifact(&update).unwrap();
+    let revised = store
+        .update_note_preserving_artifact(update, &saved)
+        .unwrap();
     assert_eq!(revised.id, saved.id);
     assert_eq!(revised.slug, saved.slug);
     assert!(revised.slug_pending);
@@ -334,9 +335,55 @@ fn external_note_update_keeps_pending_slug_subtype_and_recording_link() {
         )
         .unwrap();
     assert_eq!(subtype, "document");
+    let mut moved = revised.upsert(false);
+    moved.source_cwd = Some("/other-project".into());
+    let moved = upsert_content(&store.conn, &moved, "note", Some("document")).unwrap();
+    let mut stale = revised.upsert(false);
+    stale.body = "Stale write".into();
     assert!(store
-        .update_note_preserving_artifact(&input("missing", "No", "note"))
+        .update_note_preserving_artifact(stale, &revised)
         .is_err());
+    assert_eq!(store.get_note(&moved.id).unwrap(), Some(moved));
+}
+
+#[test]
+fn note_summary_projection_keeps_order_and_excludes_artifacts() {
+    let store = store();
+    let mut original = input("native", "Notes are indexed", "A saved body");
+    original.tags = vec!["rust".into()];
+    original.source_cwd = Some("/project".into());
+    store.upsert_note(&original).unwrap();
+    let legacy = crate::response::Note {
+        id: 42,
+        title: "Legacy note".into(),
+        body: "A legacy body".into(),
+        tags: vec!["old".into()],
+        source_session: 0,
+        source_cwd: "/archive".into(),
+    };
+    store
+        .save_setting("note:42", &serde_json::to_string(&legacy).unwrap())
+        .unwrap();
+    upsert_content(
+        &store.conn,
+        &input("artifact", "Artifact", "Separate"),
+        "artifact",
+        None,
+    )
+    .unwrap();
+    assert_eq!(
+        store.list_note_summaries().unwrap(),
+        store
+            .list_notes()
+            .unwrap()
+            .into_iter()
+            .map(crate::notes::NoteSummary::from)
+            .collect::<Vec<_>>()
+    );
+    assert_eq!(
+        store.get_note("gpui-note-42").unwrap().unwrap().body,
+        legacy.body
+    );
 }
 
 const RECORDING_A: &str = "0123456789abcdef0123456789abcdef";

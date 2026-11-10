@@ -544,34 +544,24 @@ impl Store {
     pub fn save_note(&self, note: &crate::response::Note) -> Result<(), String> {
         self.save_response_note(note)
     }
-    pub fn notes(&self) -> Result<Vec<crate::response::Note>, String> {
-        Ok(self
-            .list_notes()?
-            .into_iter()
-            .map(|note| {
-                let source_session = self
-                    .note_source_session(&note)
-                    .or_else(|| {
-                        self.shared
-                            .is_none()
-                            .then(|| note.source_session_id.as_deref()?.parse().ok())
-                            .flatten()
-                    })
-                    .unwrap_or(0);
-                crate::response::Note {
-                    id: note
-                        .id
-                        .strip_prefix("gpui-note-")
-                        .and_then(|id| id.parse().ok())
-                        .unwrap_or_else(|| shared::handle(&note.id) as u64),
-                    title: note.title,
-                    body: note.body,
-                    tags: note.tags,
-                    source_session,
-                    source_cwd: note.source_cwd.unwrap_or_default(),
-                }
+    pub fn response_note(&self, note: crate::notes::Note) -> crate::response::Note {
+        let source_session = self
+            .note_source_session(&note)
+            .or_else(|| {
+                self.shared
+                    .is_none()
+                    .then(|| note.source_session_id.as_deref()?.parse().ok())
+                    .flatten()
             })
-            .collect())
+            .unwrap_or(0);
+        crate::response::Note {
+            id: crate::notes::numeric_id(&note.id),
+            title: note.title,
+            body: note.body,
+            tags: note.tags,
+            source_session,
+            source_cwd: note.source_cwd.unwrap_or_default(),
+        }
     }
     /// Read-only fallback for early native settings; list_notes owns merging it
     /// with the desktop table, so this must never call the notes facade.

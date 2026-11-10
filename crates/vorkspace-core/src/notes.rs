@@ -25,6 +25,36 @@ pub struct Note {
     pub updated_at: i64,
 }
 
+/// The note catalog can be read and retained independently of note bodies.
+#[derive(Debug, PartialEq, Eq)]
+pub struct NoteSummary {
+    pub id: String,
+    pub slug: String,
+    pub title: String,
+    pub tags: Vec<String>,
+    pub source_cwd: Option<String>,
+    pub updated_at: i64,
+}
+
+impl From<Note> for NoteSummary {
+    fn from(note: Note) -> Self {
+        Self {
+            id: note.id,
+            slug: note.slug,
+            title: note.title,
+            tags: note.tags,
+            source_cwd: note.source_cwd,
+            updated_at: note.updated_at,
+        }
+    }
+}
+
+pub fn numeric_id(id: &str) -> u64 {
+    id.strip_prefix("gpui-note-")
+        .and_then(|id| id.parse().ok())
+        .unwrap_or_else(|| crate::session::desktop_session_handle(id) as u64)
+}
+
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct NoteUpsert {

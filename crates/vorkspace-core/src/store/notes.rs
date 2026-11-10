@@ -691,29 +691,26 @@ impl Store {
         ensure_notes_table(&self.conn).map_err(|e| e.to_string())
     }
 
-    /// Update an existing note without changing its artifact subtype or
-    /// finalizing a pending slug. The legacy numeric note facade may resolve
-    /// to a native note whose identity and metadata must stay intact.
-    pub fn update_note_preserving_artifact(&self, note: &NoteUpsert) -> Result<Note, String> {
-        valid_id(&note.id)?;
-        if note.body.len() > MAX_BODY {
-            return Err("Content is too large".into());
-        }
-        if let Some(id) = note
-            .source_session_id
-            .as_deref()
-            .filter(|id| !id.is_empty())
-        {
-            valid_id(id)?;
-        }
-        if self.shared.is_some() {
-            self.shared_writable()?;
-        }
-        ensure_notes_table(&self.conn).map_err(|e| e.to_string())?;
-        // The existence check and update share one write transaction so a
-        // concurrent delete cannot turn this update into a new note.
+    /// Update only the note the caller authorized, preserving its artifact
+    /// subtype and any pending slug. Scope and content may change between
+    /// reading the note and beginning this write.
+    pub fn update_note_preserving_artifact(
+        &self,
+        mut note: NoteUpsert,
+        expected: &Note,
+    ) -> Result<Note, String> {
+        self.prepare_note_upsert(&note)?;
         let tx = Transaction::new_unchecked(&self.conn, TransactionBehavior::Immediate)
             .map_err(|e| e.to_string())?;
+        let mut current = get_content(&tx, &note.id, "note").map_err(|e| e.to_string())?;
+        if current.is_none() && self.shared.is_none() && note.id.starts_with("gpui-note-") {
+            current = self.get_note(&note.id)?;
+        }
+        if current.as_ref() != Some(expected) {
+            return Err(
+                "The note changed before it could be saved. Read it again and retry.".into(),
+            );
+        }
         let subtype: Option<Option<String>> = tx
             .query_row(
                 "SELECT artifact_kind FROM notes WHERE id = ?1 AND content_kind = 'note'",
@@ -722,11 +719,10 @@ impl Store {
             )
             .optional()
             .map_err(|e| e.to_string())?;
-        let subtype = subtype.ok_or("Note no longer exists")?;
-        let mut update = note.clone();
-        update.finalize_slug = false;
+        let subtype = subtype.flatten();
+        note.finalize_slug = false;
         let saved =
-            upsert_content(&tx, &update, "note", subtype.as_deref()).map_err(|e| e.to_string())?;
+            upsert_content(&tx, &note, "note", subtype.as_deref()).map_err(|e| e.to_string())?;
         tx.commit().map_err(|e| e.to_string())?;
         Ok(saved)
     }
@@ -808,15 +804,15 @@ impl Store {
         if note.body.len() > MAX_BODY {
             return Err("Content is too large".into());
         }
-        let existing = self.list_notes()?.into_iter().find(|saved| {
-            saved.id == format!("gpui-note-{}", note.id)
-                || super::shared::handle(&saved.id) as u64 == note.id
+        let native_id = format!("gpui-note-{}", note.id);
+        let existing = self.list_note_summaries()?.into_iter().find(|saved| {
+            saved.id == native_id || super::shared::handle(&saved.id) as u64 == note.id
         });
         let update = NoteUpsert {
             id: existing
                 .as_ref()
                 .map(|note| note.id.clone())
-                .unwrap_or_else(|| format!("gpui-note-{}", note.id)),
+                .unwrap_or(native_id),
             title: note.title.clone(),
             body: note.body.clone(),
             tags: note.tags.clone(),

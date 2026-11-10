@@ -44,7 +44,7 @@ pub(crate) struct Completion {
     input: Entity<input::Input>,
     bot_chat: bool,
     store: Option<vorkspace_runtime::runtime::Database>,
-    notes: Vec<vorkspace_core::notes::Note>,
+    notes: Vec<vorkspace_core::notes::NoteSummary>,
     cwd: String,
     token: Option<Token>,
     dismissed: Option<Token>,
@@ -447,7 +447,7 @@ impl Completion {
                 .and_then(|s| {
                     vorkspace_runtime::runtime::locked(&s)
                         .ok()
-                        .and_then(|s| s.list_notes().ok())
+                        .and_then(|s| s.list_note_summaries().ok())
                 })
                 .unwrap_or_default();
             let skills = vorkspace_core::skills::list_skills(cwd.clone(), Some(disabled))
