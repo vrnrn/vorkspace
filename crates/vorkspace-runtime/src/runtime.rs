@@ -497,23 +497,8 @@ fn run_turn_using(
             checkpoint = Some((cwd.to_owned(), id));
         }
         let mut prompt = provider::prepare_prompt(kind, &prompt, cwd, &settings.attachments)?;
-        if !raw_native_command && prompt.contains("@note:") {
-            let notes = locked(&store)?.notes()?;
-            for note in notes {
-                let token = format!("@note:{}", note.id);
-                if prompt
-                    .lines()
-                    .filter(|line| !line.trim_start().starts_with('>'))
-                    .flat_map(str::split_whitespace)
-                    .any(|word| word.trim_end_matches([',', '.', ';']) == token)
-                {
-                    prompt = format!(
-                        "Referenced note: {}\n<note>\n{}\n</note>\n\n{prompt}",
-                        note.title,
-                        vorkspace_core::response::limit(&note.body, 64_000)
-                    );
-                }
-            }
+        if !raw_native_command && user_request.contains("@note:") {
+            prompt = locked(&store)?.apply_legacy_notes_to_turn(&user_request, prompt)?;
         }
         if !raw_native_command && settings.orchestrator {
             prompt = format!(

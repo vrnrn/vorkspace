@@ -218,6 +218,62 @@ impl Store {
         };
         Ok(crate::notes::inject_prompt(text, &picked))
     }
+
+    /// Old saved drafts can still contain numeric references. Read the
+    /// original user request so note bodies cannot select additional notes.
+    pub fn apply_legacy_notes_to_turn(
+        &self,
+        request: &str,
+        prompt: String,
+    ) -> Result<String, String> {
+        if !request.contains("@note:") {
+            return Ok(prompt);
+        }
+        let ids: HashSet<u64> = request
+            .lines()
+            .filter(|line| !line.trim_start().starts_with('>'))
+            .flat_map(str::split_whitespace)
+            .filter_map(|word| {
+                word.trim_end_matches([',', '.', ';'])
+                    .strip_prefix("@note:")
+            })
+            .filter(|id| id.bytes().all(|byte| byte.is_ascii_digit()))
+            .filter(|id| id.len() == 1 || !id.starts_with('0'))
+            .filter_map(|id| id.parse().ok())
+            .collect();
+        if ids.is_empty() {
+            return Ok(prompt);
+        }
+
+        use std::fmt::Write as _;
+        let tx = self
+            .conn
+            .unchecked_transaction()
+            .map_err(|error| error.to_string())?;
+        let mut expanded = String::new();
+        for entry in self
+            .list_note_summaries()?
+            .into_iter()
+            .rev()
+            .filter(|entry| ids.contains(&crate::notes::numeric_id(&entry.id)))
+        {
+            if let Some(note) = self.get_note(&entry.id)? {
+                write!(
+                    expanded,
+                    "Referenced note: {}\n<note>\n{}\n</note>\n\n",
+                    note.title,
+                    crate::response::limit(&note.body, 64_000),
+                )
+                .expect("writing to a String succeeds");
+            }
+        }
+        tx.commit().map_err(|error| error.to_string())?;
+        if expanded.is_empty() {
+            return Ok(prompt);
+        }
+        expanded.push_str(&prompt);
+        Ok(expanded)
+    }
 }
 
 fn legacy_note(note: crate::response::Note) -> Note {

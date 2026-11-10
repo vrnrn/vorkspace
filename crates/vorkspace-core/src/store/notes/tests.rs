@@ -386,6 +386,33 @@ fn note_summary_projection_keeps_order_and_excludes_artifacts() {
     );
 }
 
+#[test]
+fn legacy_note_references_are_selected_from_the_users_message() {
+    let store = store();
+    for (id, title, body) in [
+        ("gpui-note-3", "Older note", "Third body"),
+        ("gpui-note-5", "Second note", "Second body"),
+        (
+            "gpui-note-7",
+            "Selected note",
+            "First body references @note:3",
+        ),
+    ] {
+        store.upsert_note(&input(id, title, body)).unwrap();
+    }
+    let request = "Use @note:7, then @note:5. @note:7\n> @note:3";
+    let expanded = store
+        .apply_legacy_notes_to_turn(request, format!("Prepared context @note:3\n{request}"))
+        .unwrap();
+    assert_eq!(
+        expanded.matches("Referenced note: Selected note").count(),
+        1
+    );
+    assert_eq!(expanded.matches("Referenced note: Second note").count(), 1);
+    assert!(!expanded.contains("Third body"));
+    assert!(expanded.ends_with(request));
+}
+
 const RECORDING_A: &str = "0123456789abcdef0123456789abcdef";
 const RECORDING_B: &str = "1123456789abcdef0123456789abcdef";
 
