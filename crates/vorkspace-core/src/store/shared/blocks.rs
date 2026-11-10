@@ -190,7 +190,7 @@ fn metadata_row(role: &str, value: &Value) -> Row {
         sent_at: None,
     }
 }
-fn project_block(block: &Value) -> Result<Vec<Row>, String> {
+pub(super) fn project_block(block: &Value) -> Result<Vec<Row>, String> {
     project_block_in(block, None)
 }
 

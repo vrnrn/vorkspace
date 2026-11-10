@@ -15,6 +15,49 @@ pub(super) enum InitialRows {
     Window(Box<vorkspace_core::store::IndexedHistoryPage>),
 }
 
+pub(super) struct InitialRead {
+    pub(super) rows: Result<InitialRows, String>,
+    pub(super) settings: Result<Option<Settings>, String>,
+    pub(super) revision: i64,
+}
+
+impl InitialRead {
+    pub(super) fn read(store: &Database, id: i64, paged: bool) -> Self {
+        let store = match locked(store) {
+            Ok(store) => store,
+            Err(error) => {
+                return Self {
+                    rows: Err(error.clone()),
+                    settings: Err(error),
+                    revision: 0,
+                };
+            }
+        };
+        if paged
+            && let Ok(Some(page)) = store.indexed_history_page(id, None, 10)
+            && page.before.is_some()
+        {
+            return Self {
+                revision: page.revision,
+                rows: Ok(InitialRows::Window(Box::new(page))),
+                settings: store.agent_preferences(id),
+            };
+        }
+        match store.load_local_history(id) {
+            Ok(history) => Self {
+                revision: history.revision,
+                rows: Ok(InitialRows::Complete(history.transcript.rows)),
+                settings: history.settings,
+            },
+            Err(error) => Self {
+                revision: 0,
+                rows: Err(error),
+                settings: store.agent_preferences(id),
+            },
+        }
+    }
+}
+
 impl Conversation {
     pub(super) fn history_ready(&self) -> bool {
         self.loaded && !self.history_unloaded && !self.history_partial && !self.loading
@@ -135,18 +178,11 @@ impl Conversation {
         let store = self.store.clone();
         let bot = self.settings.bot.is_some();
         let work = cx.background_executor().spawn(async move {
-            let (history, turns, rev) = {
-                let store = locked(&store)?;
-                (
-                    store.load(id)?,
-                    store.agent_settings(id)?.unwrap_or_default().turns,
-                    store.session_history_revision(id).unwrap_or(0),
-                )
-            };
+            let history = locked(&store)?.load_local_history(id)?;
             Ok::<_, String>((
-                crate::transcript::PreparedHistory::new(history.rows, bot),
-                turns,
-                rev,
+                crate::transcript::PreparedHistory::new(history.transcript.rows, bot),
+                history.settings?.unwrap_or_default().turns,
+                history.revision,
             ))
         });
         cx.spawn(async move |this, cx| {

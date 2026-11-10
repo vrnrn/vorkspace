@@ -59,6 +59,14 @@ pub struct Reminder {
     pub fired_at: Option<u64>,
 }
 
+/// Rows, historical turn metadata, and revision from one local read snapshot.
+pub struct LoadedHistory {
+    pub transcript: Transcript,
+    /// A damaged preference record must still leave saved messages readable.
+    pub settings: Result<Option<crate::agent::Settings>, String>,
+    pub revision: i64,
+}
+
 pub struct Store {
     conn: Connection,
     path: std::path::PathBuf,
@@ -938,7 +946,49 @@ impl Store {
         if self.shared.is_some() {
             return self.shared_load(session);
         }
+        let settings = self.agent_settings(session).ok().flatten();
+        self.load_native_rows(session, settings.as_ref())
+    }
 
+    pub fn load_local_history(&self, session: i64) -> Result<LoadedHistory, String> {
+        if self.remote_session(session)?.is_some() {
+            return Err("Remote history is owned by the host".into());
+        }
+        let tx = self
+            .conn
+            .unchecked_transaction()
+            .map_err(|e| e.to_string())?;
+        let revision = self.session_history_revision(session)?;
+        let mut settings = if self.shared.is_some() {
+            self.shared_agent_preferences(session)
+        } else {
+            self.agent_settings(session)
+        };
+        let transcript = if self.shared.is_some() {
+            self.shared_load_projected(
+                session,
+                settings
+                    .as_mut()
+                    .ok()
+                    .and_then(Option::as_mut)
+                    .map(|s| &mut s.turns),
+            )?
+        } else {
+            self.load_native_rows(session, settings.as_ref().ok().and_then(Option::as_ref))?
+        };
+        tx.commit().map_err(|e| e.to_string())?;
+        Ok(LoadedHistory {
+            transcript,
+            settings,
+            revision,
+        })
+    }
+
+    fn load_native_rows(
+        &self,
+        session: i64,
+        settings: Option<&crate::agent::Settings>,
+    ) -> Result<Transcript, String> {
         let mut stmt = self
             .conn
             .prepare("SELECT role,body,first,sent_at FROM native_rows WHERE session_id=? ORDER BY row_ix")
@@ -960,8 +1010,8 @@ impl Store {
             .map_err(|e| e.to_string())?;
         // Pre-timestamp histories recorded completion and duration per run.
         // Recover their start time where known, leaving undated history undated.
-        if let Ok(Some(settings)) = self.agent_settings(session) {
-            for (turn, info) in settings.turns {
+        if let Some(settings) = settings {
+            for (&turn, info) in &settings.turns {
                 if turn > rows.len() {
                     continue;
                 }

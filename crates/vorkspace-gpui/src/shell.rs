@@ -1291,7 +1291,9 @@ impl Shell {
         requested: Option<&str>,
         cx: &App,
     ) -> Result<(), String> {
-        let saved = locked(&self.store)?.agent_settings(id)?.unwrap_or_default();
+        let saved = locked(&self.store)?
+            .agent_preferences(id)?
+            .unwrap_or_default();
         let current = saved.worktree_cwd.as_deref();
         if saved.worktree_removed
             || requested.zip(current).is_some_and(|(requested, current)| {

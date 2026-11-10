@@ -1065,6 +1065,41 @@ fn preference_edits_keep_turn_metadata_in_the_saved_transcript() {
 }
 
 #[test]
+fn local_history_load_merges_saved_receipts_and_keeps_rows_when_preferences_fail() {
+    let store = Store::open_vorkspace(Path::new(":memory:")).unwrap();
+    let (id, _) = saved(
+        &store,
+        json!([
+            {"id":"prompt","role":"user","text":"Saved request","providerTurnId":"source-turn",
+             "turnModel":{"harness":"codex","name":"Saved model"}},
+            {"id":"reply","role":"assistant","text":"Saved response"}
+        ]),
+    );
+    let key = format!("agent:{id}");
+    store
+        .save_setting(
+            &key,
+            &json!({"turns":{"1":{"model":"Old label","duration_ms":42,"duration_known":true}}})
+                .to_string(),
+        )
+        .unwrap();
+    let expected = store.agent_settings(id).unwrap().unwrap();
+    let loaded = store.load_local_history(id).unwrap();
+    assert_eq!(loaded.transcript.rows, store.load(id).unwrap().rows);
+    assert_eq!(loaded.revision, store.session_history_revision(id).unwrap());
+    let turn = loaded.settings.unwrap().unwrap().turns.remove(&1).unwrap();
+    assert_eq!(encode(&turn).unwrap(), encode(&expected.turns[&1]).unwrap());
+    assert_eq!(turn.provider_turn_id.as_deref(), Some("source-turn"));
+    assert_eq!(turn.model, "Saved model");
+    assert_eq!(turn.duration_ms, 42);
+
+    store.save_setting(&key, "{malformed").unwrap();
+    let damaged = store.load_local_history(id).unwrap();
+    assert!(damaged.settings.is_err());
+    assert_eq!(damaged.transcript.rows, loaded.transcript.rows);
+}
+
+#[test]
 fn concurrent_queue_changes_are_preserved_and_transaction_is_rolled_back() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("vorkspace.db");

@@ -192,7 +192,11 @@ impl Conversation {
                     eprintln!("Could not sync Bot native history: {error}");
                 }
             }
-            let settings = locked(&store).and_then(|s| s.agent_settings(id));
+            let history::InitialRead {
+                rows,
+                settings,
+                revision,
+            } = history::InitialRead::read(&store, id, page_bot);
             let execution_cwd = settings
                 .as_ref()
                 .ok()
@@ -200,32 +204,19 @@ impl Conversation {
                 .and_then(|s| s.worktree_cwd.as_deref())
                 .unwrap_or(&cwd);
             let git = vorkspace_model::git_cache::load(Path::new(execution_cwd)).ok();
-            let rev = locked(&store)
-                .and_then(|s| s.session_history_revision(id))
-                .unwrap_or(0);
             (
-                locked(&store)
-                    .and_then(|s| {
-                        if page_bot
-                            && let Ok(Some(page)) = s.indexed_history_page(id, None, 10)
-                            && page.before.is_some()
-                        {
-                            return Ok(history::InitialRows::Window(Box::new(page)));
-                        }
-                        Ok(history::InitialRows::Complete(s.load(id)?.rows))
-                    })
-                    .map(|rows| match rows {
-                        history::InitialRows::Complete(rows) => history::InitialHistory::Complete(
-                            crate::transcript::PreparedHistory::new(rows, bot),
-                        ),
-                        history::InitialRows::Window(mut page) => {
-                            let prepared = crate::transcript::PreparedHistory::new(
-                                std::mem::take(&mut page.rows),
-                                false,
-                            );
-                            history::InitialHistory::Window(page, prepared)
-                        }
-                    }),
+                rows.map(|rows| match rows {
+                    history::InitialRows::Complete(rows) => history::InitialHistory::Complete(
+                        crate::transcript::PreparedHistory::new(rows, bot),
+                    ),
+                    history::InitialRows::Window(mut page) => {
+                        let prepared = crate::transcript::PreparedHistory::new(
+                            std::mem::take(&mut page.rows),
+                            false,
+                        );
+                        history::InitialHistory::Window(page, prepared)
+                    }
+                }),
                 git,
                 settings,
                 locked(&store).and_then(|s| {
@@ -240,7 +231,7 @@ impl Conversation {
                     s.recover_local_submissions()?;
                     s.latest_unconfirmed_submission(id)
                 }),
-                rev,
+                revision,
             )
         });
         cx.spawn(async move |this, cx| {
@@ -248,7 +239,6 @@ impl Conversation {
             let _ = this.update(cx, |this, cx| {
                 let complete_requested = std::mem::take(&mut this.complete_history_requested);
                 this.loading = false;
-                this.loaded_history_revision = Some(rev);
                 this.branch = git.as_ref().and_then(|s| s.current.clone());
                 this.git = git;
                 this.context = context.ok().flatten();
@@ -282,37 +272,37 @@ impl Conversation {
                 }
                 // The composer may have a newer revision while history loads;
                 // historical turn provenance still belongs to the loaded rows.
-                if let Ok(Some(settings)) = &settings {
+                if let Ok(Some(mut settings)) = settings {
                     this.transcript
                         .update(cx, |view, _| view.turns = settings.turns.clone());
-                    this.settings.turns = settings.turns.clone();
-                }
-                if let Ok(Some(mut settings)) = settings
-                    && settings.revision >= this.settings.revision
-                {
-                    if !this.summary.has_messages
-                        && settings.revision == 0
-                        && settings.account.id == vorkspace_core::accounts::DEFAULT
-                    {
-                        settings.account = crate::accounts::get(cx)
-                            .map(|center| {
-                                center.read(cx).selected(
-                                    Kind::from_id(&this.summary.provider),
-                                    &this.summary.cwd,
-                                )
-                            })
-                            .unwrap_or_default();
+                    if settings.revision < this.settings.revision {
+                        this.settings.turns = settings.turns;
+                    } else {
+                        if !this.summary.has_messages
+                            && settings.revision == 0
+                            && settings.account.id == vorkspace_core::accounts::DEFAULT
+                        {
+                            settings.account = crate::accounts::get(cx)
+                                .map(|center| {
+                                    center.read(cx).selected(
+                                        Kind::from_id(&this.summary.provider),
+                                        &this.summary.cwd,
+                                    )
+                                })
+                                .unwrap_or_default();
+                        }
+                        this.model = settings.model.clone();
+                        let bot = this.settings.bot.take();
+                        let environment = std::mem::take(&mut this.settings.environment);
+                        this.settings = settings;
+                        this.attach_account(cx);
+                        this.settings.bot = bot;
+                        this.settings.environment = environment;
                     }
-                    this.model = settings.model.clone();
-                    let bot = this.settings.bot.take();
-                    let environment = std::mem::take(&mut this.settings.environment);
-                    this.settings = settings;
-                    this.attach_account(cx);
-                    this.settings.bot = bot;
-                    this.settings.environment = environment;
                 }
                 match result {
                     Ok(history) => {
+                        this.loaded_history_revision = Some(rev);
                         match history {
                             history::InitialHistory::Complete(history) => this
                                 .transcript
@@ -408,8 +398,8 @@ impl Conversation {
             if !recovering && current_rev == Some(rev) {
                 return Ok::<_, String>(None);
             }
-            let history = store.load(id)?;
-            let settings = store.agent_settings(id)?.unwrap_or_default();
+            let history = store.load_local_history(id)?;
+            let settings = history.settings?.unwrap_or_default();
             let binding = if recovering {
                 store
                     .sessions()?
@@ -425,10 +415,11 @@ impl Conversation {
             } else {
                 None
             };
+            drop(store);
             Ok(Some((
-                crate::transcript::PreparedHistory::new(history.rows, bot),
+                crate::transcript::PreparedHistory::new(history.transcript.rows, bot),
                 settings.turns,
-                rev,
+                history.revision,
                 binding,
             )))
         });

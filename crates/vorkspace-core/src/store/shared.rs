@@ -272,7 +272,7 @@ fn project_turn(
     offset: usize,
     turns: &mut HashMap<usize, crate::agent::TurnInfo>,
 ) -> Result<usize, String> {
-    let rows = blocks::project(std::slice::from_ref(block))?;
+    let rows = blocks::project_block(block)?;
     record_projected_turn(block, &rows, offset, turns);
     Ok(rows.len())
 }
@@ -297,8 +297,8 @@ pub(super) fn record_projected_turn(
             || metrics.is_some()
             || block["providerTurnId"].is_string()
         {
-            turns.insert(
-                offset + prompt + 1,
+            merge_turn_info(
+                turns.entry(offset + prompt + 1).or_default(),
                 crate::agent::TurnInfo {
                     provider_turn_id: block["providerTurnId"].as_str().map(str::to_owned),
                     provider: model["harness"].as_str().unwrap_or("").into(),
@@ -312,6 +312,32 @@ pub(super) fn record_projected_turn(
                 },
             );
         }
+    }
+}
+
+fn merge_turn_info(info: &mut crate::agent::TurnInfo, source: crate::agent::TurnInfo) {
+    if !source.provider.is_empty() {
+        info.provider = source.provider;
+    }
+    if !source.model.is_empty() {
+        info.model = source.model;
+    }
+    if source.model_id.is_some() {
+        info.model_id = source.model_id;
+    }
+    if source.provider_turn_id.is_some() {
+        info.provider_turn_id = source.provider_turn_id;
+    }
+    if source.duration_known {
+        info.duration_ms = source.duration_ms;
+        info.duration_known = true;
+    }
+    if source.started_at.is_some() {
+        info.started_at = source.started_at;
+        info.completed_at = source.completed_at;
+    }
+    if source.metrics.is_some() {
+        info.metrics = source.metrics;
     }
 }
 
@@ -843,30 +869,7 @@ impl Store {
         // Desktop blocks are authoritative. Native-only legacy metadata remains
         // available, but cannot override a saved desktop turn's identity/time.
         for (turn, source) in self.shared_project_turns(id)? {
-            let info = settings.turns.entry(turn).or_default();
-            if !source.provider.is_empty() {
-                info.provider = source.provider;
-            }
-            if !source.model.is_empty() {
-                info.model = source.model;
-            }
-            if source.model_id.is_some() {
-                info.model_id = source.model_id;
-            }
-            if source.provider_turn_id.is_some() {
-                info.provider_turn_id = source.provider_turn_id;
-            }
-            if source.duration_known {
-                info.duration_ms = source.duration_ms;
-                info.duration_known = true;
-            }
-            if source.started_at.is_some() {
-                info.started_at = source.started_at;
-                info.completed_at = source.completed_at;
-            }
-            if source.metrics.is_some() {
-                info.metrics = source.metrics;
-            }
+            merge_turn_info(settings.turns.entry(turn).or_default(), source);
         }
         Ok(Some(settings))
     }
@@ -1254,6 +1257,14 @@ impl Store {
     }
 
     pub(super) fn shared_load(&self, id: i64) -> Result<Transcript, String> {
+        self.shared_load_projected(id, None)
+    }
+
+    pub(super) fn shared_load_projected(
+        &self,
+        id: i64,
+        mut turns: Option<&mut HashMap<usize, crate::agent::TurnInfo>>,
+    ) -> Result<Transcript, String> {
         self.shared
             .as_ref()
             .unwrap()
@@ -1268,13 +1279,21 @@ impl Store {
             .remove(&id);
         let original = self.persisted_session_id(id)?;
         let indexed_query = self.shared_indexed_query(&original)?;
-        if let Some(query) = indexed_query {
+        let mut rows = Vec::new();
+        let mut append = |block: &Value| {
+            let projected = blocks::project_block(block)?;
+            if let Some(turns) = turns.as_deref_mut() {
+                record_projected_turn(block, &projected, rows.len(), turns);
+            }
+            rows.extend(projected);
+            Ok::<_, String>(())
+        };
+        let revision = if let Some(query) = indexed_query {
             // Project one source block at a time. Indexed conversations must
             // not retain complete JSON histories alongside their display rows.
             // The scalar count and the rows share one SQLite read snapshot.
             let mut query = sql(self.conn.prepare(&query))?;
             let mut records = sql(query.query([&original]))?;
-            let mut rows = Vec::new();
             let mut digest = HistoryRevision::start(0);
             let mut len = 0;
             let mut first = true;
@@ -1287,24 +1306,22 @@ impl Store {
                 let raw: String = sql(record.get(0))?;
                 let block: Value = parse_block(&raw)?;
                 HistoryRevision::push(&mut digest, &block);
-                rows.extend(blocks::project(std::slice::from_ref(&block))?);
+                append(&block)?;
             }
-            self.shared
-                .as_ref()
-                .unwrap()
-                .snapshots
-                .borrow_mut()
-                .insert(id, HistoryRevision::finish(digest, len));
-            return Ok(Transcript { rows });
-        }
-        let blocks = self.shared_blocks(id)?;
-        let rows = blocks::project(&blocks)?;
+            HistoryRevision::finish(digest, len)
+        } else {
+            let blocks = self.shared_blocks(id)?;
+            for block in &blocks {
+                append(block)?;
+            }
+            HistoryRevision::of(&blocks)
+        };
         self.shared
             .as_ref()
             .unwrap()
             .snapshots
             .borrow_mut()
-            .insert(id, HistoryRevision::of(&blocks));
+            .insert(id, revision);
         Ok(Transcript { rows })
     }
     pub(super) fn shared_store_blocks(&self, id: i64, blocks: &[Value]) -> Result<(), String> {

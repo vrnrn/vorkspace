@@ -15,6 +15,8 @@ pub struct IndexedHistoryCursor {
 #[derive(Debug)]
 pub struct IndexedHistoryPage {
     pub rows: Vec<Row>,
+    /// The scalar revision read with these exact rows and turn boundaries.
+    pub revision: i64,
     /// Turn receipts keyed by global projected-row offset in this snapshot.
     pub turns: HashMap<usize, crate::agent::TurnInfo>,
     /// Position of the first row in the complete projected transcript.
@@ -116,8 +118,14 @@ impl Store {
                     older = true;
                     global_start += blocks::project(std::slice::from_ref(&block))?.len();
                 } else if cursor.is_none_or(|cursor| seq < cursor.before) {
-                    project_turn(&block, global_start + rows.len(), &mut turns)?;
-                    rows.extend(blocks::project(std::slice::from_ref(&block))?);
+                    let projected = blocks::project_block(&block)?;
+                    record_projected_turn(
+                        &block,
+                        &projected,
+                        global_start + rows.len(),
+                        &mut turns,
+                    );
+                    rows.extend(projected);
                 }
             }
             revision = HistoryRevision::finish(hash, count);
@@ -153,6 +161,7 @@ impl Store {
         let saved_len = rows.len();
         Ok(Some(IndexedHistoryPage {
             rows,
+            revision: self.history_revision(original)?,
             turns,
             global_start,
             before,
