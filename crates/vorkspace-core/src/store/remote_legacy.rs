@@ -85,6 +85,7 @@ impl Store {
             uploads: vec![],
             rejected: None,
             composer_origin: None,
+            composer_alias: None,
             running: false,
             needs_input: false,
             configuration: None,

@@ -74,6 +74,9 @@ pub struct RemoteSession {
     /// Kept after dispatch so reopening cannot offer the same draft again.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub composer_origin: Option<super::ComposerOrigin>,
+    /// Earlier native handle retained when a legacy desktop tab owns the Host binding.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub composer_alias: Option<i64>,
     /// Last full host snapshot, used to reconcile changes from other desktops.
     #[serde(default)]
     pub configuration: Option<Value>,
@@ -91,6 +94,13 @@ pub struct RemoteSession {
     pub needs_input: bool,
 }
 impl RemoteSession {
+    pub(super) fn rekey(&mut self, previous: i64, next: i64) {
+        if previous < 0 && next >= 0 {
+            self.composer_alias.get_or_insert(previous);
+        }
+        self.summary.id = next;
+    }
+
     pub fn same_binding(&self, other: &Self) -> bool {
         self.summary.id == other.summary.id
             && self.session_id == other.session_id
@@ -375,7 +385,7 @@ impl Store {
             return Ok(None);
         };
         if let Some(mut saved) = alias(&legacy)? {
-            saved.summary.id = id;
+            saved.rekey(saved.summary.id, id);
             return Ok(Some(saved));
         }
         Ok(Some(legacy))
@@ -417,6 +427,7 @@ impl Store {
             let mut next = session.clone();
             if let Some(current) = current.filter(|current| current.same_binding(&next)) {
                 next.composer_origin = current.composer_origin;
+                next.composer_alias = current.composer_alias;
                 // Host observations can commit while a command is in flight.
                 // Legacy writes still preserve newer revisioned metadata.
                 if next.host_revision < current.host_revision {
@@ -459,7 +470,7 @@ impl Store {
             if current.composer_origin != next.composer_origin {
                 let origin = next.composer_origin.as_ref()
                     .ok_or("A remote journal cannot discard a composer transfer")?;
-                if origin.session != before.summary.id || next.outbox.is_empty() {
+                if next.outbox.is_empty() || !self.remote_composer_source_matches(&current, origin)? {
                     return Err("Remote journal does not own this composer version".into());
                 }
                 current.composer_origin = next.composer_origin;
@@ -579,6 +590,7 @@ impl Store {
             uploads: vec![],
             rejected: None,
             composer_origin: None,
+            composer_alias: None,
             configuration: None,
             host_revision: None,
             configuration_revision: None,

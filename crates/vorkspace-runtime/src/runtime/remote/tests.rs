@@ -171,6 +171,84 @@ fn receive(rx: &async_channel::Receiver<Update>) -> Update {
     }
 }
 
+#[test]
+fn host_send_publishes_its_draft_receipt_before_the_first_command() {
+    let dir = Directory::new();
+    let path = dir.0.join("vorkspace.db");
+    let store = Arc::new(Mutex::new(Store::open_vorkspace(&path).unwrap()));
+    let binding = binding(&store);
+    let desktop = binding.summary.id;
+    let prompt = "Exact Host composer offer";
+    let origin = {
+        let store = locked(&store).unwrap();
+        let revision = store
+            .save_composer_draft(
+                desktop,
+                0,
+                &json!({
+                    "cwd": binding.summary.cwd, "text": prompt, "selectionStart": 0,
+                    "selectionEnd": 0, "attachments": [], "mcpTags": [],
+                }),
+            )
+            .unwrap();
+        store.composer_origin(desktop, revision).unwrap()
+    };
+    let expected = origin.clone();
+    let host = Host::new(move |request| match request["method"].as_str().unwrap() {
+        "commands.dispatch" => {
+            let read = Store::read_vorkspace(&path).unwrap();
+            let saved = read.remote_session(desktop).unwrap().unwrap();
+            let command = &request["params"];
+            assert_eq!(saved.composer_origin.as_ref(), Some(&expected));
+            assert_eq!(saved.outbox[0]["commandId"], command["commandId"]);
+            assert!(read.composer_draft(desktop).unwrap().unwrap().deleted);
+            if command["type"] == "send" {
+                assert_eq!(command["text"], prompt);
+                assert_eq!(command["sessionId"], "host-session");
+            }
+            let mut value = receipt(command);
+            value["runId"] = json!("host-run");
+            Some(value)
+        }
+        "sessions.sync" => Some(json!({"kind":"snapshot","value":snapshot("idle", 2)})),
+        method => panic!("Unexpected fixture method {method}"),
+    });
+    let (tx, rx) = async_channel::unbounded();
+    let (_controls_tx, controls) = std::sync::mpsc::channel();
+    run_with_client(
+        host.client.clone(),
+        super::super::TurnInput {
+            summary: binding.summary,
+            prompt: prompt.into(),
+            settings: Settings {
+                model: Some("fixture".into()),
+                ..Default::default()
+            },
+            composer_origin: Some(origin.clone()),
+        },
+        controls,
+        store.clone(),
+        Arc::new(AtomicBool::new(false)),
+        tx,
+    );
+    assert!(matches!(
+        receive(&rx).transition,
+        TurnTransition::AcceptedComposer(accepted) if accepted == origin
+    ));
+    let settled = receive(&rx);
+    assert_eq!(
+        settled.settlement().unwrap().outcome,
+        TurnOutcome::Completed
+    );
+    let durable = locked(&store)
+        .unwrap()
+        .remote_session(desktop)
+        .unwrap()
+        .unwrap();
+    assert!(durable.outbox.is_empty());
+    assert_eq!(durable.session_id.as_deref(), Some("host-session"));
+}
+
 fn observe_snapshots(snapshots: Vec<Value>) -> Vec<Update> {
     let dir = Directory::new();
     let store = dir.store();

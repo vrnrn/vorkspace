@@ -151,6 +151,7 @@ fn late_idle_snapshot_cannot_replace_a_new_turn_or_release_a_newer_refresh(
                 uploads: vec![],
                 rejected: None,
                 composer_origin: None,
+                composer_alias: None,
                 configuration: None,
                 host_revision: Some(1),
                 configuration_revision: Some(1),

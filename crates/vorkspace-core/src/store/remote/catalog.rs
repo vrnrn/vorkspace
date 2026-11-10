@@ -82,7 +82,7 @@ impl<'a> Catalog<'a> {
                 .as_ref()
                 .and_then(|key| positive.get(key)?.first().copied())
                 .unwrap_or(id);
-            remote.summary.id = canonical;
+            remote.rekey(id, canonical);
             let previous = sessions.insert(canonical, remote);
             if canonical >= 0 {
                 if let Some(old_key) = previous.as_ref().and_then(host_key) {
@@ -193,6 +193,7 @@ impl<'a> Catalog<'a> {
             uploads: Vec::new(),
             rejected: None,
             composer_origin: None,
+            composer_alias: prior.and_then(|remote| remote.composer_alias),
             configuration,
             host_revision: revision.or_else(|| prior.and_then(|remote| remote.host_revision)),
             configuration_revision: if full_snapshot {

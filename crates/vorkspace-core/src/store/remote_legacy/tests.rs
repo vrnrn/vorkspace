@@ -68,6 +68,68 @@ fn bare_preferences(bound: &str, blank: &str, ambiguous: bool) -> DesktopPrefere
 }
 
 #[test]
+fn adopting_a_native_host_binding_keeps_its_draft_and_recoveries() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("desktop.db");
+    let (legacy, original, _, blank_original) = fixture(&path);
+    let native_store = Store::open_vorkspace(&path).unwrap();
+    let project = native_store
+        .remember_remote_project("legacy", &json!({"id":"host-project","cwd":"/home/repo"}))
+        .unwrap();
+    let native = native_store.create("codex", &project.key).unwrap();
+    assert!(native.id < 0);
+    let input = json!({"cwd":project.key,"text":"Native draft before legacy adoption",
+        "selectionStart":0,"selectionEnd":0,"attachments":[],"mcpTags":[]});
+    let revision = native_store
+        .save_composer_draft(native.id, 0, &input)
+        .unwrap();
+    native_store
+        .save_composer_recovery(
+            native.id,
+            super::super::ComposerRecovery {
+                owner: "native-recovery".into(),
+                revision,
+                payload: input.clone(),
+            },
+        )
+        .unwrap();
+    let mut binding = native_store.remote_session(native.id).unwrap().unwrap();
+    binding.session_id = Some("host-session".into());
+    native_store.save_remote_session(&binding).unwrap();
+    drop(native_store);
+
+    let preferences = Arc::new(preferences(&original, &blank_original));
+    let store =
+        Store::open_vorkspace_with_preferences_for_test(&path, preferences.clone()).unwrap();
+    let binding = store.remote_session(legacy).unwrap().unwrap();
+    assert_eq!(binding.composer_alias, Some(native.id));
+    assert_eq!(
+        store.composer_draft(legacy).unwrap().unwrap().payload,
+        input
+    );
+    assert_eq!(store.composer_recoveries(legacy).unwrap().len(), 1);
+    store.save_remote_session(&binding).unwrap();
+    assert!(store.remote_session(native.id).unwrap().is_none());
+    drop(store);
+
+    let store = Store::open_vorkspace_with_preferences_for_test(&path, preferences).unwrap();
+    let binding = store.remote_session(legacy).unwrap().unwrap();
+    let origin = store.composer_origin(legacy, revision).unwrap();
+    let mut journal = binding.clone();
+    journal
+        .outbox
+        .push(json!({"type":"send","commandId":"submit-native-draft","sessionId":"host-session"}));
+    journal.composer_origin = Some(origin.clone());
+    store.commit_remote_journal(&binding, journal).unwrap();
+    assert!(store.composer_transfer_committed(&origin).unwrap());
+    assert!(store.composer_draft(legacy).unwrap().unwrap().deleted);
+    store
+        .clear_composer_recovery(legacy, "native-recovery")
+        .unwrap();
+    assert!(store.composer_recoveries(legacy).unwrap().is_empty());
+}
+
+#[test]
 fn bare_create_uses_the_unique_unbound_tab_and_keeps_its_claim_after_receipt() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("desktop.db");

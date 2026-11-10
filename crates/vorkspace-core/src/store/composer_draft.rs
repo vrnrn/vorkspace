@@ -96,8 +96,7 @@ fn validate(payload: &Value) -> Result<(), String> {
 
 struct Sources {
     current: String,
-    bound: Option<String>,
-    unbound: Option<String>,
+    previous: [Option<String>; 3],
 }
 
 struct ComposerVersion {
@@ -108,11 +107,19 @@ struct ComposerVersion {
 }
 
 impl Sources {
-    fn params(&self) -> [Option<&str>; 3] {
+    fn local(current: String) -> Self {
+        Self {
+            current,
+            previous: [None, None, None],
+        }
+    }
+
+    fn params(&self) -> [Option<&str>; 4] {
         [
             Some(&self.current),
-            self.bound.as_deref(),
-            self.unbound.as_deref(),
+            self.previous[0].as_deref(),
+            self.previous[1].as_deref(),
+            self.previous[2].as_deref(),
         ]
     }
 }
@@ -120,34 +127,67 @@ impl Sources {
 impl Store {
     fn composer_sources(&self, id: i64) -> Result<Sources, String> {
         if self.shared.is_none() {
-            return Ok(Sources {
-                current: id.to_string(),
-                bound: None,
-                unbound: None,
-            });
+            return Ok(Sources::local(id.to_string()));
         }
-        if let Some(remote) = if id < 0 {
-            self.remote_session(id)?
-        } else {
-            None
-        } {
-            // The desktop draft exists before Host creates its conversation.
-            // Keep its key stable across that binding and read old Host keys
-            // until the next normal editor write copies them forward.
-            let environment = remote.project.environment_id;
+        if id >= 0 {
+            let source = self.persisted_session_id(id)?;
+            let remote = self.conn.query_row(
+                "SELECT EXISTS(SELECT 1 FROM sessions WHERE id=?1 AND cwd >= 'remote://' AND cwd < 'remote:/0')",
+                [&source],
+                |row| row.get::<_, bool>(0),
+            ).map_err(|error| error.to_string())?;
+            if !remote {
+                return Ok(Sources::local(source));
+            }
+        }
+        if let Some(remote) = self.remote_session(id)? {
+            return self.remote_composer_sources(&remote);
+        }
+        Ok(Sources::local(self.persisted_session_id(id)?))
+    }
+
+    fn remote_composer_sources(&self, remote: &super::RemoteSession) -> Result<Sources, String> {
+        let id = remote.summary.id;
+        if self.shared.is_none() {
+            return Ok(Sources::local(id.to_string()));
+        }
+        let environment = &remote.project.environment_id;
+        let bound = remote
+            .session_id
+            .as_ref()
+            .map(|host| format!("remote:{environment}:{host}"));
+        // Host can bind a new conversation after the desktop has saved input.
+        // Keep the native handle as a fallback if a legacy tab later owns it.
+        if id < 0 {
             return Ok(Sources {
                 current: format!("remote-composer:{environment}:{id}"),
-                bound: remote
-                    .session_id
-                    .map(|host| format!("remote:{environment}:{host}")),
-                unbound: Some(format!("remote:{environment}:{id}")),
+                previous: [bound, Some(format!("remote:{environment}:{id}")), None],
             });
         }
-        Ok(Sources {
-            current: self.persisted_session_id(id)?,
-            bound: None,
-            unbound: None,
-        })
+        let current = self.persisted_session_id(id)?;
+        if let Some(alias) = remote.composer_alias.filter(|alias| *alias < 0) {
+            return Ok(Sources {
+                current,
+                previous: [
+                    Some(format!("remote-composer:{environment}:{alias}")),
+                    bound,
+                    Some(format!("remote:{environment}:{alias}")),
+                ],
+            });
+        }
+        Ok(Sources::local(current))
+    }
+
+    pub(super) fn remote_composer_source_matches(
+        &self,
+        remote: &super::RemoteSession,
+        origin: &ComposerOrigin,
+    ) -> Result<bool, String> {
+        Ok(origin.session == remote.summary.id
+            && self
+                .remote_composer_sources(remote)?
+                .params()
+                .contains(&Some(origin.source.as_str())))
     }
 
     fn read_composer_row<T>(
@@ -158,8 +198,8 @@ impl Store {
     ) -> Result<Option<T>, String> {
         self.conn
             .query_row(
-                &format!("SELECT {columns} FROM composer_drafts WHERE session_id IN (?1,?2,?3)
-                          ORDER BY CASE session_id WHEN ?1 THEN 0 WHEN ?2 THEN 1 ELSE 2 END LIMIT 1"),
+                &format!("SELECT {columns} FROM composer_drafts WHERE session_id IN (?1,?2,?3,?4)
+                          ORDER BY CASE session_id WHEN ?1 THEN 0 WHEN ?2 THEN 1 WHEN ?3 THEN 2 ELSE 3 END LIMIT 1"),
                 sources.params(),
                 read,
             )
@@ -328,8 +368,8 @@ impl Store {
         let mut query=self.conn.prepare(
             "SELECT owner,revision,payload_json FROM (
                  SELECT owner,revision,payload_json,updated_at,ROW_NUMBER() OVER (
-                     PARTITION BY owner ORDER BY CASE session_id WHEN ?1 THEN 0 WHEN ?2 THEN 1 ELSE 2 END
-                 ) AS rank FROM composer_draft_recoveries WHERE session_id IN (?1,?2,?3)
+                     PARTITION BY owner ORDER BY CASE session_id WHEN ?1 THEN 0 WHEN ?2 THEN 1 WHEN ?3 THEN 2 ELSE 3 END
+                 ) AS rank FROM composer_draft_recoveries WHERE session_id IN (?1,?2,?3,?4)
              ) WHERE rank=1 ORDER BY updated_at,owner"
         ).map_err(|e|e.to_string())?;
         let rows = query
@@ -375,11 +415,11 @@ impl Store {
             return Ok(());
         }
         let sources = self.composer_sources(id)?;
-        let [current, bound, unbound] = sources.params();
+        let [current, first, second, third] = sources.params();
         self.conn
             .execute(
-                "DELETE FROM composer_draft_recoveries WHERE session_id IN (?1,?2,?3) AND owner=?4",
-                params![current, bound, unbound, owner],
+                "DELETE FROM composer_draft_recoveries WHERE session_id IN (?1,?2,?3,?4) AND owner=?5",
+                params![current, first, second, third, owner],
             )
             .map_err(|e| e.to_string())?;
         Ok(())
