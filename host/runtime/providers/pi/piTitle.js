@@ -11,10 +11,11 @@ async function generateSessionTitle(flavor, input) {
       cwd: input.cwd,
       prompt: buildThreadTitlePrompt(input.message),
       timeoutMs: TITLE_TIMEOUT_MS,
+      signal: input.signal,
     });
     return parseGeneratedSessionTitle(output, input.message);
   } catch (error) {
-    console.debug("[vorkspace] session title", error);
+    if (!input.signal?.aborted) console.debug("[vorkspace] session title", error);
     return null;
   }
 }

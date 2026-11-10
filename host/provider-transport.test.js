@@ -15,6 +15,9 @@ import { hostProviders } from "./providers.js";
 import { discoverCodexModels } from "./runtime/providers/codex/codexCatalog.js";
 import { discoverClaudeModels } from "./runtime/providers/claude/claudeCatalog.js";
 import { runClaudeTextPrompt } from "./runtime/providers/claude/claudeText.js";
+import { runCodexTextPrompt } from "./runtime/providers/codex/codexText.js";
+import { runTextPrompt } from "./runtime/providers/pi/piText.js";
+import { PI_FLAVOR } from "./runtime/providers/pi/piFlavor.js";
 import {
   configureHostFiles,
   deleteGeneratedImages,
@@ -65,6 +68,13 @@ readline.createInterface({input: process.stdin}).on('line', line => {
   if (request.method === 'thread/start' || request.method === 'thread/resume') send({id: request.id, result: {thread: {id: 'fixture-thread'}}});
   if (request.method === 'turn/start') {
     record({codexEffort: request.params.effort ?? null});
+    if (request.params.input.some(part => part.text === 'snapshot-only fixture')) {
+      send({method: 'item/completed', params: {threadId: 'other-thread', item: {id: 'other', type: 'agentMessage', text: 'Other thread text'}}});
+      send({method: 'item/completed', params: {threadId: 'fixture-thread', item: {id: 'naming', type: 'agentMessage', text: 'Exact snapshot title'}}});
+      send({method: 'turn/completed', params: {threadId: 'fixture-thread', turn: {id: 'fixture-turn', status: 'completed'}}});
+      setTimeout(() => send({id: request.id, result: {turn: {id: 'fixture-turn'}}}), 25);
+      return;
+    }
     send({id: request.id, result: {turn: {id: 'fixture-turn'}}});
     setTimeout(() => {
       if (request.params.input.some(part => part.text === 'make fixture image')) {
@@ -84,6 +94,7 @@ readline.createInterface({input: process.stdin}).on('line', line => {
     send({type: 'result', subtype: 'success', session_id: 'fixture-claude'});
   }, 30);
   if (request.type === 'get_state') send({type: 'response', id: request.id, command: 'get_state', success: true, data: {sessionId: 'fixture_pi', model: {provider: 'openai', id: 'fixture-model', contextWindow: 100000}}});
+  if (request.type === 'new_session' || request.type === 'set_thinking_level') send({type: 'response', id: request.id, command: request.type, success: true, data: {}});
   if (request.type === 'get_session_stats') send({type: 'response', id: request.id, command: 'get_session_stats', success: true, data: {contextWindow: 100000}});
   if (request.type === 'get_available_models') send({type: 'response', id: request.id, command: 'get_available_models', success: true, data: {models: [{provider: 'openai', id: 'fixture-model', name: 'Fixture model'}]}});
   if (request.type === 'prompt') {
@@ -153,6 +164,16 @@ describe("existing providers over headless process I/O", () => {
     await expect(
       runClaudeTextPrompt({ cwd: directory, prompt: "next fixture prompt" }),
     ).resolves.toBe("Headless Claude completed");
+  });
+  it("collects Codex snapshot-only text before the submission acknowledgement", async () => {
+    await expect(
+      runCodexTextPrompt({ cwd: directory, prompt: "snapshot-only fixture" }),
+    ).resolves.toBe("Exact snapshot title");
+  });
+  it("reads text from an isolated Pi naming process", async () => {
+    await expect(
+      runTextPrompt(PI_FLAVOR, { cwd: directory, prompt: "name fixture" }),
+    ).resolves.toBe("Headless Pi completed");
   });
   it("accepts a published Codex image and settles the turn without an error", async () => {
     const project = await engine.openProject(directory);

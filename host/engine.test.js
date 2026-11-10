@@ -718,6 +718,27 @@ describe("headless session ownership", () => {
         ).toBe(true);
     },
   );
+  it("scopes reused tool, agent step and approval ids to the admitted turn", async () => {
+    const { engine, store, turns, id } = setup();
+    for (const [index, decision] of ["deny", "allow"].entries()) {
+      engine.command({ type: "send", commandId: `scope-${index}`, sessionId: id, text: "Work" });
+      await vi.waitFor(() => expect(turns).toHaveLength(index + 1));
+      const { input, finish } = turns[index];
+      input.onEvent({ type: "tool.started", callId: "reused", kind: "agent", title: `Agent ${index}` });
+      input.onEvent({ type: "agent.step", callId: "reused", stepId: "reused-step", kind: "message", text: `Result ${index}` });
+      input.onEvent({ type: "approval.requested", callId: "reused", requestId: 7, title: `Agent ${index}` });
+      engine.command({
+        type: "approve", commandId: `scope-approve-${index}`, sessionId: id,
+        runId: store.session(id).runId, requestId: 7, decision,
+      });
+      input.onEvent({ type: "approval.resolved", requestId: 7, decision: "cancelled" });
+      finish();
+      await vi.waitFor(() => expect(store.session(id).status).toBe("idle"));
+    }
+    const tools = store.session(id).session.blocks.filter((block) => block.tool?.callId === "reused");
+    expect(tools.map((block) => block.approval.decided)).toEqual(["deny", "allow"]);
+    expect(tools.map((block) => block.agentRun.steps[0].text)).toEqual(["Result 0", "Result 1"]);
+  });
   it("serializes concurrent sends and accepts only one approval decision for a run", async () => {
     const { engine, store, turns, provider, id } = setup();
     engine.command({

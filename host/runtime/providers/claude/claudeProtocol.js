@@ -668,17 +668,18 @@ export function extractAskUserQuestionTitle(input) {
 }
 export function askUserQuestionAllowInput(input, reply) {
   const questions = questionsFromUnknown(input);
-  const answers = {};
+  const answers = [];
   if (reply?.kind === "answered") {
     for (const question of questions) {
       const labels = selectedAnswerLabels(question, reply);
       if (labels.length === 0) continue;
-      answers[question.prompt] = question.multiSelect
-        ? labels.join(", ")
-        : (labels[0] ?? "");
+      answers.push([
+        question.prompt,
+        question.multiSelect ? labels.join(", ") : labels[0],
+      ]);
     }
   }
-  return { questions: input.questions, answers };
+  return { questions: input.questions, answers: Object.fromEntries(answers) };
 }
 export function tryParseJsonRecord(value) {
   try {

@@ -223,6 +223,8 @@ export class HostEngine {
   providers;
   switchingProjects = new Set();
   #runs;
+  #naming = new AbortController();
+  #branchWrites = new Set();
   constructor(store, providers) {
     this.store = store;
     this.providers = providers;
@@ -525,20 +527,13 @@ export class HostEngine {
           if (command.type === "cancel") {
             effect = () => this.#runs.cancel(command.sessionId, command.runId);
           } else if (command.type === "approve") {
-            const pending = value.session.blocks.some(
-              (block) =>
-                block.approval?.requestId === command.requestId &&
-                !block.approval.decided,
-            );
-            if (!pending) throw new Error("Approval is already resolved");
-            value = {
-              ...value,
-              session: applyHarnessEvent(value.session, {
-                type: "approval.resolved",
-                requestId: command.requestId,
-                decision: command.decision,
-              }),
-            };
+            const session = applyHarnessEvent(value.session, {
+              type: "approval.resolved",
+              requestId: command.requestId,
+              decision: command.decision,
+            });
+            if (session === value.session) throw new Error("Approval is already resolved");
+            value = { ...value, session };
             effect = () =>
               provider.approve(
                 command.sessionId,
@@ -587,13 +582,15 @@ export class HostEngine {
     return receipt;
   }
   generateFirstTurnNames(value, message, generateTitle) {
+    const { signal } = this.#naming;
+    if (signal.aborted) return;
     const provider = this.provider(value.session.harness);
     const { id, cwd, harness, title } = value.session;
     if (generateTitle && provider.generateTitle) {
       void provider
-        .generateTitle({ sessionId: id, cwd, message })
+        .generateTitle({ sessionId: id, cwd, message, signal })
         .then((generated) => {
-          if (!generated) return;
+          if (signal.aborted || !generated) return;
           this.#runs.flush(id);
           const current = this.store.session(id);
           if (current.session.title !== title) return;
@@ -616,39 +613,43 @@ export class HostEngine {
     const temporary = value.autoWorktreeBranch;
     if (temporary && provider.generateBranchName) {
       void provider
-        .generateBranchName(cwd, message)
+        .generateBranchName(cwd, message, signal)
         .then(async (fragment) => {
           const branch = fragment ? namedWorktreeBranch(fragment) : null;
-          if (!branch) return;
-          // A title/branch request may finish after the conversation was deleted.
-          const currentBeforeRename = this.store.session(id);
-          if (currentBeforeRename.autoWorktreeBranch !== temporary) return;
-          const project = this.store.project(value.projectId);
-          await renameHostWorktreeBranch(
-            project.cwd,
-            cwd,
-            temporary,
-            branch,
-            () => this.store.session(id).autoWorktreeBranch === temporary,
+          if (signal.aborted || !branch) return;
+          const write = this.#publishGeneratedBranch(value, temporary, branch).catch(
+            (error) => console.debug("[vorkspace] remote worktree branch", error),
           );
-          this.#runs.flush(id);
-          const current = this.store.session(id);
-          const saved = this.store.advance(
-            {
-              ...current,
-              autoWorktreeBranch: undefined,
-              session: { ...current.session, branch },
-            },
-            { type: "session.generatedBranch", branch },
-          );
-          this.#runs.publish(saved);
+          this.#branchWrites.add(write);
+          await write;
+          this.#branchWrites.delete(write);
         })
         .catch((error) =>
           console.debug("[vorkspace] remote worktree branch", error),
         );
     }
   }
+  async #publishGeneratedBranch(value, temporary, branch) {
+    const { id, cwd } = value.session;
+    const stillOwned = () => this.store.session(id).autoWorktreeBranch === temporary;
+    if (!stillOwned()) return;
+    const project = this.store.project(value.projectId);
+    await renameHostWorktreeBranch(project.cwd, cwd, temporary, branch, stillOwned);
+    this.#runs.flush(id);
+    const current = this.store.session(id);
+    if (current.autoWorktreeBranch !== temporary) return;
+    const saved = this.store.advance(
+      {
+        ...current,
+        autoWorktreeBranch: undefined,
+        session: { ...current.session, branch },
+      },
+      { type: "session.generatedBranch", branch },
+    );
+    this.#runs.publish(saved);
+  }
   close() {
-    return this.#runs.close();
+    this.#naming.abort();
+    return Promise.all([this.#runs.close(), ...this.#branchWrites]);
   }
 }

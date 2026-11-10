@@ -52,17 +52,8 @@ export function applyHarnessEvent(session, event) {
       return recordAgentStep(session, event);
     case "approval.requested":
       return attachApproval(session, event);
-    case "approval.resolved": {
-      const blocks = session.blocks.map((block) =>
-        block.approval?.requestId === event.requestId
-          ? {
-              ...block,
-              approval: { ...block.approval, decided: event.decision },
-            }
-          : block,
-      );
-      return { ...session, blocks };
-    }
+    case "approval.resolved":
+      return resolveApproval(session, event);
     case "question.asked":
       return {
         ...session,
@@ -360,11 +351,20 @@ function preserveTaskListLabels(existing, snapshot) {
       : item;
   });
 }
-function lastMatchingBlock(blocks, predicate) {
-  for (let index = blocks.length - 1; index >= 0; index -= 1) {
+function lastMatchingBlock(blocks, predicate, after = -1) {
+  for (let index = blocks.length - 1; index > after; index -= 1) {
     if (predicate(blocks[index], index)) return index;
   }
   return -1;
+}
+function activeTurnStart(session) {
+  // Bot outbox bubbles and mid-turn follow-ups do not start a new turn.
+  return lastMatchingBlock(session.blocks, (block) =>
+    block.role === "user" &&
+    !block.draft &&
+    (block.sentAt == null || block.startedAt != null) &&
+    !session.queuedMessages?.some((message) => message.blockId === block.id)
+  );
 }
 export function stopStreaming(session, endedAt = Date.now()) {
   const { backgroundTasks: _cleared, ...settled } =
@@ -514,9 +514,7 @@ function stampTurnDuration(blocks, endedAt) {
 function appendStatus(session, text) {
   const trimmed = text.trim();
   if (!trimmed) return session;
-  const last = [...session.blocks]
-    .reverse()
-    .find((block) => block.role !== "reasoning");
+  const last = session.blocks.findLast((block) => block.role !== "reasoning");
   if (last?.role === "system" && last.text === trimmed) return session;
   return appendBlock(session, {
     id: crypto.randomUUID(),
@@ -526,17 +524,10 @@ function appendStatus(session, text) {
 }
 function upsertKeyedStatus(session, key, text) {
   const trimmed = text.trim();
-  const turnStart = lastMatchingBlock(
-    session.blocks,
-    // Bot outbox bubbles and mid-turn follow-ups do not start a new turn.
-    (block) =>
-      block.role === "user" &&
-      (block.sentAt == null || block.startedAt != null) &&
-      !session.queuedMessages?.some((message) => message.blockId === block.id),
-  );
   const index = lastMatchingBlock(
     session.blocks,
-    (block, at) => at > turnStart && block.statusKey === key,
+    (block) => block.statusKey === key,
+    activeTurnStart(session),
   );
   if (index < 0) {
     if (!trimmed) return session;
@@ -568,15 +559,12 @@ function appendImage(session, event) {
   });
 }
 function appendBlock(session, block) {
-  return {
-    ...session,
-    blocks: [
-      ...(block.role === "system" && !block.interjection
-        ? session.blocks
-        : sealLastStream(session.blocks)),
-      block,
-    ],
-  };
+  const blocks =
+    block.role === "system" && !block.interjection
+      ? session.blocks.slice()
+      : sealLastStream(session.blocks);
+  blocks.push(block);
+  return { ...session, blocks };
 }
 /** Only ordinary status rows leave an open prose stream intact. */
 function patchStreaming(session, role, input, streaming) {
@@ -674,22 +662,37 @@ function attachApproval(session, event) {
   });
 }
 function findToolForApproval(session, event) {
-  if (event.callId) {
-    const byId = session.blocks.findIndex(
-      (block) => block.tool?.callId === event.callId,
-    );
-    if (byId >= 0) return byId;
-  }
+  const start = activeTurnStart(session);
+  const byId = findToolCall(session.blocks, event.callId, start);
+  if (byId >= 0) return byId;
   const needle = normalizeLabel(event.title);
-  const unmatched = [];
-  for (let i = session.blocks.length - 1; i >= 0; i--) {
+  let unmatched = -1;
+  let ambiguous = false;
+  for (let i = session.blocks.length - 1; i > start; i--) {
     const block = session.blocks[i];
-    if (block.role !== "tool" || block.approval) continue;
-    unmatched.push(i);
+    if (block.role !== "tool" || block.approval || (event.callId && block.tool?.callId))
+      continue;
+    if (unmatched >= 0) ambiguous = true;
+    unmatched = i;
     const label = normalizeLabel(block.text || block.tool?.title || "");
     if (needle && label === needle) return i;
   }
-  return unmatched.length === 1 ? unmatched[0] : -1;
+  return ambiguous ? -1 : unmatched;
+}
+function resolveApproval(session, event) {
+  const index = lastMatchingBlock(
+    session.blocks,
+    (block) => block.approval?.requestId === event.requestId && !block.approval.decided,
+    activeTurnStart(session),
+  );
+  if (index < 0) return session;
+  const blocks = session.blocks.slice();
+  const block = blocks[index];
+  blocks[index] = {
+    ...block,
+    approval: { ...block.approval, decided: event.decision },
+  };
+  return { ...session, blocks };
 }
 function normalizeLabel(value) {
   return value
@@ -747,6 +750,7 @@ function upsertTool(session, patch) {
   const kind = patch.kind ?? prev.tool?.kind;
   const status = patch.status ?? prev.tool?.status;
   const paths = patch.paths ?? prev.tool?.paths;
+  const background = patch.background || prev.tool?.background;
   const agentName = prev.agentRun?.steps.length ? prev.agentRun.name : label;
   if (
     prev.text === label &&
@@ -756,6 +760,7 @@ function upsertTool(session, patch) {
     prev.tool?.status === status &&
     prev.tool?.detail === detail &&
     prev.tool?.paths === paths &&
+    prev.tool?.background === background &&
     (!patch.agentModel || prev.agentRun?.model === patch.agentModel) &&
     (!prev.agentRun || prev.agentRun.name === agentName) &&
     samePreview(prev.tool?.preview, preview)
@@ -786,7 +791,7 @@ function upsertTool(session, patch) {
       ...(!detail && prev.tool?.detailOmitted ? { detailOmitted: true } : {}),
       ...(preview ? { preview } : {}),
       ...(paths ? { paths } : {}),
-      ...(prev.tool?.background ? { background: true } : {}),
+      ...(background ? { background: true } : {}),
     },
   };
   return { ...session, blocks };
@@ -840,8 +845,10 @@ const MAX_AGENT_STEP_CHARS = 2000;
  * instead of appearing twice.
  */
 function recordAgentStep(session, event) {
-  const index = session.blocks.findIndex(
-    (block) => block.tool?.callId === event.callId,
+  const index = findToolCall(
+    session.blocks,
+    event.callId,
+    activeTurnStart(session),
   );
   if (index < 0) return session;
   const prev = session.blocks[index];
@@ -850,6 +857,8 @@ function recordAgentStep(session, event) {
   // not.
   if (!text && event.kind !== "tool") return session;
   const run = prev.agentRun;
+  const name = event.agentName || run?.name || prev.tool?.title || prev.text || "Subagent";
+  const agentType = (event.agentType ?? run?.agentType) || undefined;
   const detail = capToolDetail(event.detail);
   const step = {
     id: event.stepId,
@@ -864,8 +873,7 @@ function recordAgentStep(session, event) {
   let steps;
   if (run && at >= 0) {
     const existing = run.steps[at];
-    steps = run.steps.slice();
-    steps[at] = {
+    const updated = {
       ...existing,
       ...step,
       // A completion carries the result, not the request: keep the label the
@@ -873,35 +881,23 @@ function recordAgentStep(session, event) {
       text: text || existing.text,
       preview: mergeToolPreview(event.preview, existing.preview),
     };
+    if (run.name === name && run.agentType === agentType && sameAgentStep(existing, updated))
+      return session;
+    steps = run.steps.slice();
+    steps[at] = updated;
   } else {
-    steps = [...(run?.steps ?? []), step];
-    if (steps.length > MAX_AGENT_STEPS) {
-      steps = steps.slice(steps.length - MAX_AGENT_STEPS);
-    }
+    steps = run?.steps.slice(-(MAX_AGENT_STEPS - 1)) ?? [];
+    steps.push(step);
   }
   const next = {
     ...(run?.model ? { model: run.model } : {}),
-    name:
-      event.agentName ||
-      run?.name ||
-      prev.tool?.title ||
-      prev.text ||
-      "Subagent",
-    ...((event.agentType ?? run?.agentType)
-      ? { agentType: event.agentType ?? run?.agentType }
-      : {}),
+    name,
+    ...(agentType ? { agentType } : {}),
     steps,
   };
-  if (run && sameAgentRun(run, next)) return session;
   const blocks = session.blocks.slice();
   blocks[index] = { ...prev, agentRun: next };
   return { ...session, blocks };
-}
-function sameAgentRun(a, b) {
-  if (a.name !== b.name || a.agentType !== b.agentType || a.model !== b.model)
-    return false;
-  if (a.steps.length !== b.steps.length) return false;
-  return a.steps.every((step, index) => sameAgentStep(step, b.steps[index]));
 }
 function sameAgentStep(a, b) {
   return (
@@ -920,20 +916,30 @@ function capAgentStepText(value) {
   return `${text.slice(0, MAX_AGENT_STEP_CHARS)}\u2026`;
 }
 function findToolIndex(session, patch) {
-  if (patch.callId) {
-    const byId = session.blocks.findIndex(
-      (block) => block.tool?.callId === patch.callId,
+  const start = activeTurnStart(session);
+  const byId = findToolCall(session.blocks, patch.callId, start);
+  if (byId >= 0) return byId;
+  // Only provider-marked background tasks retain identity across turns.
+  if (patch.callId?.startsWith("background:")) {
+    const background = lastMatchingBlock(
+      session.blocks,
+      (block) => block.tool?.callId === patch.callId && block.tool.background,
     );
-    if (byId >= 0) return byId;
+    if (background >= 0) return background;
   }
   const needle = normalizeLabel(patch.title || "");
   if (!needle) return -1;
-  return session.blocks.findIndex((block) => {
+  return lastMatchingBlock(session.blocks, (block) => {
     if (block.role !== "tool" || !block.approval || block.tool?.callId) {
       return false;
     }
     return normalizeLabel(block.text || block.tool?.title || "") === needle;
-  });
+  }, start);
+}
+function findToolCall(blocks, id, start) {
+  return id
+    ? lastMatchingBlock(blocks, (block) => block.tool?.callId === id, start)
+    : -1;
 }
 function sealLastStream(blocks) {
   let index = blocks.length - 1;
