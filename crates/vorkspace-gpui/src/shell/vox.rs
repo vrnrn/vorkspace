@@ -230,7 +230,7 @@ impl Shell {
                 if !view.read(cx).voice_composer_ready() {
                     view.update(cx, |v, cx| {
                         if v.needs_history_restore() {
-                            v.load(cx);
+                            v.load_complete(cx);
                         }
                     });
                     return Err("The saved composer is still loading; try again".into());
@@ -262,7 +262,7 @@ impl Shell {
                 if !view.read(cx).voice_composer_ready() {
                     view.update(cx, |v, cx| {
                         if v.needs_history_restore() {
-                            v.load(cx);
+                            v.load_complete(cx);
                         }
                     });
                     return Err("Saved conversation is loading; try again".into());

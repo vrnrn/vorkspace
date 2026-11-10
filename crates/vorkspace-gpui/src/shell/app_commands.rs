@@ -683,7 +683,7 @@ impl Shell {
                     locked(&self.store)?.check_app_target(call.session,id,&project)?;
                     self.check_live_app_target(id,cx)?;
                     let view=self.ensure_session(id,cx).ok_or("Session is unavailable")?;
-                    view.update(cx,|view,cx|view.load(cx));
+                    view.update(cx,|view,cx|view.load_complete(cx));
                     if !view.read(cx).ready_for_external(cx) { return Err("Session is busy, loading, or has an unsent draft. Its draft was preserved.".into()); }
                     let prompt=text(&input,"prompt",65536)?;
                     view.update(cx,|view,cx|{

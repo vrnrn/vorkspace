@@ -607,15 +607,18 @@ impl TranscriptView {
                     .saturating_mul(vorkspace_core::visual::MEMORY_LIMIT_BYTES),
             )
     }
+    pub(crate) fn can_suspend_history(&self) -> bool {
+        !self.visible
+            && !self.streaming
+            && self.history_position.is_none()
+            && self.pending.is_empty()
+            && self.saved_draft.is_none()
+            && self.note_pending.is_empty()
+            && self.target_action.is_none()
+    }
+
     pub(crate) fn suspend_history(&mut self, cx: &mut Context<Self>) -> bool {
-        if self.visible
-            || self.streaming
-            || self.history_position.is_some()
-            || !self.pending.is_empty()
-            || self.saved_draft.is_some()
-            || !self.note_pending.is_empty()
-            || self.target_action.is_some()
-        {
+        if !self.can_suspend_history() {
             return false;
         }
         let offset = self.list.logical_scroll_top();

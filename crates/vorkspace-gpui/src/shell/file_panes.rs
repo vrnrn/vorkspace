@@ -55,8 +55,11 @@ impl Shell {
         {
             return Some(id);
         }
-        let review = self.reviews.remove(&id)?;
+        let std::collections::hash_map::Entry::Occupied(review) = self.reviews.entry(id) else {
+            return None;
+        };
         let pane = self.workspace.fresh_pane_id()?;
+        let review = review.remove();
         self.workspace.review_owners.insert(pane, id);
         self.workspace.reviews.remove(&id);
         self.reviews.insert(pane, review.clone());

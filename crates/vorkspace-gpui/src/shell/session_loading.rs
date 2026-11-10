@@ -117,35 +117,46 @@ impl Shell {
         let summary = self.session_summaries.get(&id)?.clone();
         self.add_loaded(summary, cx)
     }
-    pub(super) fn trim_session_histories(&mut self, shown: &HashSet<i64>, cx: &mut Context<Self>) {
+    pub(super) fn trim_session_histories(&self, cx: &mut Context<Self>) {
         const INACTIVE_COUNT: usize = 8;
         const INACTIVE_BYTES: usize = 32 * 1024 * 1024;
         let preview = self.session_preview.as_ref().map(|p| p.id);
         let mut inactive: Vec<_> = self
             .sessions
-            .values()
-            .filter_map(|view| {
+            .iter()
+            .filter(|&(&id, _)| !self.visible_chats.contains(&id) && preview != Some(id))
+            .filter_map(|(&id, view)| {
                 let chat = view.read(cx);
-                let id = chat.summary.id;
-                (!shown.contains(&id) && preview != Some(id) && !chat.busy && chat.history_loaded())
-                    .then(|| {
-                        (
-                            id,
-                            self.history_recency.get(&id).copied().unwrap_or(0),
-                            chat.history_weight(cx),
-                        )
-                    })
+                chat.can_unload_history(cx).then(|| {
+                    (
+                        id,
+                        self.history_recency.get(&id).copied().unwrap_or(0),
+                        chat.history_weight(cx),
+                    )
+                })
             })
             .collect();
-        inactive.sort_unstable_by_key(|&(id, recency, _)| (recency, id));
+        // A single oversized conversation cannot displace the warm set.
+        inactive.retain(|&(id, _, weight)| {
+            if weight <= INACTIVE_BYTES {
+                return true;
+            }
+            self.sessions[&id].update(cx, |chat, cx| chat.unload_history(cx));
+            false
+        });
         let mut count = inactive.len();
-        let mut bytes = inactive.iter().map(|(_, _, weight)| *weight).sum::<usize>();
+        let mut bytes = inactive
+            .iter()
+            .fold(0usize, |sum, &(_, _, weight)| sum.saturating_add(weight));
+        if count <= INACTIVE_COUNT && bytes <= INACTIVE_BYTES {
+            return;
+        }
+        inactive.sort_unstable_by_key(|&(id, recency, _)| (recency, id));
         for (id, _, weight) in inactive {
             if count <= INACTIVE_COUNT && bytes <= INACTIVE_BYTES {
                 break;
             }
-            let view = self.sessions.get(&id).cloned();
-            if view.is_some_and(|view| view.update(cx, |chat, cx| chat.unload_history(cx))) {
+            if self.sessions[&id].update(cx, |chat, cx| chat.unload_history(cx)) {
                 count -= 1;
                 bytes = bytes.saturating_sub(weight);
             }

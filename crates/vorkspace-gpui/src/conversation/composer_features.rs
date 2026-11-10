@@ -516,7 +516,7 @@ impl Conversation {
     ) {
         self.orchestration_progress = progress;
         if self.needs_history_restore() {
-            self.load(cx);
+            self.load_complete(cx);
         }
         cx.notify();
     }

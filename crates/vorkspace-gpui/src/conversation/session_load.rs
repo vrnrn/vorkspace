@@ -131,6 +131,15 @@ impl Conversation {
     }
 
     pub(crate) fn load(&mut self, cx: &mut Context<Self>) {
+        self.load_history(false, cx);
+    }
+
+    /// Mutations and execution use absolute source offsets and need all rows.
+    pub(crate) fn load_complete(&mut self, cx: &mut Context<Self>) {
+        self.load_history(true, cx);
+    }
+
+    fn load_history(&mut self, complete: bool, cx: &mut Context<Self>) {
         if self.is_remote() {
             self.load_remote(cx);
             return;
@@ -140,17 +149,22 @@ impl Conversation {
             return;
         }
         if self.history_partial {
-            if let Some(search) = self
-                .transcript
-                .update(cx, |view, _| view.take_storage_search())
-            {
-                self.pending_search = Some(search);
+            if complete {
+                if let Some(search) = self
+                    .transcript
+                    .update(cx, |view, _| view.take_storage_search())
+                {
+                    self.pending_search = Some(search);
+                }
+                self.history_unloaded = true;
+                self.reload_history(cx);
+            } else {
+                self.sync_native_history(cx);
             }
-            self.history_unloaded = true;
-            self.reload_history(cx);
             return;
         }
         if self.loading {
+            self.complete_history_requested |= complete && !self.loaded;
             return;
         }
         if self.loaded {
@@ -165,7 +179,7 @@ impl Conversation {
         let id = self.summary.id;
         let cwd = self.summary.cwd.clone();
         let bot = self.settings.bot.is_some();
-        let page_bot = bot && self.allow_storage_paging;
+        let page_bot = bot && self.allow_storage_paging && !complete;
         let bot_root = self.settings.bot.as_ref().map(|bot| bot.root.clone());
         let recovery_epoch = self.submission_recovery_epoch;
         let work = cx.background_executor().spawn(async move {
@@ -232,6 +246,7 @@ impl Conversation {
         cx.spawn(async move |this, cx| {
             let (result, git, settings, context, follow_ups, unconfirmed, rev) = work.await;
             let _ = this.update(cx, |this, cx| {
+                let complete_requested = std::mem::take(&mut this.complete_history_requested);
                 this.loading = false;
                 this.loaded_history_revision = Some(rev);
                 this.branch = git.as_ref().and_then(|s| s.current.clone());
@@ -334,10 +349,11 @@ impl Conversation {
                         this.run_history_actions(cx);
                         this.pump_follow_ups(cx);
                         if this.history_partial
-                            && (!this.history_actions.is_empty()
+                            && (complete_requested
+                                || !this.history_actions.is_empty()
                                 || !this.follow_ups.state.messages.is_empty())
                         {
-                            this.load(cx);
+                            this.load_complete(cx);
                         }
                     }
                     Err(e) => this.status = e,
@@ -359,7 +375,7 @@ impl Conversation {
 
     fn refresh_history(&mut self, recovering: bool, cx: &mut Context<Self>) {
         if !self.loaded {
-            self.load(cx);
+            self.load_history(recovering, cx);
             return;
         }
         if self.loading || self.busy || self.stopping {

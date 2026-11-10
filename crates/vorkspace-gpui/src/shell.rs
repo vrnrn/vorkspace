@@ -502,6 +502,7 @@ pub(crate) struct Shell {
     /// Lightweight history index; only opened or previewed chats own GPUI entities.
     session_summaries: HashMap<i64, Session>,
     draft_sessions: HashSet<i64>,
+    visible_chats: HashSet<i64>,
     history_recency: HashMap<i64, u64>,
     history_clock: u64,
     session_marks: HashMap<i64, Entity<SessionMark>>,
@@ -864,6 +865,7 @@ impl Shell {
             sessions: HashMap::new(),
             session_summaries: HashMap::new(),
             draft_sessions: sidebar_metadata.drafts,
+            visible_chats: HashSet::new(),
             history_recency: HashMap::new(),
             history_clock: 0,
             session_marks: HashMap::new(),
@@ -1207,29 +1209,47 @@ impl Shell {
                     .collect()
             })
             .unwrap_or_default();
-        self.update_app_pane_visibility(&shown, cx);
         // Hidden tabs keep their prepared image and any in-flight load. Only
         // closing a tab/pane should discard its background.
-        let open: HashSet<i64> = self.workspace.open_sessions().into_iter().collect();
-        self.backgrounds.retain(|id, _| open.contains(id));
+        if !self.backgrounds.is_empty() {
+            let open: HashSet<_> = self.workspace.open_sessions().into_iter().collect();
+            self.backgrounds.retain(|id, _| open.contains(id));
+        }
+        let mut visible_chats = HashSet::with_capacity(shown.len());
         for &id in &shown {
-            if !self.session_summaries.contains_key(&id) {
-                continue;
+            if self.ensure_session(id, cx).is_some() {
+                visible_chats.insert(id);
             }
-            self.ensure_session(id, cx);
+        }
+        let visible_entities = visible_chats
+            .iter()
+            .map(|id| self.sessions[id].entity_id())
+            .collect();
+        let bot_chats = self.update_app_pane_visibility(&shown, &visible_entities, cx);
+        for id in self.visible_chats.difference(&visible_chats) {
+            if let Some(view) = self.sessions.get(id)
+                && !bot_chats.contains(&view.entity_id())
+            {
+                view.read(cx)
+                    .transcript
+                    .clone()
+                    .update(cx, |t, cx| t.visible(false, cx));
+            }
+        }
+        for &id in visible_chats.difference(&self.visible_chats) {
             self.history_clock += 1;
             self.history_recency.insert(id, self.history_clock);
-        }
-        for (&id, view) in &self.sessions {
+            let view = &self.sessions[&id];
+            let bot_owns_visibility = bot_chats.contains(&view.entity_id());
             view.update(cx, |v, cx| {
-                if shown.contains(&id) {
-                    v.load(cx);
+                if !bot_owns_visibility {
+                    v.transcript.update(cx, |t, cx| t.visible(true, cx));
                 }
-                v.transcript
-                    .update(cx, |t, cx| t.visible(shown.contains(&id), cx))
+                v.load(cx);
             });
         }
-        self.trim_session_histories(&shown, cx);
+        self.visible_chats = visible_chats;
+        self.trim_session_histories(cx);
     }
     #[cfg(test)]
     fn add(&mut self, summary: Session, cx: &mut Context<Self>) {
@@ -1361,6 +1381,7 @@ impl Shell {
             .get(&id)
             .and_then(|view| view.upgrade());
         let bridge = self.bridge_environment(id, cx);
+        let new_view = existing.is_none();
         let view = existing
             .unwrap_or_else(|| cx.new(|cx| Conversation::new(summary, self.store.clone(), cx)));
         view.update(cx, |view, cx| {
@@ -1376,7 +1397,10 @@ impl Shell {
             view.refresh_team_history(cx);
             view.set_project_appearance(appearance, cx);
             view.transcript.update(cx, |transcript, cx| {
-                transcript.apply_preferences(&self.workspace.preferences, cx)
+                transcript.apply_preferences(&self.workspace.preferences, cx);
+                if new_view {
+                    transcript.visible(false, cx);
+                }
             });
         });
         self.observations.push(
@@ -2010,7 +2034,9 @@ impl Shell {
             .project_focus
             .insert(self.workspace.project.clone(), id);
         self.workspace.collapsed.remove(&self.workspace.project);
-        view.update(cx, |v, cx| v.load(cx));
+        if self.visible_chats.contains(&id) {
+            view.update(cx, |v, cx| v.load(cx));
+        }
         self.record_worktree_session(id, cx);
         self.remember_title_tab(TitleTab::Workspace(self.workspace.tab_of(id).unwrap()));
         self.reveal_active_tab(cx);
@@ -2655,9 +2681,10 @@ impl Render for Shell {
                     if this.window_active {
                         crate::menu_bar::remember(window, cx);
                         let _ = this.save_window_state(None, false, cx);
-                        let sessions: Vec<_> = this.sessions.values().cloned().collect();
-                        for view in sessions {
-                            view.update(cx, |v, cx| v.refresh_if_stale(cx));
+                        for id in &this.visible_chats {
+                            if let Some(view) = this.sessions.get(id) {
+                                view.update(cx, |v, cx| v.refresh_if_stale(cx));
+                            }
                         }
                     }
                     this.refresh_notification_permission();

@@ -610,7 +610,7 @@ impl Bots {
                 if self.protected_app_target(session,cx) { self.finish_call(call,Err("Protected sessions cannot receive app-directed input".into()),cx);return; }
                 let view=self.owner.ensure_session(session,cx);
                 let Some(view)=view else {self.finish_call(call,Err("Session is unavailable".into()),cx);return;};
-                view.update(cx,|view,cx|view.load(cx));
+                view.update(cx,|view,cx|view.load_complete(cx));
                 if !view.read(cx).ready_for_external(cx) {self.finish_call(call,Err("Session is busy, loading, or has an unsent draft".into()),cx);return;}
                 match text(&input,"prompt",65536) {
                     Ok(prompt)=>{

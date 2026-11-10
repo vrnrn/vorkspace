@@ -156,8 +156,9 @@ impl Shell {
     pub(super) fn update_app_pane_visibility(
         &mut self,
         shown: &HashSet<i64>,
+        visible_chats: &HashSet<gpui::EntityId>,
         cx: &mut Context<Self>,
-    ) {
+    ) -> HashSet<gpui::EntityId> {
         let visible = |content: &AppPane| {
             self.workspace
                 .app_panes
@@ -209,11 +210,12 @@ impl Shell {
                     },
                 )
                 .collect();
-            manager.update(cx, |manager, cx| {
+            return manager.update(cx, |manager, cx| {
                 manager.set_workspace_context(context.as_deref(), cx);
-                manager.set_visible_panes(&visible, cx);
+                manager.set_visible_panes(&visible, visible_chats, cx)
             });
         }
+        HashSet::new()
     }
 
     /// A global resource may be tiled beside a project-bound leaf. Restore that

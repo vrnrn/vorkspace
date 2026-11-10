@@ -83,7 +83,7 @@ impl Bots {
                 .iter()
                 .any(|row| row.role == "bot-card")
             {
-                chat.update(cx, |view, cx| view.load(cx));
+                chat.update(cx, |view, cx| view.load_complete(cx));
             }
             return;
         }

@@ -644,16 +644,25 @@ impl Bots {
         }
         self.chat_for_action(id, cx)
     }
-    pub(crate) fn set_visible_panes(&mut self, visible: &HashSet<String>, cx: &mut Context<Self>) {
+    pub(crate) fn set_visible_panes(
+        &mut self,
+        visible: &HashSet<String>,
+        visible_chats: &HashSet<gpui::EntityId>,
+        cx: &mut Context<Self>,
+    ) -> HashSet<gpui::EntityId> {
         for id in visible {
             self.ensure_chat(id, cx);
         }
-        for (id, chat) in &self.chats {
-            chat.update(cx, |chat, cx| {
-                chat.transcript
-                    .update(cx, |view, cx| view.visible(visible.contains(id), cx));
-            });
-        }
+        self.chats
+            .iter()
+            .map(|(id, chat)| {
+                let entity = chat.entity_id();
+                let shown = visible.contains(id) || visible_chats.contains(&entity);
+                let transcript = chat.read(cx).transcript.clone();
+                transcript.update(cx, |view, cx| view.visible(shown, cx));
+                entity
+            })
+            .collect()
     }
     /// Queue an application message through the Bot's ordinary outbox.
     pub(crate) fn send_message(
@@ -1392,7 +1401,7 @@ impl Bots {
         {
             view.update(cx, |view, cx| {
                 if view.needs_history_restore() {
-                    view.load(cx);
+                    view.load_complete(cx);
                 }
             });
         }
@@ -1450,7 +1459,7 @@ impl Bots {
         // not enter a configure → observe → dispatch loop before admission.
         if !view.read(cx).bot_ready() {
             if view.read(cx).needs_history_restore() {
-                view.update(cx, |view, cx| view.load(cx));
+                view.update(cx, |view, cx| view.load_complete(cx));
             }
             return;
         }
@@ -1567,7 +1576,7 @@ impl Bots {
                 .get(id)
                 .is_some_and(|bot| bot.seen_rows < view.read(cx).bot_row_origin(cx))
         {
-            view.update(cx, |view, cx| view.load(cx));
+            view.update(cx, |view, cx| view.load_complete(cx));
             return;
         }
         let view = view.read(cx);

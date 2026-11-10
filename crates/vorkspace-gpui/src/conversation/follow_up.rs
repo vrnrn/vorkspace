@@ -32,7 +32,7 @@ impl Conversation {
     }
     pub(crate) fn app_send(&mut self, text: String, cx: &mut Context<Self>) -> Result<(), String> {
         if self.history_partial {
-            self.load(cx);
+            self.load_complete(cx);
             return Err("Session history is loading; retry the message when ready".into());
         }
         if !self.ready_for_external(cx) {
@@ -78,7 +78,7 @@ impl Conversation {
 
         self.execution_provider()?;
         if self.history_partial {
-            self.load(cx);
+            self.load_complete(cx);
             return Err("Session history is loading; retry the message when ready".into());
         }
         if !self.history_ready()

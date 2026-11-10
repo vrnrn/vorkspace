@@ -70,7 +70,7 @@ impl Conversation {
         }
         if self.history_partial && !matches!(request, ResponseRequest::QuoteSelection { .. }) {
             self.status = "Loading complete history; please retry the action".into();
-            self.load(cx);
+            self.load_complete(cx);
             return;
         }
         match request {

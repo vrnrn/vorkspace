@@ -219,6 +219,12 @@ fn partial_history_restores_before_queued_mutation(cx: &mut TestAppContext) {
         assert_eq!(chat.bot_row_origin(cx), 30);
         assert_eq!(chat.bot_row_count(cx), 50);
         assert!(!chat.history_ready());
+        chat.load(cx);
+    });
+    cx.run_until_parked();
+    chat.update(cx, |chat, cx| {
+        assert!(chat.history_partial, "display demand keeps the saved page");
+        assert_eq!(chat.transcript.read(cx).source_rows().len(), 20);
         chat.defer_history_action(
             |chat, cx| {
                 let rows = chat.transcript.read(cx).source_rows();

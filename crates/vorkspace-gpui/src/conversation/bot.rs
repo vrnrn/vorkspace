@@ -359,7 +359,7 @@ impl Conversation {
             return false;
         }
         if !self.history_ready() {
-            self.load(cx);
+            self.load_complete(cx);
             return false;
         }
         if self.settings.pending_provider_switch.is_some() && self.busy {
@@ -651,7 +651,7 @@ impl Conversation {
         cx: &mut Context<Self>,
     ) -> Result<(), String> {
         if !self.history_ready() {
-            self.load(cx);
+            self.load_complete(cx);
             return Err("Conversation history is loading; retry the report when ready".into());
         }
         if self.busy || self.stopping {

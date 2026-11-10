@@ -31,7 +31,7 @@ impl Conversation {
         cx: &mut Context<Self>,
     ) {
         self.history_actions.push_back(Box::new(action));
-        self.load(cx);
+        self.load_complete(cx);
     }
     pub(super) fn run_history_actions(&mut self, cx: &mut Context<Self>) {
         while self.history_ready() && !self.stopping && !self.editing_last_turn.pending() {
@@ -69,44 +69,46 @@ impl Conversation {
     pub(crate) fn history_weight(&self, cx: &gpui::App) -> usize {
         self.transcript.read(cx).history_weight()
     }
-    /// Only a settled, saved conversation can lose its reconstructible payload.
-    /// Keep drafts, queued messages and their edits in the live entity, and pin
-    /// their history so row positions remain valid during background saves.
-    pub(crate) fn unload_history(&mut self, cx: &mut Context<Self>) -> bool {
-        if !self.history_loaded()
-            || self.loading
-            || self.busy
-            || self.stopping
-            || self.editing_last_turn.pending()
-            || self
+    /// Keep the histories used by drafts, queued messages and background saves.
+    pub(crate) fn can_unload_history(&self, cx: &gpui::App) -> bool {
+        self.history_loaded()
+            && !self.loading
+            && !self.busy
+            && !self.stopping
+            && !self.editing_last_turn.pending()
+            && !self
                 .btw
                 .as_ref()
                 .is_some_and(|sheet| sheet.read(cx).is_open() || sheet.read(cx).is_running())
-            || self.status != "Ready"
-            || self.settings.bot.is_some()
-            || self.account_switching
-            || self.preparing_worktree
-            || self.planning_orchestration
-            || self.orchestration_plan.is_some()
-            || self.orchestration_progress.is_some()
-            || self.settings.usage_limit.is_some()
-            || !self.history_actions.is_empty()
-            || self.controls.is_some()
-            || self.needs_approval()
-            || self.attaching
-            || !self.attachments.is_empty()
-            || !self.input.read(cx).content.is_empty()
-            || self.input.read(cx).is_composing()
-            || self.follow_ups.state.revision != self.follow_ups.persisted
-            || !self.follow_ups.state.messages.is_empty()
-            || self.follow_ups.state.draft.is_some()
-            || self.follow_ups.edit.is_some()
-            || self.follow_ups.sending.is_some()
-            || self.follow_ups.requested.is_some()
-            || self.pending_search.is_some()
-            || self.response_request.is_some()
-            || self.response_menu.is_some()
-        {
+            && self.status == "Ready"
+            && self.settings.bot.is_none()
+            && !self.account_switching
+            && !self.preparing_worktree
+            && !self.planning_orchestration
+            && self.orchestration_plan.is_none()
+            && self.orchestration_progress.is_none()
+            && self.settings.usage_limit.is_none()
+            && self.history_actions.is_empty()
+            && self.controls.is_none()
+            && !self.needs_approval()
+            && !self.attaching
+            && self.attachments.is_empty()
+            && self.input.read(cx).content.is_empty()
+            && !self.input.read(cx).is_composing()
+            && self.follow_ups.state.revision == self.follow_ups.persisted
+            && self.follow_ups.state.messages.is_empty()
+            && self.follow_ups.state.draft.is_none()
+            && self.follow_ups.edit.is_none()
+            && self.follow_ups.sending.is_none()
+            && self.follow_ups.requested.is_none()
+            && self.pending_search.is_none()
+            && self.response_request.is_none()
+            && self.response_menu.is_none()
+            && self.transcript.read(cx).can_suspend_history()
+    }
+
+    pub(crate) fn unload_history(&mut self, cx: &mut Context<Self>) -> bool {
+        if !self.can_unload_history(cx) {
             return false;
         }
         let suspended = self

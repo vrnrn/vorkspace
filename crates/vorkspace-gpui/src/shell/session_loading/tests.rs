@@ -239,7 +239,9 @@ fn inactive_history_cache_has_a_count_bound_and_reopens_evicted_history(cx: &mut
     cx.run_until_parked();
     window
         .update(cx, |shell, window, cx| {
+            let before = shell.history_clock;
             shell.update_chat_visibility(cx);
+            assert_eq!(shell.history_clock, before);
             assert_eq!(shell.workspace.active, Some(active));
             let retained = ids
                 .iter()
