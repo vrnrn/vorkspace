@@ -328,13 +328,15 @@ impl Conversation {
     pub(crate) fn voice_composer_ready(&self) -> bool {
         !self.user_read_only() && self.history_ready() && !self.account_switching
     }
-    pub(crate) fn bot_ready(&self) -> bool {
+    pub(crate) fn bot_ready(&self, cx: &App) -> bool {
         self.history_ready()
             && !self.busy
             && !self.stopping
             && self.loaded
             && self.settings.usage_limit.is_none()
             && !self.account_switching
+            && Kind::parse(&self.summary.provider).is_some()
+            && turn_driver::available(&self.store, self.summary.id, cx)
     }
     pub(crate) fn bot_settled(&self) -> bool {
         !self.busy && !self.stopping
@@ -399,7 +401,7 @@ impl Conversation {
             self.settings.operator,
             self.settings.orchestrator,
         ) = previous;
-        true
+        self.busy
     }
     /// The user's own message joins the active turn through the provider's
     /// follow-up control, as in a session. Peer and automatic messages keep

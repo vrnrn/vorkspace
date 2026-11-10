@@ -210,6 +210,12 @@ impl Conversation {
         if self.input.read(cx).is_composing() {
             return;
         }
+        if !self.busy && !self.stopping && !turn_driver::available(&self.store, self.summary.id, cx)
+        {
+            self.status = turn_driver::ALREADY_ACTIVE.into();
+            cx.notify();
+            return;
+        }
         if self.prepare_ticket_context(cx) {
             return;
         }
@@ -323,6 +329,12 @@ impl Conversation {
             self.account_unavailable(cx);
             return;
         }
+        let view = cx.weak_entity();
+        let Some(admission) = turn_driver::admit(&self.store, self.summary.id, view, cx) else {
+            self.status = turn_driver::ALREADY_ACTIVE.into();
+            cx.notify();
+            return;
+        };
         self.settings.usage_limit = None;
         self.attach_account(cx);
         if !self.is_remote() {
@@ -342,10 +354,8 @@ impl Conversation {
             "Connecting…"
         }
         .into();
-        self.cancel = Arc::new(AtomicBool::new(false));
+        self.cancel = admission.cancel_handle();
         let summary = self.summary.clone();
-        let store = self.store.clone();
-        let cancel = self.cancel.clone();
         let mut settings = self.settings.clone();
         settings.ticket_context = self.ticket_context.ready.take().map(Into::into);
         if let Some(model) = self.model_info() {
@@ -418,399 +428,61 @@ impl Conversation {
         if self.settings.handoff.take().is_some() {
             self.save_settings(cx);
         }
-        let (controls, control_rx) = std::sync::mpsc::channel();
-        self.controls = Some(controls);
         self.approvals.clear();
         self.questions.clear();
-        let (tx, rx) = async_channel::bounded(8);
         let turn_model_id = settings
             .turn_model
             .as_ref()
             .and_then(|turn| turn.model_id.clone())
             .or_else(|| settings.model.clone());
-        let remote_client = self
+        let remote = self
             .is_remote()
             .then(|| self.remote_state.client.clone())
             .flatten();
-        cx.background_executor()
-            .spawn(async move {
-                if let Some(client) = remote_client {
-                    vorkspace_runtime::runtime::remote::run_with_client(
-                        client, summary, prompt, settings, control_rx, store, cancel, tx,
-                    );
-                } else {
-                    run_turn(summary, prompt, settings, control_rx, store, cancel, tx);
-                }
-            })
-            .detach();
-        self.receive_turn_updates(
-            rx,
+        let projection = turn_projection::TurnProjection::new(
             generation,
             source_provider,
             source_account,
             turn_model_id,
-            cx,
         );
+        self.controls = Some(admission.launch(
+            turn_driver::Request {
+                summary,
+                prompt,
+                settings,
+                remote,
+            },
+            projection,
+            cx,
+        ));
         cx.emit(SessionChanged::Turn);
         cx.notify();
     }
+    #[cfg(test)]
     pub(super) fn receive_turn_updates(
         &mut self,
         rx: async_channel::Receiver<vorkspace_runtime::runtime::Update>,
         generation: u64,
         source_provider: String,
         source_account: String,
-        mut turn_model_id: Option<String>,
+        turn_model_id: Option<String>,
         cx: &mut Context<Self>,
     ) {
-        cx.spawn(async move |this, cx| {
-            let mut completed = false;
-            while let Ok(update) = rx.recv().await {
-                let outcome = update.outcome;
-                let finished = outcome.is_some();
-                completed |= finished;
-                if this
-                    .update(cx, |this, cx| {
-                        if this.submission_generation != generation {
-                            return;
-                        }
-                        let stopping = this.stopping;
-                        // The final update settles accepted rows and storage.
-                        // Ignore streaming notifications after the user stops.
-                        if stopping && !finished {
-                            return;
-                        }
-                        let source_selected = this.summary.provider == source_provider
-                            && this.settings.account.id == source_account;
-                        let mut checkout_changed = false;
-                        if let Some(cwd) = update.worktree_cwd
-                            && (this.settings.worktree_cwd.as_ref() != Some(&cwd)
-                                || this.settings.new_worktree)
-                        {
-                            this.preparing_worktree = false;
-                            this.settings.worktree_cwd = Some(cwd);
-                            this.settings.new_worktree = false;
-                            this.save_settings(cx);
-                            this.refresh_git(cx);
-                            checkout_changed = true;
-                        }
-                        if let Some(commands) = update.commands.filter(|_| source_selected) {
-                            this.completion.update(cx, |completion, cx| {
-                                completion.set_native_commands(commands, cx)
-                            });
-                        }
-                        let history_recovery = update.history_recovery;
-                        let activity_changed = this.activity != update.activity;
-                        this.activity = update.activity;
-                        let needed_approval = this.needs_approval();
-                        let incoming_notification_input = !stopping
-                            && (!update.approvals.is_empty() || !update.questions.is_empty());
-                        use vorkspace_runtime::runtime::TranscriptPatch;
-                        let patch = update.transcript;
-                        let stop_stream =
-                            stopping && !matches!(&patch, TranscriptPatch::BotSnapshot { .. });
-                        if stop_stream || !matches!(&patch, TranscriptPatch::Unchanged) {
-                            this.transcript.update(cx, |view, cx| {
-                                match patch {
-                                    TranscriptPatch::Unchanged => {}
-                                    TranscriptPatch::Tail { start, rows } => {
-                                        view.patch(start, rows, cx)
-                                    }
-                                    TranscriptPatch::Snapshot { start, rows } => {
-                                        if start == 0 {
-                                            view.patch_full_snapshot(rows, cx);
-                                        } else {
-                                            let end = start + rows.len();
-                                            view.patch_snapshot(start, rows, end, cx);
-                                        }
-                                    }
-                                    TranscriptPatch::BotSnapshot { turn_start, rows } => {
-                                        view.patch_bot_turn_snapshot(turn_start, rows, cx);
-                                    }
-                                }
-                                if stop_stream {
-                                    view.stop_streaming(cx);
-                                }
-                            });
-                        }
-                        if let Some(id) = update.provider_turn_id {
-                            this.transcript
-                                .update(cx, |view, _| view.record_provider_turn(id));
-                        }
-                        if update.provider_reset && source_selected {
-                            this.summary.provider_id = None;
-                        }
-                        if let Some(id) = update.provider_id {
-                            if let Some(pending) = this.settings.pending_provider_switch.as_mut()
-                                && pending.from == source_provider
-                                && pending.account.id == source_account
-                            {
-                                pending.provider_id = Some(id);
-                            } else if source_selected {
-                                this.summary.provider_id = Some(id);
-                            }
-                        }
-                        if let Some(handoff) = update.handoff {
-                            this.settings.pending_provider_switch = None;
-                            this.settings.handoff = handoff;
-                            this.save_settings(cx);
-                        }
-                        if let Some(model) = update.config_model {
-                            if let Some(pending) = this.settings.pending_provider_switch.as_mut()
-                                && pending.from == source_provider
-                                && pending.account.id == source_account
-                            {
-                                pending.model = Some(model);
-                            } else if source_selected {
-                                this.model = Some(model.clone());
-                                this.settings.model = Some(model);
-                            }
-                        }
-                        if let Some(settings) = update.config_settings {
-                            if let Some(pending) = this.settings.pending_provider_switch.as_mut()
-                                && pending.from == source_provider
-                                && pending.account.id == source_account
-                            {
-                                pending.model_settings.extend(settings);
-                            } else if source_selected {
-                                this.settings.model_settings.extend(settings);
-                            }
-                            this.save_settings(cx);
-                        }
-                        if let Some(model) = update.model {
-                            turn_model_id = Some(model.clone());
-                            let name: SharedString = this
-                                .catalog
-                                .iter()
-                                .find(|entry| source_selected && entry.id == model)
-                                .map(|entry| {
-                                    let name = model_display_name(
-                                        Kind::from_id(&source_provider),
-                                        &entry.id,
-                                        &entry.name,
-                                    );
-                                    name.strip_prefix("Claude ")
-                                        .unwrap_or(&name)
-                                        .to_owned()
-                                        .into()
-                                })
-                                .unwrap_or_else(|| {
-                                    model_name(Kind::from_id(&source_provider), Some(&model))
-                                });
-                            if source_selected {
-                                this.resolved_model = Some(model);
-                            }
-                            this.transcript
-                                .update(cx, |v, _| v.identity(&source_provider, &name));
-                        }
-                        if let Some(context) = update.context.filter(|_| source_selected) {
-                            this.context = Some(context);
-                        }
-                        if let Some(metrics) = update.metrics {
-                            this.transcript.update(cx, |v, _| v.metrics(metrics));
-                        }
-                        if update.turn_ready && !stopping {
-                            this.follow_ups.ready = true;
-                        }
-                        this.apply_receipts(
-                            update.delivered,
-                            update.follow_up_delivered,
-                            update.follow_up_errors,
-                            cx,
-                        );
-                        if !stopping || finished {
-                            this.status = update.status;
-                        }
-                        if !stopping {
-                            this.approvals.extend(update.approvals);
-                        }
-                        for id in update.approvals_resolved {
-                            this.approvals.retain(|approval| approval.id != id);
-                        }
-                        for id in update.questions_resolved {
-                            this.questions.retain(|(card, _)| card.read(cx).id() != id);
-                        }
-                        for request in update.questions.into_iter().filter(|_| !stopping) {
-                            let card = cx.new(|cx| {
-                                crate::composer::questions::QuestionCard::new(request, cx)
-                            });
-                            let events = cx.subscribe(
-                                &card,
-                                |this, _, reply: &crate::composer::questions::Answered, cx| {
-                                    if this
-                                        .questions
-                                        .front()
-                                        .is_none_or(|(card, _)| card.read(cx).id() != reply.id)
-                                    {
-                                        return;
-                                    }
-                                    let before = this.needs_approval();
-                                    let decision = reply
-                                        .answers
-                                        .clone()
-                                        .map_or(Decision::Deny, Decision::Answer);
-                                    if this.controls.as_ref().is_none_or(|controls| {
-                                        controls
-                                            .send(Control {
-                                                id: reply.id.clone(),
-                                                decision,
-                                            })
-                                            .is_err()
-                                    }) {
-                                        this.status =
-                                            "The provider is no longer waiting for this answer"
-                                                .into();
-                                        cx.notify();
-                                        return;
-                                    }
-                                    this.questions.pop_front();
-                                    this.status = if !this.approvals.is_empty() {
-                                        "Waiting for approval"
-                                    } else if !this.questions.is_empty() {
-                                        "Waiting for your answer"
-                                    } else {
-                                        "Working…"
-                                    }
-                                    .into();
-                                    if before != this.needs_approval() {
-                                        cx.emit(SessionChanged::Attention);
-                                    }
-                                    cx.notify();
-                                },
-                            );
-                            let keep_open = cx.subscribe(
-                                &card,
-                                |this, _, request: &crate::composer::questions::KeptOpen, cx| {
-                                    if let Some(controls) = &this.controls {
-                                        let _ = controls.send(Control {
-                                            id: request.id.clone(),
-                                            decision: Decision::KeepOpen,
-                                        });
-                                    }
-                                    cx.emit(SessionChanged::Attention);
-                                    cx.notify();
-                                },
-                            );
-                            this.questions.push_back((card, vec![events, keep_open]));
-                            this.status = "Waiting for your answer".into();
-                        }
-                        if !finished && !this.approvals.is_empty() {
-                            this.status = "Waiting for approval".into();
-                        } else if !finished && !this.questions.is_empty() {
-                            this.status = "Waiting for your answer".into();
-                        }
-                        if let Some(outcome) = outcome {
-                            use vorkspace_runtime::runtime::TurnOutcome;
-                            if this.is_remote() {
-                                this.settings.remote_action = None;
-                                this.remote_state.refreshing = false;
-                                this.remote_state.awaiting_successor =
-                                    outcome == TurnOutcome::Superseded;
-                            }
-                            this.summary.updated_at = vorkspace_core::time::now_ms();
-                            this.busy = false;
-                            this.stopping = false;
-                            if this.is_remote() {
-                                this.refresh_remote_snapshot(cx);
-                            }
-                            this.preparing_worktree = false;
-                            if !stopping && let Some(limit) = update.usage_limit {
-                                this.settings.usage_limit = Some(limit);
-                            }
-                            if !this.is_remote() {
-                                this.detect_usage_limit(cx);
-                            }
-                            this.review
-                                .update(cx, |review, cx| review.set_busy(false, cx));
-                            this.follow_ups.ready = false;
-                            if this.follow_ups.resuming {
-                                this.follow_ups.resuming = false;
-                                if !stopping && outcome == TurnOutcome::Completed {
-                                    this.follow_ups.state.paused = false;
-                                    for message in &mut this.follow_ups.state.messages {
-                                        message.error = None;
-                                    }
-                                    this.save_follow_ups(cx);
-                                }
-                            }
-                            if let Some(id) = this.follow_ups.sending.clone() {
-                                this.fail_follow_up(
-                                    &id,
-                                    "The turn ended before this message was accepted".into(),
-                                    cx,
-                                );
-                            }
-                            if outcome == TurnOutcome::Failed
-                                && !this.follow_ups.state.messages.is_empty()
-                            {
-                                this.follow_ups.state.paused = true;
-                                if history_recovery.is_none() {
-                                    this.save_follow_ups(cx);
-                                }
-                            }
-                            this.approvals.clear();
-                            this.questions.clear();
-                            this.controls = None;
-                            this.refresh_submission_recovery(cx);
-                            this.transcript.update(cx, |v, cx| v.streaming(false, cx));
-                            let model_id = turn_model_id.clone();
-                            this.transcript.update(cx, |view, _| {
-                                if let Some(turn) = view.active_turn()
-                                    && let Some(info) = view.turns.get_mut(&turn)
-                                {
-                                    info.model_id = model_id;
-                                }
-                            });
-                            if stopping {
-                                this.planning_orchestration = false;
-                                this.orchestration_progress = None;
-                            } else if history_recovery.is_none() {
-                                this.finish_orchestration_plan(cx);
-                            }
-                            if history_recovery.is_some() {
-                                this.recover_history_in_place(cx);
-                            } else {
-                                this.settings.turns = this.transcript.read(cx).turns.clone();
-                                this.save_settings(cx);
-                                this.run_history_actions(cx);
-                            }
-                            this.refresh_git(cx);
-                            cx.emit(SessionChanged::Settled);
-                        } else {
-                            if checkout_changed {
-                                cx.emit(SessionChanged::Checkout);
-                            }
-                            if incoming_notification_input
-                                || needed_approval != this.needs_approval()
-                            {
-                                cx.emit(SessionChanged::Attention);
-                            }
-                        }
-                        if activity_changed {
-                            cx.emit(SessionActivityChanged);
-                        }
-                        this.pump_follow_ups(cx);
-                        cx.notify();
-                    })
-                    .is_err()
-                {
-                    break;
-                }
-                // recv().await need not suspend: a producer can refill even a
-                // bounded channel while we patch. Return to the native event
-                // loop between atomic updates so input and frames can run.
-                // A positive timer also avoids immediately requeueing a ready
-                // continuation onto the main dispatch queue.
-                cx.background_executor()
-                    .timer(std::time::Duration::from_millis(1))
-                    .await;
-            }
-            if !completed {
-                let _ = this.update(cx, |this, cx| this.turn_updates_closed(generation, cx));
-            }
-        })
-        .detach();
+        let view = cx.weak_entity();
+        turn_driver::project(
+            view,
+            rx,
+            turn_projection::TurnProjection::new(
+                generation,
+                source_provider,
+                source_account,
+                turn_model_id,
+            ),
+            None,
+            cx,
+        );
     }
+
     /// The final update repeats the turn's initial receipt beside any steers.
     /// A steer is always accepted after its turn began, so its receipt wins.
     pub(crate) fn apply_receipts(

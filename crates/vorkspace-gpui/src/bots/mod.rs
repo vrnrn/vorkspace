@@ -1345,7 +1345,7 @@ impl Bots {
         }
         // Refreshing context notifies the view. A held/restoring recipient must
         // not enter a configure → observe → dispatch loop before admission.
-        if !view.read(cx).bot_ready() {
+        if !view.read(cx).bot_ready(cx) {
             if view.read(cx).needs_history_restore() {
                 view.update(cx, |view, cx| view.load_complete(cx));
             }

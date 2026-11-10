@@ -291,8 +291,7 @@ impl Shell {
         let core = self.app_core.clone();
         let monitor = self.resources.downgrade();
         let request = request.clone();
-        // Routing reads peer windows, including this one. Wait for the current
-        // Shell update to release its lease before resolving the owner.
+        // Let this Shell update finish before the conversation publishes Stop.
         cx.defer(move |cx| {
             let view = core.as_ref().and_then(|core| {
                 core.read(cx)

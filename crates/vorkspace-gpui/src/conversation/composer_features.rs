@@ -517,6 +517,7 @@ impl Conversation {
     }
     pub(crate) fn ready_for_external(&self, cx: &gpui::App) -> bool {
         !self.user_read_only()
+            && turn_driver::available(&self.store, self.summary.id, cx)
             && Kind::parse(&self.summary.provider).is_some()
             && self.composer_draft.ready_for_replacement()
             && self.pending_attachments.is_empty()
@@ -547,6 +548,7 @@ impl Conversation {
     /// or an already accepted message must keep ownership of this composer.
     pub(crate) fn available_for_managed_run(&self, cx: &gpui::App) -> bool {
         !self.busy
+            && turn_driver::available(&self.store, self.summary.id, cx)
             && !self.ticket_context.pending()
             && !self.stopping
             && !self.preparing_worktree

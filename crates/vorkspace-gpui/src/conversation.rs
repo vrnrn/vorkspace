@@ -31,7 +31,9 @@ mod submission_tests;
 mod team_history;
 mod ticket_context;
 mod title;
+pub(crate) mod turn_driver;
 mod turn_flow;
+mod turn_projection;
 mod turn_recovery;
 use crate::{
     git_tools::git_picker::{GitPicker, Mode as GitMode, Picked as GitPicked},
@@ -66,7 +68,7 @@ use vorkspace_core::{
     catalog::{self, Model},
 };
 use vorkspace_core::{provider::Kind, store::Session};
-use vorkspace_runtime::runtime::{Database, locked, run_turn};
+use vorkspace_runtime::runtime::{Database, locked};
 use vorkspace_ui::clock::Instant;
 use vorkspace_ui::{composer_motion::ComposerMotion, theme::*};
 // Keep empty and docked composers aligned with the transcript column. Below

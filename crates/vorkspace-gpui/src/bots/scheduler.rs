@@ -1541,7 +1541,13 @@ impl Bots {
             error: None,
             attachments: Vec::new(),
         };
-        view.update(cx, |view, cx| view.bot_dispatch(&message, cx));
+        if !view.update(cx, |view, cx| view.bot_dispatch(&message, cx)) {
+            if let Some(run) = self.running.get_mut(&session) {
+                run.failure = Some("The Habit could not start its provider turn".into());
+            }
+            self.habit_changed(session, cx);
+            return;
+        }
         self.changed(cx);
     }
 
@@ -1550,7 +1556,7 @@ impl Bots {
         let Some(run) = self.running.get(&session) else {
             return;
         };
-        if run.view.read(cx).busy {
+        if !run.view.read(cx).bot_settled() {
             self.changed(cx);
             return;
         }
