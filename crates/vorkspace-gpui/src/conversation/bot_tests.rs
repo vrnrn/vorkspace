@@ -69,7 +69,7 @@ fn island_status_distinguishes_finished_work_from_attention_and_active_turns(
     let window = chat(cx);
     window
         .update(cx, |view, _, _| {
-            view.loading = false;
+            view.history_read = history::ReadState::Idle;
             view.status = "Ready".into();
             view.summary.has_messages = true;
             assert_eq!(view.bot_status_label(), "Done");

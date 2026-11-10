@@ -672,7 +672,7 @@ impl Conversation {
                 if !bot
                     && self.status != "Ready"
                     && !self.responding()
-                    && !self.loading
+                    && !self.history_loading()
                     && self.settings.usage_limit.is_none()
                 {
                     items.push(MenuItem::Note(self.status.clone().into()));

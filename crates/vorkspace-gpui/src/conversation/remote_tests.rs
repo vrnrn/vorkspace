@@ -267,7 +267,7 @@ fn late_idle_snapshot_cannot_replace_a_new_turn_or_release_a_newer_refresh(
 
         // A suspended history has no idle poll. A stale initial response must
         // end loading and offer the existing explicit Retry action.
-        view.loading = true;
+        view.history_read = history::ReadState::Reading;
         view.loaded = false;
         view.history_unloaded = true;
         view.remote_state.refresh_generation = 3;
@@ -275,7 +275,7 @@ fn late_idle_snapshot_cannot_replace_a_new_turn_or_release_a_newer_refresh(
         let mut stale = response(view.summary.clone(), Some(1));
         stale.binding.as_mut().unwrap().host_revision = Some(2);
         view.finish_remote_snapshot(3, view.submission_generation, true, stale, cx);
-        assert!(!view.loading);
+        assert!(!view.history_loading());
         assert!(!view.remote_state.refreshing);
         assert!(!view.loaded);
         assert!(view.history_unloaded);

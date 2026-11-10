@@ -89,7 +89,7 @@ impl Conversation {
                                 "Working…".to_owned()
                             } else if done {
                                 "Done".to_owned()
-                            } else if self.loading {
+                            } else if self.history_loading() {
                                 "Loading…".to_owned()
                             } else {
                                 vorkspace_core::time::relative(
@@ -163,7 +163,7 @@ impl Conversation {
             }
             return;
         }
-        if self.loading {
+        if self.history_loading() {
             self.complete_history_requested |= complete && !self.loaded;
             return;
         }
@@ -172,9 +172,8 @@ impl Conversation {
             self.refresh_if_stale(cx);
             return;
         }
-        self.loading = true;
+        self.history_read = history::ReadState::Reading;
         self.refresh_turn_recoveries(cx);
-        self.refresh_catalog(cx);
         let store = self.store.clone();
         let id = self.summary.id;
         let bot = self.settings.bot.is_some();
@@ -227,7 +226,7 @@ impl Conversation {
             let (result, settings, context, follow_ups, unconfirmed, rev) = work.await;
             let _ = this.update(cx, |this, cx| {
                 let complete_requested = std::mem::take(&mut this.complete_history_requested);
-                this.loading = false;
+                this.history_read = history::ReadState::Idle;
                 this.context = context.ok().flatten();
                 if this.submission_recovery_epoch == recovery_epoch {
                     match unconfirmed {
@@ -239,7 +238,7 @@ impl Conversation {
                             }
                         }
                         Err(error) => {
-                            this.status = error;
+                            this.history_load_failed(error, cx);
                             return;
                         }
                     }
@@ -259,7 +258,7 @@ impl Conversation {
                         }
                     }
                     Err(error) => {
-                        this.status = error;
+                        this.history_load_failed(error, cx);
                         return;
                     }
                 }
@@ -320,6 +319,7 @@ impl Conversation {
                         }
                         this.status = "Ready".into();
                         this.loaded = true;
+                        this.refresh_catalog(cx);
                         if let Some(message) = this
                             .follow_ups
                             .state
@@ -344,7 +344,7 @@ impl Conversation {
                             this.load_complete(cx);
                         }
                     }
-                    Err(e) => this.status = e,
+                    Err(error) => this.history_load_failed(error, cx),
                 }
                 cx.emit(SessionChanged::Loaded);
                 cx.notify();
@@ -366,7 +366,7 @@ impl Conversation {
             self.load_history(recovering, cx);
             return;
         }
-        if self.loading || self.turn_in_flight() {
+        if self.history_loading() || self.turn_in_flight() {
             return;
         }
         // A partial transcript is refreshed when a cursor or mutation guard
@@ -383,7 +383,7 @@ impl Conversation {
             return;
         }
         if recovering {
-            self.loading = true;
+            self.history_read = history::ReadState::Reading;
         }
         let id = self.summary.id;
         let store = self.store.clone();
@@ -428,7 +428,7 @@ impl Conversation {
                 // restore or refresh takes ownership of the visible transcript.
                 if this.submission_generation != submission
                     || this.loaded_history_revision != current_rev
-                    || (this.loading && !recovering)
+                    || (this.history_loading() && !recovering)
                     || this.history_unloaded
                     || this.history_partial
                     || this.turn_in_flight()
@@ -436,7 +436,7 @@ impl Conversation {
                     return;
                 }
                 if recovering {
-                    this.loading = false;
+                    this.history_read = history::ReadState::Idle;
                     if let Err(error) = &result {
                         this.status = format!("Could not refresh saved history: {error}");
                         cx.notify();

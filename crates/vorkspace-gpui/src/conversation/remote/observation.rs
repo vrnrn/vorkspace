@@ -140,7 +140,9 @@ impl Conversation {
         let refresh = self.remote_state.refresh_generation;
         let submission = self.submission_generation;
         let initial = !self.loaded || self.history_unloaded;
-        self.loading = initial;
+        if initial {
+            self.history_read = history::ReadState::Reading;
+        }
         let store = self.store.clone();
         let id = self.summary.id;
         let observation = std::mem::take(&mut self.remote_state.observation);
@@ -181,7 +183,7 @@ impl Conversation {
         if self.submission_generation != submission || self.turn_in_flight() {
             return;
         }
-        self.loading = false;
+        self.history_read = history::ReadState::Idle;
         let Refresh {
             observation,
             binding,

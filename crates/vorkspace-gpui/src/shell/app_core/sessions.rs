@@ -361,6 +361,7 @@ impl Shell {
                 }
             });
         }
+        self.resume_automation_reuse(id, cx);
     }
 
     pub(in crate::shell) fn reserve_session_deletion(

@@ -514,7 +514,7 @@ mod tests {
         });
         let executor = cx.foreground_executor().clone();
         executor.block_test(cx.condition(&chat, |chat, cx| {
-            !chat.loading
+            !chat.history_loading()
                 && !chat.editing_last_turn.pending()
                 && chat.transcript.read(cx).source_rows()[1].text == "New saved answer"
         }));

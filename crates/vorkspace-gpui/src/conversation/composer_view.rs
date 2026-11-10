@@ -659,7 +659,7 @@ impl Conversation {
                     .when(
                         !bot && self.status != "Ready"
                             && !self.responding()
-                            && !self.loading
+                            && !self.history_loading()
                             && self.settings.usage_limit.is_none(),
                         |d| {
                             d.child(

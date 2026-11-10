@@ -139,6 +139,17 @@ impl State {
                 .unwrap_or_else(|e| e.into_inner())
                 .discarded
     }
+    pub(super) fn is_hydrating(&self) -> bool {
+        self.hydrating
+    }
+    pub(super) fn has_recovery(&self) -> bool {
+        !self
+            .writer
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .recoveries
+            .is_empty()
+    }
 }
 pub(super) fn flush(writer: &Arc<Mutex<Writer>>) -> Result<(), String> {
     let (pending, loaded) = {

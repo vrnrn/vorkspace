@@ -21,7 +21,11 @@ impl Conversation {
         })
     }
     pub(crate) fn sync_native_history(&mut self, cx: &mut Context<Self>) {
-        if self.native_syncing || self.loading || self.turn_in_flight() || self.account_switching {
+        if self.native_syncing
+            || self.history_loading()
+            || self.turn_in_flight()
+            || self.account_switching
+        {
             return;
         }
         let Some(bot) = &self.settings.bot else {

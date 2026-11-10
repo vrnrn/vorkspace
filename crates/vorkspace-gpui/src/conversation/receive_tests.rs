@@ -441,7 +441,7 @@ fn verify_recovered_turn_refresh(cx: &mut TestAppContext, pending: bool) {
     let executor = cx.foreground_executor().clone();
     executor.block_test(cx.condition(&entity, |view, cx| {
         !view.responding()
-            && !view.loading
+            && !view.history_loading()
             && view.transcript.read(cx).source_rows()[0].text == "Latest durable history"
     }));
     cx.run_until_parked();

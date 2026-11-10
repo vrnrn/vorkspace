@@ -229,7 +229,7 @@ fn new_tab_shows_its_folders_branch_at_once_and_no_loading_status(cx: &mut TestA
             cx.new(|cx| {
                 let mut c = Conversation::new(summary, store, cx);
                 // The first frame of a tab whose history is still loading.
-                c.loading = true;
+                c.history_read = history::ReadState::Reading;
                 c
             })
         })
@@ -247,7 +247,7 @@ fn new_tab_shows_its_folders_branch_at_once_and_no_loading_status(cx: &mut TestA
     // Once loaded, a real status (an error here) still shows.
     window
         .update(visual, |c, _, cx| {
-            c.loading = false;
+            c.history_read = history::ReadState::Idle;
             c.status = "Couldn't load".into();
             cx.notify();
         })

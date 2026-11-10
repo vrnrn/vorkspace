@@ -543,7 +543,7 @@ impl Conversation {
             } else {
                 "Working"
             }
-        } else if self.loading {
+        } else if self.history_loading() {
             "Loading"
         } else if self.status != "Ready" {
             "Needs attention"
@@ -595,7 +595,7 @@ impl Conversation {
     /// App management pauses even an idle queue. Publish the higher revision
     /// before replying so older queued writes cannot restore automatic sending.
     pub(crate) fn app_stop(&mut self, cx: &mut Context<Self>) -> Result<(), String> {
-        if !self.loaded || self.loading {
+        if !self.loaded || self.history_loading() {
             return Err("Session is loading; its queue and draft were preserved. Try again after loading completes.".into());
         }
         self.stop_if_busy(cx);

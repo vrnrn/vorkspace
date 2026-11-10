@@ -3,6 +3,14 @@ use super::*;
 
 pub(super) type HistoryAction = Box<dyn FnOnce(&mut Conversation, &mut Context<Conversation>)>;
 
+#[derive(Clone, Copy, Default, PartialEq, Eq)]
+pub(super) enum ReadState {
+    #[default]
+    Idle,
+    Reading,
+    Failed,
+}
+
 pub(super) enum InitialHistory {
     Complete(crate::transcript::PreparedHistory),
     Window(
@@ -59,13 +67,23 @@ impl InitialRead {
 }
 
 impl Conversation {
+    pub(super) fn history_loading(&self) -> bool {
+        self.history_read == ReadState::Reading
+    }
+
+    pub(super) fn history_load_failed(&mut self, error: String, cx: &mut Context<Self>) {
+        self.history_read = ReadState::Failed;
+        self.status = error;
+        cx.notify();
+    }
+
     pub(super) fn history_ready(&self) -> bool {
-        self.loaded && !self.history_unloaded && !self.history_partial && !self.loading
+        self.loaded && !self.history_unloaded && !self.history_partial && !self.history_loading()
     }
     pub(crate) fn needs_history_restore(&self) -> bool {
         self.history_unloaded
             || self.history_partial
-            || self.loading
+            || self.history_loading()
             || (!self.loaded && self.summary.has_messages)
     }
     pub(crate) fn defer_history_action(
@@ -105,7 +123,7 @@ impl Conversation {
     /// Keep the histories used by drafts, queued messages and background saves.
     pub(crate) fn can_unload_history(&self, cx: &gpui::App) -> bool {
         self.history_loaded()
-            && !self.loading
+            && !self.history_loading()
             && !self.turn_in_flight()
             && !self.editing_last_turn.pending()
             && !self
@@ -160,10 +178,10 @@ impl Conversation {
             self.refresh_remote_snapshot(cx);
             return;
         }
-        if self.loading || !self.history_unloaded {
+        if self.history_loading() || !self.history_unloaded {
             return;
         }
-        self.loading = true;
+        self.history_read = history::ReadState::Reading;
         let id = self.summary.id;
         let store = self.store.clone();
         let bot = self.settings.bot.is_some();
@@ -178,7 +196,7 @@ impl Conversation {
         cx.spawn(async move |this, cx| {
             let result = work.await;
             let _ = this.update(cx, |this, cx| {
-                this.loading = false;
+                this.history_read = history::ReadState::Idle;
                 match result {
                     Ok((history, turns, rev)) => {
                         this.settings.turns = turns.clone();
@@ -201,7 +219,7 @@ impl Conversation {
                         this.run_history_actions(cx);
                         this.pump_follow_ups(cx);
                     }
-                    Err(error) => this.status = error,
+                    Err(error) => this.history_load_failed(error, cx),
                 }
                 cx.emit(SessionChanged::Loaded);
                 cx.notify();

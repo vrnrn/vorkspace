@@ -4,6 +4,45 @@ use std::sync::Mutex;
 use vorkspace_core::{store::Store, transcript::Row};
 
 #[gpui::test]
+fn managed_reuse_waits_for_the_cold_composer_and_history(cx: &mut TestAppContext) {
+    use crate::conversation::composer_features::ManagedAvailability;
+
+    let project = tempfile::tempdir().unwrap();
+    let store = Store::open(Path::new(":memory:")).unwrap();
+    let path = project.path().to_str().unwrap();
+    let occupied = store.create("codex", path).unwrap();
+    let empty = store.create("codex", path).unwrap();
+    store
+        .save_composer_draft(
+            occupied.id,
+            0,
+            &serde_json::json!({"cwd": path, "text": "Keep my cold draft"}),
+        )
+        .unwrap();
+    let store = Arc::new(Mutex::new(store));
+    for (summary, draft) in [(occupied, "Keep my cold draft"), (empty, "")] {
+        let chat = cx.new(|cx| Conversation::new(summary, store.clone(), cx));
+        chat.update(cx, |chat, cx| {
+            assert!(chat.managed_availability(cx) == ManagedAvailability::Pending);
+            chat.load_complete(cx);
+        });
+        let executor = cx.executor();
+        executor.block_test(cx.condition(&chat, |chat, _| {
+            !chat.composer_draft.is_hydrating() && chat.history_ready()
+        }));
+        chat.read_with(cx, |chat, cx| {
+            assert_eq!(chat.input.read(cx).content, draft);
+            let expected = if draft.is_empty() {
+                ManagedAvailability::Available
+            } else {
+                ManagedAvailability::Unavailable
+            };
+            assert!(chat.managed_availability(cx) == expected);
+        });
+    }
+}
+
+#[gpui::test]
 fn stale_history_refresh_preserves_chat_scroll(cx: &mut TestAppContext) {
     for bot in [false, true] {
         for following in [false, true] {
@@ -378,7 +417,7 @@ fn hidden_mutations_wait_for_history_without_changing_settings_or_receipts(
         chat.loaded = true;
         chat.history_unloaded = true;
         // Keep the test's restore under its own control; no provider runs.
-        chat.loading = true;
+        chat.history_read = history::ReadState::Reading;
         chat.settings.revision = 17;
         chat.settings.bot_message_id = Some("delivery-receipt".into());
         chat.model = Some("original-model".into());
@@ -437,7 +476,7 @@ fn hidden_mutations_wait_for_history_without_changing_settings_or_receipts(
             )
         });
         chat.history_unloaded = false;
-        chat.loading = false;
+        chat.history_read = history::ReadState::Idle;
         chat.run_history_actions(cx);
         assert_eq!(chat.settings.revision, 19);
         assert!(chat.history_actions.is_empty());

@@ -4,6 +4,13 @@ use vorkspace_ui::radius;
 pub(crate) struct StartOrchestration(pub vorkspace_core::orchestration::Plan);
 pub(crate) struct StopOrchestration;
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ManagedAvailability {
+    Pending,
+    Available,
+    Unavailable,
+}
+
 impl Conversation {
     pub(super) fn selected_turn_mode(&self) -> Option<&'static str> {
         [
@@ -554,26 +561,52 @@ impl Conversation {
             || self.preparing_worktree
             || self.attaching
             || self.account_switching
-            || self.loading
+            || self.history_loading()
             || (!self.history_actions.is_empty() && self.history_ready())
             || self.editing_last_turn.pending()
     }
-    /// An evicted history can be restored for a managed run; a user's draft
-    /// or an already accepted message must keep ownership of this composer.
-    pub(crate) fn available_for_managed_run(&self, cx: &gpui::App) -> bool {
-        !self.responding()
-            && turn_driver::available(&self.store, self.summary.id, cx)
-            && !self.ticket_context.pending()
-            && !self.is_stopping()
-            && !self.preparing_worktree
-            && !self.attaching
-            && !self.account_switching
-            && !self.editing_last_turn.pending()
-            && self.input.read(cx).content.is_empty()
-            && self.attachments.is_empty()
-            && self.follow_ups.state.messages.is_empty()
-            && self.follow_ups.state.draft.is_none()
-            && !self.settings.worktree_removed
+    pub(crate) fn managed_availability(&self, cx: &gpui::App) -> ManagedAvailability {
+        let input = self.input.read(cx);
+        if self.is_remote()
+            || self.settings.bot.is_some()
+            || self.user_read_only()
+            || self.summary.archived
+            || self.settings.worktree_removed
+            || self.settings.pending_provider_switch.is_some()
+            || self.settings.usage_limit.is_some()
+            || !turn_driver::available(&self.store, self.summary.id, cx)
+            || self.turn_in_flight()
+            || self.unconfirmed_submission.is_some()
+            || self.needs_approval()
+            || self.ticket_context.pending()
+            || self.preparing_worktree
+            || self.attaching
+            || self.account_switching
+            || self.editing_last_turn.pending()
+            || !self.history_actions.is_empty()
+            || self.history_read == history::ReadState::Failed
+            || self.composer_draft.error.is_some()
+            || self.composer_draft.submitting()
+            || self.composer_draft.waiting_to_submit()
+            || !input.content.is_empty()
+            || input.is_composing()
+            || !self.attachments.is_empty()
+            || !self.pending_attachments.is_empty()
+            || !self.follow_ups.state.messages.is_empty()
+            || self.has_saved_draft()
+            || self.follow_ups.edit.is_some()
+            || self.follow_ups.sending.is_some()
+            || self.follow_ups.state.revision != self.follow_ups.persisted
+        {
+            ManagedAvailability::Unavailable
+        } else if !self.history_ready() || self.composer_draft.is_hydrating() {
+            ManagedAvailability::Pending
+        } else if self.composer_draft.ready_for_replacement() && !self.composer_draft.has_recovery()
+        {
+            ManagedAvailability::Available
+        } else {
+            ManagedAvailability::Unavailable
+        }
     }
     pub(crate) fn send_coordinator_report(&mut self, prompt: String, cx: &mut Context<Self>) {
         if !self.history_ready() || self.is_stopping() {

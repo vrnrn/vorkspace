@@ -135,7 +135,11 @@ impl Shell {
         let mut inactive: Vec<_> = self
             .sessions
             .iter()
-            .filter(|&(&id, _)| !self.visible_chats.contains(&id) && preview != Some(id))
+            .filter(|&(&id, _)| {
+                !self.visible_chats.contains(&id)
+                    && preview != Some(id)
+                    && !self.automation_state.reserved.contains(&id)
+            })
             .filter_map(|(&id, view)| {
                 let chat = view.read(cx);
                 chat.can_unload_history(cx).then(|| {
