@@ -97,11 +97,7 @@ impl Accounts {
                     .gap(px(6.))
                     .text_size(px(11.))
                     .when(self.working, |d| {
-                        d.child(crate::panel_kit::spinner(
-                            "footer-account-spinner",
-                            "refresh-cw",
-                            14.,
-                        ))
+                        d.child(crate::panel_kit::spinner("footer-account-spinner", 14.))
                     })
                     .child(if self.working {
                         "Waiting for browser…"
@@ -190,11 +186,7 @@ impl Accounts {
                         .gap(px(6.))
                         .text_size(px(11.))
                         .when(self.working, |d| {
-                            d.child(crate::panel_kit::spinner(
-                                "account-editor-spinner",
-                                "refresh-cw",
-                                12.,
-                            ))
+                            d.child(crate::panel_kit::spinner("account-editor-spinner", 12.))
                         })
                         .child(if adding {
                             if self.working {

@@ -619,7 +619,7 @@ impl Render for ProjectSearch {
                         content(0.45)
                     })
                     .when(self.loading, |d| {
-                        d.child(spinner("project-search-spinner", "loader", 12.))
+                        d.child(spinner("project-search-spinner", 12.))
                     })
                     .child(div().min_w_0().flex_1().child(status)),
             )

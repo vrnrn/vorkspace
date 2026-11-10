@@ -4,8 +4,9 @@ use crate::settings::{
     widgets::{icon_action, note, page_header, secondary_button},
 };
 use gpui::{
-    AnyElement, ClipboardItem, Context, Focusable, Role, SharedString, div, prelude::*, px,
+    AnyElement, ClipboardItem, Context, Focusable, Role, SharedString, Window, div, prelude::*, px,
 };
+use std::{fs::OpenOptions, io::Read, os::unix::fs::OpenOptionsExt};
 use vorkspace_ui::radius;
 use vorkspace_ui::theme::*;
 impl SettingsView {
@@ -162,11 +163,27 @@ impl SettingsView {
         self.skill_preview_generation += 1;
         let generation = self.skill_preview_generation;
         let work = cx.background_executor().spawn(async move {
-            let size = std::fs::metadata(&path).map_err(|e| e.to_string())?.len();
-            if size > 8 * 1024 * 1024 {
+            const PREVIEW_LIMIT: u64 = 8 * 1024 * 1024;
+            let file = OpenOptions::new()
+                .read(true)
+                .custom_flags(libc::O_NONBLOCK)
+                .open(path)
+                .map_err(|e| format!("Could not open SKILL.md. {e}"))?;
+            let metadata = file.metadata().map_err(|e| e.to_string())?;
+            if !metadata.is_file() {
+                return Err("SKILL.md must be a regular file.".into());
+            }
+            if metadata.len() > PREVIEW_LIMIT {
                 return Err("SKILL.md is too large to preview.".into());
             }
-            std::fs::read_to_string(path)
+            let mut bytes = Vec::new();
+            file.take(PREVIEW_LIMIT + 1)
+                .read_to_end(&mut bytes)
+                .map_err(|e| format!("Could not read SKILL.md. {e}"))?;
+            if bytes.len() as u64 > PREVIEW_LIMIT {
+                return Err("SKILL.md is too large to preview.".into());
+            }
+            String::from_utf8(bytes)
                 .map(super::super::skill_document::DocumentData::new)
                 .map_err(|e| format!("Could not read SKILL.md. {e}"))
         });
@@ -182,6 +199,24 @@ impl SettingsView {
         }));
         cx.notify();
     }
+
+    pub(in crate::settings) fn dismiss_skill_preview(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        if self.section != super::super::Section::Skills || self.skill_preview.take().is_none() {
+            return false;
+        }
+        self.skill_preview_generation += 1;
+        self.skill_preview_task = None;
+        self.skill_preview_text = None;
+        self.skill_documents.clear();
+        window.focus(&self.skill_filter.focus_handle(cx), cx);
+        cx.notify();
+        true
+    }
+
     pub(super) fn skills_page(&mut self, cx: &mut Context<Self>) -> Vec<AnyElement> {
         let query = self.skill_query.trim().to_lowercase();
         let skills = self
@@ -189,15 +224,16 @@ impl SettingsView {
             .skills
             .iter()
             .filter(|s| {
-                format!(
-                    "{} {} {} {}",
-                    s.name,
-                    s.description,
-                    s.path.display(),
-                    s.provider
-                )
-                .to_lowercase()
-                .contains(&query)
+                query.is_empty()
+                    || format!(
+                        "{} {} {} {}",
+                        s.name,
+                        s.description,
+                        s.path.display(),
+                        s.provider
+                    )
+                    .to_lowercase()
+                    .contains(&query)
             })
             .cloned()
             .collect::<Vec<_>>();
@@ -389,7 +425,6 @@ impl SettingsView {
                                         .child(skill.name.clone())
                                         .on_click(cx.listener(move |this, _, _, cx| {
                                             this.preview_skill(preview.clone(), cx);
-                                            cx.notify();
                                         })),
                                 )
                                 .when(mixed_scopes, |d| {
@@ -472,7 +507,6 @@ impl SettingsView {
                                     .on_click(cx.listener(
                                         move |this, _, _, cx| {
                                             this.preview_skill(path.clone(), cx);
-                                            cx.notify();
                                         },
                                     )),
                                 )
@@ -635,12 +669,7 @@ impl SettingsView {
                                 )
                                 .on_click(cx.listener(
                                     |this, _, window, cx| {
-                                        this.skill_preview = None;
-                                        window.focus(
-                                            &this.skill_filter.read(cx).focus_handle(cx),
-                                            cx,
-                                        );
-                                        cx.notify();
+                                        this.dismiss_skill_preview(window, cx);
                                     },
                                 )),
                             ),

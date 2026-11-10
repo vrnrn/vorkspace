@@ -6,6 +6,11 @@ use vorkspace_ui::theme::*;
 impl SettingsView {
     pub(super) fn general_page(&mut self, cx: &mut Context<Self>) -> Vec<AnyElement> {
         let p = self.prefs.clone();
+        let quick_hint = super::keybindings::command_shortcut(&p, "App: Quick Composer")
+            .map(|shortcut| format!(
+                "Press {shortcut} from any app. Return starts a session in the background and ⌘Return opens it. Change the shortcut in Keybindings."
+            ))
+            .unwrap_or_else(|| "Set a shortcut for Quick Composer in Keybindings.".into());
         let alerts = vec![
             self.row(
                 Some("sounds"),
@@ -124,18 +129,22 @@ impl SettingsView {
                 Some("quick-composer"),
                 false,
                 "Quick composer",
-                Some(format!(
-                    "Press {} from any app. Return starts a session in the background; ⌘Return opens it. Change the shortcut in Keybindings.",
-                    super::keybindings::quick_composer_label(&p)
-                ).into()),
-                {let mut controls=Vec::new();if let Some(error)=&self.ctx.quick_error{controls.push(super::super::widgets::note(error.clone()));}controls.push(self.toggle(
-                    "quick-composer",
-                    "Quick composer",
-                    p.quick_composer,
-                    false,
-                    cx,
-                    |this, on, cx| this.update(cx, |p| p.quick_composer = on),
-                ));controls},
+                Some(quick_hint.into()),
+                {
+                    let mut controls = Vec::new();
+                    if let Some(error) = &self.ctx.quick_error {
+                        controls.push(super::super::widgets::note(error.clone()));
+                    }
+                    controls.push(self.toggle(
+                        "quick-composer",
+                        "Quick composer",
+                        p.quick_composer,
+                        false,
+                        cx,
+                        |this, on, cx| this.update(cx, |p| p.quick_composer = on),
+                    ));
+                    controls
+                },
             ));
         }
         let version = env!("CARGO_PKG_VERSION");

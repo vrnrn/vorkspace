@@ -513,6 +513,12 @@ impl SettingsView {
                     .debug_selector(move || format!("settings-slider-{}", kind.id()))
                     .role(Role::Slider)
                     .aria_label(kind.label())
+                    .aria_disabled(disabled)
+                    .aria_value(display.clone())
+                    .aria_numeric_value(f64::from(value))
+                    .aria_min_numeric_value(f64::from(min))
+                    .aria_max_numeric_value(f64::from(max))
+                    .aria_numeric_value_step(1.)
                     .min_w_0()
                     .flex_1()
                     .h(px(12.))
@@ -545,14 +551,40 @@ impl SettingsView {
                             .ml(px(-4. + 8. * (0.5 - fraction))),
                     )
                     .when(!disabled, |d| {
-                        d.cursor_pointer().on_mouse_down(
-                            MouseButton::Left,
-                            cx.listener(move |this, event: &MouseDownEvent, _, cx| {
-                                this.slider_drag = Some(kind);
-                                this.slide(kind, event.position.x, cx);
-                                cx.stop_propagation();
-                            }),
-                        )
+                        d.map(tab_reachable)
+                            .cursor_pointer()
+                            .on_key_down(cx.listener(
+                                move |this, event: &gpui::KeyDownEvent, _, cx| {
+                                    let modifiers = event.keystroke.modifiers;
+                                    if modifiers.platform
+                                        || modifiers.control
+                                        || modifiers.alt
+                                        || modifiers.shift
+                                    {
+                                        return;
+                                    }
+                                    let current = kind.get(&this.prefs).clamp(min, max);
+                                    let value = match event.keystroke.key.as_str() {
+                                        "left" | "down" => current.saturating_sub(1).max(min),
+                                        "right" | "up" => current.saturating_add(1).min(max),
+                                        "home" => min,
+                                        "end" => max,
+                                        _ => return,
+                                    };
+                                    if value != kind.get(&this.prefs) {
+                                        this.update(cx, |p| kind.set(p, value));
+                                    }
+                                    cx.stop_propagation();
+                                },
+                            ))
+                            .on_mouse_down(
+                                MouseButton::Left,
+                                cx.listener(move |this, event: &MouseDownEvent, _, cx| {
+                                    this.slider_drag = Some(kind);
+                                    this.slide(kind, event.position.x, cx);
+                                    cx.stop_propagation();
+                                }),
+                            )
                     }),
             )
             .child(

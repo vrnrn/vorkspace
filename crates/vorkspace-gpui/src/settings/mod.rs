@@ -734,12 +734,7 @@ impl SettingsView {
             self.close_management(window, cx);
             return true;
         }
-        if self.skill_preview.take().is_some() {
-            window.focus(&self.skill_filter.read(cx).focus_handle(cx), cx);
-            cx.notify();
-            return true;
-        }
-        false
+        self.dismiss_skill_preview(window, cx)
     }
     /// Change preferences and tell the shell to keep them.
     /// `du` over a large build folder takes seconds, so it never holds up the page.

@@ -1079,7 +1079,7 @@ impl Changes {
                             d.hover(|s| s.bg(vorkspace_ui::fluid::hover(0.05)))
                         })
                         .child(if self.busy.as_deref() == Some("pull") {
-                            spinner("pull-spin", "loader", 14.)
+                            spinner("pull-spin", 14.)
                         } else {
                             icon("more-horizontal", 16.)
                                 .text_color(content(if menu_open { 1. } else { 0.5 }))
@@ -1180,7 +1180,7 @@ impl Changes {
                                         div()
                                             .absolute()
                                             .group_hover("generate", |s| s.opacity(0.))
-                                            .child(spinner("generate-spin", "loader", 14.)),
+                                            .child(spinner("generate-spin", 14.)),
                                     )
                                     .child(
                                         icon("x", 14.)
@@ -1358,7 +1358,7 @@ impl Changes {
                 d.child(
                     button("publish-branch", sync_title.clone(), !busy)
                         .child(if syncing {
-                            spinner("sync-spin", "loader", 14.)
+                            spinner("sync-spin", 14.)
                         } else {
                             glyph("cloud-upload")
                         })
@@ -1372,7 +1372,7 @@ impl Changes {
                 d.child(
                     button("sync-changes", sync_title.clone(), !busy)
                         .child(if syncing {
-                            spinner("sync-spin", "refresh-cw", 14.)
+                            spinner("sync-spin", 14.)
                         } else {
                             glyph("refresh-cw")
                         })
@@ -1413,7 +1413,7 @@ impl Changes {
                 d.child(
                     button("create-pr", title, enabled)
                         .child(if self.busy.as_deref() == Some("pr") {
-                            spinner("pr-spin", "loader", 14.)
+                            spinner("pr-spin", 14.)
                         } else {
                             glyph("git-pull-request")
                         })

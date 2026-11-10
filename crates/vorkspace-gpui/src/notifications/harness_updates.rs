@@ -248,11 +248,7 @@ impl Render for HarnessUpdates {
                             .items_center()
                             .gap(px(6.))
                             .when(updating, |el| {
-                                el.child(crate::panel_kit::spinner(
-                                    "harness-update-spinner",
-                                    "loader",
-                                    12.,
-                                ))
+                                el.child(crate::panel_kit::spinner("harness-update-spinner", 12.))
                             })
                             .child(if updating {
                                 "Updating"

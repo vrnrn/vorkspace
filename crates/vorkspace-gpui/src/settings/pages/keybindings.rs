@@ -312,13 +312,6 @@ pub(crate) const BINDINGS: &[Binding] = &[
         fixed: false,
     },
 ];
-pub(super) fn quick_composer_label(p: &Preferences) -> String {
-    p.keybindings
-        .get("App: Quick Composer")
-        .and_then(|s| s.clone())
-        .map(|s| shortcut_label(&s))
-        .unwrap_or_else(|| "⌘⇧Space".into())
-}
 /// A command's shortcut as shown, honoring the user's rebinding; `None`
 /// once they have disabled it.
 pub(crate) fn command_shortcut(p: &Preferences, command: &str) -> Option<String> {

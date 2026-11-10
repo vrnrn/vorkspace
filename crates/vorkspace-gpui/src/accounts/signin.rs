@@ -133,7 +133,6 @@ impl Accounts {
                     .when(running, |d| {
                         d.child(crate::panel_kit::spinner(
                             "footer-provider-auth-spinner",
-                            "refresh-cw",
                             14.,
                         ))
                     })

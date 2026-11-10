@@ -267,7 +267,8 @@ impl SettingsView {
                                 )
                                 .child("Remove")
                                 .on_click(cx.listener(
-                                    move |_, _, window, cx| {
+                                    move |this, _, window, cx| {
+                                        let project = this.selected_project.clone();
                                         let prompt = window.prompt(
                                             gpui::PromptLevel::Warning,
                                             "Remove MCP server",
@@ -282,7 +283,11 @@ impl SettingsView {
                                         cx.spawn(async move |this, cx| {
                                             if prompt.await == Ok(0) {
                                                 let _ = this.update(cx, |this, cx| {
-                                                    this.mcp_action(server, true, cx)
+                                                    if this.section == Section::Mcp
+                                                        && this.selected_project == project
+                                                    {
+                                                        this.mcp_action(server, true, cx);
+                                                    }
                                                 });
                                             }
                                         })
@@ -410,7 +415,7 @@ impl SettingsView {
             let result = work.await;
             let _ = this.update(cx, |this, cx| {
                 this.mcp_busy = false;
-                if this.selected_project != expected {
+                if this.section != Section::Mcp || this.selected_project != expected {
                     cx.notify();
                     return;
                 }

@@ -993,7 +993,6 @@ impl Automations {
                     .when(run.status == "running", |d| {
                         d.child(crate::panel_kit::spinner(
                             SharedString::from(format!("automation-run-spinner-{index}")),
-                            "loader",
                             12.,
                         ))
                     })

@@ -332,7 +332,7 @@ impl SettingsView {
         let weak = cx.weak_entity();
         // The choice is a ring around the swatch with a gap, as macOS draws
         // it: a border on the swatch itself vanished on the ink swatch.
-        let dot = |_selected: bool, color: gpui::Hsla| div().size(px(12.)).rounded_full().bg(color);
+        let dot = |color: gpui::Hsla| div().size(px(12.)).rounded_full().bg(color);
         let ring = |selected: bool| {
             move |d: gpui::Stateful<gpui::Div>| {
                 d.border_2()
@@ -377,7 +377,7 @@ impl SettingsView {
                                     .rounded_full()
                                     .cursor_pointer()
                                     .map(ring(preset == Some(ix)))
-                                    .child(dot(preset == Some(ix), color))
+                                    .child(dot(color))
                                     .on_click(cx.listener(move |this, _, _, cx| {
                                         this.accent_custom_open = false;
                                         let hex = hex.clone();
@@ -676,6 +676,8 @@ mod continuity_tests {
         let blur = visual.debug_bounds("settings-slider-blur").unwrap();
         visual.simulate_click(blur.center(), Default::default());
         visual.run_until_parked();
+        visual.simulate_keystrokes("right right left");
+        visual.run_until_parked();
         assert!(
             visual
                 .debug_bounds("settings-toggle-main-pane-glass")
@@ -690,7 +692,7 @@ mod continuity_tests {
         window
             .update(visual, |settings, _, _| {
                 assert_eq!(settings.prefs.sidebar_opacity, 43);
-                assert_eq!(settings.prefs.sidebar_blur, 50);
+                assert_eq!(settings.prefs.sidebar_blur, 51);
             })
             .unwrap();
     }

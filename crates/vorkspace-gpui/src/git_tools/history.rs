@@ -496,7 +496,7 @@ fn header_action(
             d.hover(|s| s.bg(vorkspace_ui::fluid::hover(0.05)))
         })
         .child(if spinning {
-            spinner(id, path, side)
+            spinner(id, side)
         } else {
             icon(path, side)
                 .text_color(content(0.5))

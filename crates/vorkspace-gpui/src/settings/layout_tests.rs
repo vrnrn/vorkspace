@@ -155,6 +155,16 @@ fn skills_document_has_its_own_full_height_pane_and_compact_actions(cx: &mut Tes
     assert_eq!(left.size.width, px(700.));
     assert_eq!(right.size.width, px(700.));
     assert!(visual.debug_bounds("skill-document").unwrap().size.height > px(200.));
+    window
+        .update(visual, |view, window, cx| {
+            assert!(view.dismiss_transient(window, cx));
+            assert!(view.skill_preview.is_none());
+            assert!(view.skill_preview_text.is_none());
+            assert!(view.skill_documents.is_empty());
+        })
+        .unwrap();
+    visual.run_until_parked();
+    assert!(visual.debug_bounds("skill-preview-pane").is_none());
 }
 
 #[gpui::test]

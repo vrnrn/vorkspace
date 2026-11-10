@@ -1437,7 +1437,7 @@ impl Render for ReviewPane {
                         .into_any_element()
                 } else if source.files.is_none() {
                     centered()
-                        .child(spinner("review-loading", "loader", 16.))
+                        .child(spinner("review-loading", 16.))
                         .into_any_element()
                 } else {
                     if self.focus.is_focused(window) {

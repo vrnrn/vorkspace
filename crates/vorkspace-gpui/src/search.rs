@@ -666,11 +666,7 @@ impl Render for SearchView {
                             .child(div().flex_1().min_w_0().child(self.input.clone())),
                     )
                     .when(loading, |d| {
-                        d.child(crate::panel_kit::spinner(
-                            "app-search-loading",
-                            "loader",
-                            14.,
-                        ))
+                        d.child(crate::panel_kit::spinner("app-search-loading", 14.))
                     }),
             )
             .child(

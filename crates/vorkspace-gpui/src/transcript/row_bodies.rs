@@ -160,11 +160,7 @@ impl TranscriptView {
                                 .when(expandable, |i| {
                                     i.group_hover("work-fold", |s| s.opacity(0.))
                                 })
-                                .child(crate::panel_kit::spinner(
-                                    ("live-work-cells", turn),
-                                    "",
-                                    14.,
-                                )),
+                                .child(crate::panel_kit::spinner(("live-work-cells", turn), 14.)),
                         )
                     })
                     .when(!open && !live, |d| {

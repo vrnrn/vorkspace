@@ -452,7 +452,7 @@ impl ResourceMonitor {
                                 .gap_2()
                                 .text_size(px(12.))
                                 .text_color(content(0.5))
-                                .child(spinner("resource-loading", "loader", 14.))
+                                .child(spinner("resource-loading", 14.))
                                 .child("Checking running work…"),
                         )
                     })
@@ -603,7 +603,7 @@ impl ResourceMonitor {
                                 }
                             })
                             .when(stopping_session, |d| {
-                                d.child(spinner(("stop-session-spin", id as u64), "loader", 12.))
+                                d.child(spinner(("stop-session-spin", id as u64), 12.))
                             })
                             .child(if stopping_session {
                                 "Stopping…"

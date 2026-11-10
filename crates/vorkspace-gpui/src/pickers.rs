@@ -883,18 +883,11 @@ impl ProjectPicker {
         }
     }
 }
-/// `prettyParent`: the folder holding a project, with the home folder as `~`.
 fn pretty_parent(path: &str) -> String {
-    let parent = std::path::Path::new(path)
+    std::path::Path::new(path)
         .parent()
-        .map(|p| p.to_string_lossy().into_owned())
-        .unwrap_or_default();
-    match std::env::var("HOME") {
-        Ok(home) if !home.is_empty() && parent.starts_with(&home) => {
-            format!("~{}", &parent[home.len()..])
-        }
-        _ => parent,
-    }
+        .map(crate::panel_kit::home_relative)
+        .unwrap_or_default()
 }
 impl Render for ProjectPicker {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {

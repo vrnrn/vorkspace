@@ -79,7 +79,7 @@ pub(crate) fn launch(
         None => ("", "chatting", content(0.45)),
     };
     let mark = if glyph == "loader-03" {
-        crate::panel_kit::spinner(("bot-launch-cells", id as usize), "", 16.)
+        crate::panel_kit::spinner(("bot-launch-cells", id as usize), 16.)
     } else {
         icon(glyph, 16.).text_color(color).into_any_element()
     };

@@ -142,13 +142,8 @@ pub(crate) fn icon_action(
 }
 
 /// The busy indicator: fluidither's Loader, three printed cells counting up,
-/// sized to the icon slot it replaces. `_path` names the icon the slot used
-/// to spin, so callers keep describing what is loading.
-pub(crate) fn spinner(
-    id: impl Into<gpui::ElementId>,
-    _path: &'static str,
-    side: f32,
-) -> AnyElement {
+/// sized to the icon slot it replaces.
+pub(crate) fn spinner(id: impl Into<gpui::ElementId>, side: f32) -> AnyElement {
     Loader {
         id: id.into(),
         side,
@@ -259,9 +254,7 @@ mod loader_tests {
             _: &mut gpui::Window,
             _: &mut gpui::Context<Self>,
         ) -> impl IntoElement {
-            div()
-                .size_full()
-                .child(spinner("loader-under-test", "", 14.))
+            div().size_full().child(spinner("loader-under-test", 14.))
         }
     }
 
