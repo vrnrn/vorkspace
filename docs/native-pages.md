@@ -2,6 +2,8 @@
 
 Notes, Automations, the GitHub/GitLab/Jira Inbox, Todos and Search use the compact native page controls in `crates/vorkspace-gpui/src/controls/page.rs`. These helpers own presentation; each page retains its own data, navigation, editing and asynchronous work. Recording controls and meeting transcripts are part of Notes.
 
+An automation editor saves against the revision it opened. Changes from another pane or window require Reset before the older editor can write or start a run. Typing during a save remains in the editor for the next save. Run now uses the same saved definition that was validated when the run receipt was written.
+
 ## Sizing and hierarchy
 
 Dimensions are logical pixels and follow the app's UI scale. Pages inherit the app font, palette and `vorkspace_ui::radius` corner scale. Buttons and fields use `CONTROL`, code/editor containers use `CONTAINER`, cards and panes use `SURFACE`, and dialogs use `MODAL`.

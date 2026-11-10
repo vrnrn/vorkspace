@@ -1,16 +1,30 @@
 //! Owns automation storage, transactional admission and recovery.
 use super::{
-    has_time_trigger, hydrate_triggers, new_id, next_run_at, normalize_triggers, now_millis,
-    validate_id, validate_upsert, Automation, AutomationEventClaim, AutomationRun,
-    AutomationUpsert, DueAutomationRun, MAX_PROMPT,
+    Automation, AutomationEventClaim, AutomationRun, AutomationUpsert, DueAutomationRun,
+    MAX_PROMPT, has_time_trigger, hydrate_triggers, new_id, next_run_at, normalize_triggers,
+    now_millis, validate_id, validate_upsert,
 };
-use crate::store::automations_schema::{ensure_schema, RECOVERABLE_RUN};
-use rusqlite::{params, params_from_iter, Connection, OptionalExtension, TransactionBehavior};
+use crate::store::automations_schema::{RECOVERABLE_RUN, ensure_schema};
+use rusqlite::{Connection, OptionalExtension, TransactionBehavior, params, params_from_iter};
 use std::path::Path;
 
 const MAX_RUNS_PER_AUTOMATION: i64 = 100;
 
 const EVENT_CLAIMS_BACKFILL: &str = "event-claims-v1";
+const DEFINITION_CHANGED: &str =
+    "This automation changed in another view. Use Reset to load the saved version.";
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum DefinitionRevision {
+    New,
+    Saved(i64),
+}
+
+impl DefinitionRevision {
+    fn of(saved: Option<&Automation>) -> Self {
+        saved.map_or(Self::New, |value| Self::Saved(value.updated_at))
+    }
+}
 
 fn claims_backfilled(conn: &Connection) -> rusqlite::Result<bool> {
     conn.query_row(
@@ -281,15 +295,35 @@ impl Service {
         list(&self.conn, None)
     }
 
-    pub fn upsert(&mut self, automation: AutomationUpsert) -> Result<Automation, String> {
+    pub fn save_definition(
+        &mut self,
+        automation: AutomationUpsert,
+        expected: DefinitionRevision,
+    ) -> Result<Automation, String> {
         let now = now_millis();
         validate_upsert(&automation, now)?;
         let triggers = Some(normalize_triggers(&automation));
-        let previous = get(&self.conn, &automation.id)?;
+        let tx = self
+            .conn
+            .transaction_with_behavior(TransactionBehavior::Immediate)
+            .map_err(|error| error.to_string())?;
+        let previous = get(&tx, &automation.id)?;
+        if expected != DefinitionRevision::of(previous.as_ref()) {
+            return Err(DEFINITION_CHANGED.into());
+        }
         let created_at = previous
             .as_ref()
             .map(|value| value.created_at)
             .unwrap_or(now);
+        let updated_at = match &previous {
+            Some(value) => now.max(
+                value
+                    .updated_at
+                    .checked_add(1)
+                    .ok_or("Automation revision exhausted.")?,
+            ),
+            None => now,
+        };
         let worktree_cwd = if automation.workspace_mode == "existing" {
             automation.worktree_cwd.trim().to_string()
         } else {
@@ -327,18 +361,27 @@ impl Service {
                 .and_then(|value| value.last_run_error.clone()),
             last_session_id: previous.and_then(|value| value.last_session_id),
             created_at,
-            updated_at: now,
+            updated_at,
         };
-        write_automation(&self.conn, &saved)?;
+        write_automation(&tx, &saved)?;
+        tx.commit().map_err(|error| error.to_string())?;
         Ok(saved)
     }
 
-    pub fn delete(&mut self, id: &str) -> Result<(), String> {
+    pub fn delete_definition(&mut self, id: &str, revision: i64) -> Result<(), String> {
         validate_id(id, "automation")?;
-        self.conn
-            .execute("DELETE FROM automations WHERE id = ?1", [id])
+        let removed = self
+            .conn
+            .execute(
+                "DELETE FROM automations WHERE id = ?1 AND updated_at = ?2",
+                params![id, revision],
+            )
             .map_err(|error| error.to_string())?;
-        Ok(())
+        if removed == 0 {
+            Err(DEFINITION_CHANGED.into())
+        } else {
+            Ok(())
+        }
     }
 
     pub fn runs(&self, automation_id: &str) -> Result<Vec<AutomationRun>, String> {
@@ -436,11 +479,22 @@ impl Service {
         tx.commit().map_err(|error| error.to_string())?;
         Ok(due)
     }
-    pub fn run_now(&mut self, automation_id: &str, now: i64) -> Result<AutomationRun, String> {
+    pub fn run_now(
+        &mut self,
+        automation_id: &str,
+        revision: i64,
+        now: i64,
+    ) -> Result<DueAutomationRun, String> {
         validate_id(automation_id, "automation")?;
-        let tx = self.conn.transaction().map_err(|error| error.to_string())?;
+        let tx = self
+            .conn
+            .transaction_with_behavior(TransactionBehavior::Immediate)
+            .map_err(|error| error.to_string())?;
         let mut automation =
             get(&tx, automation_id)?.ok_or_else(|| "Automation not found.".to_string())?;
+        if automation.updated_at != revision {
+            return Err(DEFINITION_CHANGED.into());
+        }
         let run = new_run(automation_id, "manual", now, now, &automation.prompt);
         automation.last_run_at = Some(now);
         automation.last_run_status = Some(run.status.clone());
@@ -449,7 +503,7 @@ impl Service {
         write_automation(&tx, &automation)?;
         trim_history(&tx, automation_id)?;
         tx.commit().map_err(|error| error.to_string())?;
-        Ok(run)
+        Ok(DueAutomationRun { automation, run })
     }
 
     pub fn claim_occurrence(
@@ -621,12 +675,23 @@ impl Service {
         tx.commit().map_err(|error| error.to_string())?;
         Ok(run)
     }
-    pub fn set_enabled(&mut self, id: &str, enabled: bool) -> Result<Automation, String> {
+    pub fn set_enabled(
+        &mut self,
+        id: &str,
+        revision: i64,
+        enabled: bool,
+    ) -> Result<Automation, String> {
         let automation = get(&self.conn, id)?.ok_or("Automation not found.")?;
+        if automation.updated_at != revision {
+            return Err(DEFINITION_CHANGED.into());
+        }
+        if automation.enabled == enabled {
+            return Ok(automation);
+        }
         let mut draft = AutomationUpsert::from_automation(&automation);
         draft.enabled = enabled;
         draft.sync_triggers(now_millis());
-        self.upsert(draft)
+        self.save_definition(draft, DefinitionRevision::Saved(revision))
     }
     /// Atomically claims each due occurrence, including skipped occurrences outside
     /// the grace period. Bounded work prevents an offline period monopolizing UI polling.

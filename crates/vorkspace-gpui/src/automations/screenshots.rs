@@ -46,7 +46,9 @@ fn native_automations_capture() {
             triggers.push(AutomationTrigger::new("github", "pull_request_opened"));
         }
         draft.triggers = Some(triggers);
-        service.upsert(draft).unwrap();
+        service
+            .save_definition(draft, DefinitionRevision::New)
+            .unwrap();
     }
     let automations = service.list().unwrap();
     let service = Arc::new(Mutex::new(service));
@@ -96,7 +98,11 @@ fn native_automations_capture() {
                                 .find(|automation| automation.name == "Review release changes")
                                 .unwrap();
                             page.selected = Some(saved.id.clone());
-                            page.install_editor(AutomationUpsert::from_automation(saved), true, cx);
+                            page.install_editor(
+                                AutomationUpsert::from_automation(saved),
+                                DefinitionRevision::Saved(saved.updated_at),
+                                cx,
+                            );
                             page.advanced = true;
                         }
                         page

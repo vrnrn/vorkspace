@@ -17,8 +17,8 @@ use std::{
 };
 use vorkspace_core::{
     automations::{
-        self, Automation, AutomationRun, AutomationTrigger, AutomationUpsert, DueAutomationRun,
-        Service,
+        self, Automation, AutomationRun, AutomationTrigger, AutomationUpsert, DefinitionRevision,
+        DueAutomationRun, Service,
     },
     provider::Kind,
 };
@@ -30,6 +30,7 @@ mod editor;
 mod gallery;
 #[cfg(test)]
 mod screenshots;
+mod storage;
 #[cfg(test)]
 mod tests;
 mod trigger_menu;
@@ -77,6 +78,7 @@ struct TriggerFields {
     time: Entity<Input>,
     repos: Entity<Input>,
     actor: Entity<Input>,
+    _subscriptions: [Subscription; 3],
 }
 struct Editor {
     draft: AutomationUpsert,
@@ -84,9 +86,20 @@ struct Editor {
     prompt: Entity<Input>,
     completion: Entity<crate::composer::composer_completion::Completion>,
     fields: Vec<TriggerFields>,
-    saved: bool,
+    saved_revision: DefinitionRevision,
+    edits: u64,
     dirty: bool,
     _subscriptions: Vec<Subscription>,
+}
+impl Editor {
+    fn saved(&self) -> bool {
+        matches!(self.saved_revision, DefinitionRevision::Saved(_))
+    }
+
+    fn mark_dirty(&mut self) {
+        self.edits += 1;
+        self.dirty = true;
+    }
 }
 #[derive(Clone)]
 enum Choice {
@@ -148,6 +161,7 @@ pub(crate) struct Automations {
     trigger_subscription: Option<Subscription>,
     trigger_connections: HashMap<String, bool>,
     request_generation: u64,
+    refresh_generation: u64,
 }
 impl EventEmitter<Event> for Automations {}
 impl Focusable for Automations {
@@ -212,6 +226,7 @@ impl Automations {
             trigger_subscription: None,
             trigger_connections: HashMap::new(),
             request_generation: 0,
+            refresh_generation: 0,
         };
         this.refresh(cx);
         this
@@ -265,51 +280,6 @@ impl Automations {
         window.focus(&self.filter.focus_handle(cx), cx);
         cx.notify();
     }
-    pub(crate) fn refresh(&mut self, cx: &mut Context<Self>) {
-        let service = self.service.clone();
-        let selected = self.selected.clone();
-        let selected_for_work = selected.clone();
-        let work = cx.background_executor().spawn(async move {
-            let service = service
-                .lock()
-                .map_err(|_| "Automations unavailable".to_string())?;
-            let list = service.list()?;
-            let runs = selected_for_work
-                .as_deref()
-                .map(|id| service.runs(id))
-                .transpose()?
-                .unwrap_or_default();
-            Ok::<_, String>((list, runs))
-        });
-        cx.spawn(async move |this, cx| {
-            let result = work.await;
-            let _ = this.update(cx, |this, cx| {
-                this.loading = false;
-                match result {
-                    Ok((list, runs)) => {
-                        this.automations = list;
-                        if this.selected == selected {
-                            this.runs = runs;
-                        }
-                        if this
-                            .selected
-                            .as_ref()
-                            .is_some_and(|id| !this.automations.iter().any(|a| &a.id == id))
-                        {
-                            this.selected = None;
-                            if !this.editor.as_ref().is_some_and(|e| e.dirty) {
-                                this.editor = None;
-                                this.gallery = true;
-                            }
-                        }
-                    }
-                    Err(error) => this.error = Some(error),
-                }
-                cx.notify();
-            });
-        })
-        .detach();
-    }
     /// Opens the editor on the first template, for captures.
     #[cfg(test)]
     pub(crate) fn begin_first_template(&mut self, cx: &mut Context<Self>) {
@@ -349,7 +319,7 @@ impl Automations {
         self.narrow_detail = true;
         self.settings_scroll = ScrollHandle::new();
         self.history_scroll = ScrollHandle::new();
-        self.set_editor(draft, false, cx);
+        self.set_editor(draft, DefinitionRevision::New, cx);
     }
     fn open_selection(&mut self, id: String, window: &mut Window, cx: &mut Context<Self>) {
         if self.selected.as_deref() == Some(&id) && self.editor.is_some() {
@@ -367,6 +337,7 @@ impl Automations {
             return;
         };
         let draft = AutomationUpsert::from_automation(automation);
+        let revision = DefinitionRevision::Saved(automation.updated_at);
         if self.selected.as_deref() != Some(&id) {
             self.settings_scroll = ScrollHandle::new();
             self.history_scroll = ScrollHandle::new();
@@ -374,15 +345,25 @@ impl Automations {
         self.selected = Some(id);
         self.narrow_detail = true;
         self.runs.clear();
-        self.set_editor(draft, true, cx);
+        self.set_editor(draft, revision, cx);
         self.refresh(cx);
     }
-    fn set_editor(&mut self, draft: AutomationUpsert, saved: bool, cx: &mut Context<Self>) {
-        self.install_editor(draft, saved, cx);
+    fn set_editor(
+        &mut self,
+        draft: AutomationUpsert,
+        revision: DefinitionRevision,
+        cx: &mut Context<Self>,
+    ) {
+        self.install_editor(draft, revision, cx);
         self.load_controls(cx);
         cx.notify();
     }
-    fn install_editor(&mut self, draft: AutomationUpsert, saved: bool, cx: &mut Context<Self>) {
+    fn install_editor(
+        &mut self,
+        draft: AutomationUpsert,
+        revision: DefinitionRevision,
+        cx: &mut Context<Self>,
+    ) {
         let name = cx.new(|cx| {
             let mut input = Input::automation_name(cx);
             input.set_text(draft.name.clone(), cx);
@@ -413,7 +394,7 @@ impl Automations {
         for field in [&name, &prompt] {
             subscriptions.push(cx.subscribe(field, |this, _, _: &input::Changed, cx| {
                 if let Some(editor) = &mut this.editor {
-                    editor.dirty = true;
+                    editor.mark_dirty();
                 }
                 cx.notify();
             }));
@@ -424,8 +405,9 @@ impl Automations {
             prompt,
             completion,
             fields: Vec::new(),
-            saved,
-            dirty: !saved,
+            saved_revision: revision,
+            edits: 0,
+            dirty: revision == DefinitionRevision::New,
             _subscriptions: subscriptions,
         });
         self.rebuild_trigger_fields(cx);
@@ -477,22 +459,20 @@ impl Automations {
                 cx,
             );
             let actor = field("Trigger actor", "Anyone", trigger.actor, cx);
-            for input in [&time, &repos, &actor] {
-                editor._subscriptions.push(cx.subscribe(
-                    input,
-                    |this, _, _: &input::Changed, cx| {
-                        if let Some(e) = &mut this.editor {
-                            e.dirty = true;
-                        }
-                        cx.notify();
-                    },
-                ));
-            }
+            let subscriptions = [&time, &repos, &actor].map(|input| {
+                cx.subscribe(input, |this, _, _: &input::Changed, cx| {
+                    if let Some(e) = &mut this.editor {
+                        e.mark_dirty();
+                    }
+                    cx.notify();
+                })
+            });
             editor.fields.push(TriggerFields {
                 id: trigger.id,
                 time,
                 repos,
                 actor,
+                _subscriptions: subscriptions,
             });
         }
     }
@@ -519,131 +499,6 @@ impl Automations {
         }
         draft.sync_triggers(vorkspace_core::time::now_ms() as i64);
         Some(draft)
-    }
-    fn save(&mut self, cx: &mut Context<Self>) {
-        if self.saving {
-            return;
-        }
-        let Some(draft) = self.collected(cx) else {
-            return;
-        };
-        self.saving = true;
-        self.error = None;
-        let service = self.service.clone();
-        let work = cx.background_executor().spawn(async move {
-            service
-                .lock()
-                .map_err(|_| "Automations unavailable".to_string())?
-                .upsert(draft)
-        });
-        cx.spawn(async move |this, cx| {
-            let result = work.await;
-            let _ = this.update(cx, |this, cx| {
-                this.saving = false;
-                match result {
-                    Ok(saved) => {
-                        this.selected = Some(saved.id.clone());
-                        this.set_editor(AutomationUpsert::from_automation(&saved), true, cx);
-                        this.refresh(cx);
-                    }
-                    Err(error) => this.error = Some(error),
-                }
-                cx.notify();
-            });
-        })
-        .detach();
-        cx.notify();
-    }
-    fn toggle(&mut self, id: String, enabled: bool, cx: &mut Context<Self>) {
-        let service = self.service.clone();
-        let work = cx.background_executor().spawn(async move {
-            service
-                .lock()
-                .map_err(|_| "Automations unavailable".to_string())?
-                .set_enabled(&id, enabled)
-        });
-        cx.spawn(async move |this, cx| {
-            let result = work.await;
-            let _ = this.update(cx, |this, cx| {
-                match result {
-                    Ok(saved) => {
-                        if let Some(editor) = &mut this.editor
-                            && editor.draft.id == saved.id
-                            && !editor.dirty
-                        {
-                            editor.draft.enabled = saved.enabled;
-                        }
-                    }
-                    Err(error) => this.error = Some(error),
-                }
-                this.refresh(cx);
-            });
-        })
-        .detach();
-    }
-    fn run(&mut self, cx: &mut Context<Self>) {
-        if self.running {
-            return;
-        }
-        let Some(automation) = self
-            .selected
-            .as_ref()
-            .and_then(|id| self.automations.iter().find(|a| &a.id == id))
-            .cloned()
-        else {
-            return;
-        };
-        self.running = true;
-        let service = self.service.clone();
-        let work = cx.background_executor().spawn(async move {
-            let run = service
-                .lock()
-                .map_err(|_| "Automations unavailable".to_string())?
-                .run_now(&automation.id, vorkspace_core::time::now_ms() as i64)?;
-            Ok::<_, String>(DueAutomationRun { automation, run })
-        });
-        cx.spawn(async move |this, cx| {
-            let result = work.await;
-            let _ = this.update(cx, |this, cx| {
-                this.running = false;
-                match result {
-                    Ok(run) => cx.emit(Event::Launch(Box::new(run))),
-                    Err(error) => this.error = Some(error),
-                }
-                this.refresh(cx);
-            });
-        })
-        .detach();
-        cx.notify();
-    }
-    fn delete(&mut self, cx: &mut Context<Self>) {
-        let Some(id) = self.selected.clone() else {
-            return;
-        };
-        let service = self.service.clone();
-        let work = cx.background_executor().spawn(async move {
-            service
-                .lock()
-                .map_err(|_| "Automations unavailable".to_string())?
-                .delete(&id)
-        });
-        cx.spawn(async move |this, cx| {
-            let result = work.await;
-            let _ = this.update(cx, |this, cx| {
-                this.confirm_delete = false;
-                match result {
-                    Ok(()) => {
-                        this.editor = None;
-                        this.selected = None;
-                        this.gallery = true;
-                        this.runs.clear();
-                    }
-                    Err(error) => this.error = Some(error),
-                }
-                this.refresh(cx);
-            });
-        })
-        .detach();
     }
     fn load_controls(&mut self, cx: &mut Context<Self>) {
         self.model_controls.clear();
@@ -754,7 +609,7 @@ impl Automations {
                         editor.completion.update(cx, |completion, cx| {
                             completion.set_provider(picked.0.id(), cx)
                         });
-                        editor.dirty = true;
+                        editor.mark_dirty();
                     }
                 }
                 this.models = None;
@@ -787,7 +642,7 @@ impl Automations {
                             editor
                                 .completion
                                 .update(cx, |completion, cx| completion.set_cwd(path, cx));
-                            editor.dirty = true;
+                            editor.mark_dirty();
                         }
                         this.load_controls(cx);
                     }
@@ -805,6 +660,9 @@ impl Automations {
         cx.notify();
     }
     fn browse_project(&mut self, cx: &mut Context<Self>) {
+        let Some(identity) = self.editor.as_ref().map(|editor| editor.name.entity_id()) else {
+            return;
+        };
         let prompt = cx.prompt_for_paths(gpui::PathPromptOptions {
             files: false,
             directories: true,
@@ -814,6 +672,13 @@ impl Automations {
         cx.spawn(async move |this, cx| {
             let result = prompt.await;
             let _ = this.update(cx, |this, cx| {
+                let Some(editor) = this
+                    .editor
+                    .as_mut()
+                    .filter(|editor| editor.name.entity_id() == identity)
+                else {
+                    return;
+                };
                 if let Ok(Ok(Some(paths))) = result
                     && let Some(path) = paths.first()
                 {
@@ -821,13 +686,12 @@ impl Automations {
                     if !this.projects.contains(&path) {
                         this.projects.push(path.clone());
                     }
-                    if let Some(e) = &mut this.editor {
-                        e.draft.cwd = path;
-                        e.completion
-                            .update(cx, |completion, cx| completion.set_cwd(&e.draft.cwd, cx));
-                        e.draft.session_folder_id.clear();
-                        e.dirty = true;
-                    }
+                    editor.draft.cwd = path;
+                    editor.completion.update(cx, |completion, cx| {
+                        completion.set_cwd(&editor.draft.cwd, cx)
+                    });
+                    editor.draft.session_folder_id.clear();
+                    editor.mark_dirty();
                     this.load_controls(cx);
                     cx.notify();
                 }
@@ -853,16 +717,17 @@ fn detail_frame(narrow: bool) -> gpui::Div {
 impl Automations {
     fn render_list(&self, narrow: bool, cx: &mut Context<Self>) -> impl IntoElement {
         let query = self.filter.read(cx).content.to_lowercase();
-        let visible: Vec<_> = self
+        let query = query.trim();
+        let mut visible = self
             .automations
             .iter()
             .filter(|a| {
-                format!("{} {} {}", a.name, a.prompt, a.cwd)
-                    .to_lowercase()
-                    .contains(query.trim())
+                query.is_empty()
+                    || format!("{} {} {}", a.name, a.prompt, a.cwd)
+                        .to_lowercase()
+                        .contains(query)
             })
-            .cloned()
-            .collect();
+            .peekable();
         let mut list = div()
             .id("automations-list")
             .role(Role::ListBox)
@@ -875,13 +740,13 @@ impl Automations {
             .flex()
             .flex_col()
             .gap(px(4.));
-        if visible.is_empty() {
+        if visible.peek().is_none() {
             list = list.child(if self.loading {
                 page::meta()
                     .px(px(8.))
                     .py(px(4.))
                     .child("Loading automations…")
-            } else if query.trim().is_empty() {
+            } else if query.is_empty() {
                 page::empty(
                     icon("zap", 20.),
                     "No automations yet",
@@ -901,6 +766,7 @@ impl Automations {
             let id = automation.id.clone();
             let toggle_id = id.clone();
             let enabled = automation.enabled;
+            let revision = automation.updated_at;
             let active = !self.gallery && self.selected.as_deref() == Some(&id);
             let kind = Kind::from_id(&automation.harness);
             let model = vorkspace_core::store::native_model(&automation.model, &automation.harness);
@@ -931,7 +797,7 @@ impl Automations {
                             page::label()
                                 .truncate()
                                 .font_weight(gpui::FontWeight::SEMIBOLD)
-                                .child(automation.name),
+                                .child(automation.name.clone()),
                         )
                         .child(
                             page::meta()
@@ -967,7 +833,9 @@ impl Automations {
                                 enabled,
                             )
                             .on_click(cx.listener(
-                                move |this, _, _, cx| this.toggle(toggle_id.clone(), !enabled, cx),
+                                move |this, _, _, cx| {
+                                    this.toggle(toggle_id.clone(), revision, !enabled, cx)
+                                },
                             )),
                         ),
                     ),

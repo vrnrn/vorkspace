@@ -2,7 +2,7 @@
 mod schedule;
 mod service;
 pub use schedule::{event_label, next_run_at, WEEKDAYS};
-pub use service::Service;
+pub use service::{DefinitionRevision, Service};
 
 use std::collections::HashMap;
 

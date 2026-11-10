@@ -1,5 +1,5 @@
 use super::*;
-use crate::automations::{claim_inbox_events, claim_inbox_events_retry, AutomationTrigger};
+use crate::automations::{AutomationTrigger, claim_inbox_events, claim_inbox_events_retry};
 use chrono::{Local, TimeZone};
 
 fn local_at(value: &str) -> i64 {
@@ -16,7 +16,9 @@ fn save(service: &mut Service, triggers: Vec<AutomationTrigger>) -> Automation {
     draft.prompt = "Review the change and implement safe fixes.".into();
     draft.triggers = Some(triggers);
     draft.sync_triggers(now_millis());
-    service.upsert(draft).unwrap()
+    service
+        .save_definition(draft, DefinitionRevision::New)
+        .unwrap()
 }
 fn item(number: i64) -> crate::inbox::Item {
     crate::inbox::Item {
@@ -33,6 +35,52 @@ fn item(number: i64) -> crate::inbox::Item {
 }
 
 #[test]
+fn stale_editors_cannot_replace_or_delete_a_newer_definition() {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("sessions.sqlite");
+    let mut first = Service::open(&path).unwrap();
+    let mut second = Service::open(&path).unwrap();
+    let base = save(&mut first, vec![]);
+    let old = DefinitionRevision::Saved(base.updated_at);
+    let mut edit = AutomationUpsert::from_automation(&base);
+    edit.prompt = "Use the new definition.".into();
+    let latest = second.save_definition(edit.clone(), old).unwrap();
+    assert!(latest.updated_at > base.updated_at);
+    assert_eq!(
+        first.save_definition(edit, old).unwrap_err(),
+        DEFINITION_CHANGED
+    );
+    assert_eq!(
+        first
+            .delete_definition(&base.id, base.updated_at)
+            .unwrap_err(),
+        DEFINITION_CHANGED
+    );
+    assert_eq!(
+        first
+            .set_enabled(&base.id, base.updated_at, false)
+            .unwrap_err(),
+        DEFINITION_CHANGED
+    );
+    assert_eq!(
+        first
+            .run_now(&base.id, base.updated_at, now_millis())
+            .unwrap_err(),
+        DEFINITION_CHANGED
+    );
+    let admitted = first
+        .run_now(&base.id, latest.updated_at, now_millis())
+        .unwrap();
+    assert_eq!(admitted.automation.updated_at, latest.updated_at);
+    assert_eq!(admitted.automation.prompt, latest.prompt);
+    assert_eq!(admitted.run.prompt.as_deref(), Some(latest.prompt.as_str()));
+    second
+        .delete_definition(&latest.id, latest.updated_at)
+        .unwrap();
+    assert!(first.list().unwrap().is_empty());
+}
+
+#[test]
 fn retired_connectors_cannot_be_saved_claimed_or_recovered_for_dispatch() {
     let directory = tempfile::tempdir().unwrap();
     let mut service = Service::open(&directory.path().join("sessions.sqlite")).unwrap();
@@ -46,7 +94,9 @@ fn retired_connectors_cannot_be_saved_claimed_or_recovered_for_dispatch() {
         draft.triggers = Some(vec![AutomationTrigger::new(provider, "issue_created")]);
         draft.sync_triggers(now);
         assert_eq!(
-            service.upsert(draft).unwrap_err(),
+            service
+                .save_definition(draft, DefinitionRevision::Saved(supported.updated_at))
+                .unwrap_err(),
             "Invalid automation trigger."
         );
         let claim = AutomationEventClaim {
@@ -127,38 +177,50 @@ fn inbox_claims_filter_projects_repositories_and_actors_and_dedupe_across_reopen
     let automation = save(&mut service, vec![trigger]);
     let mut wrong = item(1);
     wrong.project_path = "/another".into();
-    assert!(claim_inbox_events(&mut service, &[wrong], now_millis())
-        .unwrap()
-        .is_empty());
+    assert!(
+        claim_inbox_events(&mut service, &[wrong], now_millis())
+            .unwrap()
+            .is_empty()
+    );
     let mut wrong = item(2);
     wrong.repo = "acme/other".into();
-    assert!(claim_inbox_events(&mut service, &[wrong], now_millis())
-        .unwrap()
-        .is_empty());
+    assert!(
+        claim_inbox_events(&mut service, &[wrong], now_millis())
+            .unwrap()
+            .is_empty()
+    );
     let claims = claim_inbox_events(&mut service, &[item(3), item(3)], now_millis()).unwrap();
     assert_eq!(claims.len(), 1);
     assert_eq!(
         claims[0].run.event_key.as_deref(),
         Some("github:pr:acme/app:3")
     );
-    assert!(claims[0]
-        .run
-        .prompt
-        .as_deref()
-        .unwrap()
-        .contains("Work on this GitHub pull request:"));
+    assert!(
+        claims[0]
+            .run
+            .prompt
+            .as_deref()
+            .unwrap()
+            .contains("Work on this GitHub pull request:")
+    );
     drop(service);
     let mut service = Service::open(&path).unwrap();
-    assert!(claim_inbox_events(&mut service, &[item(3)], now_millis())
-        .unwrap()
-        .is_empty());
+    assert!(
+        claim_inbox_events(&mut service, &[item(3)], now_millis())
+            .unwrap()
+            .is_empty()
+    );
     let mut draft = AutomationUpsert::from_automation(&automation);
     draft.triggers.as_mut().unwrap()[0].actor = "someone".into();
     draft.sync_triggers(now_millis());
-    service.upsert(draft).unwrap();
-    assert!(claim_inbox_events(&mut service, &[item(4)], now_millis())
-        .unwrap()
-        .is_empty());
+    service
+        .save_definition(draft, DefinitionRevision::Saved(automation.updated_at))
+        .unwrap();
+    assert!(
+        claim_inbox_events(&mut service, &[item(4)], now_millis())
+            .unwrap()
+            .is_empty()
+    );
 }
 
 #[test]
@@ -193,8 +255,14 @@ fn recovery_returns_pending_prompts_and_cancels_interrupted_running_runs() {
     let mut service = Service::open(&path).unwrap();
     let automation = save(&mut service, vec![]);
     let now = now_millis();
-    let pending = service.run_now(&automation.id, now).unwrap();
-    let running = service.run_now(&automation.id, now + 1).unwrap();
+    let pending = service
+        .run_now(&automation.id, automation.updated_at, now)
+        .unwrap()
+        .run;
+    let running = service
+        .run_now(&automation.id, automation.updated_at, now + 1)
+        .unwrap()
+        .run;
     service
         .update_run(
             &running.id,
@@ -217,11 +285,13 @@ fn recovery_returns_pending_prompts_and_cancels_interrupted_running_runs() {
     let interrupted = history.iter().find(|run| run.id == running.id).unwrap();
     assert_eq!(interrupted.status, "cancelled");
     assert_eq!(interrupted.session_id.as_deref(), Some("session-1"));
-    assert!(interrupted
-        .error
-        .as_deref()
-        .unwrap()
-        .contains("Interrupted"));
+    assert!(
+        interrupted
+            .error
+            .as_deref()
+            .unwrap()
+            .contains("Interrupted")
+    );
 }
 
 #[test]
@@ -245,7 +315,10 @@ fn legacy_claim_backfill_commits_with_its_marker_and_preserves_pending_runs() {
     legacy.status = "succeeded".into();
     legacy.completed_at = Some(2);
     write_run(&service.conn, &legacy).unwrap();
-    let pending = service.run_now(&automation.id, 3).unwrap();
+    let pending = service
+        .run_now(&automation.id, automation.updated_at, 3)
+        .unwrap()
+        .run;
     service
         .conn
         .execute_batch(
@@ -279,9 +352,11 @@ fn legacy_claim_backfill_commits_with_its_marker_and_preserves_pending_runs() {
 
     let mut service = Service::open(&path).unwrap();
     assert!(claims_backfilled(&service.conn).unwrap());
-    assert!(claim_inbox_events(&mut service, &[item(42)], 4)
-        .unwrap()
-        .is_empty());
+    assert!(
+        claim_inbox_events(&mut service, &[item(42)], 4)
+            .unwrap()
+            .is_empty()
+    );
     let recovered = service.recover(4, 5).unwrap();
     assert_eq!(recovered.len(), 1);
     assert_eq!(recovered[0].run.id, pending.id);

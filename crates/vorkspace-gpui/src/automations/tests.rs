@@ -10,6 +10,53 @@ fn click(visual: &mut VisualTestContext, selector: &'static str) {
 }
 
 #[gpui::test]
+fn automation_save_keeps_later_typing_and_does_not_take_over_a_new_editor(cx: &mut TestAppContext) {
+    let service = Arc::new(Mutex::new(
+        Service::open(std::path::Path::new(":memory:")).unwrap(),
+    ));
+    let view = cx.new(|cx| Automations::new(service.clone(), "/tmp".into(), vec![], cx));
+    let draft = |name: &str| {
+        let mut draft = AutomationUpsert::new("/tmp".into(), "codex".into(), String::new());
+        draft.name = name.into();
+        draft.prompt = "Summarize the last commit.".into();
+        draft.enabled = false;
+        draft
+    };
+    let original = draft("Original");
+    let id = original.id.clone();
+    let input = view.update(cx, |view, cx| {
+        view.install_editor(original, DefinitionRevision::New, cx);
+        let name = view.editor.as_ref().unwrap().name.clone();
+        view.save(cx);
+        name.update(cx, |input, cx| input.set_text("Late edit".into(), cx));
+        name
+    });
+    cx.run_until_parked();
+    assert_eq!(service.lock().unwrap().list().unwrap()[0].name, "Original");
+    let successor = draft("Successor");
+    let successor_id = successor.id.clone();
+    view.update(cx, |view, cx| {
+        let editor = view.editor.as_ref().unwrap();
+        assert_eq!(editor.name.entity_id(), input.entity_id());
+        assert!(editor.saved() && editor.dirty);
+        assert_eq!(view.selected.as_deref(), Some(id.as_str()));
+        assert_eq!(editor.name.read(cx).content.as_ref(), "Late edit");
+        view.save(cx);
+        view.selected = None;
+        view.install_editor(successor, DefinitionRevision::New, cx);
+    });
+    cx.run_until_parked();
+    assert_eq!(service.lock().unwrap().list().unwrap()[0].name, "Late edit");
+    view.update(cx, |view, cx| {
+        let editor = view.editor.as_ref().unwrap();
+        assert_eq!(editor.draft.id, successor_id);
+        assert_eq!(editor.name.read(cx).content.as_ref(), "Successor");
+        assert!(!editor.saved());
+        assert!(view.selected.is_none());
+    });
+}
+
+#[gpui::test]
 fn narrow_navigation_retains_filter_and_editor(cx: &mut TestAppContext) {
     let mut service = Service::open(std::path::Path::new(":memory:")).unwrap();
     let mut draft = AutomationUpsert::new("/tmp".into(), "codex".into(), String::new());
@@ -17,7 +64,9 @@ fn narrow_navigation_retains_filter_and_editor(cx: &mut TestAppContext) {
     draft.prompt = "Summarize recent changes.".into();
     draft.enabled = false;
     draft.triggers = Some(vec![AutomationTrigger::new("time", "weekly")]);
-    service.upsert(draft).unwrap();
+    service
+        .save_definition(draft, DefinitionRevision::New)
+        .unwrap();
 
     let window = cx.update(|cx| {
         cx.open_window(Default::default(), |_, cx| {
@@ -101,7 +150,8 @@ fn narrow_navigation_retains_filter_and_editor(cx: &mut TestAppContext) {
             let draft = AutomationUpsert::from_automation(&view.automations[0]);
             view.selected = Some(draft.id.clone());
             view.narrow_detail = true;
-            view.install_editor(draft, true, cx);
+            let revision = DefinitionRevision::Saved(view.automations[0].updated_at);
+            view.install_editor(draft, revision, cx);
             let editor = view.editor.as_mut().unwrap();
             editor.dirty = true;
             editor.name.update(cx, |input, cx| {
@@ -146,7 +196,7 @@ fn narrow_navigation_retains_filter_and_editor(cx: &mut TestAppContext) {
         .update(visual, |view, _, cx| {
             assert_eq!(view.settings_scroll.offset(), settings_offset);
             view.selected = None;
-            view.editor.as_mut().unwrap().saved = false;
+            view.editor.as_mut().unwrap().saved_revision = DefinitionRevision::New;
             cx.notify();
         })
         .unwrap();
