@@ -59,7 +59,9 @@ mod titlebar_tests;
 mod ui_parity_tests;
 mod vorkspaces;
 mod vox;
+mod windows;
 mod worktrees;
+pub(crate) use windows::{WindowLayouts, additional_window_bounds};
 
 use crate::popover::titlebar_drag_area;
 use crate::{
@@ -89,10 +91,7 @@ use gpui::{
 use session_groups::local_reminder_label;
 use std::{
     collections::{HashMap, HashSet},
-    sync::{
-        Arc, Mutex,
-        atomic::{AtomicU64, Ordering},
-    },
+    sync::{Arc, Mutex},
 };
 use vorkspace_core::{provider::Kind, store::Session};
 use vorkspace_model::pane_layout::{Edge, LayoutLeaf, PaneNode, Rect, SplitDir};
@@ -603,6 +602,11 @@ pub(crate) struct Shell {
     /// What every window shares; `None` only before the window joins it.
     app_core: Option<Entity<app_core::AppCore>>,
     vorkspace_baseline: Vec<crate::workspace::VorkspaceDef>,
+    window_layout: u64,
+    window_shared: Option<windows::WindowShared>,
+    window_closing: bool,
+    native_window: Option<gpui::WindowHandle<Self>>,
+    native_title: String,
     rail_sessions_expanded: bool,
     rail_list: gpui::ListState,
     rail_list_ids: std::rc::Rc<Vec<i64>>,
@@ -683,8 +687,6 @@ pub(crate) struct Shell {
     viewport_width: f32,
     viewport_height: f32,
     observations: Vec<Subscription>,
-    generation: Arc<AtomicU64>,
-    latest_state: Arc<Mutex<String>>,
     pub(crate) render_passes: usize,
 }
 impl Shell {
@@ -740,7 +742,7 @@ impl Shell {
         let metadata = locked(&store)
             .map(|db| db.session_sidebar_metadata(&projects))
             .unwrap_or_default();
-        Self::new_with_metadata(store, summaries, cwd, saved, metadata, cx)
+        Self::new_with_metadata(store, summaries, cwd, saved, metadata, None, cx)
     }
     pub(crate) fn new_with_metadata(
         store: Database,
@@ -748,9 +750,11 @@ impl Shell {
         cwd: String,
         saved: Option<String>,
         sidebar_metadata: vorkspace_core::store::SessionSidebarMetadata,
+        window_layout: Option<u64>,
         cx: &mut Context<Self>,
     ) -> Self {
         vorkspace_ui::fluid::init(cx);
+        let app_core = app_core::AppCore::get(&store, cx);
         crate::accounts::install(store.clone(), cx);
         crate::codebase::install(store.clone(), cx);
         if let Some(owner) = crate::codebase::get(cx) {
@@ -760,22 +764,7 @@ impl Shell {
             })
             .detach();
         }
-        let remote_dir = locked(&store)
-            .ok()
-            .and_then(|store| store.data_dir().map(std::path::Path::to_path_buf))
-            .unwrap_or_else(|| {
-                std::env::temp_dir().join(format!("vorkspace-remote-{}", std::process::id()))
-            });
-        let remote = Arc::new(vorkspace_core::remote::Connections::new(remote_dir));
-        vorkspace_core::remote::set_default_connections(remote.clone());
-        let quit_remote = remote.clone();
-        cx.on_app_quit(move |_, cx| {
-            let remote = quit_remote.clone();
-            cx.background_executor().spawn(async move {
-                remote.shutdown();
-            })
-        })
-        .detach();
+        let remote = app_core.read(cx).remote.clone();
         let remote_clock = cx.spawn(async move |this, cx| {
             loop {
                 cx.background_executor()
@@ -790,22 +779,19 @@ impl Shell {
             }
         });
         let metadata: Vec<_> = summaries.iter().map(|s| (s.id, s.cwd.clone())).collect();
-        let workspace = Workspace::restore(saved.as_deref(), &metadata, &cwd);
+        let mut workspace = Workspace::restore(saved.as_deref(), &metadata, &cwd);
+        let window_shared = app_core.read(cx).layouts.shared.clone();
+        if let Some(shared) = &window_shared {
+            let discovered = workspace.restored_new_projects.clone();
+            shared.apply(&mut workspace);
+            for project in discovered {
+                if workspace.is_project_available(&project) {
+                    workspace.add_project(&project);
+                }
+            }
+        }
         vorkspace_core::cli::initialize(&workspace.preferences.binary_paths);
         vorkspace_core::worktree_setup::set_commands(&workspace.preferences.worktree_setup);
-        let latest_state = Arc::new(Mutex::new(serde_json::to_string(&workspace).unwrap()));
-        let quit_state = latest_state.clone();
-        let quit_store = store.clone();
-        // This application-level hook survives the last window/entity being released.
-        let app: &mut App = cx;
-        app.on_app_quit(move |cx| {
-            let state = quit_state.lock().unwrap_or_else(|e| e.into_inner()).clone();
-            let store = quit_store.clone();
-            cx.background_executor().spawn(async move {
-                let _ = locked(&store).and_then(|s| s.save_ui_state(&state));
-            })
-        })
-        .detach();
         let owner = cx.weak_entity();
         let sidebar_frame = cx.new(|_| Chrome {
             owner: owner.clone(),
@@ -987,6 +973,12 @@ impl Shell {
             vorkspace_dialog: None,
             app_core: None,
             vorkspace_baseline: Vec::new(),
+            window_layout: window_layout
+                .unwrap_or_else(|| app_core.update(cx, |core, _| core.allocate_window())),
+            window_shared,
+            window_closing: false,
+            native_window: None,
+            native_title: String::new(),
             rail_sessions_expanded: false,
             rail_list: gpui::ListState::new(0, gpui::ListAlignment::Top, px(96.)),
             rail_list_ids: Default::default(),
@@ -1056,12 +1048,10 @@ impl Shell {
                 resource_stops,
                 sidebar_search_events,
             ],
-            generation: Arc::new(AtomicU64::new(0)),
-            latest_state,
             render_passes: 0,
         };
         this.scan_external_editors(cx);
-        this.adopt_app_core(cx);
+        this.adopt_app_core(app_core, cx);
         this.observe_accounts(cx);
         this.observe_picker_preferences(cx);
         let bot_owner: std::rc::Rc<dyn crate::bots::host_api::BotsHost> =
@@ -1281,7 +1271,9 @@ impl Shell {
     }
     fn add(&mut self, summary: Session, cx: &mut Context<Self>) {
         self.workspace.restore_project(&summary.cwd);
+        let id = summary.id;
         self.add_loaded(summary, cx);
+        self.publish_session_summary(id, cx);
     }
     /// Loading history must not turn every session directory into a rail project.
     fn add_loaded(&mut self, summary: Session, cx: &mut Context<Self>) {
@@ -1330,8 +1322,23 @@ impl Shell {
                 let Some(view) = this.sessions.get(&id) else {
                     return;
                 };
-                this.session_worktrees
-                    .insert(id, view.read(cx).settings.worktree_cwd.clone());
+                let view = view.read(cx);
+                let summary = view.summary.clone();
+                let worktree = view.settings.worktree_cwd.clone();
+                let draft = view.has_saved_draft();
+                let summary_changed = this.session_summaries.get(&id) != Some(&summary);
+                let tree_changed = this.session_worktrees.get(&id) != Some(&worktree);
+                let draft_changed = this.draft_sessions.contains(&id) != draft;
+                if summary_changed || tree_changed || draft_changed {
+                    this.session_summaries.insert(id, summary);
+                    this.session_worktrees.insert(id, worktree);
+                    if draft {
+                        this.draft_sessions.insert(id);
+                    } else {
+                        this.draft_sessions.remove(&id);
+                    }
+                    this.publish_session_summary(id, cx);
+                }
                 // A finished turn may have edited files or moved to a worktree.
                 if this.workspace.active == Some(id) {
                     this.sync_git(cx);
@@ -1463,6 +1470,12 @@ impl Shell {
         });
     }
     fn toggle_archive(&mut self, id: i64, cx: &mut Context<Self>) {
+        if !self.session_available_here(id, cx) {
+            self.error =
+                Some("Open the conversation in its window to change its archive status.".into());
+            cx.notify();
+            return;
+        }
         if !self.archiving.insert(id) {
             return;
         }
@@ -1490,6 +1503,7 @@ impl Shell {
                             });
                         }
                         this.refresh_session_mark(id, cx);
+                        this.publish_session_summary(id, cx);
                         if archived && this.workspace.tab_of(id).is_some() {
                             this.close_pane(id, window, cx);
                         } else {
@@ -1649,7 +1663,7 @@ impl Shell {
         cx.notify();
     }
     fn request_quit(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if !self.unsaved_files(cx) {
+        if !self.unsaved_window_files(cx) {
             crate::quit(cx);
             return;
         }
@@ -1678,7 +1692,7 @@ impl Shell {
         .detach();
     }
     fn request_restart(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if !self.unsaved_files(cx) {
+        if !self.unsaved_window_files(cx) {
             crate::restart(cx);
             return;
         }
@@ -1755,27 +1769,10 @@ impl Shell {
         self.update_usage_provider(cx);
         self.invalidate_chrome(cx);
         self.share_vorkspaces(cx);
-        let state = serde_json::to_string(&self.workspace).unwrap();
-        *self.latest_state.lock().unwrap_or_else(|e| e.into_inner()) = state.clone();
-        let revision = self.generation.fetch_add(1, Ordering::SeqCst) + 1;
-        let generation = self.generation.clone();
-        let store = self.store.clone();
-        let work = cx.background_executor().spawn(async move {
-            let store = locked(&store)?;
-            if generation.load(Ordering::SeqCst) == revision {
-                store.save_ui_state(&state)?;
-            }
-            Ok::<_, String>(())
-        });
-        cx.spawn(async move |this, cx| {
-            if let Err(error) = work.await {
-                let _ = this.update(cx, |this, cx| {
-                    this.error = Some(format!("Could not save workspace: {error}"));
-                    cx.notify();
-                });
-            }
-        })
-        .detach();
+        if let Err(error) = self.save_window_state(None, false, cx) {
+            self.error = Some(format!("Could not save workspace: {error}"));
+            cx.notify();
+        }
     }
     fn update_usage_provider(&self, cx: &mut Context<Self>) {
         let view = self
@@ -1872,6 +1869,9 @@ impl Shell {
     }
     pub(crate) fn open(&mut self, id: i64, window: &mut Window, cx: &mut Context<Self>) {
         if let Some(owner) = self.workspace.session_for_pane(id) {
+            if self.focus_session_window(owner, cx) {
+                return;
+            }
             if self.deleting.contains(&owner) {
                 return;
             }
@@ -2193,7 +2193,8 @@ impl Shell {
         }
         if let Some(id) = self.order.iter().copied().find(|id| {
             let s = self.session_metadata(*id, cx);
-            s.summary.cwd == self.workspace.project
+            self.session_available_here(*id, cx)
+                && s.summary.cwd == self.workspace.project
                 && vorkspace_core::files::path_key(self.session_working_copy(*id, cx))
                     == vorkspace_core::files::path_key(self.working_copy())
                 && !s.summary.archived
@@ -2584,8 +2585,17 @@ impl Render for Shell {
             self.invalidate_chrome(cx);
         }
         let sidebar_width = self.docked_sidebar_width();
+        let name = self
+            .workspace
+            .active_vorkspace()
+            .map_or("vorkspace", |def| def.name.as_str());
+        if self.native_title != name {
+            self.native_title = name.to_owned();
+            window.set_window_title(name);
+        }
         if !self.window_observed {
             self.window_observed = true;
+            self.native_window = window.window_handle().downcast();
             crate::menu_bar::remember(window, cx);
             self.shortcuts = Some(shortcuts::install(cx.weak_entity(), window, cx));
             self.observations
@@ -2605,6 +2615,7 @@ impl Render for Shell {
                     this.window_active = window.is_window_active();
                     if this.window_active {
                         crate::menu_bar::remember(window, cx);
+                        let _ = this.save_window_state(None, false, cx);
                         let sessions: Vec<_> = this.sessions.values().cloned().collect();
                         for view in sessions {
                             view.update(cx, |v, cx| v.refresh_if_stale(cx));
@@ -2617,43 +2628,7 @@ impl Render for Shell {
             let shell = cx.entity().downgrade();
             window.on_window_should_close(cx, move |window, cx| {
                 shell
-                    .update(cx, |shell, cx| {
-                        #[cfg(not(test))]
-                        if shell.workspace.preferences.close_to_tray
-                            && crate::background_helper::menu_bar_ready(cx)
-                            && !shell.unsaved_files(cx)
-                        {
-                            vorkspace_ui::traffic_lights::hide(window);
-                            return false;
-                        }
-                        if shell.unsaved_files(cx) {
-                            shell.request_quit(window, cx);
-                            false
-                        } else if let Some(voice) =
-                            shell.vox.as_ref().filter(|v| v.read(cx).running()).cloned()
-                        {
-                            voice.update(cx, |v, cx| v.stop(cx));
-                            let handle = window.window_handle();
-                            cx.spawn(async move |_, cx| {
-                                for _ in 0..80 {
-                                    if !voice.read_with(cx, |v, _| v.running()) {
-                                        break;
-                                    }
-                                    cx.background_executor()
-                                        .timer(std::time::Duration::from_millis(100))
-                                        .await;
-                                }
-                                let _ = handle.update(cx, |_, window, _| window.remove_window());
-                            })
-                            .detach();
-                            false
-                        } else {
-                            if let Some(voice) = &shell.vox {
-                                voice.update(cx, |voice, cx| voice.stop(cx));
-                            }
-                            true
-                        }
-                    })
+                    .update(cx, |shell, cx| shell.allow_window_close(window, cx))
                     .unwrap_or(true)
             });
             self.observations

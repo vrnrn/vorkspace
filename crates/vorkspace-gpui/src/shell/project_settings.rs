@@ -310,6 +310,11 @@ impl Shell {
         cx: &mut Context<Self>,
     ) -> gpui::Div {
         let Some(chat) = chat else {
+            if !self.session_available_here(id, cx) {
+                return crate::bots::conversation_in_other_window(cx.listener(
+                    move |shell, _: &gpui::ClickEvent, window, cx| shell.open(id, window, cx),
+                ));
+            }
             return div().flex_1().min_h_0();
         };
         let (path, empty) = {

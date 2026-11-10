@@ -1274,7 +1274,13 @@ impl Bots {
             self.habit_changed(id, cx);
         }
         self.check_completions(cx);
-        if self.scheduling || self.active_run.is_some() {
+        let owner = cx.weak_entity();
+        if self.scheduling
+            || self.active_run.is_some()
+            || !self
+                .shared_roster
+                .update(cx, |roster, _| roster.claim_habits(owner))
+        {
             return;
         }
         self.scheduling = true;
@@ -1349,20 +1355,36 @@ impl Bots {
             return;
         };
         self.ensure_chat(id, cx);
-        let inherited = self
-            .chats
-            .get(id)
-            .map(|v| v.read(cx).bot_execution_settings())
-            .unwrap_or_default();
-        let provider = self
-            .chats
-            .get(id)
-            .map(|v| v.read(cx).summary.provider.clone())
-            .unwrap_or_else(|| "codex".into());
+        let other = self
+            .other_chat_owner(id, cx)
+            .and_then(|owner| owner.upgrade());
+        let live = self.chats.get(id).or_else(|| {
+            other
+                .as_ref()
+                .and_then(|manager| manager.read(cx).chats.get(id))
+        });
+        let inherited = live.map(|view| {
+            let view = view.read(cx);
+            (view.summary.provider.clone(), view.bot_execution_settings())
+        });
         let store = self.store.clone();
         let target = id.to_string();
         let work = cx.background_executor().spawn(async move {
             let db = locked(&store)?;
+            let (provider, inherited) = match (inherited, bot.session_id) {
+                (Some(live), _) => live,
+                (None, Some(session)) => (
+                    db.bot_session(session)?
+                        .ok_or("Bot conversation is unavailable")?
+                        .provider,
+                    db.agent_settings(session)?.unwrap_or_default(),
+                ),
+                (None, None) => bot
+                    .initial_configuration
+                    .as_ref()
+                    .map(|config| (config.provider.clone(), config.settings.clone()))
+                    .unwrap_or_else(|| ("codex".into(), Settings::default())),
+            };
             let cwd = std::env::var("HOME").unwrap_or_else(|_| ".".into());
             let mut s = db.create(&provider, &cwd)?;
             s.title = format!("{} · {}", bot.label(), habit.name);

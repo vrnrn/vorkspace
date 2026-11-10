@@ -512,7 +512,7 @@ fn terminal_tabs_restore_duplicate_cwd_identity_order_and_fresh_lazy_shells(
             shell.reorder_title_tab(&second, 0, cx);
             shell.persist(cx);
             (
-                shell.latest_state.lock().unwrap().clone(),
+                shell.latest_window_layout(cx),
                 shell.store.clone(),
                 first,
                 second,

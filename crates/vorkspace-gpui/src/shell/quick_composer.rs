@@ -2,21 +2,41 @@ use super::*;
 
 impl Shell {
     pub(super) fn configure_quick_composer(&mut self, cx: &mut Context<Self>) {
-        if let Some(receiver) = self.quick.configure(&self.workspace.preferences) {
-            self.quick.task = Some(cx.spawn(async move |this, cx| {
-                while receiver.recv().await.is_ok() {
-                    let _ = this.update_in(cx, |this, window, cx| {
-                        this.toggle_quick_composer(window, cx)
-                    });
+        if let Some(core) = &self.app_core {
+            core.update(cx, |core, cx| {
+                if let Some(receiver) = core.quick_shortcut.configure(&self.workspace.preferences) {
+                    core.quick_shortcut.task = Some(cx.spawn(async move |_, cx| {
+                        while receiver.recv().await.is_ok() {
+                            cx.update(|cx| {
+                                if let Some(target) = workspace_target(cx)
+                                    .and_then(|window| window.downcast::<Shell>())
+                                {
+                                    let _ = target.update(cx, Shell::toggle_quick_composer);
+                                }
+                            });
+                        }
+                    }));
                 }
-            }));
+            });
         }
     }
+
+    pub(super) fn quick_window_active(&self, cx: &App) -> bool {
+        self.quick
+            .window
+            .is_some_and(|handle| cx.windows().contains(&handle.into()))
+    }
+
     pub(super) fn toggle_quick_composer(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if self.management_modal_focus(cx).is_some() {
             return;
         }
-        if let Some(handle) = self.quick.window.take()
+        self.quick.window = None;
+        let existing = cx
+            .windows()
+            .into_iter()
+            .find_map(|handle| handle.downcast::<crate::composer::quick_composer::QuickComposer>());
+        if let Some(handle) = existing
             && handle
                 .update(cx, |_, window, _| window.remove_window())
                 .is_ok()

@@ -62,7 +62,10 @@ use std::{
     sync::{Arc, Mutex},
 };
 use vorkspace_core::{store::Store, transcript::Transcript};
-actions!(application, [Quit, Restart]);
+actions!(
+    application,
+    [Quit, Restart, NewWindow, CloseWindow, NextWindow]
+);
 fn quit(cx: &mut App) {
     background_helper::app_quitting(cx);
     let voice = vox::shutdown(cx);
@@ -142,6 +145,117 @@ fn launch_bounds(cx: &App) -> WindowBounds {
             .map(|display| display.visible_bounds())
             .unwrap_or(restore),
     )
+}
+
+pub(crate) struct WorkspaceWindowStart {
+    pub(crate) cwd: String,
+    pub(crate) saved: Option<String>,
+    pub(crate) layout: Option<u64>,
+    pub(crate) bounds: WindowBounds,
+}
+
+pub(crate) fn open_workspace_window(
+    db: vorkspace_runtime::runtime::Database,
+    sessions: Vec<vorkspace_core::store::Session>,
+    metadata: vorkspace_core::store::SessionSidebarMetadata,
+    start: WorkspaceWindowStart,
+    cx: &mut App,
+) -> gpui::Result<gpui::WindowHandle<shell::Shell>> {
+    cx.open_window(
+        WindowOptions {
+            window_bounds: Some(start.bounds),
+            show: false,
+            window_min_size: Some(size(px(820.), px(520.))),
+            window_background: WindowBackgroundAppearance::Blurred,
+            // GPUI owns the custom titlebar drag region.
+            app_owns_titlebar_drag: true,
+            titlebar: Some(TitlebarOptions {
+                title: Some("vorkspace".into()),
+                appears_transparent: true,
+                traffic_light_position: Some(point(
+                    px(vorkspace_ui::theme::TRAFFIC_LIGHT_MARGIN),
+                    px((vorkspace_ui::theme::TITLE_BAR_HEIGHT
+                        - vorkspace_ui::theme::TRAFFIC_LIGHT_SIZE)
+                        / 2.),
+                )),
+            }),
+            ..Default::default()
+        },
+        |window, cx| {
+            let shell = cx.new(|cx| {
+                shell::Shell::new_with_metadata(
+                    db,
+                    sessions,
+                    start.cwd,
+                    start.saved,
+                    metadata,
+                    start.layout,
+                    cx,
+                )
+            });
+            shell.update(cx, |shell, cx| {
+                shell.observe_scale(window, cx);
+                shell.focus_active(window, cx);
+                // AppKit rebuilds the buttons on some titlebar changes.
+                cx.observe_window_activation(window, |_, window, _| {
+                    vorkspace_ui::traffic_lights::pin(window)
+                })
+                .detach();
+            });
+            vorkspace_ui::traffic_lights::pin(window);
+            window.activate_window();
+            shell
+        },
+    )
+}
+
+fn restore_workspace_windows(
+    db: vorkspace_runtime::runtime::Database,
+    sessions: Vec<vorkspace_core::store::Session>,
+    metadata: vorkspace_core::store::SessionSidebarMetadata,
+    mut layouts: shell::WindowLayouts,
+    fallback: WorkspaceWindowStart,
+    explicit_cwd: bool,
+    cx: &mut App,
+) -> gpui::Result<()> {
+    // Open the last focused layout last so it comes to the front.
+    layouts
+        .entries
+        .sort_by_key(|entry| Some(entry.id) == layouts.focused);
+    let mut restored = false;
+    for (index, entry) in layouts.entries.into_iter().enumerate() {
+        let cwd = if explicit_cwd && Some(entry.id) == layouts.focused {
+            fallback.cwd.clone()
+        } else {
+            serde_json::from_str::<workspace::Workspace>(&entry.workspace)
+                .map(|workspace| workspace.project)
+                .unwrap_or_else(|_| fallback.cwd.clone())
+        };
+        let bounds = if index == 0 {
+            fallback.bounds
+        } else {
+            shell::additional_window_bounds(None, index, cx)
+        };
+        match open_workspace_window(
+            db.clone(),
+            sessions.clone(),
+            metadata.clone(),
+            WorkspaceWindowStart {
+                cwd,
+                saved: Some(entry.workspace),
+                layout: Some(entry.id),
+                bounds,
+            },
+            cx,
+        ) {
+            Ok(_) => restored = true,
+            Err(error) => eprintln!("Cannot restore workspace window: {error}"),
+        }
+    }
+    if !restored {
+        open_workspace_window(db, sessions, metadata, fallback, cx)?;
+    }
+    Ok(())
 }
 
 fn main() {
@@ -298,6 +412,7 @@ fn main() {
             .unwrap_or(std::path::Path::new("."))
             .join("checkpoints"),
     );
+    let layouts = shell::WindowLayouts::load(&db);
     let saved = db.ui_state().unwrap_or_else(|e| {
         eprintln!("Cannot read workspace settings: {e}");
         None
@@ -386,90 +501,54 @@ fn main() {
             .with_assets(assets::Assets);
     application.on_reopen(app_menu::reopen_workspace);
     application.run(move |cx: &mut App| {
-            if let Some(path) = diagnostics_path {
-                vorkspace_macos::hang_diagnostics::start(cx, path);
+        if let Some(path) = diagnostics_path {
+            vorkspace_macos::hang_diagnostics::start(cx, path);
+        }
+        cx.set_reduce_motion(vorkspace_macos::accessibility::reduce_motion());
+        dev_reload::install(cx);
+        vorkspace_ui::fluid::init(cx);
+        vorkspace_macos::updater::start(cx);
+        app_menu::init(cx);
+        input::bind(cx);
+        image_lightbox::bind(cx);
+        composer::composer_completion::bind(cx);
+        file_tools::file_editor::bind(cx);
+        popover::bind(cx);
+        file_tools::explorer::bind(cx);
+        git_tools::history::bind(cx);
+        git_tools::diff_view::bind(cx);
+        terminal::bind(cx);
+        let modifier = "cmd";
+        cx.bind_keys([
+            KeyBinding::new(&format!("{modifier}-q"), Quit, None),
+            KeyBinding::new(&format!("{modifier}-alt-r"), Restart, None),
+        ]);
+        shell::bind_keys(cx);
+        usage_footer::bind(cx);
+        cx.on_window_closed(|cx, _| {
+            if shell::workspace_target(cx).is_none() {
+                quit(cx)
             }
-            cx.set_reduce_motion(vorkspace_macos::accessibility::reduce_motion());
-            dev_reload::install(cx);
-            vorkspace_ui::fluid::init(cx);
-            vorkspace_macos::updater::start(cx);
-            app_menu::init(cx);
-            input::bind(cx);
-            image_lightbox::bind(cx);
-            composer::composer_completion::bind(cx);
-            file_tools::file_editor::bind(cx);
-            popover::bind(cx);
-            file_tools::explorer::bind(cx);
-            git_tools::history::bind(cx);
-            git_tools::diff_view::bind(cx);
-            terminal::bind(cx);
-            let modifier = "cmd";
-            cx.bind_keys([
-                KeyBinding::new(&format!("{modifier}-q"), Quit, None),
-                KeyBinding::new(&format!("{modifier}-alt-r"), Restart, None),
-            ]);
-            shell::bind_keys(cx);
-            usage_footer::bind(cx);
-            cx.on_window_closed(|cx, _| {
-                if cx.windows().is_empty() {
-                    quit(cx)
-                }
-            })
-            .detach();
-            let bounds = launch_bounds(cx);
-            cx.open_window(
-                WindowOptions {
-                    window_bounds: Some(bounds),
-                    show: false,
-                    window_min_size: Some(size(px(820.), px(520.))),
-                    window_background: WindowBackgroundAppearance::Blurred,
-                    // GPUI owns the custom chrome. AppKit must not reinterpret
-                    // its controls as native titlebar double-click/drag gestures.
-                    app_owns_titlebar_drag: true,
-                    titlebar: Some(TitlebarOptions {
-                        title: Some("vorkspace".into()),
-                        appears_transparent: true,
-                        traffic_light_position: // Original macOS chrome: 12 pt left inset, with
-                            // 14 pt native buttons centered in the 40 pt bar.
-                            Some(point(
-                                px(vorkspace_ui::theme::TRAFFIC_LIGHT_MARGIN),
-                                px((vorkspace_ui::theme::TITLE_BAR_HEIGHT - vorkspace_ui::theme::TRAFFIC_LIGHT_SIZE) / 2.),
-                            )),
-                    }),
-                    ..Default::default()
-                },
-                |window, cx| {
-                    let shell = cx.new(|cx| {
-                        shell::Shell::new_with_metadata(
-                            db,
-                            sessions,
-                            cwd,
-                            saved,
-                            sidebar_metadata,
-                            cx,
-                        )
-                    });
-                    shell.update(cx, |shell, cx| {
-                        shell.observe_scale(window, cx);
-                        shell.focus_active(window, cx);
-                    });
-                    {
-                        vorkspace_ui::traffic_lights::pin(window);
-                        // AppKit rebuilds the buttons on some titlebar changes.
-                        shell.update(cx, |_, cx| {
-                            cx.observe_window_activation(window, |_, window, _| {
-                                vorkspace_ui::traffic_lights::pin(window)
-                            })
-                            .detach();
-                        });
-                    }
-                    window.activate_window();
-                    shell
-                },
-            )
-            .expect("open GPUI window");
-            cx.activate(true);
-        });
+        })
+        .detach();
+        let bounds = launch_bounds(cx);
+        restore_workspace_windows(
+            db,
+            sessions,
+            sidebar_metadata,
+            layouts,
+            WorkspaceWindowStart {
+                cwd,
+                saved,
+                layout: None,
+                bounds,
+            },
+            explicit_cwd,
+            cx,
+        )
+        .expect("open GPUI window");
+        cx.activate(true);
+    });
 }
 
 #[cfg(test)]

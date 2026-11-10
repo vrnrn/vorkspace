@@ -427,7 +427,7 @@ mod tests {
                 shell.delete_session(created, w, cx);
                 // A cold rename updates Shell metadata and the Store without
                 // a loaded Conversation publishing SessionChanged.
-                shell.sessions.remove(&renamed);
+                shell.release_live_session(renamed, cx);
                 let title = "Needle renamed while parked";
                 shell.session_summaries.get_mut(&renamed).unwrap().title = title.into();
                 locked(&shell.store).unwrap().title(renamed, title).unwrap();

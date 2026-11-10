@@ -27,6 +27,7 @@ pub(crate) struct SharedRoster {
     // from the snapshot. Keep the deletion revision to distinguish them.
     pub(super) removed: HashMap<String, u64>,
     chat_owners: HashMap<String, WeakEntity<Bots>>,
+    habit_runner: Option<WeakEntity<Bots>>,
     writes: Option<Task<()>>,
 }
 
@@ -48,6 +49,7 @@ impl SharedRoster {
             revision: 0,
             removed: HashMap::new(),
             chat_owners: HashMap::new(),
+            habit_runner: None,
             writes: None,
         });
         let quit = shared.downgrade();
@@ -94,6 +96,16 @@ impl SharedRoster {
         if self.chat_owners.get(id) == Some(owner) {
             self.chat_owners.remove(id);
         }
+    }
+
+    pub(super) fn claim_habits(&mut self, owner: WeakEntity<Bots>) -> bool {
+        if let Some(holder) = &self.habit_runner
+            && holder.upgrade().is_some()
+        {
+            return holder == &owner;
+        }
+        self.habit_runner = Some(owner);
+        true
     }
 
     fn ids(roster: &Roster) -> Vec<String> {

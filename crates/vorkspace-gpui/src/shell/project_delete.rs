@@ -214,6 +214,31 @@ fn delete_saved(
 }
 
 impl Shell {
+    pub(super) fn window_uses_project(&self, path: &str, cx: &App) -> bool {
+        within(&self.workspace.project, path)
+            || self.sessions.values().any(|view| {
+                let session = view.read(cx);
+                within(&session.summary.cwd, path)
+                    || session
+                        .settings
+                        .worktree_cwd
+                        .as_deref()
+                        .is_some_and(|cwd| within(cwd, path))
+            })
+            || self.workspace.app_panes.iter().any(|(id, pane)| {
+                self.workspace.tab_of(*id).is_some()
+                    && (within(&pane.project, path) || within(&pane.worktree, path))
+            })
+            || self
+                .terminals
+                .iter()
+                .any(|(cwd, terminals)| !terminals.is_empty() && within(cwd, path))
+            || self
+                .pending_project_creations
+                .keys()
+                .any(|cwd| within(cwd, path))
+    }
+
     pub(super) fn finish_project_creation(&mut self, key: &str) {
         if let Some(count) = self.pending_project_creations.get_mut(key) {
             *count -= 1;
@@ -229,9 +254,12 @@ impl Shell {
         path: &str,
         ids: &[i64],
         before_release: bool,
-        cx: &App,
+        cx: &Context<Self>,
     ) -> Result<(), String> {
         let key = vorkspace_core::files::path_key(path);
+        if self.other_window_uses_project(path, cx) {
+            return Err("Close the other window using this project before deleting it.".into());
+        }
         if !self
             .workspace
             .projects
@@ -250,7 +278,7 @@ impl Shell {
             .copied()
             .unwrap_or(0)
             > 0
-            || self.quick.window.is_some()
+            || self.quick_window_active(cx)
         {
             return Err(
                 "Wait for pending conversations and close Quick Composer before deleting.".into(),
@@ -384,7 +412,7 @@ impl Shell {
         self.close_tabs(&open, None, window, cx);
         for id in idle {
             if self.workspace.tab_of(id).is_none() {
-                self.sessions.remove(&id);
+                self.release_live_session(id, cx);
             }
         }
         self.worktree_focus.retain(|p, _| !within(p, path));
@@ -400,6 +428,12 @@ impl Shell {
         cx: &mut Context<Self>,
     ) {
         let key = vorkspace_core::files::path_key(path);
+        if self.other_window_uses_project(path, cx) {
+            self.error =
+                Some("Close the other window using this project before archiving it.".into());
+            cx.notify();
+            return;
+        }
         let busy = self.session_summaries.iter().any(|(id, summary)| {
             let worktree = self.session_worktrees.get(id).and_then(|p| p.as_deref());
             (within(&summary.cwd, path) || worktree.is_some_and(|p| within(p, path)))
@@ -509,6 +543,19 @@ impl Shell {
             cx.notify();
             return;
         }
+        for (i, id) in ids.iter().enumerate() {
+            if !self.reserve_session_deletion(*id, cx) {
+                for id in &ids[..i] {
+                    self.release_session_deletion(*id, cx);
+                }
+                if let Ok(mut db) = locked(&self.store) {
+                    db.end_project_deletion(&path);
+                }
+                self.error = Some("A conversation is open in another window.".into());
+                cx.notify();
+                return;
+            }
+        }
         self.deleting_projects.insert(key.clone());
         self.deleting.extend(ids.iter().copied());
         let previous = self.group_writes.take();
@@ -532,7 +579,7 @@ impl Shell {
             });
             let result = work.await;
             let _ = this.update(cx, |this, cx| {
-                for id in &ids { this.deleting.remove(id); }
+                for id in &ids { this.deleting.remove(id); this.release_session_deletion(*id, cx); }
                 for id in &result.deleted { this.forget_session(*id, cx); }
                 this.deleting_projects.remove(&key);
                 let owner_check = if result.error.is_none() { this.project_delete_guard(&path, &ids, false, cx) } else { Ok(()) };

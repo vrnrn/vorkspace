@@ -212,9 +212,9 @@ fn native_setting_edits_persist_and_theme_switches_live(cx: &mut TestAppContext)
     visual.simulate_click(light.center(), Default::default());
     visual.run_until_parked();
     window
-        .update(visual, |shell, _, _| {
+        .update(visual, |shell, _, cx| {
             assert_eq!(shell.workspace.preferences.theme, "light");
-            let saved = shell.latest_state.lock().unwrap().clone();
+            let saved = shell.latest_window_layout(cx);
             let restored: Workspace = serde_json::from_str(&saved).unwrap();
             assert_eq!(restored.preferences.theme, "light");
             assert!(

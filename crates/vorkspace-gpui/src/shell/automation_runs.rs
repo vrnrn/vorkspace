@@ -1,5 +1,6 @@
 //! Runs use the same conversation lifecycle as an ordinary native submission.
 use super::*;
+use std::sync::atomic::{AtomicU64, Ordering};
 use vorkspace_core::automations::{self, DueAutomationRun, Service};
 
 pub(super) type ServiceHandle = Arc<Mutex<Service>>;
@@ -15,8 +16,6 @@ pub(super) struct State {
     pub open_requested: Option<u64>,
     opening: bool,
     polling: bool,
-    recovered: bool,
-    started_before: i64,
     pending: HashSet<String>,
     running: HashMap<i64, Running>,
     reserved: HashSet<i64>,
@@ -34,8 +33,6 @@ impl Default for State {
             open_requested: None,
             opening: false,
             polling: false,
-            recovered: false,
-            started_before: now(),
             pending: HashSet::new(),
             running: HashMap::new(),
             reserved: HashSet::new(),
@@ -59,6 +56,16 @@ fn service_lock(service: &ServiceHandle) -> Result<std::sync::MutexGuard<'_, Ser
 }
 
 impl Shell {
+    pub(super) fn automation_work_in_progress(&self) -> bool {
+        let state = &self.automation_state;
+        state.polling
+            || state.events_polling
+            || !state.running.is_empty()
+            || !state.reserved.is_empty()
+            || !state.pending.is_empty()
+            || state.writes.as_ref().is_some_and(|task| !task.is_ready())
+    }
+
     pub(super) fn initialize_automations(&mut self, cx: &mut Context<Self>) {
         if self.automation_state.opening || self.automation_state.service.is_some() {
             return;
@@ -86,7 +93,7 @@ impl Shell {
                         for item in retries {
                             this.automation_state.event_retries.insert(item.key(), item);
                         }
-                        if !cfg!(test) {
+                        if !cfg!(test) && this.holds_scheduler(cx) {
                             this.ensure_background_inbox(window, cx);
                         }
                         this.poll_automations(cx);
@@ -118,6 +125,9 @@ impl Shell {
     }
 
     pub(super) fn poll_automations(&mut self, cx: &mut Context<Self>) {
+        if !self.holds_scheduler(cx) {
+            return;
+        }
         // A rejected or deferred submission still needs a terminal receipt.
         let sessions: Vec<_> = self.automation_state.running.keys().copied().collect();
         for id in sessions {
@@ -131,8 +141,9 @@ impl Shell {
             return;
         }
         self.automation_state.polling = true;
-        let recover = !self.automation_state.recovered;
-        let cutoff = self.automation_state.started_before;
+        let core = self.app_core.clone().expect("registered workspace window");
+        let recover = !core.read(cx).automation_recovered;
+        let cutoff = core.read(cx).automation_cutoff;
         let work = cx.background_executor().spawn(async move {
             let mut service = service_lock(&service)?;
             let mut runs = if recover {
@@ -155,7 +166,7 @@ impl Shell {
                 this.automation_state.polling = false;
                 match result {
                     Ok((runs, has_events)) => {
-                        this.automation_state.recovered = true;
+                        core.update(cx, |core, _| core.automation_recovered = true);
                         for run in runs {
                             this.launch_automation(run, false, cx);
                         }
@@ -178,6 +189,14 @@ impl Shell {
         items: Vec<vorkspace_core::inbox::Item>,
         cx: &mut Context<Self>,
     ) {
+        if !self.holds_scheduler(cx) {
+            if let Some(owner) = self.scheduler_window(cx) {
+                cx.defer(move |cx| {
+                    let _ = owner.update(cx, |shell, cx| shell.inbox_automation_events(items, cx));
+                });
+            }
+            return;
+        }
         for item in items {
             self.automation_state.event_retries.insert(item.key(), item);
         }
@@ -199,6 +218,7 @@ impl Shell {
             return;
         }
         let Some(service) = self.automation_state.service.clone() else {
+            self.initialize_automations(cx);
             return;
         };
         self.automation_state.events_polling = true;

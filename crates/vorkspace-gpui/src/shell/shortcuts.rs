@@ -34,6 +34,8 @@ fn workspace_action(action: &dyn Action) -> bool {
         || matches!(
             name,
             "application::Quit"
+                | "application::NewWindow"
+                | "application::CloseWindow"
                 | "image_lightbox::ZoomIn"
                 | "image_lightbox::ZoomOut"
                 | "image_lightbox::ResetZoom"

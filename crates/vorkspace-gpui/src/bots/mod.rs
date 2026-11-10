@@ -571,6 +571,13 @@ impl Bots {
                 .iter()
                 .any(|m| m.habit_sessions.contains(&id))
     }
+    pub(crate) fn has_active_work(&self, cx: &App) -> bool {
+        self.scheduling
+            || self.active_run.is_some()
+            || !self.running.is_empty()
+            || !self.loading_chats.is_empty()
+            || self.chats.values().any(|chat| chat.read(cx).busy)
+    }
     pub(crate) fn protected_app_target(&self, id: i64, cx: &App) -> bool {
         // Sidebar visibility is a display choice. Only internal identities
         // (and their active owners) are protected from ordinary app controls.

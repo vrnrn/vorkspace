@@ -106,7 +106,7 @@ fn sidebar_visibility_switches_stay_open_preserve_notes_and_survive_restart(
                 assert_eq!(menu.toggle_state(id), Some(false));
             }
             assert!(!cx.global::<vorkspace_ui::preferences::Preferences>().bots);
-            let saved = shell.latest_state.lock().unwrap().clone();
+            let saved = shell.latest_window_layout(cx);
             let restored = Workspace::restore(Some(&saved), &[], "/work/vorkspace");
             assert!(!restored.sidebar_notes_visible);
             assert!(!restored.sidebar_automations_visible);
@@ -293,7 +293,7 @@ fn sidebar_grip_drag_reorders_without_toggling_and_preserves_connector_tabs(
         .update(visual, |shell, _, cx| {
             assert!(shell.enabled_connectors(cx).contains(&Connector::Github));
             assert_eq!(shell.connector_pages[&Connector::Github], page);
-            let saved = shell.latest_state.lock().unwrap().clone();
+            let saved = shell.latest_window_layout(cx);
             let restored = Workspace::restore(Some(&saved), &[], "/work/vorkspace");
             assert_eq!(
                 restored.sidebar_navigation_order,

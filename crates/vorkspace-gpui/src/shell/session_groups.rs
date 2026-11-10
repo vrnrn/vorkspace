@@ -137,6 +137,16 @@ impl Shell {
         cx: &mut Context<Self>,
         write: impl FnOnce(&mut vorkspace_core::store::Store) -> Result<(), String> + Send + 'static,
     ) {
+        self.write_session_group(what, Vec::new(), cx, write);
+    }
+
+    fn write_session_group(
+        &mut self,
+        what: &'static str,
+        changed: Vec<i64>,
+        cx: &mut Context<Self>,
+        write: impl FnOnce(&mut vorkspace_core::store::Store) -> Result<(), String> + Send + 'static,
+    ) {
         let store = self.store.clone();
         let previous = self.group_writes.take();
         self.group_writes = Some(cx.spawn(async move |this, cx| {
@@ -146,12 +156,18 @@ impl Shell {
             let work = cx
                 .background_executor()
                 .spawn(async move { write(&mut *locked(&store)?) });
-            if let Err(error) = work.await {
-                let _ = this.update(cx, |this, cx| {
+            let result = work.await;
+            let _ = this.update(cx, |this, cx| match result {
+                Ok(()) => {
+                    for id in changed {
+                        this.publish_session_summary(id, cx);
+                    }
+                }
+                Err(error) => {
                     this.error = Some(format!("Could not {what}: {error}"));
                     cx.notify();
-                });
-            }
+                }
+            });
         }));
     }
 
@@ -323,6 +339,13 @@ impl Shell {
                 }
             }
             "pin" => {
+                if ids.iter().any(|id| !self.session_available_here(*id, cx)) {
+                    self.error = Some(
+                        "Open the conversations in their windows to change their pins.".into(),
+                    );
+                    cx.notify();
+                    return;
+                }
                 let pinned = !ids
                     .iter()
                     .all(|id| self.session_metadata(*id, cx).summary.pinned);
@@ -334,7 +357,9 @@ impl Shell {
                         view.update(cx, |s, _| s.summary.pinned = pinned);
                     }
                 }
-                self.store_write("pin the session", cx, move |s| s.set_pinned(&ids, pinned));
+                self.write_session_group("pin the session", ids.clone(), cx, move |s| {
+                    s.set_pinned(&ids, pinned)
+                });
                 self.invalidate_chrome(cx);
             }
             "rename" => self.start_rename(RenameTarget::Session(id), window, cx),
@@ -524,9 +549,15 @@ impl Shell {
             cx.notify();
             return;
         }
-        if !self.session_summaries.contains_key(&id) || !self.deleting.insert(id) {
+        if !self.session_summaries.contains_key(&id) || self.deleting.contains(&id) {
             return;
         }
+        if !self.reserve_session_deletion(id, cx) {
+            self.report_session_delete_error(id, "the conversation is open in another window");
+            cx.notify();
+            return;
+        }
+        self.deleting.insert(id);
         self.close_preview(cx);
         if let Some(view) = self.sessions.get(&id) {
             view.update(cx, |session, cx| session.stop_if_busy(cx));
@@ -536,6 +567,7 @@ impl Shell {
         }
         if self.workspace.tab_of(id).is_some() {
             self.deleting.remove(&id);
+            self.release_session_deletion(id, cx);
             self.report_session_delete_error(id, "it is still open");
             cx.notify();
             return;
@@ -558,6 +590,7 @@ impl Shell {
             let result = work.await;
             let _ = this.update(cx, |this, cx| {
                 this.deleting.remove(&id);
+                this.release_session_deletion(id, cx);
                 match result {
                     Ok(()) => this.forget_session(id, cx),
                     Err(error) => this.report_session_delete_error(id, &error),
@@ -569,9 +602,20 @@ impl Shell {
         }));
     }
     pub(super) fn forget_session(&mut self, id: i64, cx: &mut Context<Self>) {
-        // A tab opened on it while the store was deleting keeps it alive.
         if self.workspace.tab_of(id).is_some() {
             return;
+        }
+        self.remove_session_from_catalog(id, cx);
+        self.publish_session_deletion(id, cx);
+    }
+
+    pub(super) fn remove_session_from_catalog(&mut self, id: i64, cx: &mut Context<Self>) {
+        if !self.session_summaries.contains_key(&id) {
+            return;
+        }
+        // A layout restored in a peer can still contain an unavailable tab.
+        if self.workspace.tab_of(id).is_some() && !self.workspace.close_pane(id) {
+            self.workspace.close(id);
         }
         if self
             .session_preview
@@ -581,7 +625,7 @@ impl Shell {
             self.session_preview = None;
             self.preview_close = None;
         }
-        self.sessions.remove(&id);
+        self.release_live_session(id, cx);
         self.session_removal_epoch = self.session_removal_epoch.wrapping_add(1);
         self.session_summaries.remove(&id);
         self.draft_sessions.remove(&id);
@@ -663,6 +707,13 @@ impl Shell {
         if commit && !name.is_empty() {
             match renaming.target {
                 RenameTarget::Session(id) => {
+                    if !self.session_available_here(id, cx) {
+                        self.error =
+                            Some("Open the conversation in its window to rename it.".into());
+                        self.focus_active(window, cx);
+                        cx.notify();
+                        return;
+                    }
                     if self.session_summaries.contains_key(&id)
                         && self.session_metadata(id, cx).summary.title != name
                     {
@@ -676,7 +727,9 @@ impl Shell {
                         } else {
                             self.sync_search_session(id, cx);
                         }
-                        self.store_write("rename the session", cx, move |s| s.title(id, &name));
+                        self.write_session_group("rename the session", vec![id], cx, move |s| {
+                            s.title(id, &name)
+                        });
                     }
                 }
             }
@@ -816,6 +869,16 @@ impl Shell {
     }
     /// Saves the parsed link, or with `keep` false, removes it.
     fn save_link(&mut self, keep: bool, window: &mut Window, cx: &mut Context<Self>) {
+        if self
+            .link_dialog
+            .as_ref()
+            .is_some_and(|dialog| !self.session_available_here(dialog.id, cx))
+        {
+            self.error =
+                Some("Open the conversation in its window to change its work item.".into());
+            self.close_link_dialog(window, cx);
+            return;
+        }
         let Some(dialog) = &mut self.link_dialog else {
             return;
         };
@@ -838,7 +901,7 @@ impl Shell {
         if let Some(session) = self.sessions.get(&id) {
             session.update(cx, |s, _| s.summary.work_item = item.clone());
         }
-        self.store_write("link the session", cx, move |s| {
+        self.write_session_group("link the session", vec![id], cx, move |s| {
             s.set_work_item(id, item.as_ref())
         });
         self.invalidate_chrome(cx);

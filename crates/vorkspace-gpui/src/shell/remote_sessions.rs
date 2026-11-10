@@ -109,7 +109,7 @@ impl Shell {
                             // tab must not be rebound to a new host conversation.
                             if this.workspace.tab_of(id).is_none() {
                                 this.session_summaries.remove(&id);
-                                this.sessions.remove(&id);
+                                this.release_live_session(id, cx);
                             }
                         }
                         for (summary, running, waiting, draft) in summaries {

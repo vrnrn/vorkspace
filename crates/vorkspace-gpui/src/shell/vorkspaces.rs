@@ -165,6 +165,17 @@ impl Shell {
             .collect();
         items.extend([
             MenuItem::Separator,
+            MenuAction::new("window", "Open in New Window")
+                .submenu(
+                    self.workspace
+                        .vorkspaces
+                        .iter()
+                        .map(|def| {
+                            MenuAction::new(format!("new-window:{}", def.id), def.name.clone())
+                        })
+                        .collect(),
+                )
+                .into(),
             // No icon, so it lines up with the vorkspace names above.
             MenuAction::new("manage", "Manage vorkspaces").into(),
         ]);
@@ -180,6 +191,8 @@ impl Shell {
         if let Some(id) = action.strip_prefix("switch:") {
             let id = id.to_owned();
             self.switch_vorkspace(&id, window, cx);
+        } else if let Some(id) = action.strip_prefix("new-window:") {
+            self.new_window(Some(id), window, cx);
         } else if action == "manage" {
             self.open_vorkspace_dialog(None, window, cx);
         }

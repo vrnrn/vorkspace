@@ -91,6 +91,29 @@ fn clipboard_route(action: shell::status_menu::Action, cx: &mut App) {
 
 pub(crate) fn init(cx: &mut App) {
     crate::menu_bar::install(build, cx);
+    cx.on_action(|_: &crate::NewWindow, cx| {
+        with_workspace(cx, |shell, window, cx| shell.new_window(None, window, cx));
+    });
+    cx.on_action(|_: &crate::CloseWindow, cx| {
+        with_workspace(cx, shell::Shell::request_close_window);
+    });
+    cx.on_action(|_: &crate::NextWindow, cx| {
+        let windows: Vec<_> = cx
+            .windows()
+            .into_iter()
+            .filter(|window| window.downcast::<shell::Shell>().is_some())
+            .collect();
+        if windows.len() > 1
+            && let Some(index) = workspace_target(cx)
+                .and_then(|target| windows.iter().position(|window| *window == target))
+        {
+            let next = windows[(index + 1) % windows.len()];
+            let _ = next.update(cx, |_, window, _| {
+                window.activate_window();
+                vorkspace_ui::traffic_lights::show(window);
+            });
+        }
+    });
     cx.on_action(|_: &crate::background_helper::Reopen, cx| reopen_workspace(cx));
     cx.on_action(|_: &crate::background_helper::Settings, cx| {
         clipboard_route(shell::status_menu::Action::Settings, cx)
@@ -174,11 +197,26 @@ pub(crate) fn init(cx: &mut App) {
         cx.open_url("https://github.com/vrnrn/vorkspace/issues/new?template=feature_request.yml")
     });
     cx.bind_keys([
+        KeyBinding::new("cmd-shift-n", crate::NewWindow, None),
+        KeyBinding::new("cmd-shift-w", crate::CloseWindow, None),
         KeyBinding::new("cmd-h", Hide, None),
         KeyBinding::new("cmd-alt-h", HideOthers, None),
         KeyBinding::new("cmd-m", shell::MinimizeWindow, None),
         KeyBinding::new("ctrl-cmd-f", shell::ToggleFullScreen, None),
     ]);
+}
+
+fn with_workspace(
+    cx: &mut App,
+    action: impl FnOnce(&mut shell::Shell, &mut gpui::Window, &mut gpui::Context<shell::Shell>)
+    + 'static,
+) {
+    if let Some(target) = workspace_target(cx).and_then(|window| window.downcast::<shell::Shell>())
+    {
+        cx.defer(move |cx| {
+            let _ = target.update(cx, action);
+        });
+    }
 }
 
 fn window_command(cx: &mut App, command: impl FnOnce(&mut gpui::Window) + 'static) {
@@ -208,6 +246,7 @@ pub(crate) fn build(prefs: &Preferences) -> Vec<Menu> {
             MenuItem::action("Quit vorkspace", crate::Quit),
         ]),
         Menu::new("File").items([
+            MenuItem::action("New Window", crate::NewWindow),
             MenuItem::action("Open Project…", shell::OpenProject),
             MenuItem::action("Quick Composer…", crate::background_helper::Composer),
             MenuItem::action("Go to File…", shell::GoToFile),
@@ -275,6 +314,9 @@ pub(crate) fn build(prefs: &Preferences) -> Vec<Menu> {
             MenuItem::action("Appearance…", shell::OpenAppearance),
         ]),
         Menu::new("Window").items([
+            MenuItem::action("Next Window", crate::NextWindow),
+            MenuItem::action("Close Window", crate::CloseWindow),
+            MenuItem::separator(),
             MenuItem::action("Minimize", shell::MinimizeWindow),
             MenuItem::action("Zoom", shell::ZoomWindow),
             MenuItem::action("Toggle Full Screen", shell::ToggleFullScreen),

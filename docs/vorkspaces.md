@@ -37,18 +37,16 @@ Connector lists show items for the visible vorkspace. Background issue and pull 
 
 The rail's options menu no longer has an Activity switch. The expanded rail lists working sessions first, and the compact rail keeps its strip of working agents.
 
-## One window per vorkspace
+## Workspace windows
 
-Vorkspaces are designed so each can own a window. Separate windows are being built in steps, so that nothing runs twice and no session has two owners.
+**File → New Window** (⇧⌘N) opens a fresh window in the current vorkspace. To open a specific vorkspace, choose **Open in New Window** from the vorkspace switcher. Each window has its own selected vorkspace, project, tabs, pane layout, and zoom. The app restores open layouts on launch and brings the last active layout to the front. Closing one window removes it from the restore list. The last layout remains available on the next launch.
 
 `shell::app_core::AppCore` is the application's single owner of what windows share, one per data store:
 
-- Vorkspace definitions and placed Bots, saved under the `vorkspaces` setting. A change in one window reaches every other window; each window keeps its own choice of active vorkspace.
-- The scheduler lease. Only the holding window fires reminders and automations. When it closes, the next window to ask takes the lease.
-- Session leases. A session is live (has a `Conversation` and may run a provider) in at most one window. Another window lists it but does not load it. A lease is free once its window closes or no longer has the session loaded.
+- Vorkspace definitions and Bot membership are saved under the `vorkspaces` setting. The shared roster commits each Bot and its backing session before a window can run that conversation.
+- The `workspace-windows` setting holds window layouts, project availability, and shared preferences. The focused layout also feeds the older `workspace` setting for compatibility.
+- The scheduler lease lets one window fire reminders and automations. The shared Bot roster also gives one manager responsibility for Habit scheduling.
+- A conversation has one live owner. Opening it in another window raises its owner. Once the owner closes, another window can load the saved conversation. Session metadata changes reach the other windows without opening their transcripts.
+- Remote-host connections, the native Dock badge, and the agent app bridge are shared. The bridge routes a call to the window running the calling session, falling back to the oldest window.
 
-- The agent app bridge. The core starts its socket once. Each call goes to the window with the calling session live, else the window whose Bots run that session, else the oldest open window.
-
-Leases name their holder and are checked again at every claim, so a closed window never leaves one stuck.
-
-Still owned per window, and the remaining blockers before the app opens a second window: the Bot manager (Habit scheduler, peer outbox and its saved roster), Vox, remote-host connections and OS notifications.
+**Window → Close Window** (⇧⌘W) checks for active work and prompts before discarding unsaved file edits. Notes must finish saving before the window closes. The last window honors **Close to Tray** when enabled.

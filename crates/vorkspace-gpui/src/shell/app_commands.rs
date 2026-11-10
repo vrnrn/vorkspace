@@ -103,7 +103,10 @@ impl Shell {
         let id = summary.id;
         // Preparation ran in the background. A view opened since then belongs
         // to its newer owner, including any input it has already collected.
-        if self.sessions.contains_key(&id) || self.workspace.tab_of(id).is_some() {
+        if self.sessions.contains_key(&id)
+            || self.workspace.tab_of(id).is_some()
+            || !self.session_available_here(id, cx)
+        {
             return Err(format!(
                 "New session {id} was already opened; its state and working copy were preserved"
             ));
@@ -145,6 +148,7 @@ impl Shell {
             return Err(self.rollback_app_start(id, cleanup, error, cx));
         }
         self.workspace.restore_project(&summary.cwd);
+        self.publish_session_summary(id, cx);
         self.started_by.insert(id, caller);
         if let Some((target, edge)) = placement {
             let before = self.active_leaves();
@@ -224,6 +228,9 @@ impl Shell {
         }
         locked(&self.store)?.check_app_target(caller, id, project)?;
         self.check_live_app_target(id, cx)?;
+        if !self.session_available_here(id, cx) {
+            return Err("The conversation is open in another window".into());
+        }
         if self.archiving.contains(&id) || self.deleting.contains(&id) {
             return Err("Session management is already in progress".into());
         }
@@ -274,6 +281,7 @@ impl Shell {
             self.forget_session(id, cx);
         } else {
             self.refresh_session_mark(id, cx);
+            self.publish_session_summary(id, cx);
         }
         self.invalidate_chrome(cx);
         cx.notify();

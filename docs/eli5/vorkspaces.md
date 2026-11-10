@@ -14,6 +14,8 @@ Under **Look**, type up to two **Icon letters** to tell your vorkspaces apart at
 
 The sidebar with Explorer, Changes and To-dos has its own folder button in the top bar, next to the rail button (or press ⇧⌘B). It stays open or closed the way you left it, whatever you are looking at.
 
-Each vorkspace is meant to get its own window. That is being built in steps. Already, the app keeps one shared list of vorkspaces for all windows, lets only one window run reminders and automations, and never lets two windows run the same session. Bots, voice and a few other background parts still need the same treatment before a second window can open.
+Use **File → New Window** (⇧⌘N) to open another window in your current vorkspace. To start in a different vorkspace, use **Open in New Window** in the switcher. Each window keeps its own tabs, layout and zoom. Projects, Bots, and most settings are shared. If you open a conversation that is already live, the app brings its window forward.
+
+Quit the app to reopen the same window layouts next time. **Window → Close Window** (⇧⌘W) closes just the current window, while ⌘W closes a tab. Finish or stop any active work before closing the window that owns it.
 
 The [technical guide](../vorkspaces.md) has the details.

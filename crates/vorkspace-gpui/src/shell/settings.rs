@@ -82,7 +82,14 @@ impl Shell {
                 .map(|v| v.read(cx).devices.clone())
                 .unwrap_or_default(),
             remote: Some(self.remote.clone()),
-            quick_error: self.quick.error.clone(),
+            quick_error: self.quick.error.clone().or_else(|| {
+                self.app_core
+                    .as_ref()?
+                    .read(cx)
+                    .quick_shortcut
+                    .error
+                    .clone()
+            }),
             inbox_connectors: self
                 .inbox
                 .as_ref()

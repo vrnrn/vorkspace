@@ -30,13 +30,18 @@ pub(crate) struct Controller {
     pub window: Option<WindowHandle<QuickComposer>>,
     pub last: Option<Launch>,
     pub error: Option<String>,
-    pub task: Option<Task<()>>,
     pub events: Option<Subscription>,
+}
+
+#[derive(Default)]
+pub(crate) struct Shortcut {
+    pub error: Option<String>,
+    pub task: Option<Task<()>>,
     config: String,
     #[cfg(not(test))]
     registration: Option<hotkey::Registration>,
 }
-impl Controller {
+impl Shortcut {
     pub fn configure(
         &mut self,
         prefs: &vorkspace_ui::preferences::Preferences,
