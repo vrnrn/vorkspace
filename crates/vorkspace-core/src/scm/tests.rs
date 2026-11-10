@@ -992,7 +992,7 @@ fn git_actions_that_need_helpers_use_login_shell_path() {
 }
 
 #[test]
-fn file_diff_reads_each_side_and_flags_binary() {
+fn file_diff_reads_each_side_and_bounds_content() {
     let dir = tmp();
     assert!(init_git_commit(
         dir.path(),
@@ -1019,6 +1019,18 @@ fn file_diff_reads_each_side_and_flags_binary() {
     );
     assert!(file_diff(dir.path(), "bin.dat", false).unwrap().binary);
     assert!(file_diff(dir.path(), "../escape", false).is_err());
+    std::fs::File::create(dir.path().join("large.dat"))
+        .unwrap()
+        .set_len(MAX_TEXT_FILE_BYTES + 1)
+        .unwrap();
+    for staged in [false, true] {
+        if staged {
+            stage_file(dir.path(), "large.dat").unwrap();
+        }
+        let large = file_diff(dir.path(), "large.dat", staged).unwrap();
+        assert!(large.too_large);
+        assert!(large.original.is_empty() && large.current.is_empty());
+    }
 
     assert!(git(dir.path(), &["add", "a.txt"]));
     std::fs::write(dir.path().join("a.txt"), "one\nTWO\nthree\n").unwrap();

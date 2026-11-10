@@ -1,7 +1,8 @@
 //! Git process setup and bounded output collection.
-use crate::shell_env as shell;
+use crate::{process, shell_env as shell};
 use std::{
     io::Read,
+    os::unix::process::CommandExt,
     path::Path,
     process::{Command, Stdio},
     sync::{
@@ -9,14 +10,14 @@ use std::{
         mpsc,
     },
     thread,
-    time::Duration,
+    time::{Duration, Instant},
 };
 
 /// Any git can start a filter (git-lfs), which a Finder launch's bare PATH
 /// lacks. The cached search path finds it without waiting on the login shell.
 pub(crate) fn git_cmd() -> Command {
     let mut cmd = Command::new("git");
-    crate::process::configure_child(&mut cmd);
+    process::configure_child(&mut cmd);
     cmd.env("PATH", shell::cached_gui_search_path())
         .env("GIT_TERMINAL_PROMPT", "0");
     cmd
@@ -111,21 +112,26 @@ pub(crate) fn git_output_capped(
     max_bytes: usize,
     cancel: Option<&AtomicBool>,
 ) -> Option<(Vec<u8>, bool)> {
+    let deadline = Instant::now() + Duration::from_secs(5);
+    let expired =
+        || Instant::now() >= deadline || cancel.is_some_and(|token| token.load(Ordering::Acquire));
+    if expired() {
+        return None;
+    }
     let mut child = git_cmd()
+        .process_group(0)
         .arg("--no-pager")
         .arg("-C")
         .arg(root)
         .args(args)
         .env("GIT_OPTIONAL_LOCKS", "0")
-        .env("GIT_TERMINAL_PROMPT", "0")
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::null())
         .spawn()
         .ok()?;
     let Some(mut stdout) = child.stdout.take() else {
-        let _ = child.kill();
-        let _ = child.wait();
+        process::terminate(&mut child);
         return None;
     };
     let (sender, receiver) = mpsc::sync_channel(8);
@@ -151,32 +157,18 @@ pub(crate) fn git_output_capped(
                 }
             }
         });
-    let mut reader = match reader {
-        Ok(reader) => Some(reader),
+    let reader = match reader {
+        Ok(reader) => reader,
         Err(_) => {
-            let _ = child.kill();
-            let _ = child.wait();
+            process::terminate(&mut child);
             return None;
         }
-    };
-    let stop = |child: &mut std::process::Child, reader: &mut Option<thread::JoinHandle<()>>| {
-        let _ = child.kill();
-        let _ = child.wait();
-        // Dropping the handle detaches the reader. A killed git process can leave
-        // a shell descendant holding the pipe, so joining here would re-block the
-        // cancelled search until that unrelated descendant exits.
-        reader.take();
     };
 
     let mut buf = Vec::new();
-    let deadline = std::time::Instant::now() + Duration::from_secs(5);
     loop {
-        if std::time::Instant::now() >= deadline {
-            stop(&mut child, &mut reader);
-            return None;
-        }
-        if cancel.is_some_and(|token| token.load(Ordering::Acquire)) {
-            stop(&mut child, &mut reader);
+        if expired() {
+            process::terminate(&mut child);
             return None;
         }
         match receiver.recv_timeout(Duration::from_millis(100)) {
@@ -185,29 +177,31 @@ pub(crate) fn git_output_capped(
                 let remaining = max_bytes.saturating_sub(buf.len());
                 if chunk.len() > remaining {
                     buf.extend_from_slice(&chunk[..remaining]);
-                    stop(&mut child, &mut reader);
+                    process::terminate(&mut child);
                     return Some((buf, true));
                 }
                 buf.extend_from_slice(&chunk);
             }
-            Ok(Err(_)) => {
-                stop(&mut child, &mut reader);
-                return None;
-            }
-            Err(mpsc::RecvTimeoutError::Timeout) => {
-                if cancel.is_some_and(|token| token.load(Ordering::Acquire)) {
-                    stop(&mut child, &mut reader);
-                    return None;
-                }
-            }
-            Err(mpsc::RecvTimeoutError::Disconnected) => {
-                stop(&mut child, &mut reader);
+            Err(mpsc::RecvTimeoutError::Timeout) => continue,
+            Ok(Err(_)) | Err(mpsc::RecvTimeoutError::Disconnected) => {
+                process::terminate(&mut child);
                 return None;
             }
         }
     }
-    let _ = reader.take().map(thread::JoinHandle::join);
-    let status = child.wait().ok()?;
+    // Joining is safe once the reader has sent EOF. A process can close its
+    // output before exiting, so the same deadline also bounds the reap.
+    let _ = reader.join();
+    let status = loop {
+        match child.try_wait() {
+            Ok(Some(status)) => break status,
+            Ok(None) if !expired() => thread::sleep(Duration::from_millis(1)),
+            _ => {
+                process::terminate(&mut child);
+                return None;
+            }
+        }
+    };
     if git_status_ok(&status, args) {
         Some((buf, false))
     } else {

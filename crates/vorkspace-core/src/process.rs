@@ -40,7 +40,7 @@ pub fn isolate(command: &mut Command) {
     command.process_group(0);
 }
 
-/// Called only by the provider worker. Always reap the immediate child.
+/// Terminate an isolated process group and reap the immediate child.
 pub fn terminate(child: &mut std::process::Child) {
     unsafe {
         libc::kill(-(child.id() as i32), libc::SIGKILL);

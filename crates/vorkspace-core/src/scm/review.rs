@@ -550,7 +550,10 @@ fn peel_commit(root: &Path, spec: &str) -> Result<String, String> {
     .ok_or_else(|| "Unknown commit".into())
 }
 fn index_mode(root: &Path, relative: &str) -> Option<String> {
-    let out = git_run(root, &["ls-files", "--stage", "--", relative])?;
+    let out = git_run(
+        root,
+        &["--literal-pathspecs", "ls-files", "--stage", "--", relative],
+    )?;
     let mode = out.lines().next()?.split_whitespace().next()?;
     (mode.len() == 6 && mode.bytes().all(|b| b.is_ascii_digit())).then(|| mode.to_string())
 }
@@ -566,7 +569,6 @@ fn hash_object(root: &Path, relative: &str, contents: &[u8]) -> Result<String, S
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
-    crate::process::configure_child(&mut command);
     let mut child = command.spawn().map_err(|e| e.to_string())?;
     let mut stdin = child
         .stdin
