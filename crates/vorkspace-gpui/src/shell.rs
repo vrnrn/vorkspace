@@ -49,6 +49,7 @@ mod session_groups;
 mod session_loading;
 use session_directory::{SessionDirectory, SessionRecord};
 mod session_preview;
+mod session_rail;
 mod settings;
 mod shortcuts;
 mod sidebar_list;
@@ -60,6 +61,7 @@ mod title_tabs;
 mod titlebar_tests;
 #[cfg(test)]
 mod ui_parity_tests;
+mod vorkspace_dialog;
 mod vorkspaces;
 mod vox;
 mod windows;
@@ -591,7 +593,7 @@ pub(crate) struct Shell {
     background_dialog: Option<project_settings::OpenBackground>,
     /// Project settings: one project's appearance, background, Codebase
     /// Memory and notifications, in the same dialog frame as a Bot's.
-    pub(super) vorkspace_dialog: Option<vorkspaces::VorkspaceDialog>,
+    pub(super) vorkspace_dialog: Option<vorkspace_dialog::VorkspaceDialog>,
     /// What every window shares; `None` only before the window joins it.
     app_core: Option<Entity<app_core::AppCore>>,
     preparing_sessions: Arc<std::sync::atomic::AtomicUsize>,
