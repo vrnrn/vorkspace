@@ -29,9 +29,9 @@ pub(super) fn render(
     width: Option<Pixels>,
     cx: &mut Context<TranscriptView>,
 ) -> Option<AnyElement> {
-    Some(match call.panel()? {
-        Panel::Tasks(list) => task_list(&list, start),
-        Panel::Agent(run) => agent(view, call, &run, start, width, cx),
+    Some(match &*call.panel()? {
+        Panel::Tasks(list) => task_list(list, start),
+        Panel::Agent(run) => agent(view, call, run, start, width, cx),
     })
 }
 fn task_list(list: &TaskList, start: usize) -> AnyElement {
@@ -683,7 +683,7 @@ fn agent_trail(
             .iter()
             .filter(|call| {
                 matches!(call.state, ToolState::Failed | ToolState::Cancelled)
-                    && matches!(call.panel(), Some(Panel::Agent(_)))
+                    && matches!(call.panel().as_deref(), Some(Panel::Agent(_)))
             })
             .count();
         let title = if failed_agents > 0 {

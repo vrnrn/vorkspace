@@ -2,6 +2,7 @@
 use super::{ToolCall, ToolState};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use std::borrow::Cow;
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
@@ -149,7 +150,9 @@ impl AgentStep {
         let text = format!("{action} {target}").trim().to_owned();
         let tool_kind = string(&display["kind"])
             .filter(|kind| kind != "other")
-            .or_else(|| matches!(call.panel(), Some(Panel::Agent(_))).then(|| "agent".into()))
+            .or_else(|| {
+                matches!(call.panel().as_deref(), Some(Panel::Agent(_))).then(|| "agent".into())
+            })
             .unwrap_or_else(|| call.name.clone());
         let detail = if call.output.is_empty() {
             desktop_detail(&display)
@@ -547,10 +550,16 @@ impl ToolCall {
             .then(|| self.output.trim())
             .filter(|report| !report.is_empty())
     }
-    pub fn panel(&self) -> Option<Panel> {
-        if let Some(panel) = &self.panel {
-            return Some(panel.clone());
-        }
+    /// Borrow structured data already decoded by the caller. Older rows may
+    /// need a projection from their provider input.
+    pub fn panel(&self) -> Option<Cow<'_, Panel>> {
+        self.panel
+            .as_ref()
+            .map(Cow::Borrowed)
+            .or_else(|| self.infer_panel().map(Cow::Owned))
+    }
+
+    fn infer_panel(&self) -> Option<Panel> {
         let input: Value = serde_json::from_str(&self.input).unwrap_or_default();
         let name = self.name.to_lowercase().replace([' ', '-', '_'], "");
         if ["todowrite", "writetodos", "updatetodos", "updateplan"]
@@ -599,7 +608,7 @@ impl ToolCall {
     }
     pub fn agent_mut(&mut self) -> Option<&mut AgentRun> {
         if self.panel.is_none() {
-            self.panel = self.panel();
+            self.panel = self.infer_panel();
         }
         match self.panel.as_mut() {
             Some(Panel::Agent(run)) => Some(run),

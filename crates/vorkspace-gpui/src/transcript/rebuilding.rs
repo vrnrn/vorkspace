@@ -282,14 +282,14 @@ impl TranscriptView {
             row.role == "tool"
                 && row.first
                 && serde_json::from_str::<ToolCall>(&row.text)
-                    .is_ok_and(|call| matches!(call.panel(), Some(Panel::Agent(_))))
+                    .is_ok_and(|call| matches!(call.panel().as_deref(), Some(Panel::Agent(_))))
         }) || self.rows[old_run_start..].iter().any(|row| {
             self.messages
                 .get(row.message)
                 .is_some_and(|message| message.run == current_turn)
                 && matches!(
                     &row.body,
-                    Body::Tool { call, .. } if matches!(call.panel(), Some(Panel::Agent(_)))
+                    Body::Tool { call, .. } if matches!(call.panel().as_deref(), Some(Panel::Agent(_)))
                 )
         }) {
             // Pinned runs sit below the fold's work rather than at their

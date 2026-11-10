@@ -50,7 +50,8 @@ fn codex_path_titles_match_tauri_for_both_item_formats() {
                     &mut Vec::new(),
                 )
                 .unwrap();
-            let Some(Panel::Agent(run)) = tool(&events).panel() else {
+            let panel = tool(&events).panel();
+            let Some(Panel::Agent(run)) = panel.as_deref() else {
                 panic!()
             };
             assert_eq!(run.display_name(), expected);
@@ -68,7 +69,8 @@ fn codex_path_titles_match_tauri_for_both_item_formats() {
                     &mut Vec::new(),
                 )
                 .unwrap();
-            let Some(Panel::Agent(run)) = tool(&events).panel() else {
+            let panel = tool(&events).panel();
+            let Some(Panel::Agent(run)) = panel.as_deref() else {
                 panic!()
             };
             assert_eq!(run.display_name(), expected);
@@ -77,7 +79,8 @@ fn codex_path_titles_match_tauri_for_both_item_formats() {
                         "id":"read", "type":"commandExecution", "command":"cat source.rs", "status":"completed"
                     }}}), &mut Vec::new(),
                 ).unwrap();
-            let Some(Panel::Agent(run)) = tool(&events).panel() else {
+            let panel = tool(&events).panel();
+            let Some(Panel::Agent(run)) = panel.as_deref() else {
                 panic!()
             };
             assert_eq!(run.display_name(), expected);
@@ -105,7 +108,8 @@ fn codex_duplicate_path_items_keep_the_original_task_title() {
         )
         .unwrap();
     assert_eq!(tool(&events).id, "spawn-id");
-    let Some(Panel::Agent(run)) = tool(&events).panel() else {
+    let panel = tool(&events).panel();
+    let Some(Panel::Agent(run)) = panel.as_deref() else {
         panic!()
     };
     assert_eq!(run.display_name(), "Audit correctness");
@@ -120,7 +124,8 @@ fn codex_completed_spawn_wait_and_child_lifecycle_keep_actual_owner() {
     let child = p.frame(json!({"method":"item/completed","params":{"threadId":"child","item":{"id":"child-answer","type":"agentMessage","text":"Only the child said this"}}}), &mut Vec::new()).unwrap();
     assert_eq!(child.len(), 1);
     assert_eq!(tool(&child).id, "spawn-id");
-    let Some(Panel::Agent(run)) = tool(&child).panel() else {
+    let panel = tool(&child).panel();
+    let Some(Panel::Agent(run)) = panel.as_deref() else {
         panic!()
     };
     assert_eq!(run.ids, vec!["child"]);
@@ -145,7 +150,8 @@ fn codex_early_child_snapshots_replay_and_do_not_finish_main_turn() {
     let events = p.frame(json!({"method":"item/completed","params":{"threadId":"child","item":{"id":"early","type":"agentMessage","text":"Early snapshot"}}}), &mut Vec::new()).unwrap();
     assert!(events.is_empty());
     spawn(&mut p);
-    let Some(Panel::Agent(run)) = p.tools["spawn-id"].panel() else {
+    let panel = p.tools["spawn-id"].panel();
+    let Some(Panel::Agent(run)) = panel.as_deref() else {
         panic!()
     };
     assert_eq!(run.steps[0].id, "early");
@@ -167,7 +173,8 @@ fn codex_plan_snapshots_update_one_real_turn_and_clear_explicitly() {
         )
         .unwrap();
     assert_eq!(tool(&a).id, tool(&b).id);
-    let Some(Panel::Tasks(list)) = tool(&b).panel() else {
+    let panel = tool(&b).panel();
+    let Some(Panel::Tasks(list)) = panel.as_deref() else {
         panic!()
     };
     assert!(list.items.is_empty());
@@ -179,7 +186,8 @@ fn claude_child_work_never_leaks_into_parent_answer_or_metrics() {
     let child = json!({"type":"assistant","parent_tool_use_id":"agent-call","message":{"id":"child-message","model":"actual-child-model","usage":{"input_tokens":999999},"content":[{"type":"text","text":"Child narration"},{"type":"tool_use","id":"child-tool","name":"Read","input":{"file_path":"source.rs"}}]}});
     let events = p.frame(child.clone(), &mut Vec::new()).unwrap();
     assert!(events.iter().all(|event| matches!(event, Event::Tool(_))));
-    let Some(Panel::Agent(run)) = tool(&events).panel() else {
+    let panel = tool(&events).panel();
+    let Some(Panel::Agent(run)) = panel.as_deref() else {
         panic!()
     };
     assert_eq!(run.model.as_deref(), Some("actual-child-model"));
@@ -187,7 +195,8 @@ fn claude_child_work_never_leaks_into_parent_answer_or_metrics() {
     assert_eq!(run.steps[0].id, "child-message:0");
     p.frame(json!({"type":"user","parent_tool_use_id":"agent-call","message":{"content":[{"type":"tool_result","tool_use_id":"child-tool","content":"Read result"}]}}), &mut Vec::new()).unwrap();
     p.frame(child, &mut Vec::new()).unwrap();
-    let Some(Panel::Agent(run)) = p.tools["agent-call"].panel() else {
+    let panel = p.tools["agent-call"].panel();
+    let Some(Panel::Agent(run)) = panel.as_deref() else {
         panic!()
     };
     assert_eq!(run.steps.len(), 2);
@@ -235,7 +244,8 @@ fn claude_task_descriptions_keep_the_name_after_child_work_starts() {
     ] {
         let events = p.frame(update, &mut Vec::new()).unwrap();
         let call = tool(&events);
-        let Some(Panel::Agent(run)) = call.panel() else {
+        let panel = call.panel();
+        let Some(Panel::Agent(run)) = panel.as_deref() else {
             panic!()
         };
         assert_eq!(run.display_name(), "Correctness review");
@@ -256,7 +266,8 @@ fn claude_task_ids_progress_and_reports_come_from_task_events() {
     assert_eq!(p.tools["agent"].state, ToolState::Running);
     assert!(p.tools["agent"].output.is_empty());
     let progress = p.frame(json!({"type":"system","subtype":"task_progress","task_id":"actual-task","summary":"Inspecting files"}), &mut Vec::new()).unwrap();
-    let Some(Panel::Agent(run)) = tool(&progress).panel() else {
+    let panel = tool(&progress).panel();
+    let Some(Panel::Agent(run)) = panel.as_deref() else {
         panic!()
     };
     assert_eq!(run.ids, vec!["actual-task"]);

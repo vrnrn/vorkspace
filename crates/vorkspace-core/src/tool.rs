@@ -7,6 +7,8 @@ pub use presentation::{CommandStep, ToolPresentation};
 pub(crate) const OUTPUT_LIMIT: usize = 64 * 1024;
 pub(crate) const OUTPUT_OMISSION: &str = "… earlier output omitted …\n";
 
+const OMITTED_OUTPUT: &str = "… earlier output omitted …\n";
+
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ToolState {
@@ -49,17 +51,29 @@ impl ToolCall {
         self.bound_output();
     }
     pub fn bound_output(&mut self) {
-        // Keep a useful tail without retaining unbounded command output in the UI.
-        if self.output.len() > OUTPUT_LIMIT {
-            let mut at = self.output.len() - OUTPUT_LIMIT;
-            while !self.output.is_char_boundary(at) {
-                at += 1;
-            }
-            self.output = format!("{OUTPUT_OMISSION}{}", &self.output[at..]);
+        if let Some(tail) = self.output_tail() {
+            self.output = format!("{OMITTED_OUTPUT}{tail}");
         }
     }
+
+    /// Compare against the projected output without copying the full source.
+    pub(crate) fn bounded_output_matches(&self, other: &str) -> bool {
+        match self.output_tail() {
+            Some(tail) => other.strip_prefix(OMITTED_OUTPUT) == Some(tail),
+            None => self.output == other,
+        }
+    }
+
+    fn output_tail(&self) -> Option<&str> {
+        const LIMIT: usize = 64 * 1024;
+        if self.output.len() <= LIMIT {
+            return None;
+        }
+        let at = self.output.ceil_char_boundary(self.output.len() - LIMIT);
+        Some(&self.output[at..])
+    }
     pub fn summary(&self) -> (String, String) {
-        match self.panel() {
+        match self.panel().as_deref() {
             Some(tasks::Panel::Tasks(list)) => return ("Tasks".into(), list.progress()),
             Some(tasks::Panel::Agent(run)) => return ("Agent".into(), run.title().into()),
             None => {}

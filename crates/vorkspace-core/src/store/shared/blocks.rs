@@ -5,10 +5,13 @@ use crate::{
     transcript::{Row, Transcript},
 };
 use serde_json::{json, Value};
+use std::{
+    borrow::Cow,
+    collections::{hash_map::Entry, HashMap},
+};
 
 fn tool(block: &Value) -> ToolCall {
     let meta = &block["tool"];
-    let preview = &meta["preview"];
     // Rich display metadata must supplement even a sparse nativeInput without
     // changing the recorded arguments. Older native envelopes remain readable.
     let native = meta["nativeInput"]
@@ -25,6 +28,15 @@ fn tool(block: &Value) -> ToolCall {
         })
         .unwrap_or(meta);
     let presentation = presentation_metadata(presentation);
+    let mut call = tool_fields(block);
+    call.panel = tasks::from_desktop(block);
+    call.display = presentation.is_object().then_some(presentation);
+    call
+}
+
+fn tool_fields(block: &Value) -> ToolCall {
+    let meta = &block["tool"];
+    let preview = &meta["preview"];
     let input = meta["nativeInput"]
         .as_str()
         .map(str::to_owned)
@@ -80,8 +92,8 @@ fn tool(block: &Value) -> ToolCall {
             .into(),
         input,
         output,
-        panel: tasks::from_desktop(block),
-        display: presentation.is_object().then_some(presentation),
+        panel: None,
+        display: None,
         state: match meta["status"].as_str() {
             Some("failed" | "error") => ToolState::Failed,
             Some("cancelled" | "canceled" | "aborted") => ToolState::Cancelled,
@@ -159,7 +171,7 @@ fn project_content(block: &Value, remote: bool) -> Result<Vec<Row>, String> {
             call.name = "update_plan".into();
             call.input = block["taskList"].to_string();
         }
-        if !matches!(call.panel(), Some(tasks::Panel::Agent(_))) {
+        if !matches!(call.panel().as_deref(), Some(tasks::Panel::Agent(_))) {
             call.bound_output();
         }
         t.begin("tool");
@@ -253,19 +265,14 @@ pub(crate) fn project(blocks: &[Value]) -> Result<Vec<Row>, String> {
     }
     Ok(rows)
 }
-fn update(old: Option<&Value>, rows: &[Row]) -> Result<Value, String> {
-    let mut block = old
-        .cloned()
-        .unwrap_or_else(|| json!({"id":format!("gpui-{}",crate::session::new_id())}));
+/// Update the source object in place. The caller has already compared its
+/// display rows and retains any separate metadata groups on the same block.
+fn update(block: &mut Value, new: bool, rows: &[&Row]) -> Result<(), String> {
     let role = rows[0].role.as_str();
-    let text = rows.iter().map(|r| r.text.as_str()).collect::<String>();
-    // Reuse the complete original object for unchanged display rows. In
-    // particular, bounded tool previews must not truncate the stored output.
-    if let Some(old) = old {
-        if project_content(old, false)? == rows {
-            return Ok(old.clone());
-        }
-    }
+    let text = match rows {
+        [row] => Cow::Borrowed(row.text.as_str()),
+        _ => Cow::Owned(rows.iter().map(|r| r.text.as_str()).collect::<String>()),
+    };
     if role == "interjection" {
         let note: crate::transcript::Interjection = super::parse(&text)?;
         block["role"] = json!("system");
@@ -274,15 +281,15 @@ fn update(old: Option<&Value>, rows: &[Row]) -> Result<Value, String> {
         if let Some(severity) = note.severity {
             block["interjection"]["severity"] = json!(severity);
         }
-        if old.is_none() {
+        if new {
             block["sentAt"] = json!(rows[0].sent_at);
         }
     } else if role == "bot-card" {
         let mut card: Value = super::parse(&text)?;
-        if old.is_none() && card["id"].is_string() {
+        if new && card["id"].is_string() {
             block["id"] = card["id"].clone();
         }
-        if let Some(external) = old.and_then(|old| old["botCard"]["sessionId"].as_str()) {
+        if let Some(external) = block["botCard"]["sessionId"].as_str() {
             // UI handles are a projection; never write one over the desktop UUID.
             card["sessionId"] = json!(external);
         }
@@ -294,8 +301,8 @@ fn update(old: Option<&Value>, rows: &[Row]) -> Result<Value, String> {
         block["botCard"] = card;
     } else if role == "tool" {
         let call: ToolCall = super::parse(&text)?;
-        let previous = old.map(tool);
-        if let Some(tasks::Panel::Tasks(list)) = call.panel() {
+        let panel = call.panel();
+        if let Some(tasks::Panel::Tasks(list)) = panel.as_deref() {
             block["role"] = json!("tasks");
             block["text"] = json!(list
                 .items
@@ -339,37 +346,15 @@ fn update(old: Option<&Value>, rows: &[Row]) -> Result<Value, String> {
                 .collect::<Vec<_>>());
             block["taskList"]["nativeCallId"] = json!(call.id);
             block["taskList"]["explanation"] = json!(list.explanation);
-            if old.is_none() {
+            if new {
                 block["sentAt"] = json!(rows[0].sent_at);
             }
-            return Ok(block);
+            return Ok(());
         }
+        let previous = (!new).then(|| tool_fields(block));
         block["role"] = json!("tool");
-        if let Some(tasks::Panel::Agent(run)) = call.panel() {
-            let updated = tasks::desktop_agent(&run);
-            if !block["agentRun"].is_object() {
-                block["agentRun"] = json!({});
-            }
-            for (key, value) in updated.as_object().unwrap() {
-                if key == "steps" {
-                    let mut steps = block["agentRun"]["steps"]
-                        .as_array()
-                        .cloned()
-                        .unwrap_or_default();
-                    for step in value.as_array().unwrap() {
-                        if let Some(old) = steps.iter_mut().find(|old| old["id"] == step["id"]) {
-                            for (field, value) in step.as_object().unwrap() {
-                                old[field] = value.clone();
-                            }
-                        } else {
-                            steps.push(step.clone());
-                        }
-                    }
-                    block["agentRun"]["steps"] = json!(steps);
-                } else {
-                    block["agentRun"][key] = value.clone();
-                }
-            }
+        if let Some(tasks::Panel::Agent(run)) = panel.as_deref() {
+            merge_agent(&mut block["agentRun"], run);
         }
         if !block["tool"].is_object() {
             block["tool"] = json!({});
@@ -417,11 +402,10 @@ fn update(old: Option<&Value>, rows: &[Row]) -> Result<Value, String> {
                 block["tool"]["preview"]["title"] = block["tool"]["title"].clone();
             }
         }
-        if previous.as_ref().is_none_or(|p| {
-            let mut p = p.clone();
-            p.bound_output();
-            p.output != call.output
-        }) {
+        let output_changed = previous
+            .as_ref()
+            .is_none_or(|p| !p.bounded_output_matches(&call.output));
+        if output_changed {
             block["tool"]["detail"] = json!(call.output);
         }
         if previous.as_ref().is_none_or(|p| p.state != call.state) {
@@ -434,7 +418,7 @@ fn update(old: Option<&Value>, rows: &[Row]) -> Result<Value, String> {
         }
     } else {
         // Plans and task lists keep their desktop role and associated metadata.
-        if old.is_none() {
+        if new {
             block["role"] = json!(match role {
                 "bot-system" => "user",
                 "error" => "system",
@@ -449,42 +433,76 @@ fn update(old: Option<&Value>, rows: &[Row]) -> Result<Value, String> {
         }
         block["text"] = json!(text);
     }
-    if old.is_none() {
+    if new {
         if let Some(at) = rows[0].sent_at {
             block["sentAt"] = json!(at);
         }
     }
-    Ok(block)
+    Ok(())
+}
+/// Keep source order and metadata. The first stored occurrence of an ID owns
+/// updates to it, including in older data that contains duplicate step IDs.
+fn merge_agent(agent: &mut Value, run: &tasks::AgentRun) {
+    let Value::Object(mut fields) = tasks::desktop_agent(run) else {
+        unreachable!("a projected delegated run is an object");
+    };
+    let Some(Value::Array(incoming)) = fields.remove("steps") else {
+        unreachable!("a projected delegated run includes its steps");
+    };
+    if !agent.is_object() {
+        *agent = json!({});
+    }
+    let agent = agent.as_object_mut().unwrap();
+    agent.extend(fields);
+    let steps = agent.entry("steps").or_insert_with(|| json!([]));
+    if !steps.is_array() {
+        *steps = json!([]);
+    }
+    let steps = steps.as_array_mut().unwrap();
+    let mut positions = HashMap::with_capacity(steps.len());
+    for (index, step) in steps.iter().enumerate() {
+        if let Some(id) = step["id"].as_str() {
+            positions.entry(id.to_owned()).or_insert(index);
+        }
+    }
+    for step in incoming {
+        let id = step["id"].as_str().expect("a projected step has an ID");
+        match positions.entry(id.to_owned()) {
+            Entry::Occupied(position) => {
+                let Value::Object(fields) = step else {
+                    unreachable!("a projected step is an object");
+                };
+                steps[*position.get()]
+                    .as_object_mut()
+                    .unwrap()
+                    .extend(fields);
+            }
+            Entry::Vacant(position) => {
+                position.insert(steps.len());
+                steps.push(step);
+            }
+        }
+    }
 }
 pub(super) fn merge(blocks: &[Value], start: usize, delta: &[Row]) -> Result<Vec<Value>, String> {
-    let mut rows = project(blocks)?;
+    let displayed = blocks
+        .iter()
+        .map(project_block)
+        .collect::<Result<Vec<_>, _>>()?;
+    let mut rows: Vec<&Row> = displayed.iter().flatten().collect();
     let original_len = rows.len();
-    if start > rows.len() {
+    if start > original_len {
         return Err(
             "Transcript changed; refusing to overwrite a different conversation revision".into(),
         );
     }
-    for (ix, row) in delta.iter().enumerate() {
-        if let Some(existing) = rows.get_mut(start + ix) {
-            *existing = row.clone();
-        } else {
-            rows.push(row.clone());
-        }
-    }
-    let mut groups = std::collections::BTreeMap::new();
-    let mut from = 0;
-    while from < rows.len() {
-        let mut to = from + 1;
-        while to < rows.len() && !rows[to].first {
-            to += 1;
-        }
-        groups.insert(from, &rows[from..to]);
-        from = to;
-    }
+    let replaced = delta.len().min(original_len - start);
+    rows.splice(start..start + replaced, delta);
+    let mut groups = rows.chunk_by(|_, next| !next.first);
+    let mut group_start = 0;
     let mut offset = 0;
-    let mut result = Vec::new();
-    for block in blocks {
-        let displayed = project_block(block)?;
+    let mut result = Vec::with_capacity(blocks.len());
+    for (block, displayed) in blocks.iter().zip(&displayed) {
         if displayed.is_empty() {
             result.push(block.clone());
             continue;
@@ -495,11 +513,18 @@ pub(super) fn merge(blocks: &[Value], start: usize, delta: &[Row]) -> Result<Vec
             let end = (local + 1..displayed.len())
                 .find(|&i| displayed[i].first)
                 .unwrap_or(displayed.len());
-            let group = groups.remove(&(offset + local)).ok_or(
+            if group_start != offset + local {
+                return Err(
+                    "A saved message boundary changed; the original conversation was preserved"
+                        .into(),
+                );
+            }
+            let group = groups.next().ok_or(
                 "A saved message boundary changed; the original conversation was preserved",
             )?;
+            group_start += group.len();
             let original = &displayed[local..end];
-            if group != original {
+            if !group.iter().copied().eq(original) {
                 if group[0].role == "bot-card" && value["botCard"].is_object() {
                     let card: Value =
                         super::parse(&group.iter().map(|r| r.text.as_str()).collect::<String>())?;
@@ -518,7 +543,7 @@ pub(super) fn merge(blocks: &[Value], start: usize, delta: &[Row]) -> Result<Vec
                         | "bot-launch"
                         | crate::transcript::attachments::ROLE
                 ) {
-                    value = update(Some(&value), group)?;
+                    update(&mut value, false, group)?;
                 } else {
                     return Err(
                         "Card references changed; the original conversation was preserved".into(),
@@ -530,10 +555,11 @@ pub(super) fn merge(blocks: &[Value], start: usize, delta: &[Row]) -> Result<Vec
         result.push(value);
         offset += displayed.len();
     }
-    for (offset, rows) in groups {
-        if offset < original_len {
+    for rows in groups {
+        if group_start < original_len {
             return Err("Invalid transcript update".into());
         }
+        group_start += rows.len();
         if rows[0].role == crate::transcript::attachments::ROLE {
             let prompt = result
                 .last_mut()
@@ -546,7 +572,9 @@ pub(super) fn merge(blocks: &[Value], start: usize, delta: &[Row]) -> Result<Vec
             }
             prompt["attachments"] = files;
         } else {
-            result.push(update(None, rows)?);
+            let mut block = json!({"id":format!("gpui-{}",crate::session::new_id())});
+            update(&mut block, true, rows)?;
+            result.push(block);
         }
     }
     Ok(result)
@@ -659,7 +687,7 @@ mod panel_tests {
         let source = json!({"id":"block","role":"tasks","text":"[ ] Inspect","taskList":{"sourceId":"provider-source","items":[{"id":"actual","text":"Inspect","status":"pending","future":true}],"futureField":"keep"},"unknown":7});
         let projected = project(std::slice::from_ref(&source)).unwrap();
         let mut call: ToolCall = serde_json::from_str(&projected[0].text).unwrap();
-        let Some(Panel::Tasks(mut list)) = call.panel() else {
+        let Some(Panel::Tasks(mut list)) = call.panel().map(Cow::into_owned) else {
             panic!()
         };
         list.items[0].status = tasks::TaskStatus::Completed;
@@ -709,7 +737,7 @@ mod panel_tests {
         assert_eq!(loaded.input, call.input);
         assert_eq!(loaded.panel(), call.panel());
         assert!(
-            matches!(loaded.panel(), Some(Panel::Agent(AgentRun { ids, .. })) if ids == vec!["actual-child-thread"])
+            matches!(loaded.panel().as_deref(), Some(Panel::Agent(AgentRun { ids, .. })) if ids == &["actual-child-thread"])
         );
     }
 }
