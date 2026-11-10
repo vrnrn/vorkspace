@@ -7,7 +7,7 @@ use std::{
     io::Read,
 };
 use vorkspace_core::{
-    agent::{Approval, Decision, Question, QuestionItem, QuestionOption},
+    agent::{Approval, Decision, Question, QuestionItem, QuestionOption, RemoteAction},
     remote::protocol::SessionObservation,
     store::{RemoteHistory, RemoteSession, RemoteUpload},
 };
@@ -607,18 +607,15 @@ pub fn run_with_client(
         let mut binding = locked(&store)?
             .remote_session(summary.id)?
             .ok_or("Remote session no longer exists")?;
-        let action = settings
-            .remote_action
-            .take()
-            .unwrap_or_else(|| json!({"type":"send"}));
-        let attaching = action["type"] == "attach";
+        let action = settings.remote_action.take();
+        let attaching = matches!(action, Some(RemoteAction::Attach(_)));
         if !attaching && Kind::parse(&summary.provider).is_none() {
             return Err(format!(
                 "Provider {} is no longer supported. Saved remote history is still available.",
                 summary.provider
             ));
         }
-        let retrying = action["type"] == "retry";
+        let retrying = action == Some(RemoteAction::Retry);
         if !attaching
             && let Some(recovery) = binding
                 .rejected
@@ -683,7 +680,10 @@ pub fn run_with_client(
             if vorkspace_core::ticket_context::has_links(&prompt) {
                 require_ticket_context(&descriptor)?;
             }
-            let ticket_context = if action["type"] == "send" || action["type"].is_null() {
+            let ticket_context = if matches!(
+                action,
+                None | Some(RemoteAction::SendDraft(_) | RemoteAction::BuildPlan(_))
+            ) {
                 let directory = locked(&store)?.data_dir().map(std::path::Path::to_path_buf);
                 Some(vorkspace_core::ticket_context::admit(
                     &prompt,
@@ -724,11 +724,12 @@ pub fn run_with_client(
                 configure["runtimeMode"] = json!(settings.access.id());
                 binding.outbox.push(configure);
             }
-            let operation = action["type"].as_str().unwrap_or("send");
-            let operation = if prompt.trim() == "/compact" {
-                "compact"
-            } else {
-                operation
+            let operation = match &action {
+                Some(RemoteAction::Compact) => "compact",
+                Some(RemoteAction::SaveDraft) => "draft",
+                Some(RemoteAction::RemoveDraft(_)) => "removeDraft",
+                None if prompt.trim() == "/compact" => "compact",
+                _ => "send",
             };
             let mut send = command(operation, binding.session_id.as_deref());
             if matches!(operation, "send" | "draft") {
@@ -757,13 +758,19 @@ pub fn run_with_client(
                 if settings.plan {
                     send["intent"] = json!("plan");
                 }
-                for key in ["draftBlockId", "planBlockId", "intent"] {
-                    if let Some(value) = action.get(key) {
-                        send[key] = value.clone();
+                match &action {
+                    Some(RemoteAction::SendDraft(id)) => {
+                        send["draftBlockId"] = json!(id);
+                        send["intent"] = json!("default");
                     }
+                    Some(RemoteAction::BuildPlan(id)) => {
+                        send["planBlockId"] = json!(id);
+                        send["intent"] = json!("build");
+                    }
+                    _ => {}
                 }
-            } else if operation == "removeDraft" {
-                send["draftBlockId"] = action["draftBlockId"].clone();
+            } else if let Some(RemoteAction::RemoveDraft(id)) = &action {
+                send["draftBlockId"] = json!(id);
             }
             binding.outbox.push(send);
             binding.rejected = None;
@@ -771,9 +778,9 @@ pub fn run_with_client(
             binding.summary.updated_at = vorkspace_core::time::now_ms();
             binding = locked(&store)?.commit_remote_journal(&before, binding)?;
         }
-        let mut run = if attaching {
+        let mut run = if let Some(RemoteAction::Attach(run_id)) = action {
             Some(ObservedRun {
-                run_id: run_id(&action).map(str::to_owned),
+                run_id,
                 legacy_prompt: None,
             })
         } else {

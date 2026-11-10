@@ -251,7 +251,6 @@ impl TurnProjection {
         if let Some(outcome) = outcome {
             use vorkspace_runtime::runtime::TurnOutcome;
             if this.is_remote() {
-                this.settings.remote_action = None;
                 this.remote_state.refreshing = false;
                 this.remote_state.awaiting_successor = outcome == TurnOutcome::Superseded;
             }

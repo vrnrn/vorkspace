@@ -61,6 +61,24 @@ fn offline_pending_and_busy_guards_preserve_typed_message(cx: &mut TestAppContex
 }
 
 #[gpui::test]
+fn declined_remote_draft_and_compact_leave_the_composer_owned_by_the_user(cx: &mut TestAppContext) {
+    let view = conversation(cx);
+    view.update(cx, |view, cx| {
+        view.account_switching = true;
+        view.attachments = vec!["/tmp/keep.png".into()];
+        for text in ["/draft Draft text", "/compact"] {
+            view.input
+                .update(cx, |input, cx| input.set_text(text.into(), cx));
+            view.send(cx);
+            assert_eq!(view.input.read(cx).content.as_ref(), text);
+            assert_eq!(view.attachments, [PathBuf::from("/tmp/keep.png")]);
+            assert!(view.settings.remote_action.is_none());
+            assert!(!view.busy);
+        }
+    });
+}
+
+#[gpui::test]
 fn remote_capability_and_command_guards_keep_composer_and_attachments(cx: &mut TestAppContext) {
     let view = conversation(cx);
     cx.update(|cx| {

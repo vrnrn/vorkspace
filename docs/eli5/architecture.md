@@ -34,6 +34,8 @@ The app reads saved messages and details about their replies together. Switching
 
 The app groups quick bursts of command output and keeps a readable tail. An idle agent can stay ready for the next message while the saved transcript stays in the conversation's storage.
 
+Queued messages keep the attachments and mode they had when you queued them. Continuing an earlier turn or acting on a remote plan leaves the files you added to your next draft in the composer.
+
 The app keeps word-fade animation data while new text is arriving, then releases it. When you scroll a long chat, the prompt rail uses your position to find nearby prompts.
 
 The app prepares a few attachment thumbnails at a time across all windows. Opening a picture full screen has its own loading path.

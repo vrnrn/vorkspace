@@ -2,7 +2,7 @@
 use super::*;
 use gpui::AnyElement;
 use serde::{Deserialize, Serialize};
-use serde_json::{Value, json};
+use vorkspace_core::agent::RemoteAction;
 use vorkspace_ui::radius;
 
 #[derive(Clone, Default, Deserialize, Serialize)]
@@ -72,8 +72,8 @@ impl Plan {
             text
         }
     }
-    pub(crate) fn command(&self) -> Value {
-        json!({"type":"send","intent":"build","planBlockId":self.id})
+    pub(crate) fn command(&self) -> RemoteAction {
+        RemoteAction::BuildPlan(self.id.clone())
     }
     pub(crate) fn prompt(&self) -> String {
         format!("Build the approved plan:\n\n{}", self.text)

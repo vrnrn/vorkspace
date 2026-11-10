@@ -1,9 +1,19 @@
 //! Submitting prompts and receiving a turn's updates.
 use super::*;
 use std::path::PathBuf;
+use vorkspace_core::agent::RemoteAction;
 
 enum PromptSource<'a> {
-    User,
+    Composer,
+    Direct,
+    Coordinator,
+    Queued {
+        id: String,
+        attachments: Vec<PathBuf>,
+        prepared: Option<String>,
+        mode: Option<String>,
+    },
+    Remote(RemoteAction),
     Bot {
         message: &'a vorkspace_core::bot::Message,
         mode: Option<&'a str>,
@@ -57,11 +67,14 @@ impl Conversation {
         if self.reject_user_entry(cx) {
             return;
         }
-        if let Err(error) = self.execution_provider() {
-            self.status = error;
-            cx.notify();
-            return;
-        }
+        let kind = match self.execution_provider() {
+            Ok(kind) => kind,
+            Err(error) => {
+                self.status = error;
+                cx.notify();
+                return;
+            }
+        };
         if let Some(error) = &self.composer_draft.error {
             self.status = error.clone();
             cx.notify();
@@ -219,11 +232,15 @@ impl Conversation {
         if self.input.read(cx).is_composing() {
             return;
         }
-        if !self.busy && !self.stopping && !turn_driver::available(&self.store, self.summary.id, cx)
-        {
-            self.status = turn_driver::ALREADY_ACTIVE.into();
-            cx.notify();
-            return;
+        if !self.busy && !self.stopping {
+            if !self.launch_account_ready(kind, cx) {
+                return;
+            }
+            if !turn_driver::available(&self.store, self.summary.id, cx) {
+                self.status = turn_driver::ALREADY_ACTIVE.into();
+                cx.notify();
+                return;
+            }
         }
         if self.prepare_ticket_context(cx) {
             return;
@@ -279,16 +296,39 @@ impl Conversation {
             }
             return;
         }
-        self.planning_orchestration = self.settings.orchestrator;
-        self.orchestration_plan = None;
-        self.orchestration_error = None;
-        self.launch_prompt(prompt, cx);
-        if self.busy && mode.is_some() {
+        if self.launch_turn(prompt, PromptSource::Composer, cx) && mode.is_some() {
             self.clear_submitted_mode(cx);
         }
     }
     pub(super) fn launch_prompt(&mut self, prompt: String, cx: &mut Context<Self>) {
-        self.launch_turn(prompt, PromptSource::User, cx);
+        self.launch_turn(prompt, PromptSource::Direct, cx);
+    }
+    pub(super) fn launch_coordinator_prompt(&mut self, prompt: String, cx: &mut Context<Self>) {
+        self.launch_turn(prompt, PromptSource::Coordinator, cx);
+    }
+    pub(super) fn launch_remote(
+        &mut self,
+        prompt: String,
+        action: RemoteAction,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        self.launch_turn(prompt, PromptSource::Remote(action), cx)
+    }
+    pub(super) fn launch_follow_up(
+        &mut self,
+        message: vorkspace_core::follow_up::Message,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        self.launch_turn(
+            message.text,
+            PromptSource::Queued {
+                id: message.id,
+                attachments: message.attachments,
+                prepared: message.prepared_prompt,
+                mode: message.mode,
+            },
+            cx,
+        )
     }
 
     pub(super) fn launch_bot_prompt(
@@ -310,8 +350,7 @@ impl Conversation {
         source: PromptSource<'_>,
         cx: &mut Context<Self>,
     ) -> bool {
-        let from_user = matches!(source, PromptSource::User);
-        if from_user && self.reject_user_entry(cx) {
+        if !matches!(source, PromptSource::Bot { .. }) && self.reject_user_entry(cx) {
             return false;
         }
         let kind = match self.execution_provider() {
@@ -323,7 +362,7 @@ impl Conversation {
             }
         };
         if self.stopping {
-            if !from_user {
+            if !matches!(source, PromptSource::Direct | PromptSource::Composer) {
                 return false;
             }
             let mode = if self.settings.orchestrator {
@@ -351,19 +390,12 @@ impl Conversation {
             return false;
         }
         if !self.history_ready() {
-            if from_user {
+            if matches!(source, PromptSource::Direct) {
                 self.defer_history_action(move |this, cx| this.launch_prompt(prompt, cx), cx);
             }
             return false;
         }
-        if self.account_switching {
-            return false;
-        }
-        if self.settings.account.id != vorkspace_core::accounts::DEFAULT
-            && crate::accounts::get(cx)
-                .is_some_and(|center| !center.read(cx).book.exists(kind, &self.settings.account.id))
-        {
-            self.account_unavailable(cx);
+        if !self.launch_account_ready(kind, cx) {
             return false;
         }
         let view = cx.weak_entity();
@@ -394,20 +426,53 @@ impl Conversation {
         self.cancel = admission.cancel_handle();
         let summary = self.summary.clone();
         let mut settings = self.settings.clone();
-        if let PromptSource::Bot { message, mode } = source {
-            settings.bot_message_id = Some(message.id.clone());
-            settings.bot_sent_at = message.sent_at;
-            settings.internal_message = message.internal;
-            settings.attachments = message.attachments.iter().map(PathBuf::from).collect();
-            settings.prepared_prompt = message.prepared_prompt.clone();
-            settings.plan = mode == Some("plan");
-            settings.operator = mode == Some("operator");
-            settings.orchestrator = mode == Some("orchestrator");
+        let queued = matches!(source, PromptSource::Queued { .. });
+        let reset_orchestration = matches!(
+            source,
+            PromptSource::Composer | PromptSource::Queued { .. } | PromptSource::Bot { .. }
+        );
+        let one_shot_mode = matches!(
+            source,
+            PromptSource::Queued { .. } | PromptSource::Bot { .. }
+        );
+        match source {
+            PromptSource::Composer => {
+                settings.ticket_context = self.ticket_context.ready.take().map(Into::into);
+                settings.attachments = std::mem::take(&mut self.attachments);
+            }
+            PromptSource::Coordinator => settings.internal_message = true,
+            PromptSource::Queued {
+                id,
+                attachments,
+                prepared,
+                mode,
+            } => {
+                settings.bot_message_id = Some(id);
+                settings.attachments = attachments;
+                settings.prepared_prompt = prepared;
+                apply_turn_mode(&mut settings, mode.as_deref());
+            }
+            PromptSource::Bot { message, mode } => {
+                settings.bot_message_id = Some(message.id.clone());
+                settings.bot_sent_at = message.sent_at;
+                settings.internal_message = message.internal;
+                settings.attachments = message.attachments.iter().map(PathBuf::from).collect();
+                settings.prepared_prompt = message.prepared_prompt.clone();
+                apply_turn_mode(&mut settings, mode);
+            }
+            PromptSource::Remote(action) => {
+                if action == RemoteAction::SaveDraft {
+                    settings.attachments = std::mem::take(&mut self.attachments);
+                }
+                settings.remote_action = Some(action);
+            }
+            PromptSource::Direct => {}
+        }
+        if reset_orchestration {
             self.planning_orchestration = settings.orchestrator;
             self.orchestration_plan = None;
             self.orchestration_error = None;
         }
-        settings.ticket_context = self.ticket_context.ready.take().map(Into::into);
         if let Some(model) = self.model_info() {
             for control in &model.controls {
                 settings
@@ -426,7 +491,7 @@ impl Conversation {
             started_at: Some(vorkspace_core::time::now_ms()),
             ..Default::default()
         });
-        if !self.is_remote() && settings.prepared_prompt.is_none() {
+        if !self.is_remote() && !queued && settings.prepared_prompt.is_none() {
             let prepared = self.completion.read(cx).prepare_prompt(&prompt);
             if prepared != prompt {
                 settings.prepared_prompt = Some(prepared);
@@ -437,35 +502,18 @@ impl Conversation {
             .is_some_and(|p| !p.claude_hooks);
         settings.model = self.model.clone();
         self.prepare_app_environment(&mut settings);
-        if settings.bot.is_none()
-            && settings.remote_action.as_ref().is_none_or(|action| {
-                (action["type"] == "send"
-                    && action["draftBlockId"].is_null()
-                    && action["planBlockId"].is_null())
-                    || action["type"] == "draft"
-            })
-        {
-            settings
-                .attachments
-                .extend(std::mem::take(&mut self.attachments));
-        }
-        if settings
-            .remote_action
-            .as_ref()
-            .is_some_and(|action| action["planBlockId"].is_string())
-        {
-            settings.attachments.clear();
-        }
         self.preparing_worktree = settings.new_worktree && settings.worktree_cwd.is_none();
         if self.preparing_worktree {
             settings.worktree_base = settings.worktree_base.or(self.branch.clone());
             self.status = "Creating worktree…".into();
         }
         if settings.bot.is_none()
-            && settings
-                .remote_action
-                .as_ref()
-                .is_none_or(|action| action["type"] == "send")
+            && matches!(
+                settings.remote_action,
+                None | Some(
+                    RemoteAction::Compact | RemoteAction::SendDraft(_) | RemoteAction::BuildPlan(_)
+                )
+            )
         {
             self.transcript
                 .update(cx, |view, cx| view.submit_prompt(&prompt, &settings, cx));
@@ -473,7 +521,7 @@ impl Conversation {
         if settings.orchestrator {
             settings.plan = true;
             settings.operator = false;
-            if from_user {
+            if !one_shot_mode {
                 self.settings.orchestrator = false;
             }
         }
@@ -509,6 +557,23 @@ impl Conversation {
         ));
         cx.emit(SessionChanged::Turn);
         cx.notify();
+        true
+    }
+
+    fn launch_account_ready(&mut self, kind: Kind, cx: &mut Context<Self>) -> bool {
+        if self.account_switching {
+            self.status = "Wait for the account switch to finish. Your input was preserved.".into();
+            cx.notify();
+            return false;
+        }
+        if !self.is_remote()
+            && self.settings.account.id != vorkspace_core::accounts::DEFAULT
+            && crate::accounts::get(cx)
+                .is_some_and(|center| !center.read(cx).book.exists(kind, &self.settings.account.id))
+        {
+            self.account_unavailable(cx);
+            return false;
+        }
         true
     }
     #[cfg(test)]
@@ -607,7 +672,6 @@ impl Conversation {
         self.save_settings(cx);
         self.refresh_submission_recovery(cx);
         if self.is_remote() {
-            self.settings.remote_action = None;
             self.remote_state.refreshing = false;
             self.refresh_remote_snapshot(cx);
         }
@@ -634,4 +698,10 @@ impl Conversation {
         self.transcript.update(cx, |v, cx| v.streaming(true, cx));
         self.summary.has_messages = true;
     }
+}
+
+fn apply_turn_mode(settings: &mut Settings, mode: Option<&str>) {
+    settings.plan = mode == Some("plan");
+    settings.operator = mode == Some("operator");
+    settings.orchestrator = mode == Some("orchestrator");
 }

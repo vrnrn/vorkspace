@@ -1,6 +1,7 @@
 //! Transfer ownership of the wire snapshot to one in-flight idle refresh.
 use super::*;
 use crate::transcript::PreparedHistory;
+use serde_json::json;
 use std::collections::HashMap;
 use vorkspace_core::{
     agent::TurnInfo,
@@ -283,7 +284,12 @@ impl Conversation {
                 self.install_remote_plans(snapshot, cx);
             }
             if snapshot["status"] == "running" {
-                run = Some(snapshot["runId"].clone());
+                run = Some(
+                    snapshot["runId"]
+                        .as_str()
+                        .filter(|id| !id.is_empty())
+                        .map(str::to_owned),
+                );
             }
         }
         self.remote_state.observation = observation;
@@ -295,8 +301,7 @@ impl Conversation {
             self.reveal_search(row, query, cx);
         }
         if let Some(run) = run.filter(|_| !self.busy && !self.stopping) {
-            self.settings.remote_action = Some(json!({"type":"attach", "runId":run}));
-            self.launch_prompt(String::new(), cx);
+            self.launch_remote(String::new(), RemoteAction::Attach(run), cx);
         } else {
             self.run_history_actions(cx);
         }

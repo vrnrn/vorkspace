@@ -40,7 +40,7 @@ Recorded turn review reads the selected path from the two saved Git trees for th
 
 The desktop turn driver admits one worker per store and session. It keeps the claim through the worker's final save and gives the attached conversation ordered updates for that run. **View → Running Work** and the pressure indicator open the app-wide list of local provider processes. Stop resolves the sampled turn's cancellation identity through the driver across windows. This identifies the correct reply even when a warm provider keeps its PID.
 
-Bot dispatch carries its message identity, permissions and one-shot options in the admitted run request. The same conversation's settings and composer remain available for its next user action.
+Each admitted run carries the identity, attachments and one-time options of its source. Composer sends consume their own attachments. Queued messages and Bot dispatch use the options captured with the message. A remote action carries its Host target in the run request and becomes a wire command inside the runtime. These paths leave a separate composer draft available for the user's next action.
 
 Side questions save drafts and transcripts under their parent conversation, with their own read-only provider runs. The visible sheet projects only its selected thread. Switching or dismissing the sheet releases that projection while other side threads retain their rows and drafts. Saves compare the revision they loaded so a window with an older copy cannot overwrite newer side questions.
 

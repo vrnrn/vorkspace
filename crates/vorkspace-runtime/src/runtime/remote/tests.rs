@@ -197,7 +197,7 @@ fn observe_snapshots(snapshots: Vec<Value>) -> Vec<Update> {
             binding.summary,
             String::new(),
             Settings {
-                remote_action: Some(json!({"type":"attach"})),
+                remote_action: Some(RemoteAction::Attach(None)),
                 ..Default::default()
             },
             controls,
@@ -507,7 +507,7 @@ fn attaching_never_replays_pending_sends_or_stops_a_run_when_receiver_closes() {
     let (tx, rx) = async_channel::unbounded();
     let (_controls_tx, controls) = std::sync::mpsc::channel();
     let settings = Settings {
-        remote_action: Some(json!({"type":"attach"})),
+        remote_action: Some(RemoteAction::Attach(None)),
         ..Default::default()
     };
     let client = host.client.clone();
@@ -581,7 +581,7 @@ fn explicit_stop_is_journaled_once_for_the_observed_run() {
     let (tx, rx) = async_channel::unbounded();
     let (_controls_tx, controls) = std::sync::mpsc::channel();
     let settings = Settings {
-        remote_action: Some(json!({"type":"attach"})),
+        remote_action: Some(RemoteAction::Attach(None)),
         ..Default::default()
     };
     let client = host.client.clone();
@@ -660,7 +660,7 @@ fn stop_never_targets_a_successor_seen_during_observation() {
             binding.summary,
             String::new(),
             Settings {
-                remote_action: Some(json!({"type":"attach","runId":"host-run"})),
+                remote_action: Some(RemoteAction::Attach(Some("host-run".into()))),
                 ..Default::default()
             },
             controls,
@@ -913,7 +913,7 @@ require('node:readline').createInterface({input:process.stdin}).on('line', line 
     );
     let draft = Settings {
         model: Some("codex:fixture-model".into()),
-        remote_action: Some(json!({"type":"draft"})),
+        remote_action: Some(RemoteAction::SaveDraft),
         ..Default::default()
     };
     run_action(draft, "Keep this draft");
@@ -926,7 +926,9 @@ require('node:readline').createInterface({input:process.stdin}).on('line', line 
         .unwrap();
     let remove = Settings {
         model: Some("codex:fixture-model".into()),
-        remote_action: Some(json!({"type":"removeDraft","draftBlockId":draft["id"]})),
+        remote_action: Some(RemoteAction::RemoveDraft(
+            draft["id"].as_str().unwrap().into(),
+        )),
         ..Default::default()
     };
     run_action(remove, "");
@@ -978,7 +980,7 @@ fn ambiguous_legacy_requests_block_direct_send_and_retry_before_transport() {
     binding.outbox = vec![json!({"type":"create","commandId":"original-create"})];
     journal(&store, &binding).unwrap();
     let client = Arc::new(vorkspace_core::remote::Connections::new(&dir.0));
-    for action in ["send", "retry"] {
+    for action in [None, Some(RemoteAction::Retry)] {
         let (tx, rx) = async_channel::unbounded();
         let (_controls_tx, controls) = std::sync::mpsc::channel();
         run_with_client(
@@ -986,7 +988,7 @@ fn ambiguous_legacy_requests_block_direct_send_and_retry_before_transport() {
             binding.summary.clone(),
             "new message".into(),
             Settings {
-                remote_action: Some(json!({"type":action})),
+                remote_action: action,
                 ..Default::default()
             },
             controls,

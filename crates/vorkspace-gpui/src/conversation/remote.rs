@@ -1,6 +1,7 @@
 //! Composer policy and recovery for Host-owned conversations.
 use super::*;
-use serde_json::{Value, json};
+use serde_json::Value;
+use vorkspace_core::agent::RemoteAction;
 use vorkspace_core::remote::protocol::SessionObservation;
 use vorkspace_ui::radius;
 
@@ -134,9 +135,10 @@ impl Conversation {
         }
         let text = self.input.read(cx).content.trim();
         if text == "/compact" {
-            self.input
-                .update(cx, |input, cx| input.set_text(String::new(), cx));
-            self.launch_prompt("/compact".into(), cx);
+            if self.launch_remote("/compact".into(), RemoteAction::Compact, cx) {
+                self.input
+                    .update(cx, |input, cx| input.set_text(String::new(), cx));
+            }
             return true;
         }
         if text.starts_with('/')
@@ -177,12 +179,12 @@ impl Conversation {
         } else {
             String::new()
         };
-        self.settings.remote_action = Some(if send {
-            json!({"type":"send","draftBlockId":draft.id,"intent":"default"})
+        let action = if send {
+            RemoteAction::SendDraft(draft.id.clone())
         } else {
-            json!({"type":"removeDraft","draftBlockId":draft.id})
-        });
-        self.launch_prompt(prompt, cx);
+            RemoteAction::RemoveDraft(draft.id.clone())
+        };
+        self.launch_remote(prompt, action, cx);
     }
     pub(super) fn remote_save_draft(&mut self, cx: &mut Context<Self>) {
         if self.reject_user_entry(cx) {
@@ -199,11 +201,11 @@ impl Conversation {
         if prompt.trim().is_empty() && self.attachments.is_empty() {
             return;
         }
-        self.input
-            .update(cx, |input, cx| input.set_text(String::new(), cx));
-        self.follow_ups.draft_selected = false;
-        self.settings.remote_action = Some(json!({"type":"draft"}));
-        self.launch_prompt(prompt, cx);
+        if self.launch_remote(prompt, RemoteAction::SaveDraft, cx) {
+            self.input
+                .update(cx, |input, cx| input.set_text(String::new(), cx));
+            self.follow_ups.draft_selected = false;
+        }
     }
     pub(super) fn remote_notice(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
         if !self.is_remote() || self.busy {
@@ -272,8 +274,7 @@ impl Conversation {
             return;
         }
         if self.remote_state.pending {
-            self.settings.remote_action = Some(json!({"type": "retry"}));
-            self.launch_prompt(String::new(), cx);
+            self.launch_remote(String::new(), RemoteAction::Retry, cx);
         } else {
             self.refresh_remote_snapshot(cx);
         }

@@ -566,10 +566,7 @@ impl Conversation {
             self.defer_history_action(move |this, cx| this.send_coordinator_report(prompt, cx), cx);
             return;
         }
-        let internal = self.settings.internal_message;
-        self.settings.internal_message = true;
-        self.launch_prompt(prompt, cx);
-        self.settings.internal_message = internal;
+        self.launch_coordinator_prompt(prompt, cx);
     }
     pub(super) fn orchestration_card(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
         if self.orchestration_plan.is_none()

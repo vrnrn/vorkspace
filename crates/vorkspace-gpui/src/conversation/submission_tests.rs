@@ -1,7 +1,27 @@
 use super::*;
 use gpui::{TestAppContext, WindowHandle};
-use std::sync::Mutex;
+use std::{path::PathBuf, sync::Mutex};
 use vorkspace_core::{store::Store, transcript::attachments};
+
+#[gpui::test]
+fn send_during_account_switch_preserves_the_composer(cx: &mut TestAppContext) {
+    let window = conversation(cx);
+    cx.run_until_parked();
+    window
+        .update(cx, |view, _, cx| {
+            view.account_switching = true;
+            view.input
+                .update(cx, |input, cx| input.set_text("Keep this draft".into(), cx));
+            view.attachments = vec!["/missing/retained.png".into()];
+            view.send(cx);
+            assert!(!view.busy);
+            assert!(view.status.contains("account switch"));
+            assert_eq!(view.input.read(cx).content.as_ref(), "Keep this draft");
+            assert_eq!(view.attachments, [PathBuf::from("/missing/retained.png")]);
+            assert!(view.transcript.read(cx).source_rows().is_empty());
+        })
+        .unwrap();
+}
 
 #[gpui::test]
 fn unsupported_history_keeps_the_unsent_composer_and_declines_external_work(

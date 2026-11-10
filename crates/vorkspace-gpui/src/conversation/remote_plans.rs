@@ -97,11 +97,11 @@ impl Conversation {
         else {
             return;
         };
-        self.settings.remote_action = Some(plan.command());
-        self.remote_plans.reader = None;
         // Launch the host command directly: the composer draft and its local
         // attachments belong to the user's next message, not this approval.
-        self.launch_prompt(plan.prompt(), cx);
+        if self.launch_remote(plan.prompt(), plan.command(), cx) {
+            self.remote_plans.reader = None;
+        }
     }
     pub(super) fn remote_plan_reader(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
         let reader = self.remote_plans.reader.as_ref()?;
@@ -177,7 +177,7 @@ impl Conversation {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use serde_json::json;
+    use vorkspace_core::agent::RemoteAction;
     #[test]
     fn approved_plan_actions_keep_host_identity_and_exact_text() {
         let mut plan = Plan {
@@ -187,10 +187,7 @@ mod tests {
             streaming: false,
         };
         assert!(plan.can_build(false));
-        assert_eq!(
-            plan.command(),
-            json!({"type":"send","intent":"build","planBlockId":"host-plan"})
-        );
+        assert_eq!(plan.command(), RemoteAction::BuildPlan("host-plan".into()));
         assert_eq!(
             plan.prompt(),
             "Build the approved plan:\n\n# Plan\n\n- Keep exact text\n"
