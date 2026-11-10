@@ -1,11 +1,11 @@
 //! Owns automation storage, transactional admission and recovery.
 use super::{
-    Automation, AutomationEventClaim, AutomationRun, AutomationUpsert, DueAutomationRun,
-    MAX_PROMPT, has_time_trigger, hydrate_triggers, new_id, next_run_at, normalize_triggers,
-    now_millis, validate_id, validate_upsert,
+    has_time_trigger, hydrate_triggers, new_id, next_run_at, normalize_triggers, now_millis,
+    validate_id, validate_upsert, Automation, AutomationEventClaim, AutomationRun,
+    AutomationUpsert, DueAutomationRun, MAX_PROMPT,
 };
-use crate::store::automations_schema::{RECOVERABLE_RUN, ensure_schema};
-use rusqlite::{Connection, OptionalExtension, TransactionBehavior, params, params_from_iter};
+use crate::store::automations_schema::{ensure_schema, RECOVERABLE_RUN};
+use rusqlite::{params, params_from_iter, Connection, OptionalExtension, TransactionBehavior};
 use std::path::Path;
 
 const MAX_RUNS_PER_AUTOMATION: i64 = 100;

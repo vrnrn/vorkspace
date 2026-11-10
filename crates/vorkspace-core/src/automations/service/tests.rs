@@ -1,5 +1,5 @@
 use super::*;
-use crate::automations::{AutomationTrigger, claim_inbox_events, claim_inbox_events_retry};
+use crate::automations::{claim_inbox_events, claim_inbox_events_retry, AutomationTrigger};
 use chrono::{Local, TimeZone};
 
 fn local_at(value: &str) -> i64 {
@@ -177,50 +177,40 @@ fn inbox_claims_filter_projects_repositories_and_actors_and_dedupe_across_reopen
     let automation = save(&mut service, vec![trigger]);
     let mut wrong = item(1);
     wrong.project_path = "/another".into();
-    assert!(
-        claim_inbox_events(&mut service, &[wrong], now_millis())
-            .unwrap()
-            .is_empty()
-    );
+    assert!(claim_inbox_events(&mut service, &[wrong], now_millis())
+        .unwrap()
+        .is_empty());
     let mut wrong = item(2);
     wrong.repo = "acme/other".into();
-    assert!(
-        claim_inbox_events(&mut service, &[wrong], now_millis())
-            .unwrap()
-            .is_empty()
-    );
+    assert!(claim_inbox_events(&mut service, &[wrong], now_millis())
+        .unwrap()
+        .is_empty());
     let claims = claim_inbox_events(&mut service, &[item(3), item(3)], now_millis()).unwrap();
     assert_eq!(claims.len(), 1);
     assert_eq!(
         claims[0].run.event_key.as_deref(),
         Some("github:pr:acme/app:3")
     );
-    assert!(
-        claims[0]
-            .run
-            .prompt
-            .as_deref()
-            .unwrap()
-            .contains("Work on this GitHub pull request:")
-    );
+    assert!(claims[0]
+        .run
+        .prompt
+        .as_deref()
+        .unwrap()
+        .contains("Work on this GitHub pull request:"));
     drop(service);
     let mut service = Service::open(&path).unwrap();
-    assert!(
-        claim_inbox_events(&mut service, &[item(3)], now_millis())
-            .unwrap()
-            .is_empty()
-    );
+    assert!(claim_inbox_events(&mut service, &[item(3)], now_millis())
+        .unwrap()
+        .is_empty());
     let mut draft = AutomationUpsert::from_automation(&automation);
     draft.triggers.as_mut().unwrap()[0].actor = "someone".into();
     draft.sync_triggers(now_millis());
     service
         .save_definition(draft, DefinitionRevision::Saved(automation.updated_at))
         .unwrap();
-    assert!(
-        claim_inbox_events(&mut service, &[item(4)], now_millis())
-            .unwrap()
-            .is_empty()
-    );
+    assert!(claim_inbox_events(&mut service, &[item(4)], now_millis())
+        .unwrap()
+        .is_empty());
 }
 
 #[test]
@@ -285,13 +275,11 @@ fn recovery_returns_pending_prompts_and_cancels_interrupted_running_runs() {
     let interrupted = history.iter().find(|run| run.id == running.id).unwrap();
     assert_eq!(interrupted.status, "cancelled");
     assert_eq!(interrupted.session_id.as_deref(), Some("session-1"));
-    assert!(
-        interrupted
-            .error
-            .as_deref()
-            .unwrap()
-            .contains("Interrupted")
-    );
+    assert!(interrupted
+        .error
+        .as_deref()
+        .unwrap()
+        .contains("Interrupted"));
 }
 
 #[test]
@@ -352,11 +340,9 @@ fn legacy_claim_backfill_commits_with_its_marker_and_preserves_pending_runs() {
 
     let mut service = Service::open(&path).unwrap();
     assert!(claims_backfilled(&service.conn).unwrap());
-    assert!(
-        claim_inbox_events(&mut service, &[item(42)], 4)
-            .unwrap()
-            .is_empty()
-    );
+    assert!(claim_inbox_events(&mut service, &[item(42)], 4)
+        .unwrap()
+        .is_empty());
     let recovered = service.recover(4, 5).unwrap();
     assert_eq!(recovered.len(), 1);
     assert_eq!(recovered[0].run.id, pending.id);
