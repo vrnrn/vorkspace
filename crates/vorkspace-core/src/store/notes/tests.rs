@@ -519,6 +519,32 @@ fn recording_import_reuses_an_existing_deterministic_note_without_overwriting_it
 }
 
 #[test]
+fn legacy_recording_keys_keep_their_exact_link_and_a_stable_note_id() {
+    let store = store();
+    let key = "planning-2024.06_12";
+    let first = store
+        .import_recording_note(key, "Planning", 123)
+        .unwrap()
+        .unwrap();
+    assert!(first.id.starts_with("meeting-legacy-"));
+    assert_eq!(
+        store
+            .note_recording(&first.id)
+            .unwrap()
+            .unwrap()
+            .recording_id,
+        key
+    );
+    assert_eq!(
+        store.import_recording_note(key, "Changed", 456).unwrap(),
+        Some(first)
+    );
+    assert!(store
+        .import_recording_note("../outside", "Invalid", 0)
+        .is_err());
+}
+
+#[test]
 fn reserved_recording_identity_recovers_an_unsaved_note_after_reopen() {
     let directory = tempfile::tempdir().unwrap();
     let path = directory.path().join("vorkspace.db");

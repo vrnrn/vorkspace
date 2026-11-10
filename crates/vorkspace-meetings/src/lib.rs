@@ -8,9 +8,11 @@ use std::{
     os::fd::AsRawFd,
     path::{Path, PathBuf},
 };
+mod catalog;
 mod directory;
 mod draft;
 mod summary;
+pub use catalog::NoteCandidate;
 use draft::Receipt;
 pub use draft::{DraftWrite, EditLease};
 pub use summary::{DEFAULT_PROMPT, Settings, Summary};
@@ -170,92 +172,6 @@ impl Meetings {
     }
     fn save(&self, meeting: &Meeting) -> Result<(), String> {
         atomic_json(&self.metadata_path(&meeting.id)?, meeting)
-    }
-    pub fn list(&self) -> Result<Value, String> {
-        #[derive(Deserialize)]
-        struct ListMetadata {
-            id: String,
-            title: String,
-            created_at: u64,
-            #[serde(default)]
-            title_set: bool,
-            #[serde(default)]
-            transcript_override: Option<String>,
-            #[serde(default)]
-            override_sequence: Option<u64>,
-            #[serde(default)]
-            applied_draft: Option<Receipt>,
-            summary: Option<serde::de::IgnoredAny>,
-        }
-        let root = self.directory.join("recordings");
-        let dir = match directory::Directory::open(&root, false) {
-            Ok(v) => v,
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(json!([])),
-            Err(e) => return Err(e.to_string()),
-        };
-        let mut rows = Vec::new();
-        for entry in dir.entries().map_err(|error| error.to_string())? {
-            let entry = entry.map_err(|error| error.to_string())?;
-            let id = entry.file_name().to_string_lossy().into_owned();
-            if let Some(retired) = id.strip_prefix(".deleted-").filter(|id| valid_id(id)) {
-                let _ = self.delete(retired, 0);
-                continue;
-            }
-            if !valid_id(&id) {
-                continue;
-            }
-            // A directory without the root marker was never published. A corrupt
-            // published record stays visible without hiding healthy meetings.
-            let marker = root.join(&id).join("state.json");
-            if !marker.exists() {
-                continue;
-            }
-            let row = (|| {
-                let state = recording::state(&self.directory, &id)?;
-                let meeting: ListMetadata = read_json(&self.metadata_path(&id)?, LIMIT)?;
-                if meeting.id != id {
-                    return Err("Meeting metadata has a different recording ID".into());
-                }
-                let mut title = meeting.title;
-                if !named(&title, meeting.title_set) {
-                    let draft = self.visible_draft_title(&id, meeting.applied_draft.as_ref())?;
-                    if !state.phase.active()
-                        && draft.is_none()
-                        && meeting.summary.is_none()
-                        && !recording::has_saved_text(
-                            &self.directory,
-                            &id,
-                            meeting.transcript_override.as_deref(),
-                            meeting.override_sequence,
-                        )?
-                    {
-                        return Ok(None);
-                    }
-                    title = draft.flatten().unwrap_or_else(|| "Untitled meeting".into());
-                }
-                let started_at = if state.started_at == 0 {
-                    meeting.created_at
-                } else {
-                    state.started_at
-                };
-                Ok::<_, String>(Some(json!({
-                    "meeting":{"id":id,"title":title},
-                    "state":{"started_at":started_at,"phase":state.phase}
-                })))
-            })();
-            match row {
-                Ok(Some(row)) => rows.push(row),
-                Ok(None) => {}
-                Err(error) if marker.exists() => rows.push(json!({
-                    "meeting":{"id":id,"title":"Unreadable meeting"},
-                    "state":{"started_at":0,"phase":"failed"},
-                    "error":error
-                })),
-                Err(_) => {}
-            }
-        }
-        rows.sort_by_key(|row| std::cmp::Reverse(row["state"]["started_at"].as_u64().unwrap_or(0)));
-        Ok(Value::Array(rows))
     }
     pub fn read(&self, id: &str) -> Result<Value, String> {
         value(self.document(id)?)

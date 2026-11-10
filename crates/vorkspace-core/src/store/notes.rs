@@ -4,6 +4,7 @@ mod read;
 use super::Store;
 use crate::notes::{normalize_tags, Note, NoteImageAsset, NoteUpsert, MAX_BODY, MAX_TITLE};
 use rusqlite::{params, Connection, OptionalExtension, Transaction, TransactionBehavior};
+use sha2::{Digest, Sha256};
 use std::path::{Component, Path, PathBuf};
 
 /// A recording retains its note identity after deletion so recovery never
@@ -417,11 +418,19 @@ fn valid_id(id: &str) -> Result<(), String> {
     Ok(())
 }
 
-fn valid_recording_id(id: &str) -> Result<(), String> {
-    if id.len() != 32 || !id.bytes().all(|ch| ch.is_ascii_hexdigit()) {
-        return Err("Invalid recording ID".into());
-    }
-    Ok(())
+fn generated_recording_id(id: &str) -> bool {
+    id.len() == 32 && id.bytes().all(|ch| ch.is_ascii_hexdigit())
+}
+
+fn legacy_recording_id(id: &str) -> bool {
+    !id.is_empty()
+        && id.len() <= 80
+        && id
+            .bytes()
+            .all(|ch| ch.is_ascii_lowercase() || ch.is_ascii_digit() || b"-._".contains(&ch))
+        && !id.starts_with('.')
+        && !id.ends_with('.')
+        && !id.contains("..")
 }
 
 impl Store {
@@ -462,7 +471,9 @@ impl Store {
     /// ephemeral. An existing or deleted identity cannot be transferred.
     pub fn attach_note_recording(&self, note_id: &str, recording_id: &str) -> Result<(), String> {
         valid_id(note_id)?;
-        valid_recording_id(recording_id)?;
+        if !generated_recording_id(recording_id) {
+            return Err("Invalid recording ID".into());
+        }
         if self.shared.is_some() {
             self.shared_writable()?;
         }
@@ -481,7 +492,10 @@ impl Store {
         title: &str,
         created_at: i64,
     ) -> Result<Option<Note>, String> {
-        valid_recording_id(recording_id)?;
+        let generated = generated_recording_id(recording_id);
+        if !generated && !legacy_recording_id(recording_id) {
+            return Err("Invalid recording ID".into());
+        }
         if self.shared.is_some() {
             self.shared_writable()?;
         }
@@ -501,9 +515,18 @@ impl Store {
             tx.commit().map_err(|e| e.to_string())?;
             return Ok(None);
         }
-        let note_id = link
-            .map(|link| link.note_id)
-            .unwrap_or_else(|| format!("meeting-{recording_id}"));
+        let note_id = link.map(|link| link.note_id).unwrap_or_else(|| {
+            if generated {
+                format!("meeting-{recording_id}")
+            } else {
+                // Legacy recording keys can contain dots. Keep their filename
+                // exact in the link while giving Notes an ordinary stable ID.
+                format!(
+                    "meeting-legacy-{:x}",
+                    Sha256::digest(recording_id.as_bytes())
+                )
+            }
+        });
         valid_id(&note_id)?;
         attach_note_recording(&tx, &note_id, recording_id)?;
         let note =

@@ -755,7 +755,12 @@ fn a_blank_note_recording_never_materializes_until_there_is_content(cx: &mut Tes
     type_into(&page, Field::Transcript, "  ", 2..2, cx);
     page.update(cx, |page, _| page.drafts.flush(&meetings).unwrap());
     assert!(meetings.read(&id).is_err());
-    assert_eq!(meetings.list().unwrap(), json!([]));
+    assert!(
+        meetings
+            .note_candidates(&Default::default())
+            .unwrap()
+            .is_empty()
+    );
 
     type_into(&page, Field::Transcript, "Planning", 8..8, cx);
     page.update(cx, |page, _| page.drafts.flush(&meetings).unwrap());

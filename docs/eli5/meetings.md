@@ -4,6 +4,8 @@ Choose **Notes**, then open a note or press **+** above the list. Press **Start 
 
 **Preview** shows the text you wrote in the note; **Source** lets you edit that text. A recording adds **Summary** and **Transcript** tabs beside them. The active tab has a line underneath it. Your written note, the transcript and the generated summary stay separate. To change a summary, open **Summary** and choose **Edit summary**, then **View summary** to return to its formatted view.
 
+Notes looks for recordings it hasn't added yet. It keeps their titles, including unfinished title edits. The full transcript and summary load when you open a recording.
+
 **Copy** and **Add to chat** use the section you are viewing. This does not overwrite your written note. Finish recording before sharing its transcript.
 
 Choose **Mic + system audio** for an online call or **Mic only** for an in-person meeting. Your Mac needs macOS 26 or newer, a downloaded speech language, and microphone permission. Mic only does not ask for system-audio permission. Use headphones on calls to help keep other people's voices out of your microphone track. The transcript labels audio sources without guessing who each person is. The recording keeps their timing aligned even when audio conversion delivers samples in uneven batches.

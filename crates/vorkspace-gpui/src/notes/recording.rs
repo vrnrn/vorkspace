@@ -31,45 +31,14 @@ pub(super) fn load(store: &Database) -> Result<Loaded, String> {
             // after its commit leaves cleanup to the next load, never import.
             let _ = meetings.delete_with_commit(&id, None, || Ok(()));
         }
-        let rows = meetings.list()?;
-        for row in rows.as_array().into_iter().flatten() {
-            let Some(id) = row["meeting"]["id"].as_str() else {
-                continue;
-            };
-            if known.contains(id) {
-                continue;
-            }
-            // Pending legacy edits are part of the user's document. Import
-            // their title too, before Notes becomes its editing authority.
-            // A damaged recording still gets a row so it can be inspected.
-            let snapshot = meetings.open_document(id).ok();
-            let title = snapshot
-                .as_ref()
-                .and_then(|snapshot| snapshot["draft"]["title"].as_str())
-                .or_else(|| row["meeting"]["title"].as_str())
-                .unwrap_or("Untitled meeting");
-            // The capture list includes active empty recordings. Reserve the
-            // link before capture, but publish a note only once it has content.
-            if (title == "Untitled meeting" || title.trim().is_empty())
-                && let Some(snapshot) = &snapshot
-                && snapshot["draft"]["transcript"]
-                    .as_str()
-                    .or_else(|| snapshot["transcript"].as_str())
-                    .is_none_or(|text| text.trim().is_empty())
-                && snapshot["draft"]["summary"]
-                    .as_str()
-                    .or_else(|| snapshot["meeting"]["summary"]["text"].as_str())
-                    .is_none_or(|text| text.trim().is_empty())
-            {
-                continue;
-            }
-            let created = row["state"]["started_at"]
-                .as_u64()
-                .unwrap_or_default()
-                .min(i64::MAX as u64) as i64;
+        for candidate in meetings.note_candidates(&known)? {
             // Idempotent publication preserves any existing note edits. The
             // recording remains the authority for its transcript and summary.
-            locked(store)?.import_recording_note(id, title, created)?;
+            locked(store)?.import_recording_note(
+                &candidate.recording_id,
+                &candidate.title,
+                candidate.created_at.min(i64::MAX as u64) as i64,
+            )?;
         }
     }
     let store = locked(store)?;

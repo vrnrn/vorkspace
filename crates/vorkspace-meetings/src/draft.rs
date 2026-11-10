@@ -52,6 +52,13 @@ struct Slot {
     draft: Option<Draft>,
 }
 
+#[derive(Default)]
+pub(super) struct CatalogEdits {
+    pub(super) title: Option<String>,
+    pub(super) transcript: Option<bool>,
+    pub(super) summary: Option<bool>,
+}
+
 impl DraftWrite {
     pub fn from_params(params: Value) -> Result<Self, String> {
         let edit: Self = decode(params)?;
@@ -138,32 +145,23 @@ impl Meetings {
         }))
     }
 
-    // Outer None hides blank, absent and consumed checkpoints. Inner None is
-    // a meaningful untitled draft, whose row uses the display placeholder.
-    pub(crate) fn visible_draft_title(
+    pub(super) fn catalog_edits(
         &self,
         id: &str,
         applied: Option<&Receipt>,
-    ) -> Result<Option<Option<String>>, String> {
-        let Some(slot) = self.draft_slot(id)? else {
-            return Ok(None);
+    ) -> Result<CatalogEdits, String> {
+        let Some(draft) = self
+            .draft_slot(id)?
+            .filter(|slot| applied.is_none_or(|receipt| receipt.version != slot.version))
+            .and_then(|slot| slot.draft)
+        else {
+            return Ok(CatalogEdits::default());
         };
-        if applied.is_some_and(|receipt| receipt.version == slot.version) {
-            return Ok(None);
-        }
-        let Some(draft) = slot.draft else {
-            return Ok(None);
-        };
-        let nonblank = |text: &str| !text.trim().is_empty();
-        let title = draft.title.filter(|text| nonblank(text));
-        if title.is_some()
-            || draft.transcript.as_deref().is_some_and(nonblank)
-            || draft.summary.as_deref().is_some_and(nonblank)
-        {
-            Ok(Some(title))
-        } else {
-            Ok(None)
-        }
+        Ok(CatalogEdits {
+            title: draft.title,
+            transcript: draft.transcript.map(|text| !text.trim().is_empty()),
+            summary: draft.summary.map(|text| !text.trim().is_empty()),
+        })
     }
 
     pub(crate) fn remove_draft(&self, id: &str) -> Result<(), String> {

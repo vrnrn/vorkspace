@@ -463,6 +463,7 @@ pub(crate) fn has_saved_text(
     id: &str,
     correction: Option<&str>,
     override_sequence: Option<u64>,
+    saved_sequence: Option<u64>,
 ) -> Result<bool, String> {
     let dir = Directory::open(&directory(base, id)?, false).map_err(|error| error.to_string())?;
     let file = dir
@@ -474,9 +475,14 @@ pub(crate) fn has_saved_text(
         None => 0,
     };
     let mut has_text = correction.is_some_and(|text| !text.trim().is_empty());
+    let mut last = 0;
     scan_segments(&file, |segment| {
+        last = segment.sequence;
         has_text |= segment.sequence > after && !segment.text.trim().is_empty();
     })?;
+    if saved_sequence.is_some_and(|expected| last < expected) {
+        return Err("Saved transcript continuity was lost".into());
+    }
     Ok(has_text)
 }
 

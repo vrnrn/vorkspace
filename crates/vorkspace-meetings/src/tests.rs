@@ -136,7 +136,12 @@ fn unrecorded_blank_checkpoints_and_empty_takes_stay_out_of_history() {
     let dormant = meetings.open_document(id).unwrap();
     assert_eq!(dormant["meeting"]["title"], "");
     assert_eq!(dormant["state"]["started_at"], 0);
-    assert_eq!(meetings.list().unwrap(), json!([]));
+    assert!(
+        meetings
+            .note_candidates(&Default::default())
+            .unwrap()
+            .is_empty()
+    );
     assert!(
         meetings
             .update(&json!({"id":id,"revision":0,"title":""}))
@@ -147,7 +152,10 @@ fn unrecorded_blank_checkpoints_and_empty_takes_stay_out_of_history() {
     meetings
         .checkpoint_draft(&draft_write(id, None, &first, 0, "A draft"))
         .unwrap();
-    assert_eq!(meetings.list().unwrap()[0]["meeting"]["title"], "A draft");
+    assert_eq!(
+        meetings.note_candidates(&Default::default()).unwrap()[0].title,
+        "A draft"
+    );
     assert!(
         meetings
             .start_recording(id, "blocked", None, CaptureSource::Microphone)
@@ -158,20 +166,35 @@ fn unrecorded_blank_checkpoints_and_empty_takes_stay_out_of_history() {
         .checkpoint_draft(&draft_write(id, Some(&first), &next, 0, ""))
         .unwrap();
     meetings.save_draft(id, &next).unwrap();
-    assert_eq!(meetings.list().unwrap(), json!([]));
+    assert!(
+        meetings
+            .note_candidates(&Default::default())
+            .unwrap()
+            .is_empty()
+    );
 
     let mut empty = meetings
         .start_recording(id, "empty", None, CaptureSource::Microphone)
         .unwrap();
-    assert_eq!(meetings.list().unwrap()[0]["state"]["phase"], "starting");
+    assert!(
+        meetings
+            .note_candidates(&Default::default())
+            .unwrap()
+            .is_empty()
+    );
     empty.phase(Phase::Stopped, None).unwrap();
     drop(empty);
-    assert_eq!(meetings.list().unwrap(), json!([]));
+    assert!(
+        meetings
+            .note_candidates(&Default::default())
+            .unwrap()
+            .is_empty()
+    );
     meetings
         .update(&json!({"id":id,"revision":1,"transcript":"Typed notes"}))
         .unwrap();
     assert_eq!(
-        meetings.list().unwrap()[0]["meeting"]["title"],
+        meetings.note_candidates(&Default::default()).unwrap()[0].title,
         "Untitled meeting"
     );
     assert_eq!(meetings.read(id).unwrap()["transcript"], "Typed notes");
@@ -386,9 +409,12 @@ fn nested_symlinks_cannot_redirect_meeting_storage() {
                     .update(&json!({"id":id,"revision":0,"title":"Redirected"}))
                     .is_err()
             );
-            assert!(meetings.list().unwrap()[0]["error"].is_string());
+            assert_eq!(
+                meetings.note_candidates(&Default::default()).unwrap()[0].title,
+                "Unreadable meeting"
+            );
         } else {
-            assert!(meetings.list().is_err());
+            assert!(meetings.note_candidates(&Default::default()).is_err());
             assert!(recording::state(root.path(), &id).is_err());
             assert!(Owner::create(root.path(), "new").is_err());
         }
@@ -427,7 +453,12 @@ fn deleting_checks_the_current_revision_and_prevents_late_publication() {
             .is_err()
     );
     assert!(meetings.read(&id).is_err());
-    assert_eq!(meetings.list().unwrap(), json!([]));
+    assert!(
+        meetings
+            .note_candidates(&Default::default())
+            .unwrap()
+            .is_empty()
+    );
     assert!(!meetings.metadata_path(&id).unwrap().exists());
     assert_eq!(
         std::fs::read_dir(root.path().join("recordings"))
@@ -456,7 +487,12 @@ fn deleting_waits_for_the_recorder_to_release_the_transcript() {
     assert!(meetings.delete(&id, 0).is_err());
     drop(owner);
     meetings.delete(&id, 0).unwrap();
-    assert_eq!(meetings.list().unwrap(), json!([]));
+    assert!(
+        meetings
+            .note_candidates(&Default::default())
+            .unwrap()
+            .is_empty()
+    );
 }
 
 #[test]
@@ -466,7 +502,10 @@ fn listing_completes_cleanup_after_a_recording_has_been_retired() {
     let live = recording::directory(root.path(), &id).unwrap();
     let retired = live.with_file_name(format!(".deleted-{id}"));
     std::fs::create_dir(&retired).unwrap();
-    assert_eq!(meetings.list().unwrap().as_array().unwrap().len(), 1);
+    assert_eq!(
+        meetings.note_candidates(&Default::default()).unwrap().len(),
+        1
+    );
     assert!(meetings.read(&id).is_ok());
     std::fs::remove_dir(&retired).unwrap();
     std::fs::rename(&live, &retired).unwrap();
@@ -475,7 +514,12 @@ fn listing_completes_cleanup_after_a_recording_has_been_retired() {
             .update(&json!({"id":id,"revision":0,"title":"Stale"}))
             .is_err()
     );
-    assert_eq!(meetings.list().unwrap(), json!([]));
+    assert!(
+        meetings
+            .note_candidates(&Default::default())
+            .unwrap()
+            .is_empty()
+    );
     assert!(!retired.exists());
     assert!(!meetings.metadata_path(&id).unwrap().exists());
 }
@@ -524,9 +568,15 @@ fn meeting_list_excludes_documents_but_reads_keep_saved_content() {
         })
         .unwrap();
 
-    let list = meetings.list().unwrap();
-    assert_eq!(list[0]["meeting"], json!({"id":id,"title":"Planning"}));
-    assert_eq!(list[0]["state"]["phase"], "stopped");
+    let list = meetings.note_candidates(&Default::default()).unwrap();
+    assert_eq!(list[0].recording_id, id);
+    assert_eq!(list[0].title, "Planning");
+    assert!(
+        meetings
+            .note_candidates(&[id.clone()].into())
+            .unwrap()
+            .is_empty()
+    );
     let doc = meetings.read(&id).unwrap();
     assert_eq!(doc["transcript"], "Edited transcript");
     assert_eq!(doc["meeting"]["summary"]["text"], "Summary text");

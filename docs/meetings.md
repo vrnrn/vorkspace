@@ -4,6 +4,8 @@ Open **Notes** in the left sidebar and choose an existing note or press **+** ab
 
 **Preview** and **Source** display and edit the note's authored Markdown. Once a recording is attached, **Summary** and **Transcript** appear beside them. These flat tabs underline the active section. The recording's generated summary and transcript remain separate from the authored note body. In **Summary**, **Edit summary** opens its Markdown editor and **View summary** returns to the formatted result.
 
+Notes discovers recordings without a linked note through a catalog of recording IDs, titles and start times. Import preserves the recording's original identity and any pending title. Discovery skips recordings that already have a linked note. Opening a recording loads its full document.
+
 **Copy** and **Add to chat** use the selected section's text without replacing the authored body. Sharing a live transcript waits for capture to finish so provisional speech is not mistaken for the final transcript.
 
 Choose **Mic + system audio** for calls or **Mic only** for an in-person meeting. This choice belongs to the recording and can change between takes. Recording requires macOS 26+, a supported installed Apple speech language and Microphone permission for **vorkspace helper**. System audio also requires Screen & System Audio Recording permission; Mic only neither requests that permission nor creates a system capture. Install the language from Dictation settings first. Capture attaches only system-audio output, never screen frames. Audio is processed in memory and is not retained as a recording. Headphones help avoid the microphone also hearing remote participants through speakers. “Microphone” and “System audio” identify sources, not individual speakers.
