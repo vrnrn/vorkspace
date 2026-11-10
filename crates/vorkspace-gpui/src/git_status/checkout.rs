@@ -146,11 +146,14 @@ impl Observation {
         before: Option<Self>,
     ) -> Result<Option<Self>, String> {
         let cwd = Path::new(path);
-        let stamp = CheckoutStamp::read(cwd);
-        if known_stamp.is_some() && known_stamp == stamp {
+        let Some(scm::DiffSnapshot {
+            index,
+            versions,
+            stamp,
+        }) = scm::DiffSnapshot::observe(cwd, known_stamp)?
+        else {
             return Ok(None);
-        }
-        let scm::DiffSnapshot { index, versions } = scm::DiffSnapshot::read(cwd)?;
+        };
         let snapshot = before
             .as_ref()
             .map(|read| &read.snapshot)

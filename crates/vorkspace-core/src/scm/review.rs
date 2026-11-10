@@ -1,4 +1,5 @@
 //! Working-tree and commit reads for unified review, and partial staging.
+use super::status::{Counts, LocalStatus};
 use super::*;
 use crate::shell_env::{expand_home, path_to_js};
 use serde::{Deserialize, Serialize};
@@ -27,20 +28,29 @@ pub struct FileDiff {
 pub struct DiffSnapshot {
     pub index: DiffIndex,
     pub versions: Option<HashMap<String, FileDiffVersion>>,
+    pub stamp: Option<CheckoutStamp>,
 }
 
 impl DiffSnapshot {
     pub fn read(cwd: &Path) -> Result<Self, String> {
-        if remote_workspace::is_remote(cwd) {
-            return Self::remote(cwd, "git_diff_index");
-        }
-        let index = diff_index(cwd)?;
-        Ok(Self::local(cwd, index))
+        Self::observe(cwd, None)?.ok_or_else(|| "Missing Git observation".into())
     }
 
-    fn local(cwd: &Path, index: DiffIndex) -> Self {
-        let versions = file_diff_versions(cwd, &index).ok();
-        Self { index, versions }
+    pub fn observe(cwd: &Path, known: Option<CheckoutStamp>) -> Result<Option<Self>, String> {
+        if remote_workspace::is_remote(cwd) {
+            return Self::remote(cwd, "git_diff_index").map(Some);
+        }
+        let root = expand_home(cwd);
+        Ok(observe_status(&root, known)?
+            .map(|status| Self::local(&root, status, Counts::Full { sync: true })))
+    }
+
+    fn local(cwd: &Path, status: LocalStatus, counts: Counts<'_>) -> Self {
+        Self {
+            index: status.index(cwd, counts),
+            versions: Some(status.versions()),
+            stamp: status.stamp,
+        }
     }
 
     fn remote(cwd: &Path, command: &str) -> Result<Self, String> {
@@ -83,8 +93,12 @@ impl DiffSnapshot {
                     })
                     .collect()
             })
-            .or_else(|| file_diff_versions(cwd, &index).ok());
-        Ok(Self { index, versions })
+            .or_else(|| remote_versions(cwd, &index).ok());
+        Ok(Self {
+            index,
+            versions,
+            stamp: None,
+        })
     }
 }
 
@@ -93,7 +107,27 @@ pub fn diff_files(cwd: &Path) -> Result<DiffIndex, String> {
     if remote_workspace::is_remote(cwd) {
         return remote_workspace::command("git_diff_files", json!({"cwd":cwd}));
     }
-    Ok(diff_index_with(&expand_home(cwd), false))
+    local_index(cwd, false)
+}
+
+pub(super) fn local_index(cwd: &Path, sync: bool) -> Result<DiffIndex, String> {
+    let root = expand_home(cwd);
+    Ok(
+        observe_status(&root, None)?.map_or_else(DiffIndex::default, |status| {
+            status.index(&root, Counts::Full { sync })
+        }),
+    )
+}
+
+fn observe_status(
+    root: &Path,
+    known: Option<CheckoutStamp>,
+) -> Result<Option<LocalStatus>, String> {
+    match LocalStatus::output(root) {
+        Some(raw) => LocalStatus::parse(root, None, &raw, known),
+        None if git_is_work_tree(root) => Err("Could not read Git status".into()),
+        None => Ok(Some(LocalStatus::default())),
+    }
 }
 
 /// Read a working-copy review against one resolved Git prefix.
@@ -133,71 +167,17 @@ impl WorktreeReview {
         if self.prefix.is_none() {
             return DiffSnapshot::remote(&self.cwd, "git_diff_files");
         }
-        Ok(DiffSnapshot::local(&self.cwd, self.index(previous)?))
+        Ok(DiffSnapshot::local(
+            &self.cwd,
+            self.local_status()?,
+            Counts::Previous(previous),
+        ))
     }
 
-    /// Revalidate the review's file list without computing every file's line
-    /// counts or querying remotes. Loaded diffs supply their own exact counts.
-    pub fn index(&self, previous: Option<&DiffIndex>) -> Result<DiffIndex, String> {
-        let Some(prefix) = &self.prefix else {
-            return diff_files(&self.cwd);
-        };
-        let root = &self.cwd;
-        let status = git_run(
-            root,
-            &[
-                "status",
-                "--porcelain=v1",
-                "-z",
-                "--untracked-files=all",
-                "--no-renames",
-                "--",
-                ".",
-            ],
-        )
-        .ok_or_else(|| "Could not read Git status".to_string())?;
-        let previous: HashMap<_, _> = previous
-            .into_iter()
-            .flat_map(|i| &i.files)
-            .map(|f| (f.relative.as_str(), f))
-            .collect();
-        let mut files = Vec::new();
-        for record in status.split('\0').filter(|r| !r.is_empty()) {
-            let bytes = record.as_bytes();
-            if bytes.len() < 4 {
-                continue;
-            }
-            let Some(relative) = record[3..].strip_prefix(prefix) else {
-                continue;
-            };
-            let untracked = &bytes[..2] == b"??";
-            let (x, y) = (bytes[0], bytes[1]);
-            let old = previous.get(relative);
-            files.push(ChangedFile {
-                path: path_to_js(&root.join(relative)),
-                relative: relative.to_string(),
-                status: if untracked {
-                    "untracked"
-                } else if x == b'D' || y == b'D' {
-                    "deleted"
-                } else if x == b'A' {
-                    "added"
-                } else {
-                    "modified"
-                }
-                .into(),
-                additions: old.map_or(0, |f| f.additions),
-                deletions: old.map_or(0, |f| f.deletions),
-                staged: !untracked && x != b' ',
-                unstaged: untracked || y != b' ',
-            });
-        }
-        files.sort_by(|a, b| a.relative.cmp(&b.relative));
-        Ok(DiffIndex {
-            head: git_stdout(root, &["rev-parse", "HEAD"]),
-            files,
-            ..Default::default()
-        })
+    fn local_status(&self) -> Result<LocalStatus, String> {
+        let raw = LocalStatus::output(&self.cwd).ok_or("Could not read Git status")?;
+        LocalStatus::parse(&self.cwd, self.prefix.as_deref(), &raw, None)?
+            .ok_or_else(|| "Missing Git observation".into())
     }
 
     /// One file's index or HEAD side against its other side. `staged` compares
@@ -231,115 +211,32 @@ impl WorktreeReview {
     }
 }
 
-/// The inputs to one diff, without reading its contents. Index object IDs
-/// invalidate only the affected paths; disk metadata also catches edits that
-/// leave Git's status and line counts unchanged.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct FileDiffVersion {
-    index: String,
-    head: Option<String>,
-    disk: Option<DiskVersion>,
-}
-
-#[derive(Clone, Debug, PartialEq, Eq)]
-struct DiskVersion {
-    len: u64,
-    modified: Option<SystemTime>,
-    created: Option<SystemTime>,
-    identity: (u64, u64, i64, i64),
-}
-
-pub(super) fn file_diff_versions(
+fn remote_versions(
     cwd: &Path,
     snapshot: &DiffIndex,
 ) -> Result<HashMap<String, FileDiffVersion>, String> {
-    if remote_workspace::is_remote(cwd) {
-        // Older hosts omit versions. Use their bounded file-diff API so that
-        // equal line counts still invalidate an externally edited diff.
-        use sha2::{Digest, Sha256};
-        let checkout = WorktreeReview::open(cwd)?;
-        let mut versions = HashMap::new();
-        for file in &snapshot.files {
-            for staged in [true, false] {
-                if if staged { !file.staged } else { !file.unstaged } {
-                    continue;
-                }
-                let diff = checkout.file(&file.relative, staged)?;
-                let bytes = serde_json::to_vec(&diff).map_err(|error| error.to_string())?;
-                versions.insert(
-                    format!(
-                        "{}:{}",
-                        if staged { "staged" } else { "unstaged" },
-                        file.relative
-                    ),
-                    FileDiffVersion {
-                        index: format!("{:x}", Sha256::digest(bytes)),
-                        head: snapshot.head.clone(),
-                        disk: None,
-                    },
-                );
-            }
-        }
-        return Ok(versions);
-    }
-    if snapshot.files.is_empty() {
-        return Ok(HashMap::new());
-    }
-    let root = expand_home(cwd);
-    let listing = git_run(&root, &["ls-files", "--stage", "-z", "--", "."])
-        .ok_or_else(|| "Could not read Git index versions".to_string())?;
-    let changed: HashSet<_> = snapshot
-        .files
-        .iter()
-        .map(|file| file.relative.as_str())
-        .collect();
-    let mut index: HashMap<&str, String> = HashMap::new();
-    for record in listing.split('\0') {
-        if let Some((version, path)) = record
-            .split_once('\t')
-            .filter(|(_, path)| changed.contains(*path))
-        {
-            let entry = index.entry(path).or_default();
-            entry.push_str(version);
-            entry.push('\n');
-        }
-    }
+    // Older hosts omit versions. Use their bounded file-diff API so that
+    // equal line counts still invalidate an externally edited diff.
+    use sha2::{Digest, Sha256};
+    let checkout = WorktreeReview::open(cwd)?;
     let mut versions = HashMap::new();
     for file in &snapshot.files {
-        let indexed = index
-            .get(file.relative.as_str())
-            .cloned()
-            .unwrap_or_default();
-        if file.staged {
+        for staged in [true, false] {
+            if if staged { !file.staged } else { !file.unstaged } {
+                continue;
+            }
+            let diff = checkout.file(&file.relative, staged)?;
+            let bytes = serde_json::to_vec(&diff).map_err(|error| error.to_string())?;
             versions.insert(
-                format!("staged:{}", file.relative),
+                format!(
+                    "{}:{}",
+                    if staged { "staged" } else { "unstaged" },
+                    file.relative
+                ),
                 FileDiffVersion {
-                    index: indexed.clone(),
+                    index: format!("{:x}", Sha256::digest(bytes)),
                     head: snapshot.head.clone(),
                     disk: None,
-                },
-            );
-        }
-        if file.unstaged {
-            let disk = match std::fs::symlink_metadata(root.join(&file.relative)) {
-                Ok(meta) => Some(DiskVersion {
-                    len: meta.len(),
-                    modified: meta.modified().ok(),
-                    created: meta.created().ok(),
-                    identity: {
-                        use std::os::unix::fs::MetadataExt;
-                        (meta.dev(), meta.ino(), meta.ctime(), meta.ctime_nsec())
-                    },
-                }),
-                Err(error) if error.kind() == ErrorKind::NotFound => None,
-                Err(error) => return Err(error.to_string()),
-            };
-            versions.insert(
-                format!("unstaged:{}", file.relative),
-                FileDiffVersion {
-                    index: indexed,
-                    head: None,
-                    disk,
                 },
             );
         }

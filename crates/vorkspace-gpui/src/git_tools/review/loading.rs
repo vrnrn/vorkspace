@@ -148,8 +148,9 @@ impl ReviewPane {
                     ReviewTab::Changes { cwd, .. } => {
                         let root = PathBuf::from(cwd);
                         let reader = scm::WorktreeReview::open(&root)?;
-                        let scm::DiffSnapshot { index, versions } =
-                            reader.snapshot(known_index.as_deref())?;
+                        let scm::DiffSnapshot {
+                            index, versions, ..
+                        } = reader.snapshot(known_index.as_deref())?;
                         Ok(Listed {
                             files: index.files,
                             versions,

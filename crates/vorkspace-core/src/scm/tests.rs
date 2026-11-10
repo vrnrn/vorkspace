@@ -1,4 +1,5 @@
 use super::*;
+use crate::shell_env::path_to_js;
 use std::path::PathBuf;
 
 fn tmp() -> tempfile::TempDir {
@@ -77,9 +78,9 @@ fn nested_checkout_detects_same_count_edits_and_preserves_literal_paths() {
     assert!(init_git_commit(root, &[(&tracked, "base\n")]));
     let path = nested.join(name);
     std::fs::write(&path, "edit one\n").unwrap();
-    let before = CheckoutStamp::read(&nested);
+    let before = DiffSnapshot::read(&nested).unwrap().stamp;
     assert!(before.is_some());
-    assert!(before == CheckoutStamp::read(&nested));
+    assert!(DiffSnapshot::observe(&nested, before).unwrap().is_none());
     assert_eq!(file(&nested, name).relative, name);
 
     std::fs::write(&path, "edit two\n").unwrap();
@@ -87,7 +88,7 @@ fn nested_checkout_detects_same_count_edits_and_preserves_literal_paths() {
         .unwrap()
         .set_modified(SystemTime::UNIX_EPOCH + std::time::Duration::from_secs(60))
         .unwrap();
-    let edited = CheckoutStamp::read(&nested);
+    let edited = DiffSnapshot::read(&nested).unwrap().stamp;
     assert!(edited.is_some() && edited != before);
     assert_eq!(
         file_diff(&nested, name, false).unwrap().current,
@@ -95,7 +96,7 @@ fn nested_checkout_detects_same_count_edits_and_preserves_literal_paths() {
     );
     stage_file(&nested, name).unwrap();
     assert!(file(&nested, name).staged);
-    assert!(CheckoutStamp::read(&nested) != edited);
+    assert!(DiffSnapshot::read(&nested).unwrap().stamp != edited);
 }
 
 #[test]
@@ -131,20 +132,26 @@ fn review_versions_invalidate_only_changed_file_sides() {
     assert!(git(root, &["add", "a.txt"]));
     std::fs::write(root.join("a.txt"), "work1\n").unwrap();
     std::fs::write(root.join("b.txt"), "other\n").unwrap();
-    let first = diff_files(root).unwrap();
-    let versions = file_diff_versions(root, &first).unwrap();
-    assert_eq!(versions, file_diff_versions(root, &first).unwrap());
+    let first = DiffSnapshot::read(root).unwrap();
+    let versions = first.versions.unwrap();
+    assert_eq!(
+        versions,
+        DiffSnapshot::read(root).unwrap().versions.unwrap()
+    );
 
     std::fs::write(root.join("a.txt"), "work2\n").unwrap();
-    let second = diff_files(root).unwrap();
-    assert_eq!(first, second, "line counts cannot detect this edit");
-    let edited = file_diff_versions(root, &second).unwrap();
+    let second = DiffSnapshot::read(root).unwrap();
+    assert_eq!(
+        first.index, second.index,
+        "line counts cannot detect this edit"
+    );
+    let edited = second.versions.unwrap();
     assert_ne!(versions["unstaged:a.txt"], edited["unstaged:a.txt"]);
     assert_eq!(versions["staged:a.txt"], edited["staged:a.txt"]);
     assert_eq!(versions["unstaged:b.txt"], edited["unstaged:b.txt"]);
 
     assert!(git(root, &["add", "a.txt"]));
-    let staged = file_diff_versions(root, &second).unwrap();
+    let staged = DiffSnapshot::read(root).unwrap().versions.unwrap();
     assert_ne!(edited["staged:a.txt"], staged["staged:a.txt"]);
     assert_ne!(edited["unstaged:a.txt"], staged["unstaged:a.txt"]);
     assert_eq!(edited["unstaged:b.txt"], staged["unstaged:b.txt"]);
@@ -162,23 +169,23 @@ fn review_index_revalidates_closed_views_and_subdirectories() {
     std::fs::write(root.join("src").join(added_name), "new\n").unwrap();
     let next = WorktreeReview::open(root)
         .unwrap()
-        .index(Some(&before))
+        .snapshot(Some(&before))
         .unwrap();
-    assert_eq!(next.files.len(), 2);
-    assert_eq!(next.files[1].additions, before.files[0].additions);
+    assert_eq!(next.index.files.len(), 2);
+    assert_eq!(next.index.files[1].additions, before.files[0].additions);
     let sub = WorktreeReview::open(&root.join("src"))
         .unwrap()
-        .index(None)
+        .snapshot(None)
         .unwrap();
-    assert_eq!(sub.files[0].relative, added_name);
-    assert_eq!(sub.files[1].relative, "a.txt");
-    let versions = file_diff_versions(&root.join("src"), &sub).unwrap();
+    assert_eq!(sub.index.files[0].relative, added_name);
+    assert_eq!(sub.index.files[1].relative, "a.txt");
+    let versions = sub.versions.unwrap();
     assert!(versions.contains_key(&format!("unstaged:{added_name}")));
     assert!(versions.contains_key("unstaged:a.txt"));
     std::fs::remove_file(root.join("src/a.txt")).unwrap();
-    let deleted = WorktreeReview::open(root).unwrap().index(None).unwrap();
-    assert_eq!(deleted.files[1].status, "deleted");
-    assert!(file_diff_versions(root, &deleted).is_ok());
+    let deleted = WorktreeReview::open(root).unwrap().snapshot(None).unwrap();
+    assert_eq!(deleted.index.files[1].status, "deleted");
+    assert!(deleted.versions.is_some());
 }
 
 #[test]
@@ -188,22 +195,20 @@ fn review_versions_support_repositories_with_only_untracked_files() {
     std::fs::write(dir.path().join("new.txt"), "new\n").unwrap();
     let snapshot = WorktreeReview::open(dir.path())
         .unwrap()
-        .index(None)
+        .snapshot(None)
         .unwrap();
-    assert!(file_diff_versions(dir.path(), &snapshot)
-        .unwrap()
-        .contains_key("unstaged:new.txt"));
+    assert!(snapshot.versions.unwrap().contains_key("unstaged:new.txt"));
 }
 
 #[test]
-fn diff_stats_are_zero_outside_a_repo() {
+fn diff_index_is_empty_outside_a_repo() {
     let dir = tmp();
     std::fs::write(dir.path().join("notes.txt"), "hello\n").unwrap();
-    assert_eq!(diff_stats(dir.path()).unwrap(), DiffStats::default());
+    assert_eq!(index(dir.path()), DiffIndex::default());
 }
 
 #[test]
-fn diff_stats_count_unstaged_and_untracked() {
+fn diff_index_counts_unstaged_and_untracked() {
     let dir = tmp();
     let dir = dir.path();
     assert!(init_git_commit(dir, &[("a.txt", "alpha\nbeta\ngamma\n")]));
@@ -212,21 +217,45 @@ fn diff_stats_count_unstaged_and_untracked() {
     std::fs::write(dir.join("ignored.txt"), "nope\n").unwrap();
     std::fs::write(dir.join(".gitignore"), "ignored.txt\n").unwrap();
     // a.txt: -beta +delta; new.txt: +2; .gitignore: +1 untracked
+    let changes = index(dir);
     assert_eq!(
-        diff_stats(dir).unwrap(),
-        DiffStats {
-            files: 3,
-            additions: 4,
-            deletions: 1
-        }
+        (changes.files.len(), changes.additions, changes.deletions),
+        (3, 4, 1)
     );
 }
 
 #[test]
-fn diff_stats_are_zero_when_clean() {
+fn diff_index_has_no_files_when_clean() {
     let dir = tmp();
     assert!(init_git_commit(dir.path(), &[("a.txt", "alpha\n")]));
-    assert_eq!(diff_stats(dir.path()).unwrap(), DiffStats::default());
+    let changes = index(dir.path());
+    assert_eq!(
+        (changes.files.len(), changes.additions, changes.deletions),
+        (0, 0, 0)
+    );
+}
+
+#[test]
+fn checkout_observation_coalesces_staged_deletion_and_untracked_replacement() {
+    let dir = tmp();
+    let root = dir.path();
+    assert!(init_git_commit(root, &[("draft.txt", "base\n")]));
+    assert!(git(root, &["rm", "--cached", "draft.txt"]));
+    std::fs::write(root.join("draft.txt"), "new\nreplacement\n").unwrap();
+    let observation = DiffSnapshot::read(root).unwrap();
+    let review = WorktreeReview::open(root)
+        .unwrap()
+        .snapshot(Some(&observation.index))
+        .unwrap();
+    assert_eq!(observation.index.files, review.index.files);
+    assert_eq!(review.index.files.len(), 1);
+    let file = &review.index.files[0];
+    assert_eq!(file.status, "untracked");
+    assert!(file.staged && file.unstaged);
+    let versions = review.versions.unwrap();
+    assert!(
+        versions.contains_key("staged:draft.txt") && versions.contains_key("unstaged:draft.txt")
+    );
 }
 
 #[test]
@@ -1048,6 +1077,7 @@ fn file_diff_reads_each_side_and_bounds_content() {
 #[test]
 fn editor_baseline_reads_a_literal_nested_file_and_tracks_its_side() {
     let dir = tmp();
+    std::fs::create_dir(dir.path().join("src")).unwrap();
     let relative = "src/[draft].txt";
     assert!(init_git_commit(dir.path(), &[(relative, "head\n")]));
     let root = dir.path().join("src");

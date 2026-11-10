@@ -3,7 +3,8 @@
 mod checkout;
 mod command;
 mod review;
-use crate::shell_env::{self as shell, expand_home, path_to_js};
+mod status;
+use crate::shell_env::{self as shell, expand_home};
 pub(crate) mod text;
 
 use std::collections::HashMap;
@@ -16,18 +17,17 @@ use crate::remote_workspace;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 
-pub use checkout::{checkout_watch_paths, CheckoutStamp};
-use checkout::{read_worktree_file, FileContents};
+pub use checkout::checkout_watch_paths;
+use checkout::{read_worktree_file, read_worktree_file_at, FileContents};
 #[cfg(test)]
 use command::git_cmd_for_args_with_path;
 use command::{git_checked, git_output, git_run, git_stdout};
 pub(crate) use command::{git_cmd, git_output_capped};
-#[cfg(test)]
-use review::file_diff_versions;
 pub use review::{
     diff_files, editor_baseline, file_diff, stage_contents, CommitReview, DiffSnapshot, FileDiff,
-    FileDiffVersion, WorktreeReview, MAX_TEXT_FILE_BYTES,
+    WorktreeReview, MAX_TEXT_FILE_BYTES,
 };
+pub use status::{CheckoutStamp, FileDiffVersion};
 
 /// The PATH a login terminal would have, for shells the app starts: a
 /// Finder-launched app inherits launchd's bare PATH.
@@ -39,14 +39,6 @@ pub fn resolve_gui_binary(name: &str) -> Option<std::path::PathBuf> {
     shell::resolve_gui_binary(name)
 }
 pub use text::{commit_message_prompt, parse_commit_message, parse_pr_content, pr_content_prompt};
-
-#[derive(Serialize, Deserialize, Clone, Debug, Default, PartialEq, Eq)]
-#[serde(rename_all = "camelCase")]
-pub struct DiffStats {
-    pub files: i64,
-    pub additions: i64,
-    pub deletions: i64,
-}
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
@@ -136,22 +128,13 @@ const HISTORY_DEFAULT: u32 = 200;
 const HISTORY_MAX: u32 = 500;
 const MAX_UNTRACKED_BYTES: u64 = 1024 * 1024;
 
-/// Uncommitted line counts: staged + unstaged vs HEAD, plus untracked
-/// (gitignore-aware) files counted as additions.
-pub fn diff_stats(cwd: &Path) -> Result<DiffStats, String> {
-    if remote_workspace::is_remote(cwd) {
-        return remote_workspace::command("git_diff_stats", json!({"cwd":cwd}));
-    }
-    Ok(diff_stats_for(&expand_home(cwd)))
-}
-
 /// Changed files under `cwd` (paths relative to it), with per-file line counts,
 /// status, and branch/upstream synchronization metadata.
 pub fn diff_index(cwd: &Path) -> Result<DiffIndex, String> {
     if remote_workspace::is_remote(cwd) {
         return remote_workspace::command("git_diff_index", json!({"cwd":cwd}));
     }
-    Ok(diff_index_with(&expand_home(cwd), true))
+    review::local_index(cwd, true)
 }
 
 /// Recent commits for the Graph view: HEAD, upstream, and the default branch.
@@ -228,14 +211,10 @@ pub fn discard_all(cwd: &Path) -> Result<(), String> {
         return remote_workspace::command("git_discard_all", json!({"cwd":cwd}));
     }
     let root = expand_home(cwd);
-    let files: Vec<String> = diff_index_with(&root, true)
-        .files
-        .into_iter()
-        .filter(|file| file.unstaged)
-        .map(|file| file.relative)
-        .collect();
-    for relative in files {
-        discard_file_for(&root, &relative)?;
+    for file in review::local_index(&root, false)?.files {
+        if file.unstaged {
+            discard_file_for(&root, &file.relative)?;
+        }
     }
     Ok(())
 }
@@ -428,217 +407,10 @@ pub fn pr_create(
     })
 }
 
-fn diff_stats_for(root: &Path) -> DiffStats {
-    if !git_is_work_tree(root) {
-        return DiffStats::default();
-    }
-    let mut files: HashMap<String, FileAcc> = HashMap::new();
-    if let Some(text) = git_run(
-        root,
-        &[
-            "diff",
-            "-z",
-            "--no-ext-diff",
-            "--numstat",
-            "HEAD",
-            "--",
-            ".",
-        ],
-    ) {
-        add_numstat_map(&text, &mut files);
-    } else {
-        if let Some(text) = git_run(
-            root,
-            &["diff", "-z", "--no-ext-diff", "--numstat", "--", "."],
-        ) {
-            add_numstat_map(&text, &mut files);
-        }
-        if let Some(text) = git_run(
-            root,
-            &[
-                "diff",
-                "-z",
-                "--no-ext-diff",
-                "--cached",
-                "--numstat",
-                "--",
-                ".",
-            ],
-        ) {
-            add_numstat_map(&text, &mut files);
-        }
-    }
-    add_untracked_map(root, &mut files);
-    let mut additions = 0i64;
-    let mut deletions = 0i64;
-    for acc in files.values() {
-        additions += acc.additions;
-        deletions += acc.deletions;
-    }
-    DiffStats {
-        files: files.len() as i64,
-        additions,
-        deletions,
-    }
-}
-
 #[derive(Default)]
 struct FileAcc {
     additions: i64,
     deletions: i64,
-    untracked: bool,
-    staged: bool,
-    unstaged: bool,
-}
-
-fn diff_index_with(root: &Path, include_sync: bool) -> DiffIndex {
-    if !git_is_work_tree(root) {
-        return DiffIndex::default();
-    }
-    let mut files: HashMap<String, FileAcc> = HashMap::new();
-    let mut statuses: HashMap<String, &'static str> = HashMap::new();
-
-    if let Some(text) = git_run(
-        root,
-        &[
-            "diff",
-            "-z",
-            "--relative",
-            "--no-ext-diff",
-            "--numstat",
-            "HEAD",
-            "--",
-            ".",
-        ],
-    ) {
-        add_numstat_map(&text, &mut files);
-        if let Some(names) = git_run(
-            root,
-            &[
-                "diff",
-                "-z",
-                "--relative",
-                "--no-ext-diff",
-                "--name-status",
-                "--no-renames",
-                "HEAD",
-                "--",
-                ".",
-            ],
-        ) {
-            add_name_status(&names, &mut statuses);
-        }
-    } else {
-        if let Some(text) = git_run(
-            root,
-            &[
-                "diff",
-                "-z",
-                "--relative",
-                "--no-ext-diff",
-                "--numstat",
-                "--",
-                ".",
-            ],
-        ) {
-            add_numstat_map(&text, &mut files);
-        }
-        if let Some(text) = git_run(
-            root,
-            &[
-                "diff",
-                "-z",
-                "--relative",
-                "--no-ext-diff",
-                "--cached",
-                "--numstat",
-                "--",
-                ".",
-            ],
-        ) {
-            add_numstat_map(&text, &mut files);
-        }
-        if let Some(names) = git_run(
-            root,
-            &[
-                "diff",
-                "-z",
-                "--relative",
-                "--no-ext-diff",
-                "--name-status",
-                "--no-renames",
-                "--",
-                ".",
-            ],
-        ) {
-            add_name_status(&names, &mut statuses);
-        }
-        if let Some(names) = git_run(
-            root,
-            &[
-                "diff",
-                "-z",
-                "--relative",
-                "--no-ext-diff",
-                "--cached",
-                "--name-status",
-                "--no-renames",
-                "--",
-                ".",
-            ],
-        ) {
-            add_name_status(&names, &mut statuses);
-        }
-    }
-    add_untracked_map(root, &mut files);
-    mark_cached_and_unstaged(root, &mut files);
-
-    let mut out = Vec::with_capacity(files.len());
-    let mut additions = 0i64;
-    let mut deletions = 0i64;
-    for (relative, acc) in files {
-        additions += acc.additions;
-        deletions += acc.deletions;
-        let abs = root.join(&relative);
-        let status = if acc.untracked {
-            "untracked"
-        } else if let Some(status) = statuses.get(&relative) {
-            *status
-        } else if !abs.exists() {
-            "deleted"
-        } else {
-            "modified"
-        };
-        out.push(ChangedFile {
-            path: path_to_js(&abs),
-            relative,
-            status: status.to_string(),
-            additions: acc.additions,
-            deletions: acc.deletions,
-            staged: acc.staged,
-            unstaged: acc.untracked || acc.unstaged,
-        });
-    }
-    out.sort_by(|a, b| a.relative.cmp(&b.relative));
-    let sync = if include_sync {
-        sync_for(root)
-    } else {
-        Sync::default()
-    };
-    DiffIndex {
-        branch: git_branch(root),
-        head: git_stdout(root, &["rev-parse", "HEAD"]),
-        files: out,
-        additions,
-        deletions,
-        remote: sync.remote,
-        upstream: sync.upstream,
-        default_branch: sync.default_branch,
-        ahead: sync.ahead,
-        behind: sync.behind,
-        ahead_of_default: sync.ahead_of_default,
-        head_pushed: sync.head_pushed,
-    }
 }
 
 fn add_numstat_map(text: &str, files: &mut HashMap<String, FileAcc>) {
@@ -696,29 +468,9 @@ fn add_name_status(text: &str, statuses: &mut HashMap<String, &'static str>) {
     }
 }
 
-fn add_untracked_map(root: &Path, files: &mut HashMap<String, FileAcc>) {
-    let Some(stdout) = git_run(
-        root,
-        &["ls-files", "-o", "--exclude-standard", "-z", "--", "."],
-    ) else {
-        return;
-    };
-    for rel in stdout.split('\0') {
-        if rel.is_empty() {
-            continue;
-        }
-        let relative = path_to_js(Path::new(rel));
-        let entry = files.entry(relative.clone()).or_default();
-        entry.untracked = true;
-        if entry.additions == 0 {
-            entry.additions = text_line_count(root, rel);
-        }
-    }
-}
-
 fn text_line_count(root: &Path, relative: &str) -> i64 {
     let Ok(Some(FileContents::Bytes(bytes))) =
-        read_worktree_file(root, relative, MAX_UNTRACKED_BYTES)
+        read_worktree_file_at(root, relative, MAX_UNTRACKED_BYTES)
     else {
         return 0;
     };
@@ -735,46 +487,6 @@ fn text_line_count(root: &Path, relative: &str) -> i64 {
         lines -= 1;
     }
     lines
-}
-
-fn mark_cached_and_unstaged(root: &Path, files: &mut HashMap<String, FileAcc>) {
-    if let Some(names) = git_run(
-        root,
-        &[
-            "diff",
-            "-z",
-            "--relative",
-            "--cached",
-            "--name-only",
-            "--no-renames",
-            "--",
-            ".",
-        ],
-    ) {
-        for line in names.split('\0') {
-            if !line.is_empty() {
-                files.entry(line.to_owned()).or_default().staged = true;
-            }
-        }
-    }
-    if let Some(names) = git_run(
-        root,
-        &[
-            "diff",
-            "-z",
-            "--relative",
-            "--name-only",
-            "--no-renames",
-            "--",
-            ".",
-        ],
-    ) {
-        for line in names.split('\0') {
-            if !line.is_empty() {
-                files.entry(line.to_owned()).or_default().unstaged = true;
-            }
-        }
-    }
 }
 
 /// Tips for the Graph filter: current HEAD, its upstream, and the repo
@@ -1155,37 +867,48 @@ struct Sync {
     head_pushed: bool,
 }
 
-fn sync_for(root: &Path) -> Sync {
+fn sync_for(
+    root: &Path,
+    upstream: Option<String>,
+    ahead_behind: Option<(i64, i64)>,
+    has_head: bool,
+) -> Sync {
     let remote = git_remote_name(root);
-    let upstream = git_stdout(root, &["rev-parse", "--abbrev-ref", "@{upstream}"]);
+    let upstream = upstream.and_then(|name| {
+        if ahead_behind.is_some() {
+            Some(name)
+        } else {
+            git_stdout(root, &["rev-parse", "--abbrev-ref", "@{upstream}"])
+        }
+    });
     let default_branch = git_default_branch(root, remote.as_deref());
     let default_ref = match (&remote, &default_branch) {
         (Some(remote), Some(branch)) => Some(format!("{remote}/{branch}")),
         _ => None,
     };
     let (ahead, behind) = if upstream.is_some() {
-        git_ahead_behind(root, "@{upstream}")
+        ahead_behind.unwrap_or_else(|| git_ahead_behind(root, "@{upstream}"))
     } else if let Some(base) = default_ref.as_deref() {
         git_ahead_behind(root, base)
     } else {
         (0, 0)
     };
-    let ahead_of_default = if let Some(base) = default_ref.as_deref() {
-        git_ahead_behind(root, base).0
-    } else {
-        ahead
-    };
-    let head_pushed = git_stdout(
-        root,
-        &[
-            "for-each-ref",
-            "--count=1",
-            "--contains",
-            "HEAD",
-            "refs/remotes",
-        ],
-    )
-    .is_some();
+    let ahead_of_default = default_ref
+        .as_deref()
+        .filter(|base| Some(*base) != upstream.as_deref())
+        .map_or(ahead, |base| git_ahead_behind(root, base).0);
+    let head_pushed = has_head
+        && git_stdout(
+            root,
+            &[
+                "for-each-ref",
+                "--count=1",
+                "--contains",
+                "HEAD",
+                "refs/remotes",
+            ],
+        )
+        .is_some();
     Sync {
         remote,
         upstream,
