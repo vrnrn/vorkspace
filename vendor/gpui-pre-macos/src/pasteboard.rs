@@ -1,3 +1,4 @@
+// Modified by Vorkspace to move decoded image bytes into the clipboard item. See NOTICE.
 use core::slice;
 use std::ffi::{CStr, c_void};
 use std::path::PathBuf;
@@ -98,7 +99,6 @@ impl Pasteboard {
             let types: id = self.inner.types();
             if msg_send![types, containsObject: ut_type.inner()] {
                 self.data_for_type(ut_type.inner_mut()).map(|bytes| {
-                    let bytes = bytes.to_vec();
                     let id = hash(&bytes);
 
                     ClipboardItem {
