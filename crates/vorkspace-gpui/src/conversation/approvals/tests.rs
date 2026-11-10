@@ -48,7 +48,7 @@ fn approval_shelf_slides_up_without_moving_the_composer_or_replaying_on_redraw(
             .update(visual, |view, _, cx| {
                 view.approvals.clear();
                 if queued {
-                    view.enqueue_follow_up("A queued follow-up".into(), None, cx);
+                    view.enqueue_follow_up("A queued follow-up".into(), Vec::new(), None, cx);
                     view.follow_ups.motion.elapsed(Duration::from_secs(1));
                 }
                 cx.notify();

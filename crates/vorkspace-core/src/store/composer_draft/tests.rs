@@ -123,6 +123,62 @@ fn failed_draft_transfer_rolls_back_the_local_dispatch_claim() {
     );
     assert!(store.composer_draft(session.id).unwrap().unwrap().deleted);
 }
+
+#[test]
+fn a_queued_version_cannot_also_dispatch_as_an_initial_turn() {
+    for shared in [false, true] {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("state.db");
+        let open = if shared {
+            Store::open_vorkspace
+        } else {
+            Store::open
+        };
+        let editor = open(&path).unwrap();
+        let worker = open(&path).unwrap();
+        let session = editor.create("codex", "/project").unwrap();
+        if shared {
+            worker
+                .resolve_session_id(&editor.persisted_session_id(session.id).unwrap())
+                .unwrap();
+        }
+        let revision = editor
+            .save_composer_draft(session.id, 0, &payload())
+            .unwrap();
+        let origin = editor.composer_origin(session.id, revision).unwrap();
+        reserve_draft(&worker, session.id, &origin, "other-window-attempt");
+        let mut successor = payload();
+        successor["text"] = json!("A distinct input");
+        editor
+            .save_composer_draft(session.id, revision, &successor)
+            .unwrap();
+        let mut queue = editor.follow_ups(session.id).unwrap();
+        queue.revision += 1;
+        queue.messages.push(crate::follow_up::Message {
+            id: "queue-owner".into(),
+            text: payload()["text"].as_str().unwrap().into(),
+            ..Default::default()
+        });
+        editor
+            .accept_composer_message(session.id, &queue, &origin, "queue-owner")
+            .unwrap();
+        assert!(worker.composer_transfer_committed(&origin).unwrap());
+        assert!(worker
+            .dispatch_composer_submission("other-window-attempt", &origin)
+            .is_err());
+        assert_eq!(
+            worker.local_submissions(session.id).unwrap()[0].phase,
+            "reserved"
+        );
+        let reopened = open(&path).unwrap();
+        let queue = reopened.follow_ups(session.id).unwrap();
+        assert_eq!(queue.messages.len(), 1);
+        assert_eq!(queue.messages[0].id, "queue-owner");
+        let draft = reopened.composer_draft(session.id).unwrap().unwrap();
+        assert!(!draft.deleted);
+        assert_eq!(draft.payload, successor);
+    }
+}
 #[test]
 fn desktop_input_roundtrips_in_its_existing_table_without_sidecar_copy() {
     let dir = tempfile::tempdir().unwrap();

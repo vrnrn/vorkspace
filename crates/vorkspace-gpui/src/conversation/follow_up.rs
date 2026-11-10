@@ -3,6 +3,8 @@ use super::*;
 use vorkspace_core::follow_up::{Message, State};
 use vorkspace_ui::radius;
 
+mod admission;
+
 #[derive(Default)]
 pub(super) struct FollowUps {
     pub state: State,
@@ -14,6 +16,8 @@ pub(super) struct FollowUps {
     pub resuming: bool,
     pub ready: bool,
     pub draft_selected: bool,
+    offering: Option<admission::ShelfOffer>,
+    pub admission_error: Option<String>,
     pub edit: Option<QueueEdit>,
 }
 pub(super) struct QueueEdit {
@@ -55,15 +59,7 @@ impl Conversation {
 
         self.execution_provider()?;
         let text = self.consume_mode_command(text, cx);
-        let mode = if self.settings.orchestrator {
-            Some("orchestrator")
-        } else if self.settings.plan {
-            Some("plan")
-        } else if self.settings.operator {
-            Some("operator")
-        } else {
-            None
-        };
+        let mode = self.selected_turn_mode();
         self.accept_external_message(text, mode.map(str::to_owned), cx)
     }
     fn accept_external_message(
@@ -103,11 +99,7 @@ impl Conversation {
         if self.follow_ups.state.messages.len() >= 128 {
             return Err("The session's message queue is full".into());
         }
-        let mut message = self.message(text, Vec::new(), mode, cx);
-        message.steer = cx
-            .try_global::<vorkspace_ui::preferences::Preferences>()
-            .is_none_or(|p| p.follow_up == "steer")
-            && Kind::from_id(&self.summary.provider).can_steer();
+        let message = self.queued_message(text, Vec::new(), mode, cx);
         let id = message.id.clone();
         let mut next = self.follow_ups.state.clone();
         next.revision += 1;
@@ -131,22 +123,16 @@ impl Conversation {
                 .is_some()
     }
     fn message(
-        &mut self,
+        &self,
         text: String,
         attachments: Vec<std::path::PathBuf>,
         mode: Option<String>,
         cx: &gpui::App,
     ) -> Message {
-        static SEQUENCE: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
         let prepared = self.completion.read(cx).prepare_prompt(&text);
         Message {
             prepared_prompt: (prepared != text).then_some(prepared),
-            id: format!(
-                "composer-{}-{}-{}",
-                self.summary.id,
-                vorkspace_core::time::now_ms(),
-                SEQUENCE.fetch_add(1, Ordering::Relaxed)
-            ),
+            id: vorkspace_core::session::new_id(),
             text,
             attachments,
             mode,
@@ -205,145 +191,45 @@ impl Conversation {
     pub(super) fn enqueue_follow_up(
         &mut self,
         prompt: String,
+        attachments: Vec<std::path::PathBuf>,
         mode: Option<String>,
         cx: &mut Context<Self>,
-    ) {
+    ) -> Option<String> {
         if self.reject_user_entry(cx) {
-            return;
+            return None;
         }
 
-        let attachments = std::mem::take(&mut self.attachments);
+        let message = self.queued_message(prompt, attachments, mode, cx);
+        let id = message.id.clone();
+        self.follow_ups
+            .motion
+            .insert(&id, self.follow_ups.state.messages.is_empty(), true);
+        self.follow_ups.state.messages.push(message);
+        self.save_follow_ups(cx);
+        Some(id)
+    }
+
+    fn queued_message(
+        &mut self,
+        prompt: String,
+        attachments: Vec<std::path::PathBuf>,
+        mode: Option<String>,
+        cx: &mut Context<Self>,
+    ) -> Message {
         let mut message = self.message(prompt, attachments, mode, cx);
         message.steer = cx
             .try_global::<vorkspace_ui::preferences::Preferences>()
             .is_none_or(|prefs| prefs.follow_up == "steer")
             && Kind::from_id(&self.summary.provider).can_steer()
             && message.can_steer();
-        self.follow_ups
-            .motion
-            .insert(&message.id, self.follow_ups.state.messages.is_empty(), true);
-        self.follow_ups.state.messages.push(message);
-        self.save_follow_ups(cx);
+        message
     }
-    pub(super) fn save_message_draft(&mut self, cx: &mut Context<Self>) {
-        if self.reject_user_entry(cx) {
-            return;
-        }
 
-        if self.is_remote() {
-            self.remote_save_draft(cx);
-            return;
+    pub(super) fn continue_after_stop(&mut self, id: String) {
+        self.follow_ups.continuations.push_back(id);
+        if self.follow_ups.requested.is_none() {
+            self.follow_ups.requested = self.follow_ups.continuations.front().cloned();
         }
-        if self.needs_history_restore() {
-            self.defer_history_action(|this, cx| this.save_message_draft(cx), cx);
-            return;
-        }
-        if self.follow_ups.state.draft.is_some()
-            || !self.loaded
-            || self.attaching
-            || self.input.read(cx).is_composing()
-        {
-            return;
-        }
-        let raw = self.input.read(cx).content.to_string();
-        let text = vorkspace_core::composer::consume_command(&raw, "draft")
-            .unwrap_or(&raw)
-            .to_owned();
-        if text.trim().is_empty() && self.attachments.is_empty() {
-            return;
-        }
-        let mut message = self.message(text, self.attachments.clone(), None, cx);
-        message.at = self.transcript.read(cx).source_rows().len();
-        // Bot drafts are accepted before clearing the composer. An attachment
-        // copy or storage failure must leave the user's input untouched.
-        if self.settings.bot.is_some() {
-            let origin_revision = match self.bot_draft_origin_revision(cx) {
-                Ok(revision) => revision,
-                Err(error) => {
-                    self.status =
-                        format!("Could not save draft: {error}. Your composer was preserved.");
-                    self.bot_ui.draft_error = Some(self.status.clone());
-                    cx.notify();
-                    return;
-                }
-            };
-            let mut next = self.follow_ups.state.clone();
-            next.revision += 1;
-            next.draft = Some(message.clone());
-            let result = (|| {
-                let store = locked(&self.store)?;
-                next.retain_attachments(self.summary.id, store.data_dir())?;
-                store.accept_bot_draft(self.summary.id, &next, origin_revision, &message.id)
-            })();
-            if let Err(error) = result {
-                // A shared-store root publication can fail after its database
-                // commit. Adopt any matching durable card before permitting a
-                // retry, while retaining the original composer as recovery.
-                if let Ok(saved) =
-                    locked(&self.store).and_then(|store| store.follow_ups(self.summary.id))
-                    && saved
-                        .draft
-                        .as_ref()
-                        .is_some_and(|draft| draft.id == message.id)
-                {
-                    self.follow_ups.persisted = saved.revision;
-                    self.follow_ups.state = saved;
-                    self.summary.has_messages = true;
-                    let draft = self.follow_ups.state.draft.clone();
-                    self.transcript
-                        .update(cx, |view, cx| view.set_saved_draft(draft, cx));
-                }
-                self.status =
-                    format!("Could not save draft: {error}. Your composer was preserved.");
-                self.bot_ui.draft_error = Some(self.status.clone());
-                cx.notify();
-                return;
-            }
-            self.bot_ui.draft_error = None;
-            message = next.draft.clone().unwrap();
-            self.follow_ups.persisted = next.revision;
-            self.follow_ups.state = next;
-        }
-        self.input.update(cx, |i, cx| i.set_text(String::new(), cx));
-        self.attachments.clear();
-        if self.settings.bot.is_none() && self.summary.title.starts_with("New ") {
-            self.summary.title = message
-                .label()
-                .split_whitespace()
-                .collect::<Vec<_>>()
-                .join(" ")
-                .chars()
-                .take(42)
-                .collect();
-            let (store, id, title) = (
-                self.store.clone(),
-                self.summary.id,
-                self.summary.title.clone(),
-            );
-            cx.background_executor()
-                .spawn(async move {
-                    let _ = locked(&store).and_then(|s| s.title(id, &title));
-                })
-                .detach();
-        }
-        if !self.summary.has_messages {
-            self.composer_motion.capture(self.composer_anchor.get());
-        }
-        self.summary.has_messages = true;
-        self.follow_ups.draft_selected = false;
-        self.settings.plan = false;
-        self.settings.operator = false;
-        self.settings.orchestrator = false;
-        self.save_settings(cx);
-        self.follow_ups.state.draft = Some(message.clone());
-        self.transcript
-            .update(cx, |view, cx| view.introduce_saved_draft(message, cx));
-        self.completion
-            .update(cx, |completion, cx| completion.dismiss(cx));
-        if self.settings.bot.is_none() {
-            self.save_follow_ups(cx);
-        }
-        cx.emit(SessionChanged::Draft);
     }
     pub(super) fn draft_action(&mut self, send: bool, cx: &mut Context<Self>) {
         if self.reject_user_entry(cx) {

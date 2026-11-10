@@ -1,6 +1,31 @@
 //! Queue acceptance is strict; delayed presentation saves may skip older revisions.
-use super::Store;
+use super::{ComposerOrigin, Store};
 use crate::follow_up::State;
+use rusqlite::{Transaction, TransactionBehavior};
+
+#[derive(Clone, Copy)]
+pub(super) enum FollowUpWrite<'a> {
+    Deferred,
+    Accept,
+    BotDraft {
+        revision: u64,
+        draft_id: &'a str,
+    },
+    Composer {
+        origin: &'a ComposerOrigin,
+        message_id: &'a str,
+    },
+}
+
+impl FollowUpWrite<'_> {
+    pub(super) fn check_revision(self, previous: u64, next: u64) -> Result<bool, String> {
+        if !matches!(self, Self::Deferred) && previous >= next {
+            return Err("The message queue changed before this prompt could be saved. Reopen it before sending; saved messages were preserved.".into());
+        }
+        Ok(previous <= next)
+    }
+}
+
 impl Store {
     /// Publish a Bot draft and its exact composer origin in the same transaction.
     pub fn accept_bot_draft(
@@ -10,71 +35,111 @@ impl Store {
         revision: u64,
         draft_id: &str,
     ) -> Result<(), String> {
-        if self.uses_vorkspace_schema() && session >= 0 {
-            return self.shared_accept_bot_draft(session, state, revision, draft_id);
-        }
-        let tx = rusqlite::Transaction::new_unchecked(
-            &self.conn,
-            rusqlite::TransactionBehavior::Immediate,
+        self.write_follow_ups(
+            session,
+            state,
+            FollowUpWrite::BotDraft { revision, draft_id },
         )
-        .map_err(|e| e.to_string())?;
-        let current = self.composer_draft(session)?;
-        if current.as_ref().map_or(0, |draft| draft.revision) != revision
-            || state
-                .draft
-                .as_ref()
-                .is_none_or(|draft| draft.id != draft_id)
-        {
-            return Err("Composer changed in another window; your input was preserved".into());
-        }
-        let key = format!("follow-up:{session}");
-        let previous = self
-            .setting(&key)?
-            .map(|raw| serde_json::from_str::<State>(&raw).map_err(|e| e.to_string()))
-            .transpose()?;
-        if previous.is_some_and(|previous| previous.revision >= state.revision) {
-            return Err("The message queue changed before this prompt could be saved. Reopen it before sending; saved messages were preserved.".into());
-        }
-        self.save_setting(
-            &key,
-            &serde_json::to_string(state).map_err(|e| e.to_string())?,
-        )?;
-        self.save_setting(
-            &format!("bot-draft-origin:{session}"),
-            &serde_json::json!({"id":draft_id,"revision":revision}).to_string(),
-        )?;
-        tx.commit().map_err(|e| e.to_string())
     }
+
+    pub fn accept_composer_message(
+        &self,
+        session: i64,
+        state: &State,
+        origin: &ComposerOrigin,
+        message_id: &str,
+    ) -> Result<(), String> {
+        self.write_follow_ups(
+            session,
+            state,
+            FollowUpWrite::Composer { origin, message_id },
+        )
+    }
+
     /// Synchronous external admission must prove that this complete queue was
     /// written. Async stale completions may skip; accepted prompts may not.
     pub fn accept_follow_ups(&self, session: i64, state: &State) -> Result<(), String> {
+        self.write_follow_ups(session, state, FollowUpWrite::Accept)
+    }
+
+    pub fn save_follow_ups(&self, session: i64, state: &State) -> Result<(), String> {
+        self.write_follow_ups(session, state, FollowUpWrite::Deferred)
+    }
+
+    fn write_follow_ups(
+        &self,
+        session: i64,
+        state: &State,
+        write: FollowUpWrite<'_>,
+    ) -> Result<(), String> {
         if self.uses_vorkspace_schema() && session >= 0 {
-            return self.shared_accept_follow_ups(session, state);
+            return self.shared_write_follow_ups(session, state, write);
         }
-        let tx = rusqlite::Transaction::new_unchecked(
-            &self.conn,
-            rusqlite::TransactionBehavior::Immediate,
-        )
-        .map_err(|e| e.to_string())?;
+        let tx = Transaction::new_unchecked(&self.conn, TransactionBehavior::Immediate)
+            .map_err(|error| error.to_string())?;
         let key = format!("follow-up:{session}");
         let previous = self
             .setting(&key)?
             .map(|raw| {
                 serde_json::from_str::<State>(&raw)
-                    .map_err(|e| format!("Cannot verify the saved queue: {e}"))
+                    .map_err(|error| format!("Cannot verify the saved queue: {error}"))
             })
             .transpose()?;
-        if previous.is_some_and(|previous| previous.revision >= state.revision) {
-            return Err("The message queue changed before this prompt could be saved. Reopen it before sending; saved messages were preserved.".into());
+        if let Some(previous) = previous {
+            if !write.check_revision(previous.revision, state.revision)? {
+                return Ok(());
+            }
         }
+        self.transfer_follow_up(&tx, session, state, write)?;
         self.save_setting(
             &key,
-            &serde_json::to_string(state).map_err(|e| e.to_string())?,
+            &serde_json::to_string(state).map_err(|error| error.to_string())?,
         )?;
-        tx.commit().map_err(|e| e.to_string())
+        tx.commit().map_err(|error| error.to_string())
     }
-}
-impl Store {
+
+    pub(super) fn transfer_follow_up(
+        &self,
+        tx: &Transaction<'_>,
+        session: i64,
+        state: &State,
+        write: FollowUpWrite<'_>,
+    ) -> Result<(), String> {
+        match write {
+            FollowUpWrite::Deferred | FollowUpWrite::Accept => Ok(()),
+            FollowUpWrite::Composer { origin, message_id } => {
+                if !state
+                    .messages
+                    .last()
+                    .into_iter()
+                    .chain(state.draft.as_ref())
+                    .any(|message| message.id == message_id)
+                {
+                    return Err("The saved message does not own this draft version.".into());
+                }
+                self.transfer_composer_origin(tx, session, origin)
+            }
+            FollowUpWrite::BotDraft { revision, draft_id } => {
+                let current = self.composer_draft(session)?;
+                if current.as_ref().map_or(0, |draft| draft.revision) != revision
+                    || state
+                        .draft
+                        .as_ref()
+                        .is_none_or(|draft| draft.id != draft_id)
+                {
+                    return Err(
+                        "Composer changed in another window; your input was preserved".into(),
+                    );
+                }
+                // Bot draft editing still uses its original receipt during delivery.
+                self.save_setting(
+                    &format!("bot-draft-origin:{session}"),
+                    &serde_json::json!({"id":draft_id,"revision":revision}).to_string(),
+                )
+            }
+        }
+    }
+
     pub fn follow_ups(&self, session: i64) -> Result<State, String> {
         let mut state: State = if self.uses_vorkspace_schema() && session >= 0 {
             self.shared_follow_ups(session)?
@@ -105,22 +170,6 @@ impl Store {
         // Recovery is always explicit, as in React's deserializeSession.
         state.paused = !state.messages.is_empty();
         Ok(state)
-    }
-    pub fn save_follow_ups(&self, session: i64, state: &State) -> Result<(), String> {
-        if self.uses_vorkspace_schema() && session >= 0 {
-            return self.shared_save_follow_ups(session, state);
-        }
-        let key = format!("follow-up:{session}");
-        let previous = self
-            .setting(&key)?
-            .and_then(|text| serde_json::from_str::<State>(&text).ok());
-        if previous.is_some_and(|previous| previous.revision > state.revision) {
-            return Ok(());
-        }
-        self.save_setting(
-            &key,
-            &serde_json::to_string(state).map_err(|e| e.to_string())?,
-        )
     }
 }
 

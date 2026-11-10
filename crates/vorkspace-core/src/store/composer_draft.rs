@@ -36,7 +36,17 @@ pub(super) fn ensure_draft_schema(conn: &rusqlite::Connection) -> Result<(), Str
         session_id TEXT PRIMARY KEY,cwd TEXT NOT NULL,
         revision INTEGER NOT NULL CHECK(revision>=1 AND revision<=9007199254740991),
         payload_json TEXT NOT NULL,deleted INTEGER NOT NULL DEFAULT 0 CHECK(deleted IN(0,1)),updated_at INTEGER NOT NULL);")
-        .map_err(|e| e.to_string())
+        .map_err(|e| e.to_string())?;
+    ensure_transfer_schema(conn)
+}
+pub(super) fn ensure_transfer_schema(conn: &rusqlite::Connection) -> Result<(), String> {
+    conn.execute_batch(
+        "CREATE TABLE IF NOT EXISTS composer_transfers (
+            session_id TEXT NOT NULL, revision INTEGER NOT NULL,
+            PRIMARY KEY(session_id, revision)
+         ) WITHOUT ROWID;",
+    )
+    .map_err(|error| error.to_string())
 }
 pub(super) fn ensure_recovery_schema(conn: &rusqlite::Connection) -> Result<(), String> {
     conn.execute_batch("CREATE TABLE IF NOT EXISTS composer_draft_recoveries(session_id TEXT NOT NULL,owner TEXT NOT NULL,revision INTEGER NOT NULL,payload_json TEXT NOT NULL,updated_at INTEGER NOT NULL,PRIMARY KEY(session_id,owner));")
@@ -88,6 +98,13 @@ struct Sources {
     current: String,
     bound: Option<String>,
     unbound: Option<String>,
+}
+
+struct ComposerVersion {
+    source: String,
+    revision: u64,
+    deleted: bool,
+    remote: bool,
 }
 
 impl Sources {
@@ -162,40 +179,47 @@ impl Store {
             .is_some_and(|origin| origin.source == source && origin.revision == revision))
     }
 
-    pub fn composer_origin(&self, id: i64, revision: u64) -> Result<ComposerOrigin, String> {
-        let sources = self.composer_sources(id)?;
-        let version = if self.shared.is_some() {
+    fn composer_version(
+        &self,
+        id: i64,
+        sources: Sources,
+    ) -> Result<Option<ComposerVersion>, String> {
+        if self.shared.is_some() {
             self.read_composer_row(
                 &sources,
                 "session_id,revision,deleted,cwd LIKE 'remote://%'",
                 |row| {
-                    Ok((
-                        row.get(0)?,
-                        row.get::<_, i64>(1)?.max(0) as u64,
-                        row.get(2)?,
-                        row.get::<_, bool>(3)?,
-                    ))
+                    Ok(ComposerVersion {
+                        source: row.get(0)?,
+                        revision: row.get::<_, i64>(1)?.max(0) as u64,
+                        deleted: row.get(2)?,
+                        remote: row.get(3)?,
+                    })
                 },
-            )?
+            )
         } else {
-            self.composer_draft(id)?
-                .map(|draft| (sources.current, draft.revision, draft.deleted, false))
-        };
-        let Some((source, current, false, remote)) = version else {
-            return Err(
-                "The saved draft changed before this send. Your input was preserved.".into(),
-            );
-        };
-        if current != revision
-            || (remote && self.remote_composer_transferred(id, &source, revision)?)
-        {
-            return Err(
-                "The saved draft changed before this send. Your input was preserved.".into(),
-            );
+            Ok(self.composer_draft(id)?.map(|draft| ComposerVersion {
+                source: sources.current,
+                revision: draft.revision,
+                deleted: draft.deleted,
+                remote: draft.payload["cwd"]
+                    .as_str()
+                    .is_some_and(|cwd| cwd.starts_with("remote://")),
+            }))
+        }
+    }
+
+    pub fn composer_origin(&self, id: i64, revision: u64) -> Result<ComposerOrigin, String> {
+        let version = self
+            .composer_version(id, self.composer_sources(id)?)?
+            .filter(|version| !version.deleted && version.revision == revision)
+            .ok_or(DRAFT_CHANGED)?;
+        if version.remote && self.remote_composer_transferred(id, &version.source, revision)? {
+            return Err(DRAFT_CHANGED.into());
         }
         Ok(ComposerOrigin {
             session: id,
-            source,
+            source: version.source,
             revision,
         })
     }
@@ -206,31 +230,31 @@ impl Store {
         if !sources.params().contains(&Some(origin.source.as_str())) {
             return Ok(false);
         }
-        if self.shared.is_none() {
-            return Ok(self
-                .composer_draft(origin.session)?
-                .is_some_and(|draft| draft.revision == origin.revision && draft.deleted));
+        let revision = i64::try_from(origin.revision).map_err(|error| error.to_string())?;
+        if shared::has_table(&self.conn, "composer_transfers")?
+            && self
+                .conn
+                .query_row(
+                    "SELECT EXISTS(SELECT 1 FROM composer_transfers WHERE session_id=?1 AND revision=?2)",
+                    params![origin.source, revision],
+                    |row| row.get::<_, bool>(0),
+                )
+                .map_err(|error| error.to_string())?
+        {
+            return Ok(true);
         }
-        let version = self.read_composer_row(
-            &sources,
-            "session_id,revision,deleted,cwd LIKE 'remote://%'",
-            |row| {
-                Ok((
-                    row.get::<_, String>(0)?,
-                    row.get::<_, i64>(1)?.max(0) as u64,
-                    row.get::<_, bool>(2)?,
-                    row.get::<_, bool>(3)?,
-                ))
-            },
-        )?;
-        let Some((source, revision, deleted, remote)) = version else {
+        let Some(version) = self.composer_version(origin.session, sources)? else {
             return Ok(false);
         };
-        if source != origin.source || revision != origin.revision {
-            return Ok(false);
-        }
-        Ok(deleted
-            || (remote && self.remote_composer_transferred(origin.session, &source, revision)?))
+        Ok(version.deleted
+            && version.source == origin.source
+            && version.revision == origin.revision
+            || version.remote
+                && self.remote_composer_transferred(
+                    origin.session,
+                    &origin.source,
+                    origin.revision,
+                )?)
     }
 
     /// The caller owns the transaction that accepts the input. Moving the
@@ -242,8 +266,30 @@ impl Store {
         id: i64,
         origin: &ComposerOrigin,
     ) -> Result<(), String> {
-        if origin.session != id || origin.source != self.composer_sources(id)?.current {
+        let sources = self.composer_sources(id)?;
+        if origin.session != id || origin.source != sources.current {
             return Err("Composer submission belongs to another conversation".into());
+        }
+        let version = self
+            .composer_version(id, sources)?
+            .filter(|version| {
+                version.revision >= origin.revision && version.source == origin.source
+            })
+            .ok_or(DRAFT_CHANGED)?;
+        if version.remote || (version.revision == origin.revision && version.deleted) {
+            return Err(DRAFT_CHANGED.into());
+        }
+        let revision = i64::try_from(origin.revision).map_err(|error| error.to_string())?;
+        ensure_transfer_schema(transaction)?;
+        let inserted = transaction
+            .execute(
+                "INSERT INTO composer_transfers(session_id,revision) VALUES(?1,?2)
+                 ON CONFLICT(session_id,revision) DO NOTHING",
+                params![origin.source, revision],
+            )
+            .map_err(|error| error.to_string())?;
+        if inserted == 0 {
+            return Err("This version of the draft was already accepted.".into());
         }
         if self.shared.is_some() {
             transaction
@@ -253,7 +299,7 @@ impl Store {
                     params![
                         crate::time::now_ms().min(i64::MAX as u64) as i64,
                         origin.source,
-                        i64::try_from(origin.revision).map_err(|error| error.to_string())?
+                        revision
                     ],
                 )
                 .map_err(|error| error.to_string())?;
@@ -466,6 +512,8 @@ impl Store {
         Ok(revision)
     }
 }
+
+const DRAFT_CHANGED: &str = "The saved draft changed before this send. Your input was preserved.";
 
 #[cfg(test)]
 mod tests;

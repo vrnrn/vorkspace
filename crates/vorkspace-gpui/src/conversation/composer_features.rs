@@ -5,6 +5,16 @@ pub(crate) struct StartOrchestration(pub vorkspace_core::orchestration::Plan);
 pub(crate) struct StopOrchestration;
 
 impl Conversation {
+    pub(super) fn selected_turn_mode(&self) -> Option<&'static str> {
+        [
+            (self.settings.orchestrator, "orchestrator"),
+            (self.settings.plan, "plan"),
+            (self.settings.operator, "operator"),
+        ]
+        .into_iter()
+        .find_map(|(selected, mode)| selected.then_some(mode))
+    }
+
     pub(crate) fn set_app_environment(
         &mut self,
         environment: std::collections::HashMap<String, String>,

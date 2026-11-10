@@ -239,6 +239,19 @@ impl Conversation {
             .children(self.local_submission_banner(cx))
             .children(self.edit_recovery_banner())
             .children(self.recovered_turn_banner(cx))
+            .when_some(self.follow_ups.admission_error.clone(), |d, error| {
+                d.child(
+                    div()
+                        .id("composer-admission-error")
+                        .role(Role::Alert)
+                        .aria_label(error.clone())
+                        .px(px(10.))
+                        .pt(px(6.))
+                        .text_size(px(12.))
+                        .text_color(vorkspace_ui::theme::danger())
+                        .child(error),
+                )
+            })
             .children(self.attachment_chips(cx))
             .child(
                 // Even padding centres send beside one line and keeps it at
@@ -741,12 +754,15 @@ impl Conversation {
     pub(super) fn action(&self, has_value: bool, cx: &mut Context<Self>) -> impl IntoElement {
         let ticket_pending = self.ticket_context.pending();
         let bot = self.settings.bot.is_some();
-        let busy = !bot && (ticket_pending || (self.responding() && !has_value));
+        let busy = !bot
+            && (ticket_pending
+                || (self.responding() && (!has_value || self.composer_version_offered())));
+        let offering = self.composer_draft.submitting();
         let draft = self.draft_active(cx);
         let enabled = ticket_pending
             || (!self.attaching
                 && (!self.preparing_worktree || self.busy || self.stopping)
-                && (busy || (has_value && self.loaded))
+                && (busy || (has_value && self.loaded && !offering))
                 && (busy
                     || !draft
                     || (self.follow_ups.state.draft.is_none()
@@ -757,6 +773,10 @@ impl Conversation {
             .role(Role::Button)
             .aria_label(if busy {
                 "Stop"
+            } else if let Some(label) = self.follow_ups.admission_label() {
+                label
+            } else if offering {
+                "Waiting for send confirmation"
             } else if draft {
                 "Save draft"
             } else {

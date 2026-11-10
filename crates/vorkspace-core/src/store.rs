@@ -209,6 +209,7 @@ impl Store {
             PRIMARY KEY(session_id,row_ix));
           CREATE TABLE IF NOT EXISTS native_reminders(session_id INTEGER PRIMARY KEY REFERENCES native_sessions(id),
             due_at INTEGER NOT NULL, fired_at INTEGER);").map_err(|e| e.to_string())?;
+        composer_draft::ensure_transfer_schema(&conn)?;
         let columns = conn
             .prepare("PRAGMA table_info(native_sessions)")
             .map_err(|e| e.to_string())?
@@ -1280,6 +1281,11 @@ impl Store {
         }
         local_submissions::delete_if_present(&tx, &id.to_string())?;
         native_history::delete_if_present(&tx, &id.to_string())?;
+        tx.execute(
+            "DELETE FROM composer_transfers WHERE session_id=?1",
+            [id.to_string()],
+        )
+        .map_err(|error| error.to_string())?;
         if tx
             .query_row(
                 "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE name='composer_draft_recoveries')",

@@ -92,19 +92,9 @@ impl Conversation {
     pub(super) fn enqueue_restored_prompt(&mut self, prompt: String, cx: &mut Context<Self>) {
         // The accepted prompt predates this composer draft. Queue it without
         // taking any files the user attached while history was restoring.
-        let attachments = std::mem::take(&mut self.attachments);
-        self.attachments = std::mem::take(&mut self.settings.attachments);
-        let mode = if self.settings.orchestrator {
-            Some("orchestrator")
-        } else if self.settings.plan {
-            Some("plan")
-        } else if self.settings.operator {
-            Some("operator")
-        } else {
-            None
-        };
-        self.enqueue_follow_up(prompt, mode.map(str::to_owned), cx);
-        self.attachments = attachments;
+        let attachments = std::mem::take(&mut self.settings.attachments);
+        let mode = self.selected_turn_mode();
+        self.enqueue_follow_up(prompt, attachments, mode.map(str::to_owned), cx);
     }
     pub(crate) fn history_loaded(&self) -> bool {
         self.loaded && !self.history_unloaded && !self.history_partial
@@ -135,6 +125,7 @@ impl Conversation {
             && self.controls.is_none()
             && !self.needs_approval()
             && !self.attaching
+            && !self.composer_draft.submitting()
             && self.attachments.is_empty()
             && self.input.read(cx).content.is_empty()
             && !self.input.read(cx).is_composing()

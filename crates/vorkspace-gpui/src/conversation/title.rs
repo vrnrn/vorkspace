@@ -19,30 +19,42 @@ impl Conversation {
             cancel.store(true, Ordering::Relaxed);
         }
     }
-    pub(super) fn generate_title(&mut self, message: &str, cx: &mut Context<Self>) {
-        if self.summary.has_messages
-            || self.settings.bot.is_some()
-            || self.summary.title
-                != format!(
+    pub(super) fn needs_title(&self) -> bool {
+        !self.is_remote()
+            && self.settings.bot.is_none()
+            && self.summary.title
+                == format!(
                     "New {} session",
                     Kind::display_label(&self.summary.provider)
                 )
-        {
+    }
+
+    pub(super) fn seed_title(&mut self, message: &str, cx: &mut Context<Self>) {
+        self.offer_title(message, false, cx);
+    }
+
+    pub(super) fn generate_title(&mut self, message: &str, cx: &mut Context<Self>) {
+        self.offer_title(message, true, cx);
+    }
+
+    fn offer_title(&mut self, message: &str, refine: bool, cx: &mut Context<Self>) {
+        if !self.needs_title() {
             return;
         }
         self.cancel_title_generation();
         let placeholder = self.summary.title.clone();
         let seed = message
             .split_whitespace()
-            .collect::<Vec<_>>()
-            .join(" ")
-            .chars()
+            .enumerate()
+            .flat_map(|(index, word)| (index > 0).then_some(' ').into_iter().chain(word.chars()))
             .take(42)
             .collect::<String>();
         if seed.is_empty() {
             return;
         }
         self.summary.title = seed.clone();
+        cx.emit(SessionChanged::Catalog);
+        cx.notify();
         let cancel = Arc::new(AtomicBool::new(false));
         self.title_cancel = Some(cancel.clone());
         let kind = Kind::from_id(&self.summary.provider);
@@ -51,7 +63,7 @@ impl Conversation {
             .worktree_cwd
             .clone()
             .unwrap_or_else(|| self.summary.cwd.clone());
-        let message = message.to_owned();
+        let message = refine.then(|| message.to_owned());
         let account = self.settings.account.clone();
         let id = self.summary.id;
         let store = self.store.clone();
@@ -68,17 +80,24 @@ impl Conversation {
             }
             // GPUI unit tests use synthetic conversations. Live-provider checks
             // are opt-in; the core runner is tested with isolated CLI fixtures.
-            if cfg!(test) {
-                None
-            } else {
-                vorkspace_core::session_title::generate_for(
+            if let Some(message) = message.filter(|_| !cfg!(test) && !flag.load(Ordering::Acquire))
+            {
+                let generated = vorkspace_core::session_title::generate_for(
                     kind,
                     Path::new(&cwd),
                     &message,
                     account,
-                    flag,
-                )
+                    flag.clone(),
+                )?;
+                if !flag.load(Ordering::Acquire)
+                    && locked(&store)
+                        .and_then(|store| store.replace_title(id, &expected, &generated.title))
+                        .unwrap_or(false)
+                {
+                    return Some(generated);
+                }
             }
+            None
         });
         cx.spawn(async move |this, cx| {
             let generated = work.await;
@@ -101,15 +120,7 @@ impl Conversation {
         if self.summary.title != seed {
             return;
         }
-        self.summary.title = title.clone();
-        let store = self.store.clone();
-        let id = self.summary.id;
-        let seed = seed.to_owned();
-        cx.background_executor()
-            .spawn(async move {
-                let _ = locked(&store).and_then(|s| s.replace_title(id, &seed, &title));
-            })
-            .detach();
+        self.summary.title = title;
         cx.emit(SessionChanged::Catalog);
         cx.notify();
     }

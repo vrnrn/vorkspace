@@ -214,6 +214,10 @@ impl Conversation {
             return false;
         }
         self.persist_composer(cx);
+        self.composer_version_offered()
+    }
+
+    pub(super) fn composer_version_offered(&self) -> bool {
         self.composer_draft
             .submission
             .as_ref()
@@ -261,12 +265,18 @@ impl Conversation {
         };
         self.persist_composer(cx);
         self.composer_draft.submission = None;
-        if self.composer_draft.generation() == generation && !self.input.read(cx).is_composing() {
+        let cleared =
+            self.composer_draft.generation() == generation && !self.input.read(cx).is_composing();
+        if cleared {
+            let clear_mode = self.follow_ups.draft_selected || self.selected_turn_mode().is_some();
             self.attachments.clear();
             self.follow_ups.draft_selected = false;
             self.input
                 .update(cx, |input, cx| input.set_text(String::new(), cx));
             self.persist_composer(cx);
+            if clear_mode {
+                self.clear_submitted_mode(cx);
+            }
         }
         cx.notify();
     }
@@ -293,7 +303,9 @@ impl Conversation {
         let committed =
             locked(&self.store).and_then(|store| store.composer_transfer_committed(origin));
         match committed {
-            Ok(true) => self.accept_composer_submission(origin, cx),
+            Ok(true) => {
+                self.accept_composer_submission(origin, cx);
+            }
             Ok(false) => self.finish_composer_submission(cx),
             // Keep the offered version fenced until storage or a newer edit
             // supplies ownership. An uncertain read must not recreate it.

@@ -60,7 +60,7 @@ fn queue_entrances_slide_above_a_stationary_composer_for_the_first_and_later_mes
     {
         window
             .update(visual, |view, _, cx| {
-                view.enqueue_follow_up(text.into(), None, cx);
+                view.enqueue_follow_up(text.into(), Vec::new(), None, cx);
             })
             .unwrap();
         let (starting, composer) = bounds(visual);
@@ -132,6 +132,46 @@ fn submitted_modes_clear_after_queueing_and_do_not_leak_into_the_next_message(
                 let queue = store.follow_ups(view.summary.id).unwrap();
                 assert_eq!(queue.messages[0].mode.as_deref(), Some(mode));
                 assert_eq!(queue.messages[1].mode, None);
+            })
+            .unwrap();
+    }
+}
+
+#[gpui::test]
+fn rejected_queue_and_draft_saves_preserve_the_editor(cx: &mut TestAppContext) {
+    for draft in [false, true] {
+        let window = conversation(cx);
+        cx.run_until_parked();
+        window
+            .update(cx, |view, _, cx| {
+                let original = "An important message";
+                view.busy = !draft;
+                view.follow_ups.draft_selected = draft;
+                view.input
+                    .update(cx, |input, cx| input.set_text(original.into(), cx));
+                locked(&view.store)
+                    .unwrap()
+                    .save_follow_ups(
+                        view.summary.id,
+                        &State {
+                            revision: 8,
+                            ..State::default()
+                        },
+                    )
+                    .unwrap();
+                view.send(cx);
+                assert_eq!(view.input.read(cx).content.as_ref(), original);
+                assert_eq!(view.follow_ups.draft_selected, draft);
+                assert!(view.follow_ups.admission_error.is_some());
+                assert!(view.follow_ups.state.messages.is_empty());
+                assert!(view.follow_ups.state.draft.is_none());
+                let saved = locked(&view.store)
+                    .unwrap()
+                    .composer_draft(view.summary.id)
+                    .unwrap()
+                    .unwrap();
+                assert!(!saved.deleted);
+                assert_eq!(saved.payload["text"], original);
             })
             .unwrap();
     }

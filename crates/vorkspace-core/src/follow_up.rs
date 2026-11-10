@@ -76,44 +76,119 @@ pub struct State {
     pub draft: Option<Message>,
 }
 
+/// Copies belong to the pending message until a durable queue or draft owns
+/// them. A rejected save and a view closed during staging release the copies.
+pub struct StagedMessage {
+    pub message: Message,
+    cleanup: Option<PathBuf>,
+}
+
+impl StagedMessage {
+    pub fn prepare(
+        message: Message,
+        session: i64,
+        directory: Option<&std::path::Path>,
+    ) -> Result<Self, String> {
+        let mut staged = Self {
+            message,
+            cleanup: None,
+        };
+        if let Some(directory) = directory.filter(|_| !staged.message.attachments.is_empty()) {
+            let root = staged.message.attachment_directory(session, directory);
+            let parent = root
+                .parent()
+                .ok_or("Missing attachment storage directory")?;
+            std::fs::create_dir_all(parent).map_err(|error| error.to_string())?;
+            std::fs::create_dir(&root).map_err(|error| error.to_string())?;
+            staged.cleanup = Some(root);
+            staged.message.retain_attachments(session, directory)?;
+        }
+        Ok(staged)
+    }
+
+    pub fn publish(&mut self) {
+        self.cleanup = None;
+    }
+}
+
+impl Drop for StagedMessage {
+    fn drop(&mut self) {
+        if let Some(root) = &self.cleanup {
+            let _ = std::fs::remove_dir_all(root);
+        }
+    }
+}
+
+impl Message {
+    fn attachment_directory(&self, session: i64, directory: &std::path::Path) -> PathBuf {
+        use std::hash::{Hash, Hasher};
+        let mut hash = std::collections::hash_map::DefaultHasher::new();
+        self.id.hash(&mut hash);
+        directory
+            .join("composer-messages")
+            .join(session.to_string())
+            .join(format!("{:016x}", hash.finish()))
+    }
+
+    fn retain_attachments(
+        &mut self,
+        session: i64,
+        directory: &std::path::Path,
+    ) -> Result<(), String> {
+        let root = self.attachment_directory(session, directory);
+        for (index, source) in self.attachments.iter_mut().enumerate() {
+            let name = source.file_name().ok_or("An attachment has no file name")?;
+            let parent = root.join(index.to_string());
+            let target = parent.join(name);
+            if *source != target && !target.exists() {
+                std::fs::create_dir_all(&parent).map_err(|error| error.to_string())?;
+                let temporary = parent.join(format!(".copy-{}", crate::session::new_id()));
+                let copy = || -> std::io::Result<()> {
+                    let mut input = std::fs::OpenOptions::new();
+                    input.read(true);
+                    #[cfg(unix)]
+                    {
+                        use std::os::unix::fs::OpenOptionsExt;
+                        input.custom_flags(libc::O_NONBLOCK);
+                    }
+                    let mut input = input.open(&*source)?;
+                    if !input.metadata()?.is_file() {
+                        return Err(std::io::Error::other("Attachment is not a regular file"));
+                    }
+                    let mut options = std::fs::OpenOptions::new();
+                    options.create_new(true).write(true);
+                    #[cfg(unix)]
+                    {
+                        use std::os::unix::fs::OpenOptionsExt;
+                        options.mode(0o600);
+                    }
+                    let mut output = options.open(&temporary)?;
+                    std::io::copy(&mut input, &mut output)?;
+                    output.sync_all()?;
+                    std::fs::rename(&temporary, &target)
+                };
+                if let Err(error) = copy() {
+                    let _ = std::fs::remove_file(&temporary);
+                    return Err(format!("Could not retain {}: {error}", source.display()));
+                }
+            }
+            *source = target;
+        }
+        Ok(())
+    }
+}
+
 impl State {
-    /// Snapshot picked files just once, as React persists queued attachment
-    /// bytes. A later rename, edit or deletion of the original must not change
-    /// the message the user already saved.
+    /// Snapshot picked files once. Moving or editing the source must not change
+    /// a saved message.
     pub fn retain_attachments(
         &mut self,
         session: i64,
         directory: Option<&std::path::Path>,
     ) -> Result<(), String> {
-        use std::hash::{Hash, Hasher};
-        let Some(directory) = directory else {
-            return Ok(());
-        };
-        for message in self.messages.iter_mut().chain(self.draft.iter_mut()) {
-            let mut hash = std::collections::hash_map::DefaultHasher::new();
-            message.id.hash(&mut hash);
-            let root = directory
-                .join("composer-messages")
-                .join(session.to_string())
-                .join(format!("{:016x}", hash.finish()));
-            for (index, source) in message.attachments.iter_mut().enumerate() {
-                let name = source.file_name().ok_or("An attachment has no file name")?;
-                let parent = root.join(index.to_string());
-                let target = parent.join(name);
-                if *source == target {
-                    continue;
-                }
-                if !target.exists() {
-                    std::fs::create_dir_all(&parent).map_err(|e| e.to_string())?;
-                    let temporary = parent.join(format!(".copy-{}", crate::session::new_id()));
-                    if let Err(error) = std::fs::copy(&*source, &temporary)
-                        .and_then(|_| std::fs::rename(&temporary, &target))
-                    {
-                        let _ = std::fs::remove_file(&temporary);
-                        return Err(format!("Could not retain {}: {error}", source.display()));
-                    }
-                }
-                *source = target;
+        if let Some(directory) = directory {
+            for message in self.messages.iter_mut().chain(self.draft.iter_mut()) {
+                message.retain_attachments(session, directory)?;
             }
         }
         Ok(())

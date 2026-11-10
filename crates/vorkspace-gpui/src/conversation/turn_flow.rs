@@ -70,6 +70,7 @@ impl Conversation {
         if self.reject_user_entry(cx) || self.composer_submission_pending(cx) {
             return;
         }
+        self.follow_ups.admission_error = None;
         let kind = match self.execution_provider() {
             Ok(kind) => kind,
             Err(error) => {
@@ -148,15 +149,7 @@ impl Conversation {
                     }
                 };
                 let text = self.consume_mode_command(raw.clone(), cx);
-                let mode = if self.settings.orchestrator {
-                    Some("orchestrator")
-                } else if self.settings.plan {
-                    Some("plan")
-                } else if self.settings.operator {
-                    Some("operator")
-                } else {
-                    None
-                };
+                let mode = self.selected_turn_mode();
                 let mode = recovery.as_ref().map_or(mode.map(str::to_owned), |record| {
                     record.payload["botSubmission"]["mode"]
                         .as_str()
@@ -266,47 +259,12 @@ impl Conversation {
         }
         self.completion
             .update(cx, |completion, cx| completion.dismiss(cx));
-        let mode = if self.settings.orchestrator {
-            Some("orchestrator")
-        } else if self.settings.plan {
-            Some("plan")
-        } else if self.settings.operator {
-            Some("operator")
-        } else {
-            None
-        };
-        if self.settings.pending_provider_switch.is_some() && self.busy {
-            // Picking a provider only arms the change. Sending is what stops
-            // the outgoing provider and commits the handoff.
-            self.stop(cx);
-        }
+        let mode = self.selected_turn_mode();
         if queueing {
-            self.input.update(cx, |input, cx| input.take(cx));
-            self.enqueue_follow_up(prompt, mode.map(str::to_owned), cx);
-            if self.stopping || self.settings.pending_provider_switch.is_some() {
-                // A fresh Send continues the conversation, while older queued
-                // messages remain paused after Stop.
-                if let Some(id) = self
-                    .follow_ups
-                    .state
-                    .messages
-                    .last()
-                    .map(|message| message.id.clone())
-                {
-                    self.follow_ups.continuations.push_back(id);
-                    if self.follow_ups.requested.is_none() {
-                        self.follow_ups.requested = self.follow_ups.continuations.front().cloned();
-                    }
-                }
-            }
-            if mode.is_some() {
-                self.clear_submitted_mode(cx);
-            }
+            self.queue_composer(prompt, mode.map(str::to_owned), cx);
             return;
         }
-        if self.launch_composer(prompt, false, cx) && mode.is_some() {
-            self.clear_submitted_mode(cx);
-        }
+        self.launch_composer(prompt, false, cx);
     }
 
     pub(super) fn launch_composer(
@@ -401,27 +359,11 @@ impl Conversation {
             if !matches!(source, PromptSource::Direct) {
                 return false;
             }
-            let mode = if self.settings.orchestrator {
-                Some("orchestrator")
-            } else if self.settings.plan {
-                Some("plan")
-            } else if self.settings.operator {
-                Some("operator")
-            } else {
-                None
-            };
-            self.enqueue_follow_up(prompt, mode.map(str::to_owned), cx);
-            if let Some(id) = self
-                .follow_ups
-                .state
-                .messages
-                .last()
-                .map(|message| message.id.clone())
+            let mode = self.selected_turn_mode();
+            if let Some(id) =
+                self.enqueue_follow_up(prompt, Vec::new(), mode.map(str::to_owned), cx)
             {
-                self.follow_ups.continuations.push_back(id);
-                if self.follow_ups.requested.is_none() {
-                    self.follow_ups.requested = self.follow_ups.continuations.front().cloned();
-                }
+                self.continue_after_stop(id);
             }
             return false;
         }
@@ -442,9 +384,6 @@ impl Conversation {
         };
         self.settings.usage_limit = None;
         self.attach_account(cx);
-        if !self.is_remote() {
-            self.generate_title(&prompt, cx);
-        }
         let model_label = self.model_label();
         self.sync_tool_paths(cx);
         self.transcript
@@ -469,7 +408,7 @@ impl Conversation {
         );
         let one_shot_mode = matches!(
             source,
-            PromptSource::Queued { .. } | PromptSource::Bot { .. }
+            PromptSource::Composer { .. } | PromptSource::Queued { .. } | PromptSource::Bot { .. }
         );
         let mut composer_origin = None;
         match source {
@@ -586,6 +525,9 @@ impl Conversation {
             turn_model_id,
         );
         projection.composer_origin = composer_origin.clone();
+        if self.needs_title() && !settings.internal_message {
+            projection.title_seed = Some(vorkspace_core::response::limit(&prompt, 8_000));
+        }
         self.controls = Some(admission.launch(
             vorkspace_runtime::runtime::TurnInput {
                 summary,

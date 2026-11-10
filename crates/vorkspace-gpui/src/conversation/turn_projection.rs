@@ -9,6 +9,7 @@ pub(super) struct TurnProjection {
     source_account: String,
     turn_model_id: Option<String>,
     pub(super) composer_origin: Option<ComposerOrigin>,
+    pub(super) title_seed: Option<String>,
 }
 
 impl TurnProjection {
@@ -24,6 +25,7 @@ impl TurnProjection {
             source_account,
             turn_model_id,
             composer_origin: None,
+            title_seed: None,
         }
     }
 
@@ -55,6 +57,15 @@ impl TurnProjection {
         }
         let source_selected =
             this.summary.provider == source_provider && this.settings.account.id == source_account;
+        if !stopping
+            && source_selected
+            && (accepted
+                || update.turn_ready
+                || outcome == Some(vorkspace_runtime::runtime::TurnOutcome::Completed))
+            && let Some(seed) = self.title_seed.take()
+        {
+            this.generate_title(&seed, cx);
+        }
         let mut checkout_changed = false;
         if let Some(cwd) = update.worktree_cwd
             && (this.settings.worktree_cwd.as_ref() != Some(&cwd) || this.settings.new_worktree)

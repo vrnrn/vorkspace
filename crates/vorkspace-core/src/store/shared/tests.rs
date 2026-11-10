@@ -1108,6 +1108,39 @@ fn local_history_load_merges_saved_receipts_and_keeps_rows_when_preferences_fail
 }
 
 #[test]
+fn queue_only_writes_do_not_read_or_rehash_indexed_history() {
+    use crate::follow_up::Message;
+    let mut store = Store::open_vorkspace(std::path::Path::new(":memory:")).unwrap();
+    let session = store.create("codex", "/project").unwrap();
+    let mut history = Transcript::default();
+    for index in 0..256 {
+        history.begin(if index % 2 == 0 { "user" } else { "assistant" });
+        history.append(&"A detailed transcript. ".repeat(256));
+    }
+    store.write_rows(session.id, 0, &history.rows).unwrap();
+    let source = store.persisted_session_id(session.id).unwrap();
+    let before = store.history_revision(&source).unwrap();
+    HISTORY_READ_BYTES.with(|count| count.set(0));
+    HISTORY_REVISION_HASH_BLOCKS.with(|count| count.set(0));
+    let mut state = store.follow_ups(session.id).unwrap();
+    state.messages.push(Message {
+        id: "follow-up".into(),
+        text: "Queued separately".into(),
+        ..Default::default()
+    });
+    state.revision += 1;
+    store.accept_follow_ups(session.id, &state).unwrap();
+    assert_eq!(
+        store.follow_ups(session.id).unwrap().messages,
+        state.messages
+    );
+    assert_eq!(store.history_revision(&source).unwrap(), before);
+    assert!(HISTORY_READ_BYTES.with(|count| count.get()) < 1024);
+    assert_eq!(HISTORY_REVISION_HASH_BLOCKS.with(|count| count.get()), 0);
+    assert_eq!(store.load(session.id).unwrap().rows, history.rows);
+}
+
+#[test]
 fn concurrent_queue_changes_are_preserved_and_transaction_is_rolled_back() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("vorkspace.db");
