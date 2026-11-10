@@ -194,10 +194,13 @@ fn pins_links_groups_and_reminders_survive_restart_and_delete_clears_them() {
     let item = crate::session_groups::parse_github_work_item("https://github.com/acme/app/pull/9")
         .unwrap();
     store.set_work_item(keep.id, Some(&item)).unwrap();
-    let mut groups = crate::session_groups::Groups::default();
-    groups.create_folder(&[keep.id, gone.id], "f".into());
-    groups.pinned_collapsed = true;
-    store.save_groups("/project", &groups).unwrap();
+    store
+        .edit_groups("/project", |groups| {
+            groups.create_folder(&[keep.id, gone.id], "f".into());
+            groups.pinned_collapsed = true;
+            Ok(())
+        })
+        .unwrap();
     store.set_reminders(&[keep.id, gone.id], 100).unwrap();
     store.set_reminders(&[keep.id], 200).unwrap();
     drop(store);

@@ -1166,46 +1166,41 @@ impl Store {
     }
     /// A project's folders and folded groups.
     pub fn groups(&self, cwd: &str) -> Result<crate::session_groups::Groups, String> {
-        if self.shared.is_some() {
-            return self.shared_groups(cwd);
-        }
-
-        use rusqlite::OptionalExtension;
-        let text: Option<String> = self
-            .conn
-            .query_row(
-                "SELECT value FROM native_settings WHERE key=?1",
-                [format!("groups:{cwd}")],
-                |r| r.get(0),
-            )
-            .optional()
-            .map_err(|e| e.to_string())?;
-        Ok(text
-            .and_then(|text| serde_json::from_str(&text).ok())
-            .unwrap_or_default())
+        self.groups_from(cwd, self.setting(&format!("groups:{cwd}"))?.as_deref())
     }
-    pub fn save_groups(
+    fn groups_from(
         &self,
         cwd: &str,
-        groups: &crate::session_groups::Groups,
-    ) -> Result<(), String> {
-        if self.shared.is_some() {
-            return self.shared_save_setting(&format!("groups:{cwd}"), &shared::encode(groups)?);
+        saved: Option<&str>,
+    ) -> Result<crate::session_groups::Groups, String> {
+        if let Some(saved) = saved {
+            let decoded = serde_json::from_str(saved);
+            return if self.shared.is_some() {
+                decoded.map_err(|error| error.to_string())
+            } else {
+                Ok(decoded.unwrap_or_default())
+            };
         }
-
-        self.conn.execute("INSERT INTO native_settings(key,value) VALUES(?1,?2) ON CONFLICT(key) DO UPDATE SET value=excluded.value", params![format!("groups:{cwd}"), serde_json::to_string(groups).map_err(|e| e.to_string())?]).map_err(|e| e.to_string())?;
-        Ok(())
+        Ok(self
+            .desktop_preferences()
+            .and_then(|preferences| {
+                preferences.groups(cwd, |id| self.resolve_existing_session_id(id))
+            })
+            .unwrap_or_default())
     }
 
-    /// Call with the database guard held across the read, edit and write.
+    /// Merge the edit with the current saved groups across independent stores.
     pub fn edit_groups(
         &self,
         cwd: &str,
         edit: impl FnOnce(&mut crate::session_groups::Groups) -> Result<(), String>,
     ) -> Result<(), String> {
-        let mut groups = self.groups(cwd)?;
-        edit(&mut groups)?;
-        self.save_groups(cwd, &groups)
+        let key = format!("groups:{cwd}");
+        self.update_settings(|settings| {
+            let mut groups = self.groups_from(cwd, settings.get(&key).map(String::as_str))?;
+            edit(&mut groups)?;
+            Ok(((), vec![(key, shared::encode(&groups)?)]))
+        })
     }
     pub fn reminders(&self) -> Result<Vec<Reminder>, String> {
         if self.shared.is_some() {

@@ -216,6 +216,13 @@ fn remote_blocks(snapshot: &Value) -> Result<&[Value], String> {
 
 impl Store {
     pub fn remote_projects(&self) -> Result<BTreeMap<String, RemoteProject>, String> {
+        self.remote_projects_from(self.setting(PROJECTS)?.as_deref())
+    }
+
+    fn remote_projects_from(
+        &self,
+        saved: Option<&str>,
+    ) -> Result<BTreeMap<String, RemoteProject>, String> {
         let mut projects: BTreeMap<String, RemoteProject> = self
             .desktop_preferences()
             .and_then(|prefs| prefs.get("vorkspace.remote-projects.v2"))
@@ -224,9 +231,9 @@ impl Store {
                     .map_err(|e| format!("Cannot read desktop remote projects: {e}"))
             })
             .unwrap_or_else(|| Ok(BTreeMap::new()))?;
-        if let Some(raw) = self.setting(PROJECTS)? {
+        if let Some(raw) = saved {
             projects.extend(
-                serde_json::from_str::<BTreeMap<String, RemoteProject>>(&raw)
+                serde_json::from_str::<BTreeMap<String, RemoteProject>>(raw)
                     .map_err(|e| format!("Cannot read remote projects: {e}"))?,
             );
         }
@@ -252,13 +259,12 @@ impl Store {
             project_id: id.into(),
             cwd: cwd.into(),
         };
-        let mut projects = self.remote_projects()?;
-        projects.insert(remote.key.clone(), remote.clone());
-        self.save_setting(
-            PROJECTS,
-            &serde_json::to_string(&projects).map_err(|e| e.to_string())?,
-        )?;
-        Ok(remote)
+        self.update_settings(|settings| {
+            let mut projects =
+                self.remote_projects_from(settings.get(PROJECTS).map(String::as_str))?;
+            projects.insert(remote.key.clone(), remote.clone());
+            Ok((remote, vec![(PROJECTS.into(), shared::encode(&projects)?)]))
+        })
     }
     fn stored_remote_sessions(&self) -> Result<BTreeMap<i64, RemoteSession>, String> {
         decode_sessions(self.setting(SESSIONS)?.as_deref())

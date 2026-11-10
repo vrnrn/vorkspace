@@ -1703,17 +1703,6 @@ impl Store {
         }
         Ok(out)
     }
-    pub(super) fn shared_groups(&self, cwd: &str) -> Result<crate::session_groups::Groups, String> {
-        if let Some(raw) = self.shared_setting(&format!("groups:{cwd}"))? {
-            return parse(&raw);
-        }
-        Ok(self
-            .desktop_preferences()
-            .and_then(|preferences| {
-                preferences.groups(cwd, |id| self.resolve_existing_session_id(id))
-            })
-            .unwrap_or_default())
-    }
     pub(super) fn shared_ui_state(&self) -> Result<Option<String>, String> {
         let saved = self.shared_setting("workspace")?;
         let mut workspace = saved.as_deref().map(parse::<Value>).transpose()?;
