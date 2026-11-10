@@ -248,16 +248,7 @@ fn idle_life_paints_every_pose_change_and_nothing_while_asleep() {
     let seeds: Vec<u32> = (0..12)
         .map(|i| default_seed_for(&format!("bot-{i}")))
         .collect();
-    let look = BotLookConfig::from_legacy("robot", 0x3b82f6);
-    let key = |life: &IdleLife| {
-        let anim = BotAnimState {
-            yaw: life.look.0,
-            pitch: life.look.1,
-            blink: life.blink,
-            ..Default::default()
-        };
-        frame_cache_key(true, &look, false, 48, anim)
-    };
+    let pose = |life: &IdleLife| (life.look, life.blink);
     let span = Duration::from_secs(300);
     let mut union = BTreeSet::new();
     for &seed in &seeds {
@@ -270,10 +261,10 @@ fn idle_life_paints_every_pose_change_and_nothing_while_asleep() {
             blinked |= life.blink < 0.5;
             if life.next - at > AVATAR_FRAME {
                 // Asleep: the painted pose must hold until the next wake.
-                let painted = key(&life);
+                let painted = pose(&life);
                 let mut t = at;
                 while t < life.next {
-                    assert!(key(&idle_life(seed, t)) == painted, "seed {seed} at {t:?}");
+                    assert!(pose(&idle_life(seed, t)) == painted, "seed {seed} at {t:?}");
                     t += Duration::from_millis(11);
                 }
             }

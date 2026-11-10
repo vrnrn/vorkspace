@@ -13,13 +13,11 @@ use std::{
     sync::{Arc, LazyLock, Mutex},
     time::Duration,
 };
-#[cfg(test)]
-use vorkspace_core::project_appearance::render_badge_or_bot_with_eyes;
 use vorkspace_core::{
     bot::Bot,
     project_appearance::{
-        BADGE_SHAPES, BOT_FACES, BotAnimState, default_foreground_color, default_seed_for,
-        normalize_badge_shape, normalize_bot_face,
+        BADGE_SHAPES, BOT_FACES, default_foreground_color, default_seed_for, normalize_badge_shape,
+        normalize_bot_face,
     },
 };
 use vorkspace_ui::clock::Instant;
@@ -593,86 +591,6 @@ pub(crate) fn minion_look(parent: &Bot, identity: &str) -> BotLookConfig {
     }
 }
 
-#[cfg(test)]
-#[derive(Clone, PartialEq, Eq, Hash)]
-struct FrameCacheKey {
-    is_bot: bool,
-    shape: String,
-    pattern: &'static str,
-    face: String,
-    one_eye: bool,
-    needs_you: bool,
-    textured: bool,
-    seed: u32,
-    grid: u8,
-    bg_color: u32,
-    fg_color: u32,
-    pixel_side: u32,
-    yaw_q: i16,
-    pitch_q: i16,
-    blink_q: i16,
-    squash_x_q: i16,
-    squash_y_q: i16,
-    hop_y_q: i16,
-    wide_q: i16,
-    tex_rot_q: i16,
-    crossed_eyes: bool,
-}
-
-#[cfg(test)]
-fn frame_cache_key(
-    is_bot: bool,
-    look: &BotLookConfig,
-    needs_you: bool,
-    pixel_side: u32,
-    anim: BotAnimState,
-) -> FrameCacheKey {
-    FrameCacheKey {
-        is_bot,
-        shape: normalize_badge_shape(&look.shape).into(),
-        pattern: look.pattern,
-        face: normalize_bot_face(&look.face).into(),
-        one_eye: is_bot && look.one_eye,
-        needs_you,
-        textured: look.textured,
-        seed: look.seed,
-        grid: look.grid,
-        bg_color: look.bg_color,
-        fg_color: look.fg_color,
-        pixel_side,
-        yaw_q: (anim.yaw * 40.0).round() as i16,
-        pitch_q: (anim.pitch * 40.0).round() as i16,
-        blink_q: (anim.blink * 25.0).round() as i16,
-        squash_x_q: (anim.squash_x * 100.0).round() as i16,
-        squash_y_q: (anim.squash_y * 100.0).round() as i16,
-        hop_y_q: (anim.hop_y * 100.0).round() as i16,
-        wide_q: (anim.wide * 50.0).round() as i16,
-        tex_rot_q: (anim.tex_rot * 0.5).round() as i16,
-        crossed_eyes: anim.crossed_eyes,
-    }
-}
-
-#[cfg(test)]
-fn render_frame(key: &FrameCacheKey, look: &BotLookConfig, anim: BotAnimState) -> Arc<RenderImage> {
-    to_render_image(
-        vorkspace_core::project_appearance::render_badge_or_bot_with_eyes(
-            key.is_bot,
-            &key.shape,
-            &key.face,
-            key.needs_you,
-            key.pattern,
-            look.textured,
-            look.seed,
-            look.grid,
-            look.bg_color,
-            look.fg_color,
-            key.pixel_side,
-            key.one_eye,
-            anim,
-        ),
-    )
-}
-
 #[derive(Clone, PartialEq, Eq, Hash)]
 struct BodyKey {
     shape: String,
@@ -686,6 +604,22 @@ struct BodyKey {
     pixel_side: u32,
 }
 
+impl BodyKey {
+    fn new(look: &BotLookConfig, pixel_side: u32) -> Self {
+        Self {
+            shape: normalize_badge_shape(&look.shape).into(),
+            pattern: look.pattern,
+            print: look.print,
+            textured: look.textured,
+            seed: look.seed,
+            grid: look.grid,
+            bg_color: look.bg_color,
+            fg_color: look.fg_color,
+            pixel_side,
+        }
+    }
+}
+
 /// One body per look and size; poses never enter the key.
 const BODY_CACHE_BYTES: usize = 12 * 1024 * 1024;
 static BODY_CACHE: LazyLock<Mutex<ImageCache<BodyKey>>> =
@@ -697,17 +631,7 @@ fn body_image(
     window: &mut Window,
     cx: &mut gpui::App,
 ) -> Arc<RenderImage> {
-    let key = BodyKey {
-        shape: normalize_badge_shape(&look.shape).into(),
-        pattern: look.pattern,
-        print: look.print,
-        textured: look.textured,
-        seed: look.seed,
-        grid: look.grid,
-        bg_color: look.bg_color,
-        fg_color: look.fg_color,
-        pixel_side,
-    };
+    let key = BodyKey::new(look, pixel_side);
     cached_image(&BODY_CACHE, key.clone(), window, cx, || {
         to_render_image(vorkspace_core::project_appearance::render_bot_body(
             &key.shape,
@@ -729,7 +653,7 @@ fn rgb_hsla(hex: u32) -> gpui::Hsla {
 
 /// Paints a Bot in `bounds`: its cached body moved by the pose's hop and
 /// squash, then the face as vector shapes placed by gaze, blink and width.
-pub(crate) fn paint_bot(
+fn paint_bot(
     bounds: Bounds<Pixels>,
     look: &BotLookConfig,
     needs_you: bool,
@@ -883,8 +807,33 @@ pub(crate) fn paint_bot(
     }
 }
 
-/// Render a 30% opacity full-button concentric texture / color highlight pill for
-/// selected rows in the sidebar.
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct BotAnimState {
+    yaw: f32,
+    pitch: f32,
+    blink: f32,
+    squash_x: f32,
+    squash_y: f32,
+    hop_y: f32,
+    wide: f32,
+    /// Transient expression for destructive-action hover; never saved as a face style.
+    crossed_eyes: bool,
+}
+impl Default for BotAnimState {
+    fn default() -> Self {
+        Self {
+            yaw: 0.0,
+            pitch: 0.0,
+            blink: 1.0,
+            squash_x: 1.0,
+            squash_y: 1.0,
+            hop_y: 0.0,
+            wide: 1.0,
+            crossed_eyes: false,
+        }
+    }
+}
+
 fn compute_bot_anim(
     seed: u32,
     status: &str,
@@ -965,22 +914,19 @@ fn bot_anim_at(
 
     if gaze.is_none() {
         if status == "working" {
-            // Working: Rhythmic Nod + Half-Speed Texture Flow (14 deg/sec)
+            // The working pose nods and squashes on the same beat.
             let pulse = (t * 5.2).sin();
             anim.yaw = (t * 1.3).sin() * 0.28;
             anim.pitch = pulse * 0.28;
             anim.squash_x = 1.0 + pulse * 0.045;
             anim.squash_y = 1.0 - pulse * 0.045;
             anim.hop_y = -pulse.abs() * 0.025;
-            anim.tex_rot = (now * 14.0).rem_euclid(360.0);
         } else {
             anim.yaw = (t * 6.0).sin() * 0.05;
             anim.pitch = -0.12;
             anim.wide = 1.14;
             anim.hop_y = -(t * 3.2).sin().abs() * 0.035;
         }
-    } else if status == "working" {
-        anim.tex_rot = (now * 14.0).rem_euclid(360.0);
     }
 
     (anim, Some(next_tick(elapsed)))
@@ -1068,8 +1014,7 @@ fn preview_anim(
 }
 
 /// A large preview follows this window's pointer rather than the sidebar's
-/// shared cursor. Retain only its last frame: high-resolution animation frames
-/// must not accumulate in the sidebar image cache.
+/// shared cursor, painting vector eyes over the same body cache.
 pub(super) fn settings_preview(
     bot: &Bot,
     side: f32,
@@ -1242,10 +1187,6 @@ mod preview_tests {
         // Crossed eyes never blink; the restored face resumes idle blinks.
         assert!(crossed_next.is_none());
         assert!(restored_next.is_some_and(|next| next > quiet));
-        assert!(
-            frame_cache_key(true, &look, false, 256, crossed)
-                != frame_cache_key(true, &look, false, 256, restored)
-        );
         assert_eq!(restored.yaw, 0.);
         assert_eq!(restored.pitch, 0.);
         assert_eq!(restored.blink, 1.);
