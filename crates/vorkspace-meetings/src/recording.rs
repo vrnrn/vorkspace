@@ -4,9 +4,10 @@ use crate::{directory::Directory, valid_id};
 use rustix::fs::OFlags;
 use serde::{Deserialize, Serialize};
 use std::{
+    borrow::Cow,
     ffi::OsStr,
     fs::File,
-    io::{Read, Write},
+    io::{BufRead, BufReader, Read, Write},
     os::fd::AsRawFd,
     path::{Path, PathBuf},
     sync::atomic::{AtomicU64, Ordering},
@@ -95,6 +96,29 @@ pub struct Segment {
     pub start_ms: u64,
     pub end_ms: u64,
     pub text: String,
+}
+
+#[derive(Deserialize)]
+struct SegmentLine<'a> {
+    sequence: u64,
+    #[serde(borrow)]
+    source: Cow<'a, str>,
+    start_ms: u64,
+    end_ms: u64,
+    #[serde(borrow)]
+    text: Cow<'a, str>,
+}
+
+impl From<SegmentLine<'_>> for Segment {
+    fn from(line: SegmentLine<'_>) -> Self {
+        Self {
+            sequence: line.sequence,
+            source: line.source.into_owned(),
+            start_ms: line.start_ms,
+            end_ms: line.end_ms,
+            text: line.text.into_owned(),
+        }
+    }
 }
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Transcript {
@@ -434,28 +458,68 @@ pub fn read(base: &Path, id: &str) -> Result<Transcript, String> {
     Ok(Transcript { state, segments })
 }
 
+pub(crate) fn has_saved_text(
+    base: &Path,
+    id: &str,
+    correction: Option<&str>,
+    override_sequence: Option<u64>,
+) -> Result<bool, String> {
+    let dir = Directory::open(&directory(base, id)?, false).map_err(|error| error.to_string())?;
+    let file = dir
+        .file(OsStr::new("transcript.jsonl"), OFlags::RDONLY)
+        .map_err(|error| error.to_string())?;
+    let after = match correction {
+        // A legacy correction covers the full captured prefix.
+        Some(_) => override_sequence.unwrap_or(u64::MAX),
+        None => 0,
+    };
+    let mut has_text = correction.is_some_and(|text| !text.trim().is_empty());
+    scan_segments(&file, |segment| {
+        has_text |= segment.sequence > after && !segment.text.trim().is_empty();
+    })?;
+    Ok(has_text)
+}
+
 fn read_segments(file: &File) -> Result<(Vec<Segment>, usize, bool), String> {
-    let mut bytes = Vec::new();
-    file.take(MAX_TRANSCRIPT as u64 + 1)
-        .read_to_end(&mut bytes)
-        .map_err(|e| e.to_string())?;
-    if bytes.len() > MAX_TRANSCRIPT {
-        return Err("Transcript exceeds its storage limit".into());
-    }
-    let end = bytes.iter().rposition(|b| *b == b'\n').map_or(0, |i| i + 1);
-    let mut segments = Vec::<Segment>::new();
-    for line in bytes[..end]
-        .split(|b| *b == b'\n')
-        .filter(|b| !b.is_empty())
-    {
-        let segment: Segment = serde_json::from_slice(line).map_err(|e| e.to_string())?;
-        if segment.sequence != segments.len() as u64 + 1 {
+    let mut segments = Vec::new();
+    let (end, complete) = scan_segments(file, |segment| segments.push(segment.into()))?;
+    Ok((segments, end, complete))
+}
+
+fn scan_segments(
+    file: &File,
+    mut visit: impl FnMut(SegmentLine<'_>),
+) -> Result<(usize, bool), String> {
+    let mut reader = BufReader::new(file.take(MAX_TRANSCRIPT as u64 + 1));
+    let mut line = Vec::new();
+    let mut end = 0;
+    let mut expected = 1;
+    loop {
+        line.clear();
+        let count = reader
+            .read_until(b'\n', &mut line)
+            .map_err(|e| e.to_string())?;
+        if count == 0 {
+            return Ok((end, true));
+        }
+        if end + count > MAX_TRANSCRIPT {
+            return Err("Transcript exceeds its storage limit".into());
+        }
+        if line.pop() != Some(b'\n') {
+            // Only an incomplete trailing write may be ignored.
+            return Ok((end, false));
+        }
+        end += count;
+        if line.is_empty() {
+            continue;
+        }
+        let segment: SegmentLine<'_> = serde_json::from_slice(&line).map_err(|e| e.to_string())?;
+        if segment.sequence != expected {
             return Err("Transcript segment continuity was lost".into());
         }
-        segments.push(segment);
+        expected += 1;
+        visit(segment);
     }
-    // Ignore only an incomplete trailing write; completed corrupt data fails closed.
-    Ok((segments, end, end == bytes.len()))
 }
 #[cfg(test)]
 mod tests {

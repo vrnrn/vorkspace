@@ -178,14 +178,16 @@ impl Meetings {
     }
 
     pub fn open_document(&self, id: &str) -> Result<Value, String> {
-        let _lock = self.lock()?;
+        let lock = self.lock()?;
         let meeting = self.metadata(id)?;
         let slot = self.draft_slot(id)?;
         let applied = meeting
             .applied_draft
             .as_ref()
             .map(|receipt| receipt.version.clone());
-        let mut result = self.read_document(meeting)?;
+        let document = self.read_document(meeting)?;
+        drop(lock);
+        let mut result = value(document)?;
         if let Some(Slot { version, draft }) = slot {
             if applied.as_ref() != Some(&version) {
                 result["draft"] = value(draft)?;
