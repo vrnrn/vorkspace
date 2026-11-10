@@ -24,7 +24,9 @@ export async function hostBranches(cwd, branch = currentBranch(cwd)) {
       ],
       { ...options(cwd), maxBuffer: 2 * 1024 * 1024 },
     ),
-    branch,
+    Promise.resolve(branch).then((value) =>
+      value === undefined ? currentBranch(cwd) : value,
+    ),
   ]);
   const branches = [];
   const remotes = [];

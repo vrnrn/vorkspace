@@ -450,12 +450,7 @@ export function createHostServer(engine, providers, lifecycle) {
             break;
           }
           case "git.snapshot": {
-            const checkout = await hostCheckout(engine.store.projects(), params.cwd);
-            result = {
-              ...(await hostBranches(checkout.cwd, checkout.current)),
-              linked: checkout.linked,
-              worktrees: checkout.worktrees,
-            };
+            result = await hostCheckout(engine.store.projects(), params.cwd);
             break;
           }
           case "git.switch": {

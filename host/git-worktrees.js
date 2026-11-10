@@ -3,6 +3,7 @@ import { existsSync, realpathSync, statSync } from "node:fs";
 import { mkdir } from "node:fs/promises";
 import { basename, dirname, isAbsolute, join } from "node:path";
 import { promisify } from "node:util";
+import { hostBranches } from "./git-branches.js";
 const exec = promisify(execFile);
 const options = (cwd) => ({
   cwd,
@@ -116,6 +117,21 @@ function canonicalDirectory(path) {
   }
 }
 
+async function checkoutSnapshot(cwd, listed) {
+  const scope = Promise.resolve(listed).then(({ worktrees }) => ({
+    worktrees,
+    tree: worktrees.find((row) => row.path === cwd && !row.missing),
+  }));
+  const [branches, { worktrees, tree }] = await Promise.all([
+    hostBranches(
+      cwd,
+      scope.then(({ tree }) => (tree?.head ? tree.branch : undefined)),
+    ),
+    scope,
+  ]);
+  return { ...branches, linked: tree?.isMain === false, worktrees };
+}
+
 // Resolve a read by path using the Host's project and working-copy registrations.
 export async function hostCheckout(projects, requested) {
   if (
@@ -128,29 +144,14 @@ export async function hostCheckout(projects, requested) {
   const cwd = canonicalDirectory(requested);
   const unavailable = "Choose an available worktree of this project";
   if (cwd == null) throw new Error(unavailable);
-  const direct = projects.find((project) => project.cwd === cwd);
-  if (direct) {
-    const { worktrees } = await hostWorktrees(cwd);
-    const tree = worktrees.find((row) => row.path === cwd && !row.missing);
-    return {
-      cwd,
-      current: tree?.head ? tree.branch : undefined,
-      linked: tree?.isMain === false,
-      worktrees,
-    };
-  }
+  // The exact registered project can read refs while its working copies load.
+  if (projects.some((project) => project.cwd === cwd))
+    return checkoutSnapshot(cwd, hostWorktrees(cwd));
   // Linked copies usually sit beside their registered project.
   for (const project of projects) {
     const result = await hostWorktrees(project.cwd).catch(() => null);
     const tree = result?.worktrees.find((row) => row.path === cwd && !row.missing);
-    if (tree) {
-      return {
-        cwd,
-        current: tree.branch,
-        linked: !tree.isMain,
-        worktrees: result.worktrees,
-      };
-    }
+    if (tree) return checkoutSnapshot(cwd, result);
   }
   throw new Error(unavailable);
 }
