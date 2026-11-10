@@ -641,12 +641,17 @@ impl gpui::Render for Inbox {
             .size_full()
             .flex()
             .flex_col()
-            .on_key_down(cx.listener(|this, event: &gpui::KeyDownEvent, window, cx| {
-                if event.keystroke.key == "escape" {
-                    if this.connect_provider.is_some() && !this.connecting {
-                        this.dismiss_connection(cx);
-                    } else if this.confirm_action.is_some() && !this.acting {
-                        this.confirm_action = None;
+            .on_action(
+                cx.listener(|this, _: &vorkspace_ui::actions::DismissMenu, window, cx| {
+                    if this.connect_provider.is_some() {
+                        if !this.connecting {
+                            this.dismiss_connection(cx);
+                            window.focus(&this.focus, cx);
+                        }
+                    } else if this.confirm_action.is_some() {
+                        if !this.acting {
+                            this.confirm_action = None;
+                        }
                     } else if this.filters_open
                         || this.connections_open
                         || this.project_picker
@@ -667,8 +672,8 @@ impl gpui::Render for Inbox {
                     }
                     cx.stop_propagation();
                     cx.notify();
-                }
-            }))
+                }),
+            )
             .on_mouse_move(
                 cx.listener(|this, event: &gpui::MouseMoveEvent, window, cx| {
                     if let Some((start, width)) = this.resize_start {
