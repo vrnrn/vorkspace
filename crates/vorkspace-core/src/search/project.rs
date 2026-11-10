@@ -1,8 +1,12 @@
 //! Project content search ported from the Tauri search service.
 use crate::files::list_project_files_sync_cancellable;
 use serde::{Deserialize, Serialize};
-use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::{
+    io::Read,
+    os::unix::fs::OpenOptionsExt,
+    path::{Component, Path},
+    sync::atomic::{AtomicBool, Ordering},
+};
 const MAX_MATCHES: usize = 500;
 const MAX_FILE_BYTES: u64 = 512 * 1024;
 const MAX_GIT_GREP_BYTES: usize = 4 * 1024 * 1024;
@@ -46,21 +50,11 @@ pub fn preview_ranges(
     matches: &[SearchMatch],
     options: &SearchOptions,
 ) -> Vec<Option<std::ops::Range<usize>>> {
-    let pattern = if options.regex {
-        options.query.trim().to_owned()
-    } else {
-        regex::escape(options.query.trim())
-    };
-    let matcher = regex::RegexBuilder::new(&pattern)
-        .case_insensitive(!options.case_sensitive)
-        .build()
-        .ok();
+    let matcher = matcher(options, options.query.trim()).ok();
     matches
         .iter()
         .map(|m| {
-            matcher
-                .as_ref()?
-                .find(m.preview.trim_end())
+            first_match(m.preview.trim_end(), matcher.as_ref()?, options.whole_word)
                 .map(|found| found.range())
         })
         .collect()
@@ -127,24 +121,33 @@ fn git_grep_capped(
     max_bytes: usize,
     cancel: &AtomicBool,
 ) -> Option<SearchResult> {
-    let mut args = vec!["grep".to_string(), "-z".to_string(), "-n".to_string()];
+    let mut args = vec![
+        "grep",
+        "-I",
+        "-z",
+        "-n",
+        "--column",
+        "--no-color",
+        "--no-full-name",
+        "--no-textconv",
+        "--untracked",
+    ];
     if !options.case_sensitive {
-        args.push("-i".to_string());
+        args.push("-i");
     }
     if options.whole_word {
-        args.push("-w".to_string());
+        args.push("-w");
     }
-    args.push(if options.regex { "-E" } else { "-F" }.to_string());
-    args.push("-e".to_string());
-    args.push(query.to_string());
+    args.push(if options.regex { "-E" } else { "-F" });
+    args.extend(["-e", query]);
 
     // Terminate option parsing so an include glob starting with `-` is treated
     // as a pathspec instead of a git grep flag.
-    args.push("--".to_string());
-    args.extend(pathspecs(&options.include, &options.exclude));
+    args.push("--");
+    let pathspecs = pathspecs(options.include.as_deref(), options.exclude.as_deref());
+    args.extend(pathspecs.iter().map(String::as_str));
 
-    let args: Vec<&str> = args.iter().map(String::as_str).collect();
-    let (mut raw, mut truncated) =
+    let (raw, mut truncated) =
         match crate::scm::git_output_capped(root, &args, max_bytes, Some(cancel)) {
             Some(output) => output,
             None if cancel.load(Ordering::Acquire) => {
@@ -155,74 +158,70 @@ fn git_grep_capped(
             }
             None => return None,
         };
-    if truncated {
-        // The cap can land inside a match record. Keep only complete lines so the
-        // parser never invents a match from a partial path, number, or preview.
-        if let Some(line_end) = raw.iter().rposition(|byte| *byte == b'\n') {
-            raw.truncate(line_end + 1);
-        } else {
-            raw.clear();
-        }
-    }
-
-    let root = root.to_path_buf();
     let mut matches = Vec::new();
-    let mut offset = 0;
-    while offset < raw.len() {
-        let Some((path_bytes, next)) = read_until(&raw[offset..], 0) else {
+    let mut records = raw.as_slice();
+    while !records.is_empty() {
+        if cancel.load(Ordering::Acquire) {
+            return Some(SearchResult {
+                matches: Vec::new(),
+                truncated: false,
+            });
+        }
+        let Some((path_bytes, next)) = take_until(records, 0) else {
             break;
         };
-        offset += next;
-        if path_bytes.is_empty() {
+        let Some((line_bytes, next)) = take_until(next, 0) else {
+            break;
+        };
+        let Some((column_bytes, next)) = take_until(next, 0) else {
+            break;
+        };
+        let (preview, rest) = match take_until(next, b'\n') {
+            Some(complete) => complete,
+            None if !truncated => (next, &[][..]),
+            None => break,
+        };
+        records = rest;
+        let (Ok(relative), Some(line), Some(column)) = (
+            std::str::from_utf8(path_bytes),
+            std::str::from_utf8(line_bytes)
+                .ok()
+                .and_then(|n| n.parse::<u32>().ok()),
+            std::str::from_utf8(column_bytes)
+                .ok()
+                .and_then(|n| n.parse::<usize>().ok()),
+        ) else {
+            continue;
+        };
+        if relative.is_empty()
+            || !Path::new(relative)
+                .components()
+                .all(|part| matches!(part, Component::Normal(_)))
+        {
             continue;
         }
-
-        let Some((line_bytes, next)) = read_until(&raw[offset..], 0) else {
-            break;
-        };
-        offset += next;
-
-        let line_end = raw[offset..]
-            .iter()
-            .position(|byte| *byte == b'\n')
-            .map(|index| offset + index)
-            .unwrap_or(raw.len());
-        let preview_bytes = &raw[offset..line_end];
-        offset = line_end + (usize::from(line_end < raw.len()));
-
-        let relative = String::from_utf8_lossy(path_bytes).replace('\\', "/");
-        let line = std::str::from_utf8(line_bytes)
-            .ok()
-            .and_then(|value| value.parse::<u32>().ok())
-            .unwrap_or(1);
-        let preview = String::from_utf8_lossy(preview_bytes).to_string();
-        let path = crate::shell_env::path_to_js(&root.join(&relative));
-        let column = match_column(
-            &preview,
-            query,
-            options.case_sensitive,
-            options.whole_word,
-            options.regex,
-        );
-        matches.push(SearchMatch {
-            path,
-            relative,
-            line,
-            column,
-            preview,
-        });
-        if matches.len() >= MAX_MATCHES {
+        if matches.len() == MAX_MATCHES {
             truncated = true;
             break;
         }
+        // Git returns a one-based byte column. The file editor navigates by
+        // Unicode scalars, including when a preview is decoded lossily.
+        let prefix = &preview[..column.saturating_sub(1).min(preview.len())];
+        matches.push(SearchMatch {
+            path: crate::shell_env::path_to_js(&root.join(relative)),
+            relative: relative.to_owned(),
+            line,
+            column: String::from_utf8_lossy(prefix).chars().count() as u32 + 1,
+            preview: String::from_utf8_lossy(preview).into_owned(),
+        });
     }
 
     Some(SearchResult { matches, truncated })
 }
 
-fn read_until(bytes: &[u8], delimiter: u8) -> Option<(&[u8], usize)> {
+fn take_until(bytes: &[u8], delimiter: u8) -> Option<(&[u8], &[u8])> {
     let end = bytes.iter().position(|byte| *byte == delimiter)?;
-    Some((&bytes[..end], end + 1))
+    Some((&bytes[..end], &bytes[end + 1..]))
 }
 
 fn scan_files(
@@ -231,7 +230,7 @@ fn scan_files(
     query: &str,
     cancel: &AtomicBool,
 ) -> Result<SearchResult, String> {
-    if options.regex || cancel.load(Ordering::Acquire) {
+    if cancel.load(Ordering::Acquire) {
         return Ok(SearchResult {
             matches: Vec::new(),
             truncated: false,
@@ -245,14 +244,9 @@ fn scan_files(
             truncated: false,
         });
     }
-    let include = glob_tokens(&options.include);
-    let exclude = glob_tokens(&options.exclude);
-    let needle = query.to_string();
-
-    let matcher = regex::RegexBuilder::new(&regex::escape(&needle))
-        .case_insensitive(!options.case_sensitive)
-        .build()
-        .map_err(|e| e.to_string())?;
+    let include = path_filter(options.include.as_deref())?;
+    let exclude = path_filter(options.exclude.as_deref())?;
+    let matcher = matcher(options, query).map_err(|error| error.to_string())?;
     let mut matches = Vec::new();
     let mut truncated = false;
 
@@ -263,23 +257,16 @@ fn scan_files(
                 truncated: false,
             });
         }
-        if !matches_pathspec(&file.relative, &include, &exclude) {
+        if include
+            .as_ref()
+            .is_some_and(|set| !set.is_match(&file.relative))
+            || exclude
+                .as_ref()
+                .is_some_and(|set| set.is_match(&file.relative))
+        {
             continue;
         }
-        let path = PathBuf::from(&file.path);
-        let Ok(meta) = std::fs::metadata(&path) else {
-            continue;
-        };
-        if !meta.is_file() || meta.len() > MAX_FILE_BYTES {
-            continue;
-        }
-        let Ok(bytes) = std::fs::read(&path) else {
-            continue;
-        };
-        if bytes.contains(&0) {
-            continue;
-        }
-        let Ok(content) = String::from_utf8(bytes) else {
+        let Some(content) = read_text(Path::new(&file.path)) else {
             continue;
         };
 
@@ -290,18 +277,18 @@ fn scan_files(
                     truncated: false,
                 });
             }
-            if let Some(column) = find_with_matcher(line, &matcher, options.whole_word) {
+            if let Some(found) = first_match(line, &matcher, options.whole_word) {
+                if matches.len() == MAX_MATCHES {
+                    truncated = true;
+                    break 'files;
+                }
                 matches.push(SearchMatch {
                     path: file.path.clone(),
                     relative: file.relative.clone(),
                     line: (index + 1) as u32,
-                    column,
+                    column: line[..found.start()].chars().count() as u32 + 1,
                     preview: line.to_string(),
                 });
-                if matches.len() >= MAX_MATCHES {
-                    truncated = true;
-                    break 'files;
-                }
             }
         }
     }
@@ -309,20 +296,43 @@ fn scan_files(
     Ok(SearchResult { matches, truncated })
 }
 
-fn find_on_line(line: &str, needle: &str, options: &SearchOptions) -> Option<u32> {
-    let matcher = regex::RegexBuilder::new(&regex::escape(needle))
-        .case_insensitive(!options.case_sensitive)
-        .build()
+fn read_text(path: &Path) -> Option<String> {
+    let file = std::fs::OpenOptions::new()
+        .read(true)
+        .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK)
+        .open(path)
         .ok()?;
-    find_with_matcher(line, &matcher, options.whole_word)
+    let meta = file.metadata().ok()?;
+    if !meta.is_file() || meta.len() > MAX_FILE_BYTES {
+        return None;
+    }
+    let mut bytes = Vec::new();
+    file.take(MAX_FILE_BYTES + 1).read_to_end(&mut bytes).ok()?;
+    if bytes.len() as u64 > MAX_FILE_BYTES || bytes.contains(&0) {
+        return None;
+    }
+    String::from_utf8(bytes).ok()
 }
 
-fn find_with_matcher(line: &str, matcher: &regex::Regex, whole_word: bool) -> Option<u32> {
-    let result = matcher
+fn matcher(options: &SearchOptions, query: &str) -> Result<regex::Regex, regex::Error> {
+    let pattern = if options.regex {
+        std::borrow::Cow::Borrowed(query)
+    } else {
+        std::borrow::Cow::Owned(regex::escape(query))
+    };
+    regex::RegexBuilder::new(&pattern)
+        .case_insensitive(!options.case_sensitive)
+        .build()
+}
+
+fn first_match<'a>(
+    line: &'a str,
+    matcher: &regex::Regex,
+    whole_word: bool,
+) -> Option<regex::Match<'a>> {
+    matcher
         .find_iter(line)
         .find(|m| !whole_word || is_word_boundary(line, m.start(), m.len()))
-        .map(|m| (line[..m.start()].chars().count() + 1) as u32);
-    result
 }
 
 fn is_word_boundary(line: &str, start: usize, len: usize) -> bool {
@@ -331,74 +341,39 @@ fn is_word_boundary(line: &str, start: usize, len: usize) -> bool {
         && !line[start + len..].chars().next().is_some_and(word)
 }
 
-fn match_column(
-    line: &str,
-    query: &str,
-    case_sensitive: bool,
-    whole_word: bool,
-    regex: bool,
-) -> u32 {
-    if regex {
-        return 1;
-    }
-    let needle = query.to_string();
-    find_on_line(
-        line,
-        &needle,
-        &SearchOptions {
-            cwd: String::new(),
-            query: query.to_string(),
-            case_sensitive,
-            whole_word,
-            regex: false,
-            include: None,
-            exclude: None,
-            search_id: String::new(),
-        },
-    )
-    .unwrap_or(1)
-}
-
-fn glob_tokens(value: &Option<String>) -> Vec<String> {
+fn glob_tokens(value: Option<&str>) -> impl Iterator<Item = &str> {
     value
-        .as_deref()
         .unwrap_or_default()
         .split(',')
         .map(str::trim)
         .filter(|part| !part.is_empty())
-        .map(ToString::to_string)
+}
+
+fn path_filter(value: Option<&str>) -> Result<Option<regex::RegexSet>, String> {
+    let mut patterns = Vec::new();
+    for glob in glob_tokens(value) {
+        let glob = glob.trim_start_matches("./").trim_end_matches('/');
+        let mut pattern = regex::escape(glob).replace("\\*", ".*").replace("\\?", ".");
+        if !glob.contains(['*', '?']) {
+            pattern.push_str("(?:/.*)?");
+        }
+        patterns.push(format!(r"\A{pattern}\z"));
+    }
+    if patterns.is_empty() {
+        return Ok(None);
+    }
+    regex::RegexSetBuilder::new(patterns)
+        .dot_matches_new_line(true)
+        .build()
+        .map(Some)
+        .map_err(|error| error.to_string())
+}
+
+fn pathspecs(include: Option<&str>, exclude: Option<&str>) -> Vec<String> {
+    glob_tokens(include)
+        .map(str::to_owned)
+        .chain(glob_tokens(exclude).map(|glob| format!(":(exclude){glob}")))
         .collect()
-}
-
-fn matches_pathspec(relative: &str, include: &[String], exclude: &[String]) -> bool {
-    if !include.is_empty() && !include.iter().any(|glob| glob_match(glob, relative)) {
-        return false;
-    }
-    !exclude.iter().any(|glob| glob_match(glob, relative))
-}
-
-fn glob_match(glob: &str, path: &str) -> bool {
-    let glob = glob.trim_start_matches("./");
-    if glob.contains('*') || glob.contains('?') {
-        if let Some(prefix) = glob.strip_suffix('*') {
-            let prefix = prefix.trim_end_matches('/');
-            return path == prefix || path.starts_with(&format!("{prefix}/"));
-        }
-        if let Some(suffix) = glob.strip_prefix('*') {
-            let suffix = suffix.trim_start_matches('/');
-            return path.ends_with(suffix) || path.contains(suffix);
-        }
-        return path.contains(glob.trim_matches('*'));
-    }
-    path == glob || path.starts_with(&format!("{glob}/"))
-}
-
-fn pathspecs(include: &Option<String>, exclude: &Option<String>) -> Vec<String> {
-    let mut specs = glob_tokens(include);
-    for glob in glob_tokens(exclude) {
-        specs.push(format!(":(exclude){glob}"));
-    }
-    specs
 }
 
 #[cfg(test)]
@@ -477,10 +452,52 @@ mod tests {
             .matches
             .is_empty());
     }
+
+    #[test]
+    fn git_search_preserves_literal_names_and_uses_the_regex_match_column() {
+        let dir = tempfile::tempdir().unwrap();
+        git(dir.path(), &["init", "--quiet"]);
+        let relative = "a\\b\nnotes.txt";
+        let path = dir.path().join(relative);
+        std::fs::write(&path, "é🙂 target42\n").unwrap();
+        std::fs::write(dir.path().join("binary"), b"\0target42").unwrap();
+        let mut opts = options("target[0-9]+");
+        opts.regex = true;
+        let hits = search_project(dir.path(), &opts, &AtomicBool::new(false)).unwrap();
+        assert_eq!(hits.matches.len(), 1);
+        let first = &hits.matches[0];
+        assert_eq!((first.relative.as_str(), first.column), (relative, 4));
+        assert_eq!(Path::new(&first.path), path);
+    }
+
+    #[test]
+    fn ordinary_folders_support_regex_and_anchored_globs() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir(dir.path().join("src")).unwrap();
+        for path in ["src/a.rs", "src/a.txt", "src/skip.rs", "outside.rs"] {
+            std::fs::write(dir.path().join(path), "🙂 needle7").unwrap();
+        }
+        let mut opts = options("needle[0-9]+");
+        opts.regex = true;
+        opts.include = Some("src/*.rs".into());
+        opts.exclude = Some("src/skip.?s".into());
+        let hits = search_project(dir.path(), &opts, &AtomicBool::new(false)).unwrap();
+        assert_eq!(hits.matches.len(), 1);
+        assert_eq!(
+            (hits.matches[0].relative.as_str(), hits.matches[0].column),
+            ("src/a.rs", 3)
+        );
+        opts.query = "[".into();
+        assert!(search_project(dir.path(), &opts, &AtomicBool::new(false)).is_err());
+    }
+
     #[test]
     fn whole_word_unicode_does_not_slice_inside_utf8() {
         let mut opts = options("é");
         opts.whole_word = true;
-        assert_eq!(find_on_line("café é!", "é", &opts), Some(6));
+        let line = "café é!";
+        let matcher = matcher(&opts, "é").unwrap();
+        let found = first_match(line, &matcher, true).unwrap();
+        assert_eq!(line[..found.start()].chars().count() + 1, 6);
     }
 }

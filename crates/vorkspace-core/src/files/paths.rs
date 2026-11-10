@@ -109,9 +109,13 @@ pub fn rebase_path(path: &str, from: &str, to: &str) -> String {
 }
 
 pub fn is_equal_or_inside(path: &str, root: &str) -> bool {
+    if path.is_empty() || root.is_empty() {
+        return path == root;
+    }
     let key = path_key(path);
     let base_key = path_key(root);
-    key == base_key || key.starts_with(&format!("{base_key}/"))
+    key.strip_prefix(&base_key)
+        .is_some_and(|rest| rest.is_empty() || base_key.ends_with('/') || rest.starts_with('/'))
 }
 
 /// Use for destructive checkout operations, where a symlink must not hide
@@ -246,6 +250,16 @@ mod tests {
         assert_eq!(parent_path("/"), "/");
         assert_eq!(join_path("/", "a/./b"), "/a/b");
         assert_eq!(join_path("/a/b", "../c"), "/a/c");
+    }
+
+    #[test]
+    fn filesystem_roots_match_only_their_own_absolute_descendants() {
+        assert!(is_equal_or_inside("/a/b", "/"));
+        assert!(!is_equal_or_inside("a/b", "/"));
+        assert!(!is_equal_or_inside("/a/b", ""));
+        assert!(!is_equal_or_inside("/alpha", "/a"));
+        assert!(is_equal_or_inside("remote://host/a/b", "remote://host/"));
+        assert!(!is_equal_or_inside("remote://host2/a/b", "remote://host/"));
     }
 
     #[test]

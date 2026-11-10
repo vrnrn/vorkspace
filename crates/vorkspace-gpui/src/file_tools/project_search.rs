@@ -60,6 +60,7 @@ pub(crate) struct ProjectSearch {
     groups: Vec<Group>,
     count: usize,
     truncated: bool,
+    revision: u64,
     cancel: Arc<AtomicBool>,
     debounce: Option<Task<()>>,
     scroll: ScrollHandle,
@@ -115,6 +116,7 @@ impl ProjectSearch {
             groups: Vec::new(),
             count: 0,
             truncated: false,
+            revision: 0,
             cancel: Arc::new(AtomicBool::new(false)),
             debounce: None,
             scroll: ScrollHandle::new(),
@@ -172,19 +174,21 @@ impl ProjectSearch {
     fn refresh(&mut self, cx: &mut Context<Self>) {
         self.cancel.store(true, Ordering::Release);
         self.cancel = Arc::new(AtomicBool::new(false));
+        self.revision += 1;
         self.debounce = None;
         self.loading = false;
         self.error = None;
         self.truncated = false;
+        self.groups.clear();
+        self.count = 0;
         let options = self.options(cx);
         if options.query.is_empty() || self.cwd.is_empty() || self.cwd == "~" {
-            self.groups.clear();
-            self.count = 0;
             self.scroll.set_offset(point(px(0.), px(0.)));
             cx.notify();
             return;
         }
         if self.active {
+            self.loading = true;
             let check = self.cancel.clone();
             self.debounce = Some(cx.spawn(async move |this, cx| {
                 cx.background_executor()
@@ -347,6 +351,7 @@ impl Render for ProjectSearch {
             .iter()
             .enumerate()
             .map(|(group_index, group)| {
+                let revision = self.revision;
                 div()
                     .w_full()
                     .min_w_0()
@@ -444,7 +449,9 @@ impl Render for ProjectSearch {
                                     .child(text),
                             )
                             .on_click(cx.listener(move |this, event: &gpui::ClickEvent, _, cx| {
-                                this.pick(group_index, index, event.click_count() >= 2, cx);
+                                if this.revision == revision {
+                                    this.pick(group_index, index, event.click_count() >= 2, cx);
+                                }
                             }))
                     }))
                     .into_any_element()

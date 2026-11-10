@@ -1,6 +1,7 @@
 //! Composer tokens and turn preparation, independent of the UI.
 use crate::{files::ProjectFile, skills::DiscoveredSkill};
 use std::{
+    borrow::Cow,
     io::Read,
     ops::Range,
     path::{Path, PathBuf},
@@ -114,22 +115,32 @@ pub fn consume_command<'a>(text: &'a str, command: &str) -> Option<&'a str> {
 
 /// Prefer leaf and consecutive matches, then a compact fuzzy subsequence.
 pub fn score(query: &str, value: &str) -> Option<i64> {
-    let query = query.to_lowercase();
-    let value = value.to_lowercase();
+    score_folded(&query.to_lowercase(), value)
+}
+
+fn score_folded(query: &str, value: &str) -> Option<i64> {
     if query.is_empty() {
         return Some(0);
     }
-    if value == query {
+    let value = if value
+        .bytes()
+        .all(|b| b.is_ascii() && !b.is_ascii_uppercase())
+    {
+        Cow::Borrowed(value)
+    } else {
+        Cow::Owned(value.to_lowercase())
+    };
+    if value.as_ref() == query {
         return Some(10_000);
     }
     let leaf = value.rsplit('/').next().unwrap_or(&value);
-    if leaf.starts_with(&query) {
+    if leaf.starts_with(query) {
         return Some(5_000 - value.len() as i64);
     }
-    if let Some(at) = value.find(&query) {
+    if let Some(at) = value.find(query) {
         return Some(3_000 - at as i64 - value.len() as i64);
     }
-    let mut rest = value.as_str();
+    let mut rest = value.as_ref();
     let mut gaps = 0;
     for ch in query.chars() {
         let at = rest.find(ch)?;
@@ -139,12 +150,22 @@ pub fn score(query: &str, value: &str) -> Option<i64> {
     Some(1_000 - gaps as i64 - value.len() as i64)
 }
 pub fn rank_files<'a>(files: &'a [ProjectFile], query: &str, limit: usize) -> Vec<&'a ProjectFile> {
+    if limit == 0 {
+        return Vec::new();
+    }
+    let query = query.to_lowercase();
     let mut matches: Vec<_> = files
         .iter()
-        .filter_map(|f| score(query, &f.relative).map(|s| (s, f)))
+        .filter_map(|f| score_folded(&query, &f.relative).map(|s| (s, f)))
         .collect();
-    matches.sort_unstable_by(|(a, x), (b, y)| b.cmp(a).then_with(|| x.relative.cmp(&y.relative)));
-    matches.truncate(limit);
+    let order = |(a, x): &(i64, &ProjectFile), (b, y): &(i64, &ProjectFile)| {
+        b.cmp(a).then_with(|| x.relative.cmp(&y.relative))
+    };
+    if matches.len() > limit {
+        matches.select_nth_unstable_by(limit, order);
+        matches.truncate(limit);
+    }
+    matches.sort_unstable_by(order);
     matches.into_iter().map(|(_, file)| file).collect()
 }
 pub fn validate_attachments(paths: &[PathBuf]) -> Result<(), String> {
