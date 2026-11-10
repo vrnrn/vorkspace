@@ -1,4 +1,4 @@
-use crate::settings::{SettingsView, management::Target, widgets::secondary_button};
+use crate::settings::{Section, SettingsView, management::Target, widgets::secondary_button};
 use gpui::{AnyElement, Context, SharedString, div, prelude::*, px};
 use vorkspace_ui::radius;
 use vorkspace_ui::theme::*;
@@ -322,7 +322,7 @@ impl SettingsView {
         self.mcp_health = Some(cx.spawn(async move |this, cx| {
             let result = work.await;
             let _ = this.update(cx, |this, cx| {
-                if this.selected_project != expected {
+                if this.section != Section::Mcp || this.selected_project != expected {
                     return;
                 }
                 match result {
@@ -340,16 +340,19 @@ impl SettingsView {
                                 continue;
                             }
                             let lower = detail.to_lowercase();
-                            let status = if lower.contains("connected") {
-                                "Connected"
-                            } else if lower.contains("authentication")
+                            let status = if lower.contains("authentication")
                                 || lower.contains("needs auth")
                             {
                                 "Needs authentication"
-                            } else if lower.contains("failed") {
+                            } else if lower.contains("failed")
+                                || lower.contains("not connected")
+                                || lower.contains("disconnected")
+                            {
                                 "Failed"
                             } else if lower.contains("disabled") {
                                 "Disabled"
+                            } else if lower.contains("connected") {
+                                "Connected"
                             } else {
                                 "Configured"
                             };

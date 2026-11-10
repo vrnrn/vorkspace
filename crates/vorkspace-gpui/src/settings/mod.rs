@@ -263,6 +263,7 @@ pub(crate) struct SettingsView {
     mcp_busy: bool,
     mcp_health: Option<Task<()>>,
     discovery: data::Discovery,
+    discovery_scope: Option<(data::DiscoveryPage, String)>,
     discovery_loading: bool,
     discovery_task: Option<Task<()>>,
     worktree_sizes: HashMap<String, u64>,
@@ -452,6 +453,7 @@ impl SettingsView {
             mcp_busy: false,
             mcp_health: None,
             discovery: data::Discovery::default(),
+            discovery_scope: None,
             discovery_loading: false,
             discovery_task: None,
             worktree_sizes: HashMap::new(),
@@ -485,11 +487,37 @@ impl SettingsView {
             this.probe_notification_permission(false, cx);
         }
         this.notification_deadline(cx);
-        this.refresh(cx);
+        if this.section == section {
+            this.refresh(cx);
+        }
         this
     }
+
+    fn discovery_page(section: Section) -> Option<data::DiscoveryPage> {
+        use data::DiscoveryPage;
+        match section {
+            Section::Providers | Section::Notes => Some(DiscoveryPage::Providers),
+            Section::Skills => Some(DiscoveryPage::Skills),
+            Section::Mcp => Some(DiscoveryPage::Mcp),
+            Section::Worktrees => Some(DiscoveryPage::Worktrees),
+            _ => None,
+        }
+    }
+
     pub(super) fn refresh(&mut self, cx: &mut Context<Self>) {
-        if matches!(self.section, Section::Providers | Section::Notes)
+        self.discovery_task = None;
+        self.mcp_health = None;
+        let scope =
+            Self::discovery_page(self.section).map(|page| (page, self.selected_project.clone()));
+        if self.discovery_scope != scope {
+            self.discovery = data::Discovery::default();
+            self.discovery_scope = scope.clone();
+        }
+        let Some((page, cwd)) = scope else {
+            self.discovery_loading = false;
+            return;
+        };
+        if page == data::DiscoveryPage::Providers
             && let Some(center) = crate::accounts::get(cx)
         {
             center.update(cx, |center, cx| {
@@ -498,23 +526,29 @@ impl SettingsView {
                 }
             });
         }
-        let cwd = self.selected_project.clone();
+        if page == data::DiscoveryPage::Worktrees {
+            self.worktree_sizes_task = None;
+            self.worktree_sizes_project.clear();
+            self.worktree_sizes.clear();
+        }
+        let expected = (page, cwd.clone());
         self.discovery_loading = true;
         let work = cx
             .background_executor()
-            .spawn(async move { data::discover(&cwd) });
+            .spawn(async move { data::discover(page, &cwd) });
         self.discovery_task = Some(cx.spawn(async move |this, cx| {
             let data = work.await;
             let _ = this.update(cx, |this, cx| {
-                this.skill_documents.clear();
+                if this.discovery_scope.as_ref() != Some(&expected) {
+                    return;
+                }
                 this.discovery = data;
                 this.discovery_loading = false;
-                this.worktree_sizes_project.clear();
-                if matches!(this.section, Section::Providers | Section::Notes) {
-                    this.load_catalogs(true, cx);
-                }
-                if this.section == Section::Mcp {
-                    this.refresh_mcp_health(cx);
+                match page {
+                    data::DiscoveryPage::Providers => this.load_catalogs(true, cx),
+                    data::DiscoveryPage::Mcp => this.refresh_mcp_health(cx),
+                    data::DiscoveryPage::Skills => this.skill_documents.clear(),
+                    data::DiscoveryPage::Worktrees => {}
                 }
                 cx.notify();
             });
@@ -639,6 +673,7 @@ impl SettingsView {
             Section::Connectors
         };
         if self.section != section {
+            let previous_discovery = Self::discovery_page(self.section);
             if let Some(center) = crate::accounts::get(cx) {
                 center.update(cx, |center, _| center.hide_emails());
             }
@@ -647,11 +682,10 @@ impl SettingsView {
             self.leave_connections(cx);
             self.section = section;
             self.watch_connections(cx);
-            if matches!(section, Section::Providers | Section::Notes) {
+            if Self::discovery_page(section) != previous_discovery {
+                self.refresh(cx);
+            } else if matches!(section, Section::Providers | Section::Notes) {
                 self.load_catalogs(false, cx);
-            }
-            if section == Section::Mcp {
-                self.refresh_mcp_health(cx);
             }
             self.select_open = None;
             self.models_open = None;

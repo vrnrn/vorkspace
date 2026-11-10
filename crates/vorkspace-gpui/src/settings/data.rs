@@ -42,15 +42,35 @@ pub(super) struct ResultTrees {
     pub main: String,
     pub error: Option<String>,
 }
-pub(super) fn discover(cwd: &str) -> Discovery {
-    let mut data = Discovery {
-        binaries: Kind::ALL
-            .into_iter()
-            .map(|k| (k, provider::resolve(k)))
-            .collect(),
-        ..Default::default()
-    };
-    data.skills = vorkspace_core::skills::list_skills(cwd.into(), None)
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum DiscoveryPage {
+    Providers,
+    Skills,
+    Mcp,
+    Worktrees,
+}
+
+pub(super) fn discover(page: DiscoveryPage, cwd: &str) -> Discovery {
+    let mut data = Discovery::default();
+    match page {
+        DiscoveryPage::Providers => {
+            data.binaries = Kind::ALL
+                .into_iter()
+                .map(|kind| (kind, provider::resolve(kind)))
+                .collect();
+        }
+        DiscoveryPage::Skills => data.skills = skills(cwd),
+        DiscoveryPage::Mcp => match mcp(cwd) {
+            Ok(servers) => data.mcp = servers,
+            Err(error) => data.mcp_error = Some(error),
+        },
+        DiscoveryPage::Worktrees => data.worktrees = worktrees(cwd),
+    }
+    data
+}
+
+fn skills(cwd: &str) -> Vec<Skill> {
+    vorkspace_core::skills::list_skills(cwd.into(), None)
         .unwrap_or_default()
         .into_iter()
         .map(|s| {
@@ -64,45 +84,53 @@ pub(super) fn discover(cwd: &str) -> Discovery {
                 provider: s.source,
             }
         })
-        .collect();
-    match vorkspace_core::mcp::mcp_discover(cwd.into()) {
-        Ok(servers) => {
-            data.mcp = servers
-                .into_iter()
-                .map(|s| McpServer {
-                    name: s.name,
-                    provider: s.provider,
-                    scope: s.scope,
-                    path: s.config_path.into(),
-                    transport: s.transport,
-                    status: if s.enabled { "Configured" } else { "Disabled" }.into(),
-                })
-                .collect()
-        }
-        Err(e) => data.mcp_error = Some(e),
-    }
-    if !cwd.is_empty() {
-        match git::snapshot(Path::new(cwd)) {
-            Ok(s) => {
-                if let Some(main) = s.worktrees.first() {
-                    data.worktrees.main = main.path.clone();
-                    data.worktrees.default_root =
-                        vorkspace_core::worktree_management::default_root(Path::new(&main.path));
-                }
-                data.worktrees.branches = s.branches;
-                data.worktrees.trees = s
-                    .worktrees
-                    .into_iter()
-                    .filter(|t| !t.main)
-                    .map(|tree| {
-                        let assessment =
-                            vorkspace_core::worktree_management::assess(Path::new(cwd), &tree);
-                        Tree { tree, assessment }
-                    })
-                    .collect();
+        .collect()
+}
+
+fn mcp(cwd: &str) -> Result<Vec<McpServer>, String> {
+    Ok(vorkspace_core::mcp::mcp_discover(cwd.into())?
+        .into_iter()
+        .map(|server| McpServer {
+            name: server.name,
+            provider: server.provider,
+            scope: server.scope,
+            path: server.config_path.into(),
+            transport: server.transport,
+            status: if server.enabled {
+                "Configured"
+            } else {
+                "Disabled"
             }
-            Err(e) => data.worktrees.error = Some(e),
-        }
+            .into(),
+        })
+        .collect())
+}
+
+fn worktrees(cwd: &str) -> ResultTrees {
+    let mut trees = ResultTrees::default();
+    if cwd.is_empty() {
+        return trees;
     }
-    data
+    match git::snapshot(Path::new(cwd)) {
+        Ok(snapshot) => {
+            if let Some(main) = snapshot.worktrees.first() {
+                trees.main = main.path.clone();
+                trees.default_root =
+                    vorkspace_core::worktree_management::default_root(Path::new(&main.path));
+            }
+            trees.branches = snapshot.branches;
+            trees.trees = snapshot
+                .worktrees
+                .into_iter()
+                .filter(|tree| !tree.main)
+                .map(|tree| {
+                    let assessment =
+                        vorkspace_core::worktree_management::assess(Path::new(cwd), &tree);
+                    Tree { tree, assessment }
+                })
+                .collect();
+        }
+        Err(error) => trees.error = Some(error),
+    }
+    trees
 }

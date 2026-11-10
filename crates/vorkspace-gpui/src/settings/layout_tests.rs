@@ -51,6 +51,42 @@ fn window(section: Section, cx: &mut TestAppContext) -> WindowHandle<SettingsVie
 }
 
 #[gpui::test]
+fn discovery_is_scoped_to_the_visible_settings_page(cx: &mut TestAppContext) {
+    let root = tempfile::tempdir().unwrap();
+    let cwd = root.path().display().to_string();
+    let view = cx.new(|cx| {
+        SettingsView::new(
+            Section::General,
+            Preferences::default(),
+            SettingsContext {
+                cwd: cwd.clone(),
+                ..Default::default()
+            },
+            cx,
+        )
+    });
+    view.update(cx, |view, cx| {
+        assert!(view.discovery_task.is_none());
+        assert!(!view.discovery_loading);
+        view.select_section(Section::Skills, cx);
+        assert_eq!(
+            view.discovery_scope,
+            Some((data::DiscoveryPage::Skills, cwd.clone()))
+        );
+        assert!(view.discovery_loading);
+        view.select_section(Section::General, cx);
+        assert!(view.discovery_task.is_none());
+        assert!(view.discovery_scope.is_none());
+    });
+    cx.run_until_parked();
+    view.read_with(cx, |view, _| {
+        assert!(!view.discovery_loading);
+        assert!(view.discovery.binaries.is_empty());
+        assert!(view.discovery.skills.is_empty());
+    });
+}
+
+#[gpui::test]
 fn skills_document_has_its_own_full_height_pane_and_compact_actions(cx: &mut TestAppContext) {
     let window = window(Section::Skills, cx);
     window
