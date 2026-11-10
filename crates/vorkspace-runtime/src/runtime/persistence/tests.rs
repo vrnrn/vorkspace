@@ -307,11 +307,14 @@ fn first_turn_with_setup(command: &str) -> (String, Vec<Update>, std::path::Path
         assert!(result.status.success());
     }
     let repo = repo.canonicalize().unwrap();
-    vorkspace_core::worktree_setup::set_commands(&std::collections::HashMap::from([(
-        repo.to_string_lossy().into_owned(),
-        command.to_owned(),
-    )]));
-    let store = Store::open(std::path::Path::new(":memory:")).unwrap();
+    vorkspace_core::worktree_setup::configure(
+        Some(&root),
+        &std::collections::HashMap::from([(
+            repo.to_string_lossy().into_owned(),
+            command.to_owned(),
+        )]),
+    );
+    let store = Store::open(&root.join("fixture.db")).unwrap();
     let summary = store.create("codex", repo.to_str().unwrap()).unwrap();
     let store = Arc::new(Mutex::new(store));
     let (tx, rx) = async_channel::bounded(8);
@@ -349,6 +352,7 @@ fn the_first_turn_in_a_new_worktree_runs_its_setup() {
     assert!(updates.iter().any(|u| u.status == "Preparing worktree…"));
     assert!(std::path::Path::new(&cwd).join("prepared").exists());
     assert!(!vorkspace_core::worktree_setup::is_due(
+        repo.parent().unwrap(),
         std::path::Path::new(&cwd)
     ));
     tidy(&repo);
@@ -360,7 +364,10 @@ fn a_setup_failure_outlives_a_turn_that_never_reached_the_agent() {
 
     let (cwd, _, repo) = first_turn_with_setup("echo no network >&2; exit 3");
     let cwd = std::path::Path::new(&cwd);
-    assert!(vorkspace_core::worktree_setup::is_due(cwd));
+    assert!(vorkspace_core::worktree_setup::is_due(
+        repo.parent().unwrap(),
+        cwd
+    ));
 
     let binary = repo.join("mock-provider");
     std::fs::write(&binary, r#"#!/usr/bin/env python3
@@ -380,7 +387,7 @@ for line in sys.stdin:
     std::fs::set_permissions(&binary, std::fs::Permissions::from_mode(0o700)).unwrap();
 
     let turn = |attachments| {
-        let store = Store::open(std::path::Path::new(":memory:")).unwrap();
+        let store = Store::open(&repo.parent().unwrap().join("fixture.db")).unwrap();
         let summary = store.create("codex", repo.to_str().unwrap()).unwrap();
         let (tx, rx) = async_channel::unbounded();
         let (_control, controls) = std::sync::mpsc::channel();
@@ -411,10 +418,16 @@ for line in sys.stdin:
 
     let status = turn(vec![repo.join("removed-attachment.txt")]);
     assert!(status.contains("removed-attachment.txt"), "{status}");
-    assert!(vorkspace_core::worktree_setup::is_due(cwd));
+    assert!(vorkspace_core::worktree_setup::is_due(
+        repo.parent().unwrap(),
+        cwd
+    ));
 
     assert_eq!(turn(vec![]), "Ready");
-    assert!(!vorkspace_core::worktree_setup::is_due(cwd));
+    assert!(!vorkspace_core::worktree_setup::is_due(
+        repo.parent().unwrap(),
+        cwd
+    ));
     tidy(&repo);
 }
 

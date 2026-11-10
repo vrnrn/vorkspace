@@ -48,7 +48,7 @@ pub(crate) struct PreparedCore {
     saved: Saved,
     pub(crate) layouts: WindowLayouts,
     automation_events: HashMap<String, vorkspace_core::inbox::Item>,
-    remote_dir: Option<std::path::PathBuf>,
+    data_dir: Option<std::path::PathBuf>,
     roster: Option<PreparedRoster>,
     reminders: Vec<vorkspace_core::store::Reminder>,
 }
@@ -74,7 +74,7 @@ impl PreparedCore {
             saved,
             layouts,
             automation_events,
-            remote_dir: store.data_dir().map(std::path::Path::to_path_buf),
+            data_dir: store.data_dir().map(std::path::Path::to_path_buf),
             roster: Some(PreparedRoster::read(store)),
             reminders: store.reminders().unwrap_or_default(),
         }
@@ -83,6 +83,7 @@ impl PreparedCore {
 
 pub(crate) struct AppCore {
     pub(super) store: Database,
+    data_dir: Option<std::path::PathBuf>,
     writes: Arc<SettingsWrites>,
     settings_flush: Option<gpui::Task<()>>,
     settings_flush_again: bool,
@@ -175,7 +176,7 @@ impl AppCore {
             saved,
             layouts,
             automation_events,
-            remote_dir,
+            data_dir,
             roster,
             reminders,
         } = prepared;
@@ -186,7 +187,7 @@ impl AppCore {
             .max()
             .unwrap_or(0)
             + 1;
-        let remote_dir = remote_dir.unwrap_or_else(|| {
+        let remote_dir = data_dir.clone().unwrap_or_else(|| {
             std::env::temp_dir().join(format!("vorkspace-remote-{}", std::process::id()))
         });
         let remote = Arc::new(vorkspace_core::remote::Connections::new(remote_dir));
@@ -226,6 +227,7 @@ impl AppCore {
             .detach();
             AppCore {
                 store: store.clone(),
+                data_dir,
                 writes,
                 settings_flush: None,
                 settings_flush_again: false,

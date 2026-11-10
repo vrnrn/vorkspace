@@ -1,6 +1,7 @@
 //! A project's setup command for new worktrees. Creation only records that setup
-//! is due, inside the worktree's private Git folder. The first turn working there
+//! is due in the app data directory. The first turn working there
 //! runs it, so it has one owner, can be stopped, and can tell the agent how it went.
+use sha2::{Digest, Sha256};
 use std::{
     collections::HashMap,
     fs::{self, File},
@@ -8,7 +9,7 @@ use std::{
     os::{
         fd::AsRawFd,
         unix::{
-            fs::{MetadataExt, OpenOptionsExt},
+            fs::{DirBuilderExt, MetadataExt, OpenOptionsExt},
             process::{CommandExt, ExitStatusExt},
         },
     },
@@ -24,37 +25,91 @@ use std::{
 const TIMEOUT: Duration = Duration::from_secs(600);
 const POLL: Duration = Duration::from_millis(50);
 const OUTPUT_LIMIT: usize = 2000;
+const MAX_RECORD_BYTES: u64 = 1024 * 1024;
 const DUE: &str = "due";
 const RUNNING: &str = "running";
 const NOTICE: &str = "notice";
-static COMMANDS: Mutex<Option<HashMap<String, String>>> = Mutex::new(None);
+struct SetupPolicy {
+    data_dir: Option<PathBuf>,
+    commands: HashMap<String, String>,
+}
+static POLICY: Mutex<Option<SetupPolicy>> = Mutex::new(None);
 
-/// Per-project commands from the user's own preferences. They never come from the
-/// repository, so opening a project can't choose what runs on this Mac.
-pub fn set_commands(commands: &HashMap<String, String>) {
+/// Worktree creation uses the current user's per-project setup choices.
+pub fn configure(data_dir: Option<&Path>, commands: &HashMap<String, String>) {
     let commands = commands
         .iter()
         .filter(|(_, command)| !command.trim().is_empty())
         .map(|(project, command)| (crate::files::path_key(project), command.clone()))
         .collect();
-    *COMMANDS.lock().unwrap_or_else(|e| e.into_inner()) = Some(commands);
+    *POLICY.lock().unwrap_or_else(|e| e.into_inner()) = Some(SetupPolicy {
+        data_dir: data_dir.map(Path::to_owned),
+        commands,
+    });
 }
 
-/// A linked worktree's `.git` file names its private folder.
-fn marker(worktree: &Path) -> Option<PathBuf> {
-    let link = fs::read_to_string(worktree.join(".git")).ok()?;
-    let directory = Path::new(link.strip_prefix("gitdir: ")?.trim());
-    Some(worktree.join(directory).join("vorkspace-setup"))
+/// Bind a record to the linked checkout's Git entry. Reusing the path for
+/// a different checkout cannot inherit a command. Never read a Git entry as
+/// a path or source of commands.
+fn marker(data_dir: &Path, worktree: &Path) -> Option<PathBuf> {
+    let checkout = fs::metadata(worktree).ok()?;
+    let metadata = fs::symlink_metadata(worktree.join(".git")).ok()?;
+    if !metadata.is_file() {
+        return None;
+    }
+    let born = metadata
+        .created()
+        .or_else(|_| metadata.modified())
+        .ok()?
+        .duration_since(std::time::UNIX_EPOCH)
+        .ok()?;
+    let mut hash = Sha256::new();
+    hash.update(checkout.dev().to_le_bytes());
+    hash.update(checkout.ino().to_le_bytes());
+    hash.update(metadata.dev().to_le_bytes());
+    hash.update(metadata.ino().to_le_bytes());
+    hash.update(born.as_secs().to_le_bytes());
+    hash.update(born.subsec_nanos().to_le_bytes());
+    let key = hash.finalize();
+    Some(data_dir.join("worktree-setup").join(format!("{key:x}")))
 }
+
+fn prepare_directory(marker: &Path) -> io::Result<()> {
+    let directory = marker.parent().expect("setup records have a directory");
+    match fs::DirBuilder::new().mode(0o700).create(directory) {
+        Ok(()) => {
+            let root = directory
+                .parent()
+                .filter(|path| !path.as_os_str().is_empty())
+                .unwrap_or_else(|| Path::new("."));
+            File::open(root)?.sync_all()
+        }
+        Err(error) if error.kind() == io::ErrorKind::AlreadyExists => {
+            if directory.symlink_metadata()?.is_dir() {
+                Ok(())
+            } else {
+                Err(io::Error::other(
+                    "Worktree setup storage is not a directory",
+                ))
+            }
+        }
+        Err(error) => Err(error),
+    }
+}
+
 fn lock_file(marker: &Path) -> io::Result<File> {
-    File::options()
+    let file = File::options()
         .read(true)
         .write(true)
         .create(true)
         .truncate(false)
         .mode(0o600)
-        .custom_flags(libc::O_NOFOLLOW)
-        .open(marker.with_extension("lock"))
+        .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK)
+        .open(marker.with_extension("lock"))?;
+    if !file.metadata()?.is_file() {
+        return Err(io::Error::other("Invalid worktree setup lock"));
+    }
+    Ok(file)
 }
 
 fn try_lock(lock: &File) -> io::Result<bool> {
@@ -68,36 +123,44 @@ fn try_lock(lock: &File) -> io::Result<bool> {
     }
 }
 
-fn write(marker: &Path, state: &str, content: &str) -> io::Result<File> {
-    let parent = marker.parent().unwrap();
-    let directory = File::open(parent)?;
-    let mut file = tempfile::NamedTempFile::new_in(parent)?;
-    write!(file, "{state}\n{content}")?;
-    file.as_file().sync_all()?;
-    let file = file.persist(marker)?;
-    // Make the rename durable before a due command is allowed to start.
-    directory.sync_all()?;
-    Ok(file)
+fn write(marker: &Path, state: &str, content: &str) -> io::Result<()> {
+    crate::private_file::replace(marker, |file| write!(file, "{state}\n{content}"))
 }
 
-fn remove_marker(marker: &Path) -> io::Result<()> {
-    let directory = File::open(marker.parent().unwrap())?;
-    fs::remove_file(marker)?;
-    directory.sync_all()
+fn open_marker(marker: &Path) -> io::Result<File> {
+    let file = File::options()
+        .read(true)
+        .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK)
+        .open(marker)?;
+    let metadata = file.metadata()?;
+    if !metadata.is_file() || metadata.len() > MAX_RECORD_BYTES {
+        return Err(io::Error::other("Invalid worktree setup record"));
+    }
+    Ok(file)
 }
 
 /// Keeps the command chosen when the worktree was made, whatever changes later.
 pub fn mark_due(projects: &[&Path], worktree: &Path) {
-    let command = {
-        let commands = COMMANDS.lock().unwrap_or_else(|e| e.into_inner());
-        projects.iter().find_map(|project| {
-            let key = crate::files::path_key(&project.to_string_lossy());
-            commands.as_ref()?.get(&key).cloned()
+    let pending = {
+        let policy = POLICY.lock().unwrap_or_else(|e| e.into_inner());
+        policy.as_ref().and_then(|policy| {
+            let data_dir = policy.data_dir.as_ref()?;
+            let command = projects.iter().find_map(|project| {
+                let key = crate::files::path_key(&project.to_string_lossy());
+                policy.commands.get(&key)
+            })?;
+            Some((data_dir.clone(), command.clone()))
         })
     };
-    let (Some(command), Some(marker)) = (command, marker(worktree)) else {
+    let Some((data_dir, command)) = pending else {
         return;
     };
+    let Some(marker) = marker(&data_dir, worktree) else {
+        return;
+    };
+    if prepare_directory(&marker).is_err() {
+        return;
+    }
     let Ok(lock) = lock_file(&marker) else {
         return;
     };
@@ -106,18 +169,30 @@ pub fn mark_due(projects: &[&Path], worktree: &Path) {
     }
 }
 
-pub fn is_due(worktree: &Path) -> bool {
-    marker(worktree).is_some_and(|marker| marker.exists())
+fn owns_record(marker: &Path) -> bool {
+    marker
+        .parent()
+        .is_some_and(|parent| parent.symlink_metadata().is_ok_and(|m| m.is_dir()))
 }
 
-/// Run what is due in `worktree`. The result is for the agent: a failure leaves a
-/// usable worktree, so the turn continues and can repair it. Two sessions sharing a
-/// worktree take turns on a lock, and an owner that died releases it, which is how
-/// a setup killed by a crash or quit is noticed.
-pub fn run_due(project: &Path, worktree: &Path, cancel: &AtomicBool) -> io::Result<Option<Notice>> {
-    let Some(marker) = marker(worktree) else {
+pub fn is_due(data_dir: &Path, worktree: &Path) -> bool {
+    marker(data_dir, worktree).is_some_and(|marker| owns_record(&marker) && marker.exists())
+}
+
+/// Run the setup scheduled for this checkout. A failure leaves a usable
+/// worktree and a notice. The lock serializes sessions and detects a dead owner.
+pub fn run_due(
+    data_dir: &Path,
+    project: &Path,
+    worktree: &Path,
+    cancel: &AtomicBool,
+) -> io::Result<Option<Notice>> {
+    let Some(marker) = marker(data_dir, worktree) else {
         return Ok(None);
     };
+    if !owns_record(&marker) {
+        return Ok(None);
+    }
     let lock = lock_file(&marker)?;
     loop {
         if cancel.load(Ordering::Relaxed) {
@@ -128,17 +203,18 @@ pub fn run_due(project: &Path, worktree: &Path, cancel: &AtomicBool) -> io::Resu
         }
         std::thread::sleep(POLL);
     }
-    let mut file = match File::options()
-        .read(true)
-        .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK)
-        .open(&marker)
-    {
+    let mut file = match open_marker(&marker) {
         Ok(file) => file,
         Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(None),
         Err(error) => return Err(error),
     };
     let mut text = String::new();
-    file.read_to_string(&mut text)?;
+    (&mut file)
+        .take(MAX_RECORD_BYTES + 1)
+        .read_to_string(&mut text)?;
+    if text.len() as u64 > MAX_RECORD_BYTES {
+        return Err(io::Error::other("Invalid worktree setup record"));
+    }
     let (state, command) = text.split_once('\n').unwrap_or_default();
     if state == NOTICE {
         return Ok(Some(Notice {
@@ -153,7 +229,7 @@ pub fn run_due(project: &Path, worktree: &Path, cancel: &AtomicBool) -> io::Resu
         write(&marker, RUNNING, command)?;
         match run(command, project, worktree, cancel, TIMEOUT) {
             Ok(()) => {
-                remove_marker(&marker)?;
+                crate::private_file::remove(&marker)?;
                 return Ok(None);
             }
             Err(Failure::StoppedBeforeSpawn) => {
@@ -165,7 +241,8 @@ pub fn run_due(project: &Path, worktree: &Path, cancel: &AtomicBool) -> io::Resu
     } else {
         format!("Worktree setup was interrupted and may be incomplete. Its command was: {command}")
     };
-    let file = write(&marker, NOTICE, &warning)?;
+    write(&marker, NOTICE, &warning)?;
+    let file = open_marker(&marker)?;
     Ok(Some(Notice {
         marker,
         file,
@@ -200,7 +277,7 @@ impl Notice {
         };
         let delivered = self.file.metadata()?;
         if current.dev() == delivered.dev() && current.ino() == delivered.ino() {
-            remove_marker(&self.marker)?;
+            crate::private_file::remove(&self.marker)?;
         }
         Ok(())
     }
@@ -304,8 +381,14 @@ mod tests {
         ]);
         (dir, tree)
     }
-    fn due(tree: &Path, command: &str) {
-        write(&marker(tree).unwrap(), DUE, command).unwrap();
+    fn record(data: &Path, tree: &Path) -> PathBuf {
+        let path = marker(data, tree).unwrap();
+        prepare_directory(&path).unwrap();
+        path
+    }
+
+    fn due(data: &Path, tree: &Path, command: &str) {
+        write(&record(data, tree), DUE, command).unwrap();
     }
     fn stopped(value: bool) -> AtomicBool {
         AtomicBool::new(value)
@@ -314,16 +397,20 @@ mod tests {
     #[test]
     fn a_due_setup_runs_once_in_the_worktree() {
         let (dir, tree) = repository();
-        assert!(!is_due(&tree));
-        due(&tree, "printf %s \"$VORKSPACE_PROJECT_PATH\" >> ran");
-        assert!(is_due(&tree));
-        assert!(run_due(dir.path(), &tree, &stopped(false))
+        assert!(!is_due(dir.path(), &tree));
+        due(
+            dir.path(),
+            &tree,
+            "printf %s \"$VORKSPACE_PROJECT_PATH\" >> ran",
+        );
+        assert!(is_due(dir.path(), &tree));
+        assert!(run_due(dir.path(), dir.path(), &tree, &stopped(false))
             .unwrap()
             .is_none());
-        assert!(run_due(dir.path(), &tree, &stopped(false))
+        assert!(run_due(dir.path(), dir.path(), &tree, &stopped(false))
             .unwrap()
             .is_none());
-        assert!(!is_due(&tree));
+        assert!(!is_due(dir.path(), &tree));
         assert_eq!(
             fs::read_to_string(tree.join("ran")).unwrap(),
             dir.path().to_string_lossy()
@@ -334,10 +421,11 @@ mod tests {
     fn a_failure_reaches_the_turn_and_is_not_retried() {
         let (dir, tree) = repository();
         due(
+            dir.path(),
             &tree,
             "echo ran >> attempts; echo cannot install >&2; exit 3",
         );
-        let notice = run_due(dir.path(), &tree, &stopped(false))
+        let notice = run_due(dir.path(), dir.path(), &tree, &stopped(false))
             .unwrap()
             .unwrap();
         assert!(
@@ -345,13 +433,13 @@ mod tests {
             "{}",
             notice.warning()
         );
-        let pending = run_due(dir.path(), &tree, &stopped(false))
+        let pending = run_due(dir.path(), dir.path(), &tree, &stopped(false))
             .unwrap()
             .unwrap();
         assert_eq!(pending.warning(), notice.warning());
         assert_eq!(fs::read_to_string(tree.join("attempts")).unwrap(), "ran\n");
         notice.acknowledge().unwrap();
-        assert!(!is_due(&tree));
+        assert!(!is_due(dir.path(), &tree));
     }
 
     #[test]
@@ -365,52 +453,52 @@ mod tests {
     #[test]
     fn a_second_acknowledgment_cannot_remove_a_replacement_notice() {
         let (dir, tree) = repository();
-        let marker = marker(&tree).unwrap();
+        let marker = record(dir.path(), &tree);
         let warning = "Worktree setup failed: no network";
         write(&marker, NOTICE, warning).unwrap();
-        let first = run_due(dir.path(), &tree, &stopped(false))
+        let first = run_due(dir.path(), dir.path(), &tree, &stopped(false))
             .unwrap()
             .unwrap();
-        let second = run_due(dir.path(), &tree, &stopped(false))
+        let second = run_due(dir.path(), dir.path(), &tree, &stopped(false))
             .unwrap()
             .unwrap();
         assert_eq!(first.warning(), warning);
         assert_eq!(second.warning(), warning);
         first.acknowledge().unwrap();
-        assert!(!is_due(&tree));
+        assert!(!is_due(dir.path(), &tree));
 
         write(&marker, NOTICE, warning).unwrap();
         second.acknowledge().unwrap();
-        assert!(is_due(&tree));
-        let replacement = run_due(dir.path(), &tree, &stopped(false))
+        assert!(is_due(dir.path(), &tree));
+        let replacement = run_due(dir.path(), dir.path(), &tree, &stopped(false))
             .unwrap()
             .unwrap();
         assert_eq!(replacement.warning(), warning);
         replacement.acknowledge().unwrap();
-        assert!(!is_due(&tree));
+        assert!(!is_due(dir.path(), &tree));
     }
 
     #[test]
     fn a_setup_stopped_before_spawn_stays_due() {
         let (dir, tree) = repository();
-        due(&tree, "touch started");
-        assert!(run_due(dir.path(), &tree, &stopped(true))
+        due(dir.path(), &tree, "touch started");
+        assert!(run_due(dir.path(), dir.path(), &tree, &stopped(true))
             .unwrap()
             .is_none());
-        assert!(is_due(&tree));
+        assert!(is_due(dir.path(), &tree));
         assert!(!tree.join("started").exists());
-        assert!(run_due(dir.path(), &tree, &stopped(false))
+        assert!(run_due(dir.path(), dir.path(), &tree, &stopped(false))
             .unwrap()
             .is_none());
         assert!(tree.join("started").exists());
-        assert!(!is_due(&tree));
+        assert!(!is_due(dir.path(), &tree));
     }
 
     #[test]
     fn a_setup_whose_owner_died_counts_as_interrupted() {
         let (dir, tree) = repository();
-        write(&marker(&tree).unwrap(), RUNNING, "npm ci").unwrap();
-        let notice = run_due(dir.path(), &tree, &stopped(false))
+        write(&record(dir.path(), &tree), RUNNING, "npm ci").unwrap();
+        let notice = run_due(dir.path(), dir.path(), &tree, &stopped(false))
             .unwrap()
             .unwrap();
         let warning = notice.warning();
@@ -435,11 +523,15 @@ mod tests {
     fn quitting_the_app_stops_a_running_setup() {
         const OWNER: i64 = 719_451;
         let (dir, tree) = repository();
-        due(&tree, "sleep 30; touch survived");
+        due(dir.path(), &tree, "sleep 30; touch survived");
         let worker = std::thread::spawn({
             let project = dir.path().to_owned();
             let tree = tree.clone();
-            move || crate::process::owned_by(OWNER, || run_due(&project, &tree, &stopped(false)))
+            move || {
+                crate::process::owned_by(OWNER, || {
+                    run_due(&project, &project, &tree, &stopped(false))
+                })
+            }
         });
         let start = Instant::now();
         // RUNNING is persisted before environment preparation and spawn. Wait
@@ -456,7 +548,10 @@ mod tests {
         let notice = worker.join().unwrap().unwrap().unwrap();
         let warning = notice.warning();
         assert!(warning.contains("interrupted"), "{warning}");
-        assert!(is_due(&tree), "the next launch has to hear about it");
+        assert!(
+            is_due(dir.path(), &tree),
+            "the next launch has to hear about it"
+        );
         assert!(!tree.join("survived").exists());
     }
 
@@ -464,12 +559,20 @@ mod tests {
     fn only_a_configured_project_is_marked() {
         let (dir, tree) = repository();
         mark_due(&[dir.path()], &tree);
-        assert!(!is_due(&tree));
-        set_commands(&HashMap::from([(
-            dir.path().to_string_lossy().into_owned(),
-            "npm ci".to_owned(),
-        )]));
+        assert!(!is_due(dir.path(), &tree));
+        configure(
+            Some(dir.path()),
+            &HashMap::from([(
+                dir.path().to_string_lossy().into_owned(),
+                "npm ci".to_owned(),
+            )]),
+        );
         mark_due(&[Path::new("/elsewhere"), dir.path()], &tree);
-        assert!(is_due(&tree));
+        assert!(is_due(dir.path(), &tree.join(".")));
+        let isolated = tempfile::tempdir().unwrap();
+        assert!(!is_due(isolated.path(), &tree));
+        assert!(run_due(isolated.path(), dir.path(), &tree, &stopped(false))
+            .unwrap()
+            .is_none());
     }
 }

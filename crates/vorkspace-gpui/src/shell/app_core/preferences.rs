@@ -64,7 +64,10 @@ impl AppCore {
         };
         cx.set_global(prefs.clone());
         if changed(|a, b| a.worktree_setup != b.worktree_setup) {
-            vorkspace_core::worktree_setup::set_commands(&prefs.worktree_setup);
+            vorkspace_core::worktree_setup::configure(
+                self.data_dir.as_deref(),
+                &prefs.worktree_setup,
+            );
         }
         if changed(|a, b| {
             a.clipboard_history != b.clipboard_history

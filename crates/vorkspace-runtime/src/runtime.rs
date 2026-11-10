@@ -393,8 +393,10 @@ fn run_turn_using(
         if vorkspace_core::worktree_management::is_being_removed(&working) {
             return Err("This worktree is being removed.".into());
         }
-        let setup_notice = if vorkspace_core::worktree_setup::is_due(std::path::Path::new(&working))
-        {
+        let setup_data = locked(&store)?.data_dir().map(std::path::Path::to_path_buf);
+        let setup_notice = if let Some(data_dir) = setup_data.as_deref().filter(|data_dir| {
+            vorkspace_core::worktree_setup::is_due(data_dir, std::path::Path::new(&working))
+        }) {
             publish(
                 &tx,
                 &cancel,
@@ -406,6 +408,7 @@ fn run_turn_using(
             )?;
             let notice = vorkspace_core::process::owned_turn(summary.id, &cancel, || {
                 vorkspace_core::worktree_setup::run_due(
+                    data_dir,
                     std::path::Path::new(&summary.cwd),
                     std::path::Path::new(&working),
                     &cancel,
