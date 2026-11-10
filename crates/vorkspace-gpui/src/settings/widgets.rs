@@ -76,6 +76,8 @@ pub(super) fn empty_inline(
     title: impl Into<SharedString>,
     detail: impl Into<SharedString>,
 ) -> Div {
+    let title = title.into();
+    let detail = detail.into();
     div()
         .px_4()
         .py_6()
@@ -89,15 +91,19 @@ pub(super) fn empty_inline(
         )
         .child(
             div()
+                .id(title.clone())
+                .role(Role::Status)
+                .aria_label(title.clone())
+                .aria_description(detail.clone())
                 .text_size(px(13.))
                 .font_weight(gpui::FontWeight::MEDIUM)
-                .child(title.into()),
+                .child(title),
         )
         .child(
             div()
                 .text_size(px(12.))
                 .text_color(content(0.5))
-                .child(detail.into()),
+                .child(detail),
         )
 }
 
@@ -880,6 +886,17 @@ impl SettingsView {
 }
 
 impl SettingsView {
+    fn toggle_model_visibility(&mut self, provider: &str, id: &str, cx: &mut Context<Self>) {
+        let key = vorkspace_ui::preferences::model_key(provider, id);
+        self.update(cx, |p| {
+            if let Some(at) = p.hidden_models.iter().position(|saved| *saved == key) {
+                p.hidden_models.remove(at);
+            } else {
+                p.hidden_models.push(key);
+            }
+        });
+    }
+
     /// Choose which of a provider's models the picker offers. The full catalog
     /// stays listed here so a hidden model can always be restored.
     pub(super) fn models_menu(
@@ -888,7 +905,6 @@ impl SettingsView {
         models: &[(String, String)],
         cx: &mut Context<Self>,
     ) -> AnyElement {
-        use vorkspace_ui::preferences::model_key;
         let provider = kind.id();
         let open = self.models_open == Some(kind);
         let slot = self
@@ -920,6 +936,8 @@ impl SettingsView {
                         this.models_open = None;
                     } else {
                         this.models_open = Some(kind);
+                        this.model_active = None;
+                        this.model_scroll.set_offset(gpui::point(px(0.), px(0.)));
                         this.model_filter
                             .update(cx, |input, cx| input.set_text(String::new(), cx));
                         window.focus(&gpui::Focusable::focus_handle(&this.model_filter, cx), cx);
@@ -932,21 +950,34 @@ impl SettingsView {
             .child(trigger)
             .when(open, |d| {
                 let query = self.model_filter.read(cx).content.trim().to_lowercase();
-                let rows = models
+                let filtered = models
                     .iter()
                     .enumerate()
                     .filter(|(_, (_, name))| {
                         query.is_empty() || name.to_lowercase().contains(&query)
                     })
+                    .collect::<Vec<_>>();
+                let ids = filtered
+                    .iter()
+                    .map(|(_, (id, _))| id.clone())
+                    .collect::<Vec<_>>();
+                let rows = filtered
+                    .into_iter()
                     .map(|(ix, (id, name))| {
                         let shown = !self.prefs.model_hidden(provider, id);
-                        let key = model_key(provider, id);
+                        let active = self.model_active.as_deref() == Some(id);
+                        let model = id.clone();
                         div()
-                            .id(SharedString::from(format!("model-visible-{provider}-{ix}")))
+                            .id(SharedString::from(format!("model-visible-{provider}-{id}")))
                             .debug_selector(move || format!("model-visible-{provider}-{ix}"))
                             .role(Role::CheckBox)
                             .aria_label(name.clone())
-                            .aria_selected(shown)
+                            .aria_toggled(if shown {
+                                gpui::Toggled::True
+                            } else {
+                                gpui::Toggled::False
+                            })
+                            .when(active, |d| d.aria_active_descendant().bg(content(0.1)))
                             .w_full()
                             .flex()
                             .items_center()
@@ -972,16 +1003,7 @@ impl SettingsView {
                             )
                             .child(div().min_w_0().flex_1().truncate().child(name.clone()))
                             .on_click(cx.listener(move |this, _, _, cx| {
-                                let key = key.clone();
-                                this.update(cx, |p| {
-                                    if let Some(at) =
-                                        p.hidden_models.iter().position(|saved| *saved == key)
-                                    {
-                                        p.hidden_models.remove(at);
-                                    } else {
-                                        p.hidden_models.push(key);
-                                    }
-                                })
+                                this.toggle_model_visibility(provider, &model, cx);
                             }))
                     })
                     .collect::<Vec<_>>();
@@ -1008,6 +1030,39 @@ impl SettingsView {
                             .id(SharedString::from(format!("models-list-{provider}")))
                             .role(Role::Group)
                             .aria_label(format!("{} model visibility", kind.label()))
+                            .capture_key_down(cx.listener(
+                                move |this, event: &gpui::KeyDownEvent, _, cx| {
+                                    if ids.is_empty()
+                                        || event.keystroke.modifiers != gpui::Modifiers::none()
+                                        || this.model_filter.read(cx).is_composing()
+                                    {
+                                        return;
+                                    }
+                                    let active = this
+                                        .model_active
+                                        .as_ref()
+                                        .and_then(|id| ids.iter().position(|model| model == id));
+                                    let last = ids.len() - 1;
+                                    let next = match event.keystroke.key.as_str() {
+                                        "down" => active.map_or(0, |at| (at + 1).min(last)),
+                                        "up" => active.map_or(last, |at| at.saturating_sub(1)),
+                                        "enter" if active.is_some() || last == 0 => {
+                                            this.toggle_model_visibility(
+                                                provider,
+                                                &ids[active.unwrap_or(0)],
+                                                cx,
+                                            );
+                                            cx.stop_propagation();
+                                            return;
+                                        }
+                                        _ => return,
+                                    };
+                                    this.model_active = Some(ids[next].clone());
+                                    this.model_scroll.scroll_to_item(next);
+                                    cx.stop_propagation();
+                                    cx.notify();
+                                },
+                            ))
                             .flex()
                             .flex_col()
                             .gap_1()
@@ -1049,6 +1104,7 @@ impl SettingsView {
                                 div()
                                     .id(SharedString::from(format!("models-scroll-{provider}")))
                                     .debug_selector(move || format!("models-scroll-{provider}"))
+                                    .track_scroll(&self.model_scroll)
                                     .max_h(px(320.))
                                     .min_h_0()
                                     .overflow_y_scroll()

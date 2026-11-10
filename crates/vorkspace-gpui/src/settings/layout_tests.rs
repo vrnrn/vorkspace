@@ -268,6 +268,14 @@ fn models_menu_hides_and_restores_individual_models(cx: &mut TestAppContext) {
             assert!(view.prefs.hidden_models.is_empty())
         })
         .unwrap();
+    visual.simulate_keystrokes("down down enter");
+    visual.run_until_parked();
+    window
+        .update(visual, |view, _, _| {
+            assert_eq!(view.prefs.hidden_models, ["claude:b"]);
+            assert_eq!(view.model_active.as_deref(), Some("b"));
+        })
+        .unwrap();
 }
 
 #[gpui::test]

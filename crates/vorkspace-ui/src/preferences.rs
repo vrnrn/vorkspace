@@ -321,6 +321,10 @@ pub fn model_key(provider: &str, model: &str) -> String {
 impl gpui::Global for Preferences {}
 impl Preferences {
     pub fn model_hidden(&self, provider: &str, model: &str) -> bool {
-        self.hidden_models.contains(&model_key(provider, model))
+        self.hidden_models.iter().any(|key| {
+            key.strip_prefix(provider)
+                .and_then(|suffix| suffix.strip_prefix(':'))
+                == Some(model)
+        })
     }
 }

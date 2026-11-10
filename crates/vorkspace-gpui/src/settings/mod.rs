@@ -246,6 +246,8 @@ pub(crate) struct SettingsView {
     models_open: Option<vorkspace_core::provider::Kind>,
     model_menu_anchors: RefCell<HashMap<vorkspace_core::provider::Kind, AnchorSlot>>,
     model_filter: Entity<Input>,
+    model_active: Option<String>,
+    model_scroll: ScrollHandle,
     search: Entity<Input>,
     search_query: String,
     search_active: usize,
@@ -361,7 +363,11 @@ impl SettingsView {
                 this.dictation_words_error = None;
                 cx.notify();
             }),
-            cx.subscribe(&model_filter, |_, _, _: &input::Changed, cx| cx.notify()),
+            cx.subscribe(&model_filter, |this, _, _: &input::Changed, cx| {
+                this.model_active = None;
+                this.model_scroll.set_offset(gpui::point(px(0.), px(0.)));
+                cx.notify();
+            }),
             cx.subscribe(&skill_filter, |this, input, _: &input::Changed, cx| {
                 this.skill_query = input.read(cx).content.to_string();
                 cx.notify();
@@ -437,6 +443,8 @@ impl SettingsView {
             models_open: None,
             model_menu_anchors: Default::default(),
             model_filter,
+            model_active: None,
+            model_scroll: ScrollHandle::new(),
             search,
             search_query: String::new(),
             search_active: 0,
