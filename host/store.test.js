@@ -249,8 +249,22 @@ it("writes and serializes only a changed tail while preserving large hidden payl
   expect(store.db.prepare("SELECT id FROM changed_blocks").all().map((row) => row.id)).toEqual(["tail"]);
   const reopened = new HostStore(join(directory, "host.db"));
   cleanups.push(() => reopened.close());
+  const parse = vi.spyOn(JSON, "parse");
+  try {
+    expect(reopened.sync("incremental", 1)).toMatchObject({
+      kind: "delta",
+      blockIds: ["incremental-block", "tail"],
+      blocks: [{ id: "tail", text: "second" }],
+    });
+    expect(reopened.events("incremental", 1)).toEqual({
+      events: [{ revision: 2, event: { type: "tail" } }],
+      revision: 2,
+    });
+    expect(parse.mock.calls.every(([text]) => text.length < 4096)).toBe(true);
+  } finally {
+    parse.mockRestore();
+  }
   expect(reopened.session("incremental")).toEqual(updated);
-  expect(reopened.sync("incremental", 1)).toMatchObject({ kind: "delta", blocks: [{ id: "tail", text: "second" }] });
   expect(reopened.session("incremental").session.blocks[0].tool).toEqual(original.session.blocks[0].tool);
 });
 

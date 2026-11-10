@@ -105,6 +105,8 @@ Ticket references in a sent message are resolved on the desktop. Hosts advertise
 
 The headless host runs the reused JavaScript adapters with a Node process backend. It proves the execution boundary without introducing the planned Rust daemon/worker IPC yet. Node is included in host release archives, separately from the desktop application.
 
+Each active turn owns its provider, pending event batch, shutdown and settlement. A follow-up can start once the provider has stopped and the preceding turn's outcome has committed. For a client catching up to a newer revision, the host reads the current block order and decodes only the changed payloads. The metadata, order and blocks come from one SQLite read transaction.
+
 ## Verify
 
 ```sh

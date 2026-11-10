@@ -37,7 +37,8 @@ export class HostStore {
       id TEXT NOT NULL, ordinal INTEGER NOT NULL, revision INTEGER NOT NULL,
       digest TEXT NOT NULL, code_units INTEGER NOT NULL, payload TEXT NOT NULL,
       PRIMARY KEY(session_id, id));
-      CREATE INDEX IF NOT EXISTS session_block_order ON session_blocks(session_id, ordinal);`);
+      CREATE INDEX IF NOT EXISTS session_block_order ON session_blocks(session_id, ordinal);
+      CREATE INDEX IF NOT EXISTS session_block_revision ON session_blocks(session_id, revision);`);
     // A summary sits after the large snapshot in the row. A covering index
     // keeps metadata reads off the transcript's SQLite overflow pages.
     this.db.exec(
@@ -112,24 +113,21 @@ export class HostStore {
     }
     return value;
   }
-  find(id) {
+  #cached(id) {
     const cached = this.cache.get(id);
     if (cached) {
       this.cache.delete(id);
       this.cache.set(id, cached);
       return cached.value;
     }
-    // The metadata and normalized blocks must be one SQLite read snapshot,
-    // including when another process commits between these SELECTs.
-    if (!this.db.isTransaction)
-      return this.transaction(() => this.find(id), true);
+  }
+  #root(id) {
     const row = this.db
       .prepare("SELECT snapshot FROM sessions WHERE id=?")
       .get(id);
-    if (!row) return undefined;
-    const snapshot = String(row.snapshot);
-    const value = JSON.parse(snapshot);
-    let length = snapshot.length;
+    return row && String(row.snapshot);
+  }
+  #hydrate(id, value, length) {
     if (!Object.hasOwn(value.session, "blocks")) {
       const rows = this.db.prepare(
         "SELECT id, revision, digest, code_units, payload FROM session_blocks WHERE session_id=? ORDER BY ordinal",
@@ -145,6 +143,16 @@ export class HostStore {
       value.blockRevisions = Object.fromEntries(rows.map((row) => [row.id, Number(row.revision)]));
     }
     return this.remember(value, length);
+  }
+
+  find(id) {
+    const cached = this.#cached(id);
+    if (cached) return cached;
+    // Read metadata and blocks from one SQLite revision.
+    if (!this.db.isTransaction)
+      return this.transaction(() => this.find(id), true);
+    const snapshot = this.#root(id);
+    return snapshot && this.#hydrate(id, JSON.parse(snapshot), snapshot.length);
   }
 
   session(id) {
@@ -189,51 +197,45 @@ export class HostStore {
       .sort((a, b) => b.updatedAt - a.updatedAt);
   }
   sync(id, revision) {
-    // Oversized transcripts deliberately bypass the snapshot cache. Polling an
-    // unchanged session must not read and parse that whole transcript each time.
-    // The summary revision is published in the same SQLite statement as the
-    // snapshot, and rolls back with it; absent legacy metadata falls through.
+    const cached = this.#cached(id);
+    if (cached) return syncSnapshot(cached, revision);
+    if (!this.db.isTransaction)
+      return this.transaction(() => this.sync(id, revision), true);
+
+    // The covering summary index handles unchanged polls without reading the root.
     if (Number.isSafeInteger(revision)) {
-      const cached = this.cache.get(id);
-      if (cached?.value.revision === revision) {
-        this.cache.delete(id);
-        this.cache.set(id, cached);
-        return { kind: "unchanged", revision };
-      }
-      if (!cached) {
-        const row = this.db
-          // The primary-key index can look cheaper to SQLite, but it would
-          // require visiting the wide row to retrieve the summary.
-          .prepare(
-            "SELECT summary FROM sessions INDEXED BY session_summary_lookup WHERE id=?",
-          )
-          .get(id);
-        try {
-          const metadata = row?.summary && JSON.parse(String(row.summary));
-          if (metadata?.id === id && metadata.revision === revision)
-            return { kind: "unchanged", revision };
-        } catch {
-          // A malformed derived summary must not make sync unavailable.
-        }
+      const row = this.db.prepare(
+        "SELECT summary FROM sessions INDEXED BY session_summary_lookup WHERE id=?",
+      ).get(id);
+      try {
+        const metadata = row?.summary && JSON.parse(String(row.summary));
+        if (metadata?.id === id && metadata.revision === revision)
+          return { kind: "unchanged", revision };
+      } catch {
+        // Old or malformed derived metadata falls through to the durable root.
       }
     }
-    const value = this.session(id);
-    const { blockRevisions, ...snapshot } = value;
+
+    const snapshot = this.#root(id);
+    if (!snapshot) throw new Error("Session not found on this machine");
+    const value = JSON.parse(snapshot);
     if (revision === value.revision) return { kind: "unchanged", revision };
-    if (revision === undefined || revision > value.revision || !blockRevisions)
-      return { kind: "snapshot", value: snapshot };
-    const {
-      session: { blocks, ...session },
-      ...rest
-    } = snapshot;
+    if (!Number.isSafeInteger(revision) || revision > value.revision || Object.hasOwn(value.session, "blocks"))
+      return syncSnapshot(this.#hydrate(id, value, snapshot.length), revision);
+
+    // Keep the wire order for older clients. Only changed payloads need decoding.
+    const ids = this.db.prepare(
+      "SELECT id FROM session_blocks WHERE session_id=? ORDER BY ordinal",
+    ).all(id);
+    const changed = this.db.prepare(
+      "SELECT payload FROM session_blocks INDEXED BY session_block_revision WHERE session_id=? AND revision>? ORDER BY ordinal",
+    ).all(id, revision);
     return {
       kind: "delta",
       base: revision,
-      value: { ...rest, session },
-      blockIds: blocks.map((block) => block.id),
-      blocks: blocks.filter(
-        (block) => (blockRevisions[block.id] ?? value.revision) > revision,
-      ),
+      value,
+      blockIds: ids.map((row) => row.id),
+      blocks: changed.map((row) => JSON.parse(String(row.payload))),
     };
   }
   sessions(projectId) {
@@ -242,6 +244,12 @@ export class HostStore {
       : this.db.prepare("SELECT id FROM sessions").all();
     return rows.map((row) => this.session(String(row.id)))
       .sort((a, b) => b.updatedAt - a.updatedAt);
+  }
+  advance(value, event) {
+    return this.transaction(() => this.save(
+      { ...value, revision: value.revision + 1, updatedAt: Date.now() },
+      event,
+    ));
   }
   /** Metadata, changed blocks, summary, event and caller receipts commit together.
    * Legacy full snapshots convert lazily on their next write. */
@@ -369,24 +377,30 @@ export class HostStore {
       .run(receipt.commandId, signature, JSON.stringify(receipt));
   }
   events(id, after) {
-    const snapshot = this.session(id);
+    if (!this.db.isTransaction)
+      return this.transaction(() => this.events(id, after), true);
+    const cached = this.#cached(id);
+    const root = cached ? undefined : this.#root(id);
+    if (!cached && !root) throw new Error("Session not found on this machine");
+    const value = cached ?? JSON.parse(root);
+    const revision = value.revision;
     const rows = this.db
       .prepare(
         "SELECT revision, payload FROM events WHERE session_id=? AND revision>? ORDER BY revision",
       )
       .all(id, after);
     if (
-      after > snapshot.revision ||
-      (after < snapshot.revision && Number(rows[0]?.revision) !== after + 1)
+      after > revision ||
+      (after < revision && Number(rows[0]?.revision) !== after + 1)
     ) {
-      return { snapshot, revision: snapshot.revision };
+      return { snapshot: cached ?? this.#hydrate(id, value, root.length), revision };
     }
     return {
       events: rows.map((row) => ({
         revision: row.revision,
         event: JSON.parse(String(row.payload)),
       })),
-      revision: snapshot.revision,
+      revision,
     };
   }
   issueDevice(name) {
@@ -450,24 +464,19 @@ export function summary(value) {
     ),
   };
 }
-/** Unchanged blocks keep their previous stamp. Identity is the fast path;
- * values re-read from disk fall back to a structural comparison. */
-export function blockRevisions(previous, next) {
-  const before = new Map(
-    previous?.session.blocks.map((block) => [block.id, block]),
-  );
-  const revisions = {};
-  for (const block of next.session.blocks) {
-    const old = before.get(block.id);
-    const stamp = previous?.blockRevisions?.[block.id];
-    revisions[block.id] =
-      old &&
-      stamp !== undefined &&
-      (old === block || JSON.stringify(old) === JSON.stringify(block))
-        ? stamp
-        : next.revision;
-  }
-  return revisions;
+function syncSnapshot(value, revision) {
+  const { blockRevisions, ...snapshot } = value;
+  if (revision === value.revision) return { kind: "unchanged", revision };
+  if (!Number.isSafeInteger(revision) || revision > value.revision || !blockRevisions)
+    return { kind: "snapshot", value: snapshot };
+  const { session: { blocks, ...session }, ...rest } = snapshot;
+  return {
+    kind: "delta",
+    base: revision,
+    value: { ...rest, session },
+    blockIds: blocks.map((block) => block.id),
+    blocks: blocks.filter((block) => (blockRevisions[block.id] ?? value.revision) > revision),
+  };
 }
 
 // JSON trees have no cycles after decoding. Freeze only new/decoded blocks;

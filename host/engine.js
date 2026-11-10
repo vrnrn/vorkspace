@@ -1,16 +1,12 @@
 import { createHash, randomUUID } from "node:crypto";
-import { readFile, realpath, stat } from "node:fs/promises";
+import { realpath, stat } from "node:fs/promises";
 import { basename, isAbsolute } from "node:path";
 import {
   renameHostWorktreeBranch,
   resolveHostWorktree,
 } from "./git-worktrees.js";
-import {
-  applyHarnessEvent,
-  stopStreaming,
-} from "./runtime/protocol/apply.js";
+import { applyHarnessEvent } from "./runtime/protocol/apply.js";
 import { resolveModel } from "./runtime/models/sessions/models.js";
-import { isVisionImage } from "./runtime/models/sessions/attachments.js";
 import {
   HARNESS_LABEL,
   RUNTIME_MODES,
@@ -21,18 +17,9 @@ import {
 import { namedWorktreeBranch } from "./runtime/models/source-control/worktrees.js";
 import { isRemoteProvider } from "./runtime/models/connections/protocol.js";
 import { parseRemoteAttachments, resolveAttachments } from "./attachments.js";
-// Streamed output is written in batches. Anything a user may need to act on
-// (approvals, questions, errors, completion) is written immediately.
-const FLUSH_MS = 120;
+import { SessionRuns, settledSession } from "./session-runs.js";
 // Visible text remains small; resolved provider context has its own byte cap.
 export const MAX_PREPARED_TEXT_BYTES = 5 * 1024 * 1024;
-const BATCHED = new Set([
-  "message.delta",
-  "reasoning.delta",
-  "tool.updated",
-  "agent.step",
-  "status",
-]);
 const text = (value, label, max = 128) => {
   if (
     typeof value !== "string" ||
@@ -235,14 +222,11 @@ export class HostEngine {
   store;
   providers;
   switchingProjects = new Set();
-  running = new Map();
-  /** Running sessions, including streamed events not yet written to disk. */
-  live = new Map();
-  retryTimers = new Map();
-  closing = false;
+  #runs;
   constructor(store, providers) {
     this.store = store;
     this.providers = providers;
+    this.#runs = new SessionRuns(store);
     // Provider dispatch is not transactional with SQLite. Never replay a send
     // automatically after a crash; its external effects may already exist.
     // Idle history needs only binding metadata. Loading every transcript here
@@ -250,8 +234,8 @@ export class HostEngine {
     for (const item of store.summaries()) {
       if (item.status === "running") {
         const value = store.session(item.id);
-        this.save(
-          this.settled(
+        this.store.advance(
+          settledSession(
             value,
             "interrupted",
             "Host restarted. This turn was interrupted; inspect its work before continuing.",
@@ -301,85 +285,14 @@ export class HostEngine {
     if (!provider) throw new Error(`${id} is not available on this host`);
     return provider;
   }
-  save(value, event) {
-    return this.store.transaction(() =>
-      this.store.save(
-        { ...value, revision: value.revision + 1, updatedAt: Date.now() },
-        event,
-      ),
-    );
-  }
   updateSession(id, patch) {
-    this.flush(id);
+    this.#runs.flush(id);
     const summary = this.store.updateSession(id, patch);
-    const live = this.live.get(id);
-    if (live) live.value = this.store.session(id);
+    if (this.#runs.has(id)) this.#runs.publish(this.store.session(id));
     return summary;
   }
-  flush(id) {
-    const live = this.live.get(id);
-    if (!live) return;
-    clearTimeout(live.timer);
-    live.timer = undefined;
-    if (!live.events.length) return;
-    const events = live.events;
-    live.value = this.save(live.value, { type: "events", events });
-    live.events = [];
-  }
-  scheduledFlush(id, provider) {
-    try {
-      this.flush(id);
-    } catch (error) {
-      const active = this.running.get(id);
-      if (active) active.persistenceFailed = true;
-      console.error(
-        "Session persistence failed; stopping its provider:",
-        error instanceof Error ? error.message : "unknown error",
-      );
-      void provider.stop(id);
-    }
-  }
-  retrySettlement(id, runId, provider) {
-    if (this.closing || this.retryTimers.has(id)) return;
-    const timer = setTimeout(() => {
-      this.retryTimers.delete(id);
-      void (async () => {
-        try {
-          await provider.stop(id);
-          this.flush(id);
-          const latest = this.store.session(id);
-          if (latest.runId === runId && latest.status === "running")
-            this.save(
-              this.settled(
-                latest,
-                "interrupted",
-                "Session storage failed during this turn. Inspect its work before continuing.",
-                latest.updatedAt,
-              ),
-              { type: "interrupted", reason: "persistence failure" },
-            );
-          this.live.delete(id);
-          this.running.delete(id);
-          if (latest.session.providerSessionId)
-            provider.bind(
-              id,
-              latest.session.providerSessionId,
-              latest.session.cwd,
-            );
-        } catch (error) {
-          console.error(
-            "Retrying session persistence:",
-            error instanceof Error ? error.message : "unknown error",
-          );
-          this.retrySettlement(id, runId, provider);
-        }
-      })();
-    }, 1_000);
-    timer.unref?.();
-    this.retryTimers.set(id, timer);
-  }
   command(raw) {
-    if (this.closing) throw new Error("Host is stopping");
+    if (this.#runs.closing) throw new Error("Host is stopping");
     const command = parseCommand(raw);
     const signature = createHash("sha256")
       .update(JSON.stringify(command))
@@ -387,7 +300,7 @@ export class HostEngine {
     const previous = this.store.receipt(command.commandId, signature);
     if (previous) return previous;
     // Commands apply to the latest state, including batched stream output.
-    if (command.type !== "create") this.flush(command.sessionId);
+    if (command.type !== "create") this.#runs.flush(command.sessionId);
     let effect;
     const { receipt, saved } = this.store.transaction(() => {
       let value;
@@ -489,7 +402,7 @@ export class HostEngine {
             },
           };
         } else if (command.type === "send" || command.type === "compact") {
-          if (value.status === "running")
+          if (value.status === "running" || this.#runs.has(command.sessionId))
             throw new Error("This session is already running");
           if (command.type === "compact" && !provider.compact)
             throw new Error(
@@ -590,13 +503,12 @@ export class HostEngine {
             },
           };
           effect = (saved) => {
-            this.run(
-              saved,
-              command.type === "compact" ? null : command.text,
-              command.type === "send" ? command.intent : undefined,
+            this.#runs.start(saved, provider, {
+              prompt: command.type === "compact" ? null : command.text,
+              intent: command.type === "send" ? command.intent : undefined,
               attachments,
-              command.preparedText,
-            );
+              preparedText: command.preparedText,
+            });
             if (firstTurn && command.type === "send") {
               this.generateFirstTurnNames(
                 saved,
@@ -611,13 +523,7 @@ export class HostEngine {
               "This request belongs to a finished or replaced turn",
             );
           if (command.type === "cancel") {
-            effect = () => {
-              const active = this.running.get(command.sessionId);
-              if (active) active.cancelled = true;
-              void provider
-                .cancel(command.sessionId)
-                .catch(() => provider.stop(command.sessionId));
-            };
+            effect = () => this.#runs.cancel(command.sessionId, command.runId);
           } else if (command.type === "approve") {
             const pending = value.session.blocks.some(
               (block) =>
@@ -672,8 +578,7 @@ export class HostEngine {
       this.store.recordReceipt(signature, result);
       return { receipt: result, saved };
     });
-    const live = this.live.get(saved.session.id);
-    if (live) live.value = saved;
+    this.#runs.publish(saved);
     // A receipt means durable host acceptance, not provider completion.
     effect?.(saved);
     return receipt;
@@ -686,10 +591,10 @@ export class HostEngine {
         .generateTitle({ sessionId: id, cwd, message })
         .then((generated) => {
           if (!generated) return;
-          this.flush(id);
+          this.#runs.flush(id);
           const current = this.store.session(id);
           if (current.session.title !== title) return;
-          const saved = this.save(
+          const saved = this.store.advance(
             {
               ...current,
               session: {
@@ -699,8 +604,7 @@ export class HostEngine {
             },
             { type: "session.generatedTitle" },
           );
-          const live = this.live.get(id);
-          if (live) live.value = saved;
+          this.#runs.publish(saved);
         })
         .catch((error) =>
           console.debug("[vorkspace] remote session title", error),
@@ -724,9 +628,9 @@ export class HostEngine {
             branch,
             () => this.store.session(id).autoWorktreeBranch === temporary,
           );
-          this.flush(id);
+          this.#runs.flush(id);
           const current = this.store.session(id);
-          const saved = this.save(
+          const saved = this.store.advance(
             {
               ...current,
               autoWorktreeBranch: undefined,
@@ -734,163 +638,14 @@ export class HostEngine {
             },
             { type: "session.generatedBranch", branch },
           );
-          const live = this.live.get(id);
-          if (live) live.value = saved;
+          this.#runs.publish(saved);
         })
         .catch((error) =>
           console.debug("[vorkspace] remote worktree branch", error),
         );
     }
   }
-  run(value, prompt, intent, attachments = [], preparedText) {
-    const { session, runId } = value;
-    const provider = this.provider(session.harness);
-    const active = {
-      runId: runId,
-      done: Promise.resolve(),
-      cancelled: false,
-      persistenceFailed: false,
-    };
-    this.running.set(session.id, active);
-    this.live.set(session.id, { value, events: [] });
-    active.done = Promise.resolve()
-      .then(async () => {
-        let error;
-        try {
-          if (!this.closing && !active.cancelled) {
-            const input = {
-              sessionId: session.id,
-              cwd: session.cwd,
-              model: session.model,
-              modelSettings: session.modelSettings,
-              runtimeMode: session.runtimeMode,
-              intent,
-              onEvent: (event) => this.event(session.id, runId, event),
-            };
-            if (prompt === null) await provider.compact(input);
-            else {
-              let resolvedAttachments;
-              if (attachments) {
-                resolvedAttachments = [];
-                for (const file of attachments) {
-                  if (this.closing || active.cancelled) break;
-                  resolvedAttachments.push(
-                    isVisionImage(file.mimeType) &&
-                      file.path &&
-                      file.size <= 20 * 1024 * 1024
-                      ? {
-                          ...file,
-                          data: (await readFile(file.path)).toString("base64"),
-                        }
-                      : file,
-                  );
-                }
-              }
-              if (!this.closing && !active.cancelled) {
-                await provider.send({
-                  ...input,
-                  // Resolved context is input data, appended by the desktop
-                  // after its composer transformations. It never replaces the
-                  // user's visible message, title source, or command identity.
-                  text: preparedText ?? prompt,
-                  attachments: resolvedAttachments,
-                });
-              }
-            }
-          }
-        } catch (reason) {
-          error = reason instanceof Error ? reason.message : String(reason);
-        }
-        // Keep the session running until the old process has stopped. Otherwise
-        // a follow-up can race cleanup and have its newly spawned child killed.
-        await provider.stop(session.id);
-        this.flush(session.id);
-        this.live.delete(session.id);
-        const latest = this.store.session(session.id);
-        if (latest.runId === runId) {
-          const message = this.closing
-            ? "Host stopped. This turn was interrupted."
-            : active.persistenceFailed
-              ? "Session storage failed during this turn. Inspect its work before continuing."
-              : active.cancelled
-                ? "Stopped by you."
-                : error;
-          this.save(
-            this.settled(
-              latest,
-              this.closing || active.persistenceFailed ? "interrupted" : "idle",
-              message,
-            ),
-            { type: "settled", error, cancelled: active.cancelled },
-          );
-        }
-        this.running.delete(session.id);
-        // stop/forget releases callbacks and native resources; bind only retained
-        // provider conversation identity for an explicit future follow-up.
-        const persisted = this.store.session(session.id).session;
-        if (persisted.providerSessionId)
-          provider.bind(session.id, persisted.providerSessionId, persisted.cwd);
-      })
-      .catch((error) => {
-        clearTimeout(this.live.get(session.id)?.timer);
-        console.error(
-          "Session persistence failed; stopping its provider:",
-          error instanceof Error ? error.message : "unknown error",
-        );
-        void provider.stop(session.id);
-        this.retrySettlement(session.id, runId, provider);
-      });
-  }
-  event(id, runId, event) {
-    const live = this.live.get(id);
-    if (!live || live.value.runId !== runId || live.value.status !== "running")
-      return;
-    const session = applyHarnessEvent(live.value.session, event);
-    if (session === live.value.session) return;
-    live.value = { ...live.value, session };
-    live.events.push(event);
-    if (!BATCHED.has(event.type))
-      this.scheduledFlush(id, this.provider(session.harness));
-    else
-      live.timer ??= setTimeout(
-        () => this.scheduledFlush(id, this.provider(session.harness)),
-        FLUSH_MS,
-      );
-  }
-  settled(value, status, message, endedAt = Date.now()) {
-    const stopped = stopStreaming(value.session, endedAt);
-    const session = {
-      ...stopped,
-      blocks: stopped.blocks.map((block) =>
-        block.role === "plan" && block.plan?.status === "building"
-          ? {
-              ...block,
-              plan: {
-                ...block.plan,
-                status: status === "idle" && !message ? "built" : "ready",
-              },
-            }
-          : block,
-      ),
-    };
-    if (message)
-      session.blocks.push({
-        id: randomUUID(),
-        role: "system",
-        text: message,
-        streaming: false,
-      });
-    return { ...value, status, session };
-  }
-  async close() {
-    this.closing = true;
-    for (const timer of this.retryTimers.values()) clearTimeout(timer);
-    this.retryTimers.clear();
-    await Promise.all(
-      [...this.running.keys()].map((id) =>
-        this.provider(this.store.session(id).session.harness).stop(id),
-      ),
-    );
-    await Promise.all([...this.running.values()].map((active) => active.done));
+  close() {
+    return this.#runs.close();
   }
 }

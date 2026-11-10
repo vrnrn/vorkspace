@@ -1078,6 +1078,24 @@ describe("headless session ownership", () => {
       log.mockRestore();
     }
   });
+  it("joins provider shutdown when completion and host close overlap", async () => {
+    const { engine, store, turns, provider, id } = setup();
+    const stopped = Promise.withResolvers();
+    const release = Promise.withResolvers();
+    provider.stop.mockImplementation(async () => {
+      stopped.resolve();
+      await release.promise;
+    });
+    engine.command({ type: "send", commandId: "close-overlap", sessionId: id, text: "Work" });
+    await vi.waitFor(() => expect(turns).toHaveLength(1));
+    turns[0].finish();
+    await stopped.promise;
+    const closing = engine.close();
+    release.resolve();
+    await closing;
+    expect(provider.stop).toHaveBeenCalledExactlyOnceWith(id);
+    expect(store.session(id).status).toBe("interrupted");
+  });
   it("batches streamed output and syncs only changed blocks", async () => {
     const { engine, store, turns, id, project } = setup();
     engine.command({
