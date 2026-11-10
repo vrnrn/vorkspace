@@ -382,13 +382,7 @@ fn connector_pages_keep_drafts_filters_scroll_and_pending_details_with_one_obser
                 .insert("github".into(), "Temporarily unavailable".into());
             snapshot.items.retain(|item| item.provider != "github");
             root.generation = 7;
-            root.finish_refresh(
-                7,
-                root.state.fetch_scope(&root.projects),
-                snapshot,
-                Default::default(),
-                cx,
-            );
+            root.finish_refresh(7, root.state.fetch_scope(&root.projects), snapshot, cx);
             subscription
         })
         .unwrap();
@@ -952,7 +946,7 @@ fn disabling_a_source_removes_controls_unread_and_selection_and_rejects_inflight
                 .into(),
                 ..Default::default()
             };
-            inbox.finish_refresh(7, old_scope, stale, Default::default(), cx);
+            inbox.finish_refresh(7, old_scope, stale, cx);
             assert!(inbox.snapshot.items.is_empty());
             assert!(inbox.connection_statuses().is_empty());
             for provider in ["github", "linear", "azuredevops"] {
@@ -1003,7 +997,6 @@ fn own_successful_revision_is_read_suppressed_and_later_remote_revision_can_chim
                     items: vec![item.clone()],
                     ..Default::default()
                 },
-                Default::default(),
                 cx,
             );
             item.updated_at = "2026-10-22T11:00:00Z".into();
@@ -1015,7 +1008,6 @@ fn own_successful_revision_is_read_suppressed_and_later_remote_revision_can_chim
                     items: vec![item.clone()],
                     ..Default::default()
                 },
-                Default::default(),
                 cx,
             );
             assert!(!inbox.state.seen.unseen(&item));
@@ -1031,7 +1023,6 @@ fn own_successful_revision_is_read_suppressed_and_later_remote_revision_can_chim
                     items: vec![item],
                     ..Default::default()
                 },
-                Default::default(),
                 cx,
             );
             subscription
@@ -1119,7 +1110,6 @@ fn a_coalesced_external_revision_is_never_consumed_as_own_activity(cx: &mut Test
                     items: vec![item.clone()],
                     ..Default::default()
                 },
-                Default::default(),
                 cx,
             );
             let own = model::timestamp_ms("2026-10-22T11:00:00Z");
@@ -1143,7 +1133,6 @@ fn a_coalesced_external_revision_is_never_consumed_as_own_activity(cx: &mut Test
                     items: vec![item.clone()],
                     ..Default::default()
                 },
-                Default::default(),
                 cx,
             );
             assert_eq!(inbox.self_activity[&item.key()].0, own);
@@ -1156,7 +1145,6 @@ fn a_coalesced_external_revision_is_never_consumed_as_own_activity(cx: &mut Test
                     items: vec![item.clone()],
                     ..Default::default()
                 },
-                Default::default(),
                 cx,
             );
             assert!(inbox.state.seen.unseen(&item));

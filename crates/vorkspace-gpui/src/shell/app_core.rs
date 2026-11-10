@@ -99,6 +99,7 @@ pub(crate) struct AppCore {
     scheduler: Option<WeakEntity<Shell>>,
     reminders: reminders::ReminderSchedule,
     pub(super) github_activity: Entity<crate::notifications::github_activity::GithubActivity>,
+    pub(super) inbox_links: Entity<crate::inbox::SessionLinks>,
     linked_activity_clock: Option<gpui::Task<()>>,
     linked_activity_started_at: u64,
     pub(super) notification_permission: crate::notifications::delivery::Permission,
@@ -214,6 +215,7 @@ impl AppCore {
         };
         let checkouts = cx.new(|_| crate::git_status::CheckoutCatalog::default());
         let github_activity = cx.new(|_| Default::default());
+        let inbox_links = cx.new(|_| Default::default());
         let directory = cx.new(|_| SessionDirectory::default());
         let core = cx.new(|cx: &mut Context<AppCore>| {
             AppCore::observe_linked_activity(&github_activity, cx);
@@ -243,6 +245,7 @@ impl AppCore {
                 scheduler: None,
                 reminders: reminders::ReminderSchedule::new(reminders),
                 github_activity,
+                inbox_links,
                 linked_activity_clock: None,
                 linked_activity_started_at: vorkspace_core::time::now_ms(),
                 notification_permission: crate::notifications::delivery::Permission::Unsupported,

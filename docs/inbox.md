@@ -30,8 +30,10 @@ order and applies to both expanded and collapsed sidebars. Disabled connectors
 retain their saved position. Search stays first; the Activity section and the
 session-card density switch are retired because work is shown inline.
 
-One retained owner fetches enabled providers and emits notification and automation
-events once. Provider pages retain independent selection, filters, search, list
+Each window's retained connector owner fetches enabled providers and observes
+their updates. The application session directory supplies one related-conversation
+index across windows, independent of connector polling. Provider pages retain
+independent selection, filters, search, list
 and detail scroll, detail requests and reply drafts while hidden or closed during
 this run. Disabling a connector closes its page while retaining that state.
 Provider filters are persisted alongside the existing native view state; legacy

@@ -350,8 +350,16 @@ impl Shell {
                 .collect();
             let cwd = self.workspace.project.clone().into();
             let poll_projects = self.inbox_poll_projects();
-            let view = cx
-                .new(|cx| inbox::Inbox::new(self.store.clone(), projects, cwd, poll_projects, cx));
+            let links = self
+                .app_core
+                .as_ref()
+                .expect("registered workspace window")
+                .read(cx)
+                .inbox_links
+                .clone();
+            let view = cx.new(|cx| {
+                inbox::Inbox::new(self.store.clone(), projects, cwd, poll_projects, links, cx)
+            });
             self.subscribe_connector(&view, window, cx);
             self.app_view_events
                 .push(cx.observe(&view, |this, inbox, cx| {

@@ -24,6 +24,8 @@ use vorkspace_core::inbox::{
 use vorkspace_runtime::runtime::{Database, locked};
 use vorkspace_ui::theme::*;
 
+pub(crate) use catalog::SessionLinks;
+
 pub(crate) enum Event {
     Close,
     OpenTab(Box<Item>),
@@ -157,10 +159,18 @@ impl Inbox {
         projects: Vec<PathBuf>,
         cwd: PathBuf,
         poll_projects: Vec<PathBuf>,
+        links: Entity<SessionLinks>,
         cx: &mut Context<Self>,
     ) -> Self {
         let mut inbox = Self::new_inner(store, projects, cwd, !cfg!(test), cx);
         inbox.poll_projects = poll_projects;
+        inbox.sessions = links.read(cx).index();
+        cx.observe(&links, |this, links, cx| {
+            this.sessions = links.read(cx).index();
+            this.publish_pages(cx);
+            cx.notify();
+        })
+        .detach();
         inbox
     }
     fn new_inner(
@@ -620,18 +630,13 @@ impl Inbox {
         let state = self.state.clone();
         let projects = self.poll_projects.clone();
         let scope = state.fetch_scope(&projects);
-        let store = self.store.clone();
-        let task = cx.background_executor().spawn(async move {
-            let snapshot = service.list(&projects, &state);
-            let sessions = locked(&store)
-                .and_then(|db| db.sessions())
-                .unwrap_or_default();
-            (snapshot, catalog::RelatedSessions::new(sessions))
-        });
+        let task = cx
+            .background_executor()
+            .spawn(async move { service.list(&projects, &state) });
         cx.spawn(async move |this, cx| {
-            let (snapshot, sessions) = task.await;
+            let snapshot = task.await;
             let _ = this.update(cx, |this, cx| {
-                this.finish_refresh(generation, scope, snapshot, sessions, cx)
+                this.finish_refresh(generation, scope, snapshot, cx)
             });
         })
         .detach();
@@ -642,7 +647,6 @@ impl Inbox {
         generation: u64,
         scope: String,
         mut snapshot: Snapshot,
-        sessions: catalog::RelatedSessions,
         cx: &mut Context<Self>,
     ) {
         if self.generation != generation {
@@ -697,7 +701,6 @@ impl Inbox {
             .sort_by_key(|item| std::cmp::Reverse(item.updated_ms()));
         self.state.seen.seed(&snapshot.items);
         self.snapshot = Rc::new(snapshot);
-        self.sessions = Rc::new(sessions);
         if self.active
             && let Some(item) = self.item()
         {

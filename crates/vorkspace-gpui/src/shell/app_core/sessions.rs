@@ -60,11 +60,30 @@ impl AppCore {
         if saved.is_empty() && deleted.is_empty() {
             return;
         }
+        self.sync_inbox_links(saved.iter().copied(), deleted.iter().copied(), cx);
         self.catalog_revision = self.catalog_revision.wrapping_add(1);
         cx.emit(CatalogChanged {
             source,
             saved,
             deleted,
+        });
+    }
+
+    pub(in crate::shell) fn sync_inbox_links(
+        &self,
+        saved: impl IntoIterator<Item = i64>,
+        deleted: impl IntoIterator<Item = i64>,
+        cx: &mut Context<Self>,
+    ) {
+        let directory = self.directory.clone();
+        self.inbox_links.update(cx, |links, cx| {
+            let rows = &directory.read(cx).rows;
+            let summaries = saved
+                .into_iter()
+                .filter_map(|id| rows.get(&id).map(|record| &record.summary));
+            if links.reconcile(summaries, deleted) {
+                cx.notify();
+            }
         });
     }
 

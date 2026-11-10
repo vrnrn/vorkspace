@@ -247,6 +247,11 @@ impl app_core::AppCore {
             }
         });
         if update.changed {
+            self.sync_inbox_links(
+                update.entries.iter().map(|(id, _)| *id),
+                update.removed.iter().map(|(id, _)| *id),
+                cx,
+            );
             self.catalog_revision = self.catalog_revision.wrapping_add(1);
         }
         update
