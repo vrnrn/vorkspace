@@ -354,7 +354,7 @@ fn copies_keep_running_sessions_and_route_new_tabs_and_splits(cx: &mut TestAppCo
             assert_eq!(shell.workspace.project, project);
             assert_eq!(shell.terminal_cwd(cx), other.path);
             let running = shell.sessions[&feature_session].read(cx);
-            assert!(running.busy);
+            assert!(running.responding());
             assert_eq!(running.input.read(cx).content.as_ref(), "keep this draft");
             assert!(shell.worktree_focus.contains_key(project));
             // A directly opened chat joins the selected workspace without
