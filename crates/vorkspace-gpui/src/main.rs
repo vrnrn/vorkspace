@@ -235,7 +235,7 @@ fn restore_workspace_windows(
             metadata.clone(),
             WorkspaceWindowStart {
                 cwd,
-                saved: Some(entry.workspace),
+                saved: Some(entry.workspace.to_string()),
                 layout: Some(entry.id),
                 bounds,
             },

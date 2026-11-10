@@ -9,7 +9,7 @@ pub(crate) const WINDOW_STATE_KEY: &str = "workspace-windows";
 #[derive(Clone, Serialize, Deserialize)]
 pub(crate) struct WindowLayout {
     pub(crate) id: u64,
-    pub(crate) workspace: String,
+    pub(crate) workspace: Arc<str>,
 }
 
 #[derive(Clone, Default, Serialize, Deserialize)]
@@ -17,7 +17,7 @@ pub(crate) struct WindowLayout {
 pub(crate) struct WindowLayouts {
     pub(crate) entries: Vec<WindowLayout>,
     pub(crate) focused: Option<u64>,
-    pub(super) shared: Option<WindowShared>,
+    pub(super) shared: Option<Arc<WindowShared>>,
     #[serde(skip)]
     pub(super) imported_projects: Vec<String>,
 }
@@ -65,7 +65,7 @@ impl WindowLayouts {
                 .cloned()
                 .collect();
         }
-        self.shared = Some(WindowShared::from_workspace(&legacy));
+        self.shared = Some(Arc::new(WindowShared::from_workspace(&legacy)));
         for entry in &mut self.entries {
             // Keep each layout's selected project, panes and zoom. Carry the
             // desktop merge baseline forward so the next launch can detect edits.
@@ -84,20 +84,25 @@ impl WindowLayouts {
             layout
                 .desktop_workspace_snapshot
                 .clone_from(&legacy.desktop_workspace_snapshot);
-            entry.workspace = serde_json::to_string(&layout).expect("serialize reconciled window");
+            entry.workspace = serde_json::to_string(&layout)
+                .expect("serialize reconciled window")
+                .into();
         }
     }
 
     pub(super) fn record(&mut self, id: u64, workspace: String, focused: bool) -> bool {
         let mut changed = false;
         match self.entries.iter_mut().find(|entry| entry.id == id) {
-            Some(entry) if entry.workspace != workspace => {
-                entry.workspace = workspace;
+            Some(entry) if entry.workspace.as_ref() != workspace => {
+                entry.workspace = workspace.into();
                 changed = true;
             }
             Some(_) => {}
             None => {
-                self.entries.push(WindowLayout { id, workspace });
+                self.entries.push(WindowLayout {
+                    id,
+                    workspace: workspace.into(),
+                });
                 changed = true;
             }
         }
@@ -125,7 +130,27 @@ impl WindowLayouts {
         self.entries
             .iter()
             .find(|entry| Some(entry.id) == self.focused)
-            .map(|entry| entry.workspace.as_str())
+            .map(|entry| entry.workspace.as_ref())
+    }
+
+    pub(super) fn settings_values(&self) -> [(&'static str, String); 2] {
+        let mut legacy = self
+            .legacy()
+            .and_then(|raw| serde_json::from_str::<Workspace>(raw).ok())
+            .unwrap_or_default();
+        if let Some(shared) = &self.shared {
+            shared.apply(&mut legacy);
+        }
+        [
+            (
+                WINDOW_STATE_KEY,
+                serde_json::to_string(self).expect("serialize windows"),
+            ),
+            (
+                "workspace",
+                serde_json::to_string(&legacy).expect("serialize the focused workspace"),
+            ),
+        ]
     }
 }
 
@@ -394,7 +419,7 @@ impl WindowShared {
         workspace.deleted_projects.clone_from(&self.deleted);
     }
 
-    pub(super) fn apply_edits(&mut self, before: &Self, next: Self) {
+    pub(super) fn apply_edits(&mut self, before: &Self, next: &Self) {
         if next.preferences != before.preferences {
             // Windows may save independent settings before a peer's observer
             // runs. Apply only fields this editor changed.
@@ -418,15 +443,15 @@ impl WindowShared {
         if next.projects != before.projects {
             self.projects
                 .retain(|path| !before.projects.contains(path) || next.projects.contains(path));
-            for path in next.projects {
-                if !before.projects.contains(&path) && !self.projects.contains(&path) {
-                    self.projects.push(path);
+            for path in &next.projects {
+                if !before.projects.contains(path) && !self.projects.contains(path) {
+                    self.projects.push(path.clone());
                 }
             }
         }
-        for (key, archived) in next.archived {
-            if before.archived.get(&key) != Some(&archived) {
-                self.archived.insert(key, archived);
+        for (key, &archived) in &next.archived {
+            if before.archived.get(key) != Some(&archived) {
+                self.archived.insert(key.clone(), archived);
             }
         }
         self.deleted
@@ -614,10 +639,10 @@ mod compatibility_tests {
         let layouts = WindowLayouts {
             entries: vec![WindowLayout {
                 id: 1,
-                workspace: serde_json::to_string(&local).unwrap(),
+                workspace: serde_json::to_string(&local).unwrap().into(),
             }],
             focused: Some(1),
-            shared: Some(WindowShared::from_workspace(&local)),
+            shared: Some(Arc::new(WindowShared::from_workspace(&local))),
             ..Default::default()
         };
         let mut updated = local.clone();

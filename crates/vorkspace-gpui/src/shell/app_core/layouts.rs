@@ -1,8 +1,6 @@
 //! Per-window layouts and the focused layout's legacy projection.
 use super::*;
 
-use crate::shell::windows::WINDOW_STATE_KEY;
-
 impl AppCore {
     pub(in crate::shell) fn allocate_window(&mut self) -> u64 {
         let id = self.next_window_id;
@@ -10,23 +8,9 @@ impl AppCore {
         id
     }
 
-    fn layout_values(layouts: &WindowLayouts) -> (String, String) {
-        let mut legacy: Workspace = layouts
-            .legacy()
-            .and_then(|raw| serde_json::from_str(raw).ok())
-            .unwrap_or_default();
-        if let Some(shared) = &layouts.shared {
-            shared.apply(&mut legacy);
-        }
-        (
-            serde_json::to_string(layouts).expect("serialize windows"),
-            serde_json::to_string(&legacy).expect("serialize the focused workspace"),
-        )
-    }
-
     fn stage_layouts(&mut self, cx: &mut Context<Self>) {
-        let (windows, legacy) = Self::layout_values(&self.layouts);
-        self.stage_settings([(WINDOW_STATE_KEY, windows), ("workspace", legacy)], cx);
+        self.writes.stage_layouts(self.layouts.clone());
+        self.flush_settings(cx);
     }
 
     fn record_layout(
@@ -37,25 +21,24 @@ impl AppCore {
         focused: bool,
         durable: bool,
         cx: &mut Context<Self>,
-    ) -> Result<(), String> {
+    ) -> Result<Arc<WindowShared>, String> {
         let local = WindowShared::from_workspace(workspace);
         let mut next = self.layouts.clone();
-        let shared = next.shared.get_or_insert_with(|| local.clone());
+        let shared = next.shared.get_or_insert_with(|| Arc::new(local.clone()));
         if let Some(before) = before.filter(|before| *before != &local) {
-            shared.apply_edits(before, local);
+            Arc::make_mut(shared).apply_edits(before, &local);
         }
-        shared.apply(workspace);
-        let shared_changed = next.shared != self.layouts.shared;
+        if shared.as_ref() != &local {
+            shared.apply(workspace);
+        }
+        let shared = shared.clone();
+        let shared_changed = self.layouts.shared.as_deref() != Some(shared.as_ref());
         let state = serde_json::to_string(workspace).expect("serialize workspace");
         if !next.record(window, state, focused) && !shared_changed {
-            return Ok(());
+            return Ok(shared);
         }
         if durable {
-            let (windows, legacy) = Self::layout_values(&next);
-            self.writes.commit(
-                &self.store,
-                &[(WINDOW_STATE_KEY, &windows), ("workspace", &legacy)],
-            )?;
+            self.writes.commit_layouts(&self.store, &next)?;
         }
         self.layouts = next;
         if !durable {
@@ -64,7 +47,7 @@ impl AppCore {
         if shared_changed {
             cx.notify();
         }
-        Ok(())
+        Ok(shared)
     }
 
     fn close_layout(&mut self, id: u64, cx: &mut Context<Self>) {
@@ -112,17 +95,16 @@ impl Shell {
         }
         let core = self.app_core.clone().expect("registered workspace window");
         let workspace = next.as_mut().unwrap_or(&mut self.workspace);
-        core.update(cx, |core, cx| {
+        self.window_shared = Some(core.update(cx, |core, cx| {
             core.record_layout(
                 self.window_layout,
-                self.window_shared.as_ref(),
+                self.window_shared.as_deref(),
                 workspace,
                 self.window_active,
                 durable,
                 cx,
             )
-        })?;
-        self.window_shared = Some(WindowShared::from_workspace(workspace));
+        })?);
         if let Some(next) = next {
             self.workspace = next;
         }
@@ -141,7 +123,7 @@ impl Shell {
             .find(|entry| entry.id == self.window_layout)
             .expect("persisted window layout")
             .workspace
-            .clone()
+            .to_string()
     }
 
     pub(in crate::shell) fn forget_closed_window(&self, cx: &mut Context<Self>) {

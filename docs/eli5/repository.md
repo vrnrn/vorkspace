@@ -16,7 +16,7 @@ A finished turn tells the composer whether it completed, stopped, or failed. Cha
 
 `embedded` contains the small JavaScript helpers that ship inside the desktop: editor language tools and voice audio. `scripts` contains developer tools for building, testing, measuring, and packaging the app. `crates/vorkspace-gpui/fixtures` contains example visuals, while `vendor` and `licenses` keep dependency code and its legal notices.
 
-Windows share one place for their saved layouts, which chats they have open, and which window handles scheduled work. One writer collects settings edits before saving them. Notes keeps the code that saves your writing separate from the code that draws the list and editor.
+Windows share one place for their saved layouts, which chats they have open, and which window handles scheduled work. One background writer saves the newest layouts and a copy of the focused window that older versions can read. Before an action that needs a saved layout, the app waits for that save. Notes keeps the code that saves your writing separate from the code that draws the list and editor.
 
 The launch code picks the data folder and reads saved state before the first window opens. Quit and restart use the same shutdown code and give pending Bot saves time to finish.
 

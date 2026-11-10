@@ -605,7 +605,7 @@ pub(crate) struct Shell {
     preparing_sessions: Arc<std::sync::atomic::AtomicUsize>,
     vorkspace_baseline: Vec<crate::workspace::VorkspaceDef>,
     window_layout: u64,
-    window_shared: Option<windows::WindowShared>,
+    window_shared: Option<Arc<windows::WindowShared>>,
     window_closing: bool,
     native_window: Option<gpui::WindowHandle<Self>>,
     native_title: String,

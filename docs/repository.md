@@ -40,7 +40,7 @@ In GPUI, `conversation` connects the session runtime to input and transcript vie
 
 `launch` resolves the invocation, selects the data source, and prepares persisted state before GPUI creates its first window. The entry point owns the shared quit and restart sequence, including the Bot write barrier.
 
-`shell/app_core/` owns shared window layouts, session leases, scheduled work and settings publication. A single settings writer coalesces background saves. Closing a window can commit its layout durably through the same writer. `notes/` separates editing and revision-checked saves from library and document rendering.
+`shell/app_core/` owns shared window layouts, session leases, scheduled work and settings publication. The settings writer coalesces immutable window snapshots, encodes the multi-window setting and its focused-window compatibility projection on a worker, and commits the pair together. A synchronous durability barrier uses the same writer when a window or project transition requires the layout to be saved first. `notes/` separates editing and revision-checked saves from library and document rendering.
 
 The host's top-level modules own server, service, store, engine, and sync lifecycles. `host/runtime/models/` contains domain records and validation; `providers/` contains provider-specific adapters; `protocol/` contains their shared stream and RPC machinery; `platform/` owns Node filesystem/platform helpers; `lib/` contains small pure utilities. These modules run on the remote machine.
 

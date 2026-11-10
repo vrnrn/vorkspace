@@ -9,7 +9,7 @@ publish = false
 vorkspace-meetings = { path = "../vorkspace-meetings" }
 uuid = { version = "1", features = ["v4"] }
 tempfile = "3"
-serde.workspace = true
+serde = { workspace = true, features = ["rc"] }
 serde_json.workspace = true
 image = { version = "0.25", default-features = false, features = ["png", "jpeg", "gif", "webp", "bmp", "ico"] }
 vorkspace-helper = { path = "../vorkspace-helper" }
