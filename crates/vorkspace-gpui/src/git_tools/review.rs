@@ -1,11 +1,10 @@
-//! The file pane a review opens beside the chat (FilePane.tsx with
-//! SurfaceTabs.tsx), holding files, Changes and commit tabs. WorkingTreeDiff.tsx and
-//! CommitDiff.tsx load their files four at a time off the UI thread and
-//! build each diff there too; the view only lays out rows.
+//! The file and diff tabs next to a conversation.
+mod loading;
+
 use crate::{
     file_tools::file_editor::{FileEditor, FileEvent},
     git_status::{GitChanged, ProjectGit},
-    git_tools::diff_view::{CommentRequest, DiffEvent, DiffFile, DiffView},
+    git_tools::diff_view::{CommentRequest, DiffEvent, DiffView},
     panel_kit::{selection, spinner, stroke},
     popover::{Anchor, Menu, MenuAction, MenuEvent, menu_popover},
 };
@@ -24,7 +23,6 @@ use std::{
         Arc,
         atomic::{AtomicU64, Ordering},
     },
-    time::Duration,
 };
 use vorkspace_core::{
     diff,
@@ -33,8 +31,6 @@ use vorkspace_core::{
 use vorkspace_ui::radius;
 use vorkspace_ui::{file_icons::file_type_icon, pane_motion::PaneReveal, theme::*};
 
-const CONCURRENCY: usize = 4;
-const PUBLISH_INTERVAL: Duration = Duration::from_millis(16);
 const MAX_CACHED_SOURCES: usize = 8;
 const MAX_CACHED_TEXT_BYTES: usize = 32 * 1024 * 1024;
 
@@ -200,7 +196,6 @@ struct Source {
     tab: ReviewTab,
     view: Entity<DiffView>,
     editor: Option<Entity<FileEditor>>,
-    editor_mode: bool,
     _editor_events: Option<Subscription>,
     files: Option<Arc<[ChangedFile]>>,
     error: Option<String>,
@@ -374,59 +369,6 @@ fn entry_id(staged: bool, relative: &str) -> String {
     format!("{side}:{relative}")
 }
 
-enum FileReader {
-    Checkout(scm::WorktreeReview),
-    Commit(scm::CommitReview),
-    Session { cwd: String, id: String },
-}
-
-impl FileReader {
-    fn file(&self, relative: &str, staged: Option<bool>) -> Result<FileDiff, String> {
-        match self {
-            Self::Checkout(reader) => reader.file(relative, staged == Some(true)),
-            Self::Commit(reader) => reader.file(relative),
-            Self::Session { cwd, id } => {
-                let store =
-                    vorkspace_core::checkpoint::store().ok_or("Session changes are unavailable")?;
-                store.exclusive(|s| s.file_diff(id, cwd, relative))
-            }
-        }
-    }
-}
-
-struct Listed {
-    files: Vec<ChangedFile>,
-    versions: Option<HashMap<String, FileDiffVersion>>,
-    reader: FileReader,
-}
-
-fn session_files(cwd: &str, session: i64) -> Result<Listed, String> {
-    let store = vorkspace_core::checkpoint::store().ok_or("Session changes are unavailable")?;
-    let id = session.to_string();
-    let status = store.exclusive(|s| s.status(&id, cwd))?;
-    let files = status
-        .files
-        .into_iter()
-        .map(|f| ChangedFile {
-            path: f.path,
-            relative: f.relative,
-            status: f.status,
-            additions: f.additions,
-            deletions: f.deletions,
-            staged: false,
-            unstaged: true,
-        })
-        .collect();
-    Ok(Listed {
-        files,
-        versions: None,
-        reader: FileReader::Session {
-            cwd: cwd.to_owned(),
-            id,
-        },
-    })
-}
-
 impl ReviewPane {
     pub(crate) fn new(
         git: Entity<ProjectGit>,
@@ -488,7 +430,6 @@ impl ReviewPane {
             };
             this.diff_event(ix, event, cx);
         });
-        let editor_mode = matches!(tab, ReviewTab::File { .. });
         let editor = if let ReviewTab::File { cwd, .. } = &tab {
             let path = tab.file_path().unwrap();
             Some(cx.new(|cx| {
@@ -535,7 +476,6 @@ impl ReviewPane {
             |cached| (cached.files, cached.loaded, cached.complete),
         );
         Source {
-            editor_mode,
             editor,
             _editor_events: editor_events,
             tab,
@@ -972,10 +912,7 @@ impl ReviewPane {
             }
             if let Some(editor) = &source.editor {
                 editor.update(cx, |e, cx| {
-                    e.set_visible(
-                        source.editor_mode && visible && !self.deferred && ix == self.state.active,
-                        cx,
-                    )
+                    e.set_visible(visible && !self.deferred && ix == self.state.active, cx)
                 });
             }
         }
@@ -995,508 +932,6 @@ impl ReviewPane {
             self.cache.remember(source, cx);
         }
     }
-    /// Focus and Git changes reread the working tree; commits never change.
-    pub(crate) fn refresh(&mut self, cx: &mut Context<Self>) {
-        if self.visible
-            && let Some(source) = self.sources.get(self.state.active)
-            && matches!(
-                source.tab,
-                ReviewTab::Changes { .. } | ReviewTab::Session { .. }
-            )
-        {
-            self.load_active(cx);
-        }
-    }
-
-    fn load_active(&mut self, cx: &mut Context<Self>) {
-        if !self.visible || self.deferred {
-            return;
-        }
-        for (ix, source) in self.sources.iter_mut().enumerate() {
-            if ix != self.state.active && source.load.is_some() {
-                source.cancel();
-            }
-            if let Some(editor) = &source.editor {
-                editor.update(cx, |e, cx| {
-                    e.set_visible(
-                        source.editor_mode && self.visible && ix == self.state.active,
-                        cx,
-                    )
-                });
-            }
-        }
-        let ix = self.state.active;
-        let Some(source) = self.sources.get_mut(ix) else {
-            return;
-        };
-        if source.editor_mode && source.editor.is_some() {
-            return;
-        }
-        if source.complete && matches!(source.tab, ReviewTab::Commit { .. }) {
-            return;
-        }
-        if source.load.is_some() {
-            source.refresh_pending = true;
-            return;
-        }
-        let generation = source.generation.fetch_add(1, Ordering::SeqCst) + 1;
-        let tab = source.tab.clone();
-        let counter = source.generation.clone();
-        let known_index = match &tab {
-            ReviewTab::Changes { cwd, .. } if self.git.read(cx).project() == cwd => {
-                self.git.read(cx).snapshot()
-            }
-            _ => None,
-        };
-        let list = cx.background_executor().spawn({
-            let tab = tab.clone();
-            async move {
-                match &tab {
-                    ReviewTab::File { .. } => unreachable!(),
-                    ReviewTab::Changes { cwd, .. } => {
-                        let root = PathBuf::from(cwd);
-                        let reader = scm::WorktreeReview::open(&root)?;
-                        let scm::DiffSnapshot { index, versions } =
-                            reader.snapshot(known_index.as_deref())?;
-                        Ok(Listed {
-                            files: index.files,
-                            versions,
-                            reader: FileReader::Checkout(reader),
-                        })
-                    }
-                    ReviewTab::Commit { cwd, sha, .. } => {
-                        let reader = scm::CommitReview::open(&PathBuf::from(cwd), sha)?;
-                        Ok(Listed {
-                            files: reader.files()?,
-                            versions: None,
-                            reader: FileReader::Commit(reader),
-                        })
-                    }
-                    ReviewTab::Session { cwd, session, .. } => session_files(cwd, *session),
-                }
-            }
-        });
-        let task = cx.spawn(async move |this, cx| {
-            let listed = list.await;
-            let order = this.update(cx, |this, cx| {
-                let source = this
-                    .sources
-                    .iter_mut()
-                    .find(|s| Arc::ptr_eq(&s.generation, &counter))?;
-                if counter.load(Ordering::SeqCst) != generation {
-                    return None;
-                }
-                match listed {
-                    Ok(Listed {
-                        files,
-                        versions,
-                        reader,
-                    }) => {
-                        source.error = None;
-                        let order: Vec<(String, Option<bool>, ChangedFile)> = match &tab {
-                            ReviewTab::File { .. } => unreachable!(),
-                            ReviewTab::Changes { path, staged, .. } => {
-                                let mut entries: Vec<_> = entries(&files, *staged)
-                                    .map(|(id, kind, file)| (id, Some(kind), file.clone()))
-                                    .collect();
-                                // The focused file loads first.
-                                if let Some(at) = path.as_ref().and_then(|p| {
-                                    entries
-                                        .iter()
-                                        .position(|e| &e.2.path == p || &e.2.relative == p)
-                                }) {
-                                    let focused = entries.remove(at);
-                                    entries.insert(0, focused);
-                                }
-                                entries
-                            }
-                            ReviewTab::Commit { .. } => files
-                                .iter()
-                                .map(|f| (f.relative.clone(), None, f.clone()))
-                                .collect(),
-                            ReviewTab::Session { path, .. } => {
-                                let mut entries: Vec<_> = files
-                                    .iter()
-                                    .map(|f| (f.relative.clone(), None, f.clone()))
-                                    .collect();
-                                if let Some(at) = path
-                                    .as_ref()
-                                    .and_then(|p| entries.iter().position(|e| &e.2.path == p))
-                                {
-                                    let focused = entries.remove(at);
-                                    entries.insert(0, focused);
-                                }
-                                entries
-                            }
-                        };
-                        let retained: std::collections::HashSet<_> =
-                            order.iter().map(|e| e.0.clone()).collect();
-                        source.loaded.retain(|id, _| retained.contains(id));
-                        source.files = Some(files.into());
-                        this.publish(cx);
-                        Some((order, versions, reader))
-                    }
-                    Err(error) => {
-                        source.error = Some(error);
-                        source.files = Some(Arc::from([]));
-                        source.load = None;
-                        source.refresh_pending = false;
-                        cx.notify();
-                        None
-                    }
-                }
-            });
-            let Ok(Some((order, versions, reader))) = order else {
-                return;
-            };
-            let queue = Arc::new(std::sync::Mutex::new(order.into_iter()));
-            let versions = Arc::new(versions);
-            let reader = Arc::new(reader);
-            let mut workers = Vec::new();
-            for _ in 0..CONCURRENCY {
-                let queue = queue.clone();
-                let versions = versions.clone();
-                let counter = counter.clone();
-                let reader = reader.clone();
-                let this = this.clone();
-                let mut cx = cx.clone();
-                workers.push(async move {
-                    loop {
-                        if counter.load(Ordering::SeqCst) != generation {
-                            return;
-                        }
-                        let Some((id, staged, file)) = queue
-                            .lock()
-                            .unwrap_or_else(std::sync::PoisonError::into_inner)
-                            .next()
-                        else {
-                            return;
-                        };
-                        let previous = this
-                            .update(&mut cx, |this, _| {
-                                this.sources
-                                    .iter()
-                                    .find(|s| Arc::ptr_eq(&s.generation, &counter))
-                                    .and_then(|s| s.loaded.get(&id).cloned())
-                            })
-                            .ok()
-                            .flatten();
-                        let version = versions.as_ref().as_ref().and_then(|v| v.get(&id)).cloned();
-                        if previous.as_ref().is_some_and(|p| {
-                            p.error.is_none()
-                                && (matches!(reader.as_ref(), FileReader::Commit(_))
-                                    || (version.is_some() && p.version == version))
-                        }) {
-                            continue;
-                        }
-                        let reader = reader.clone();
-                        let relative = file.relative.clone();
-                        let work_counter = counter.clone();
-                        let loaded = cx
-                            .background_executor()
-                            .spawn(async move {
-                                let diff = reader.file(&relative, staged);
-                                if work_counter.load(Ordering::SeqCst) != generation {
-                                    return None;
-                                }
-                                match diff {
-                                    Ok(diff) => {
-                                        if let Some(prev) = previous.filter(|p| {
-                                            p.error.is_none()
-                                                && p.diff.original == diff.original
-                                                && p.diff.current == diff.current
-                                                && p.diff.binary == diff.binary
-                                                && p.diff.too_large == diff.too_large
-                                        }) {
-                                            return Some(Arc::new(Loaded {
-                                                version,
-                                                ..prev.as_ref().clone()
-                                            }));
-                                        }
-                                        let unified =
-                                            (!diff.binary && !diff.too_large).then(|| {
-                                                diff::build_unified_file(
-                                                    &diff.original,
-                                                    &diff.current,
-                                                    diff::CONTEXT_DEFAULT,
-                                                )
-                                            });
-                                        Some(Arc::new(Loaded {
-                                            version,
-                                            additions: unified.as_ref().map_or(0, |u| u.additions),
-                                            deletions: unified.as_ref().map_or(0, |u| u.deletions),
-                                            chunks: Arc::new(
-                                                unified
-                                                    .as_ref()
-                                                    .map_or_else(Vec::new, |u| u.chunks.clone()),
-                                            ),
-                                            unified: unified.map(|u| Arc::new(u.blocks)),
-                                            diff: Arc::new(diff),
-                                            error: None,
-                                        }))
-                                    }
-                                    Err(error) => Some(Arc::new(Loaded {
-                                        version: None,
-                                        diff: Arc::new(FileDiff::default()),
-                                        unified: None,
-                                        chunks: Arc::default(),
-                                        additions: 0,
-                                        deletions: 0,
-                                        error: Some(error),
-                                    })),
-                                }
-                            })
-                            .await;
-                        let Some(loaded) = loaded else {
-                            return;
-                        };
-                        let _ = this.update(&mut cx, |this, cx| {
-                            if counter.load(Ordering::SeqCst) != generation {
-                                return;
-                            }
-                            this.file_loaded(&counter, id, loaded, cx);
-                        });
-                    }
-                });
-            }
-            futures_join_all(workers).await;
-            let _ = this.update(cx, |this, cx| {
-                let mut refresh = false;
-                let mut publish = false;
-                if let Some(source) = this
-                    .sources
-                    .iter_mut()
-                    .find(|s| Arc::ptr_eq(&s.generation, &counter))
-                    && counter.load(Ordering::SeqCst) == generation
-                {
-                    source.complete = source.loaded.values().all(|l| l.error.is_none());
-                    source.load = None;
-                    publish = source.publish.take().is_some();
-                    refresh = std::mem::take(&mut source.refresh_pending);
-                }
-                if publish {
-                    this.publish(cx);
-                }
-                if refresh {
-                    this.load_active(cx);
-                }
-            });
-        });
-        if let Some(source) = self.sources.get_mut(ix) {
-            source.load = Some(task);
-        }
-    }
-
-    fn file_loaded(
-        &mut self,
-        owner: &Arc<AtomicU64>,
-        id: String,
-        loaded: Arc<Loaded>,
-        cx: &mut Context<Self>,
-    ) {
-        let Some(source) = self
-            .sources
-            .get_mut(self.state.active)
-            .filter(|source| Arc::ptr_eq(&source.generation, owner))
-        else {
-            return;
-        };
-        source.loaded.insert(id, loaded);
-        if source.publish.is_none() {
-            // The source is current immediately. Merge completions arriving
-            // in the same frame before rebuilding the whole review layout.
-            let owner = owner.clone();
-            let generation = owner.load(Ordering::SeqCst);
-            source.publish = Some(cx.spawn(async move |this, cx| {
-                cx.background_executor().timer(PUBLISH_INTERVAL).await;
-                let _ = this.update(cx, |this, cx| {
-                    if owner.load(Ordering::SeqCst) == generation
-                        && this
-                            .sources
-                            .get(this.state.active)
-                            .is_some_and(|source| Arc::ptr_eq(&source.generation, &owner))
-                    {
-                        this.flush_publication(cx);
-                    }
-                });
-            }));
-        }
-    }
-
-    fn flush_publication(&mut self, cx: &mut Context<Self>) {
-        if self
-            .sources
-            .get_mut(self.state.active)
-            .is_some_and(|source| source.publish.take().is_some())
-        {
-            self.publish(cx);
-        }
-    }
-
-    fn publish(&mut self, cx: &mut Context<Self>) {
-        let ix = self.state.active;
-        let Some(source) = self.sources.get(ix) else {
-            return;
-        };
-        let Some(files) = &source.files else {
-            cx.notify();
-            return;
-        };
-        let empty = Arc::<Vec<diff::Block>>::default();
-        let models: Vec<DiffFile> = match &source.tab {
-            ReviewTab::File { .. } => return,
-            ReviewTab::Changes { staged, .. } => entries(files, *staged)
-                .map(|(id, kind, file)| {
-                    let loaded = source.loaded.get(&id);
-                    let unchanged = loaded.is_some_and(|l| {
-                        l.unified.is_some()
-                            && l.additions == 0
-                            && l.deletions == 0
-                            && !l.diff.binary
-                    });
-                    let index_counts = loaded.is_some_and(|l| l.error.is_none())
-                        && !(file.staged && file.unstaged);
-                    let label = if file.staged && file.unstaged {
-                        format!(
-                            "{} ({})",
-                            file.relative,
-                            if kind { "Staged" } else { "Unstaged" }
-                        )
-                    } else {
-                        file.relative.clone()
-                    };
-                    DiffFile {
-                        id: id.into(),
-                        path: file.path.clone(),
-                        label,
-                        binary: loaded.is_some_and(|l| l.diff.binary),
-                        too_large: loaded.is_some_and(|l| l.diff.too_large),
-                        empty_message: match loaded {
-                            None => Some("Loading…".into()),
-                            Some(l) if l.error.is_some() => Some(format!(
-                                "Couldn’t load diff: {}",
-                                l.error.clone().unwrap_or_default()
-                            )),
-                            _ if unchanged => Some(
-                                if kind {
-                                    "No staged changes"
-                                } else {
-                                    "No unstaged changes"
-                                }
-                                .into(),
-                            ),
-                            _ => None,
-                        },
-                        additions: loaded
-                            .filter(|l| l.unified.is_some())
-                            .map(|l| l.additions)
-                            .unwrap_or(if index_counts {
-                                file.additions as u32
-                            } else {
-                                0
-                            }),
-                        deletions: loaded
-                            .filter(|l| l.unified.is_some())
-                            .map(|l| l.deletions)
-                            .unwrap_or(if index_counts {
-                                file.deletions as u32
-                            } else {
-                                0
-                            }),
-                        blocks: if unchanged {
-                            empty.clone()
-                        } else {
-                            loaded
-                                .and_then(|l| l.unified.clone())
-                                .unwrap_or_else(|| empty.clone())
-                        },
-                        can_stage: !kind,
-                        can_discard: !kind,
-                        can_stage_hunk: !kind
-                            && !loaded.is_some_and(|l| l.diff.binary || l.diff.too_large),
-                    }
-                })
-                .collect(),
-            ReviewTab::Commit { .. } | ReviewTab::Session { .. } => files
-                .iter()
-                .map(|file| {
-                    let loaded = source.loaded.get(&file.relative);
-                    let unified = loaded.and_then(|l| l.unified.clone());
-                    DiffFile {
-                        id: file.relative.clone().into(),
-                        path: file.path.clone(),
-                        label: file.relative.clone(),
-                        binary: loaded.is_some_and(|l| l.diff.binary),
-                        too_large: loaded.is_some_and(|l| l.diff.too_large),
-                        empty_message: match loaded {
-                            None => Some("Loading…".into()),
-                            Some(l) if l.error.is_some() => Some(format!(
-                                "Couldn’t load diff: {}",
-                                l.error.clone().unwrap_or_default()
-                            )),
-                            Some(l)
-                                if l.unified.is_some()
-                                    && l.additions == 0
-                                    && l.deletions == 0
-                                    && !l.diff.binary =>
-                            {
-                                Some("No textual diff".into())
-                            }
-                            _ => None,
-                        },
-                        additions: loaded
-                            .filter(|l| l.unified.is_some())
-                            .map_or(file.additions as u32, |l| l.additions),
-                        deletions: loaded
-                            .filter(|l| l.unified.is_some())
-                            .map_or(file.deletions as u32, |l| l.deletions),
-                        blocks: unified.unwrap_or_else(|| empty.clone()),
-                        can_stage: false,
-                        can_discard: false,
-                        can_stage_hunk: false,
-                    }
-                })
-                .collect(),
-        };
-        let totals = models
-            .iter()
-            .fold((0, 0), |(a, d), f| (a + f.additions, d + f.deletions));
-        let (focus, file_count) = match &source.tab {
-            ReviewTab::File { .. } => return,
-            ReviewTab::Changes { path, staged, .. } => (
-                path.as_ref().and_then(|p| {
-                    entries(files, *staged)
-                        .find(|(_, kind, f)| {
-                            staged.is_none_or(|s| s == *kind) && (&f.path == p || &f.relative == p)
-                        })
-                        .map(|(id, _, _)| SharedString::from(id))
-                }),
-                if staged.is_some() {
-                    models.len()
-                } else {
-                    files.len()
-                },
-            ),
-            ReviewTab::Commit { .. } => (None, models.len()),
-            ReviewTab::Session { path, .. } => (
-                path.as_ref().and_then(|p| {
-                    files
-                        .iter()
-                        .find(|f| &f.path == p)
-                        .map(|f| SharedString::from(f.relative.clone()))
-                }),
-                models.len(),
-            ),
-        };
-        source.view.update(cx, |view, cx| {
-            view.totals = Some(totals);
-            view.file_count = Some(file_count);
-            view.set_files(models, cx);
-            view.focus_file(focus, cx);
-        });
-        cx.notify();
-    }
-
     fn diff_event(&mut self, ix: usize, event: &DiffEvent, cx: &mut Context<Self>) {
         // A closed review can briefly retain the cached view after its new
         // source has subscribed. Only the live source owns its events.
@@ -1893,20 +1328,6 @@ fn log_error(error: &str) {
     eprintln!("vorkspace: review action failed: {error}");
 }
 
-/// Polls every future to completion; the workers share one queue.
-async fn futures_join_all(workers: Vec<impl std::future::Future<Output = ()>>) {
-    let mut workers: Vec<_> = workers.into_iter().map(Box::pin).collect();
-    std::future::poll_fn(move |cx| {
-        workers.retain_mut(|w| w.as_mut().poll(cx).is_pending());
-        if workers.is_empty() {
-            std::task::Poll::Ready(())
-        } else {
-            std::task::Poll::Pending
-        }
-    })
-    .await
-}
-
 impl Render for ReviewPane {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         if std::mem::take(&mut self.retiring_focus)
@@ -1932,7 +1353,7 @@ impl Render for ReviewPane {
         let body: AnyElement = match self.sources.get(self.state.active) {
             None => div().into_any_element(),
             Some(_) if self.deferred => div().into_any_element(),
-            Some(source) if source.editor_mode && source.editor.is_some() => {
+            Some(source) if source.editor.is_some() => {
                 let editor = source.editor.as_ref().unwrap();
                 if self.focus.is_focused(window) {
                     window.focus(&editor.focus_handle(cx), cx);
