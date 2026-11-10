@@ -143,7 +143,7 @@ pub struct InitialConfiguration {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub soul: Option<String>,
 }
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Launch {
     pub session_id: i64,
@@ -159,7 +159,7 @@ pub struct Launch {
     pub dismissed: bool,
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Document {
     pub id: String,

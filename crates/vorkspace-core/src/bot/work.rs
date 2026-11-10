@@ -1,7 +1,7 @@
 //! Desktop work references belong to conversation blocks, not the Bot roster.
 //! Keep projection separate from persistence so opening a Bot never rewrites it.
 use serde_json::{json, Value};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 pub fn session_handle(value: &Value) -> Option<i64> {
     value
@@ -207,41 +207,69 @@ pub(crate) fn block_launches(blocks: &[Value]) -> Vec<Vec<Value>> {
     result
 }
 
+fn replace_projection<T: PartialEq>(
+    current: &mut Vec<T>,
+    incoming: Vec<T>,
+    keep: impl Fn(&T) -> bool,
+) -> bool {
+    if current
+        .iter()
+        .eq(current.iter().filter(|value| keep(value)).chain(&incoming))
+    {
+        return false;
+    }
+    current.retain(keep);
+    current.extend(incoming);
+    true
+}
+
 impl super::Bot {
     pub fn apply_work(
         &mut self,
         documents: Vec<super::Document>,
         mut launches: Vec<super::Launch>,
-    ) -> Result<bool, String> {
-        let before = serde_json::to_string(&(self.documents.clone(), self.launches.clone()))
-            .map_err(|e| e.to_string())?;
+    ) -> bool {
+        let mut previous_launches = HashMap::new();
+        for launch in &self.launches {
+            previous_launches.entry(launch.session_id).or_insert(launch);
+        }
         for launch in &mut launches {
-            if let Some(previous) = self
-                .launches
-                .iter()
-                .find(|old| old.session_id == launch.session_id)
-            {
+            if let Some(previous) = previous_launches.get(&launch.session_id) {
                 launch.origin_turn = previous.origin_turn;
                 launch.notify_on_complete = previous.notify_on_complete;
                 launch.completed = previous.completed;
                 launch.dismissed = previous.dismissed;
             }
         }
-        self.documents.retain(|d| {
-            !self.desktop_document_ids.contains(&d.id)
-                && !documents.iter().any(|new| new.id == d.id)
+
+        let document_ids: Vec<_> = documents
+            .iter()
+            .map(|document| document.id.clone())
+            .collect();
+        let launch_ids: Vec<_> = launches.iter().map(|launch| launch.session_id).collect();
+        let projected_documents: HashSet<_> = self
+            .desktop_document_ids
+            .iter()
+            .chain(&document_ids)
+            .map(String::as_str)
+            .collect();
+        let projected_launches: HashSet<_> = self
+            .desktop_launch_ids
+            .iter()
+            .chain(&launch_ids)
+            .copied()
+            .collect();
+        let documents_changed = replace_projection(&mut self.documents, documents, |document| {
+            !projected_documents.contains(document.id.as_str())
         });
-        self.launches.retain(|l| {
-            !self.desktop_launch_ids.contains(&l.session_id)
-                && !launches.iter().any(|new| new.session_id == l.session_id)
+        let launches_changed = replace_projection(&mut self.launches, launches, |launch| {
+            !projected_launches.contains(&launch.session_id)
         });
-        self.desktop_document_ids = documents.iter().map(|d| d.id.clone()).collect();
-        self.desktop_launch_ids = launches.iter().map(|l| l.session_id).collect();
-        self.documents.extend(documents);
-        self.launches.extend(launches);
-        Ok(before
-            != serde_json::to_string(&(self.documents.clone(), self.launches.clone()))
-                .map_err(|e| e.to_string())?)
+        let provenance_changed =
+            self.desktop_document_ids != document_ids || self.desktop_launch_ids != launch_ids;
+        self.desktop_document_ids = document_ids;
+        self.desktop_launch_ids = launch_ids;
+        documents_changed || launches_changed || provenance_changed
     }
 }
 
@@ -303,9 +331,10 @@ mod tests {
         let mut native = document.clone();
         native.id = "native".into();
         bot.documents.push(native);
-        bot.apply_work(vec![document], Vec::new()).unwrap();
+        assert!(bot.apply_work(vec![document.clone()], Vec::new()));
+        assert!(!bot.apply_work(vec![document], Vec::new()));
         assert_eq!(bot.documents.len(), 2);
-        bot.apply_work(Vec::new(), Vec::new()).unwrap();
+        assert!(bot.apply_work(Vec::new(), Vec::new()));
         assert_eq!(bot.documents.len(), 1);
         assert_eq!(bot.documents[0].id, "native");
     }

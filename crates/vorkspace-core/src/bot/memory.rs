@@ -3,7 +3,7 @@ use super::files;
 use chrono::{Local, NaiveDate};
 use regex::Regex;
 use serde::Serialize;
-use std::{path::Path, sync::LazyLock};
+use std::{borrow::Cow, path::Path, sync::LazyLock};
 pub const MAX_LINES: usize = 200;
 pub const MAX_BYTES: usize = 24 * 1024;
 /// Shared guidance for every agent that uses the Bot's durable memory.
@@ -24,12 +24,17 @@ static SECRETS: LazyLock<Vec<Regex>> = LazyLock::new(|| {
     .collect()
 });
 pub fn redact(text: &str) -> String {
-    SECRETS.iter().fold(text.into(), |s, re| {
-        re.replace_all(&s, |c: &regex::Captures<'_>| {
-            format!("«redacted {} chars»", c[0].chars().count())
-        })
-        .into_owned()
-    })
+    let mut output = Cow::Borrowed(text);
+    for pattern in SECRETS.iter() {
+        if let Cow::Owned(redacted) =
+            pattern.replace_all(&output, |capture: &regex::Captures<'_>| {
+                format!("«redacted {} chars»", capture[0].chars().count())
+            })
+        {
+            output = Cow::Owned(redacted);
+        }
+    }
+    output.into_owned()
 }
 pub fn date() -> String {
     Local::now().format("%Y-%m-%d").to_string()
@@ -172,9 +177,10 @@ pub fn replace(text: &str, find: &str, entry: Option<&str>, day: &str) -> Result
 pub fn fit(text: &str, keep: Option<&str>, day: &str) -> (String, Vec<String>) {
     let mut rows = lines(text);
     let mut moved = Vec::new();
+    let mut bytes = rows.iter().map(|row| row.len() + 1).sum::<usize>();
     for pass in 0..3 {
         loop {
-            if rows.len() <= MAX_LINES && join(&rows).len() <= MAX_BYTES {
+            if rows.len() <= MAX_LINES && bytes <= MAX_BYTES {
                 break;
             }
             let pick = rows.iter().position(|line| {
@@ -193,7 +199,9 @@ pub fn fit(text: &str, keep: Option<&str>, day: &str) -> (String, Vec<String>) {
             let Some(index) = pick else {
                 break;
             };
-            moved.push(rows.remove(index));
+            let archived = rows.remove(index);
+            bytes -= archived.len() + 1;
+            moved.push(archived);
         }
     }
     (join(&rows), moved)

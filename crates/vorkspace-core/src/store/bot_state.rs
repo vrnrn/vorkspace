@@ -211,7 +211,7 @@ impl Bot {
         let Some((documents, launches)) = store.bot_work(session)? else {
             return Ok(false);
         };
-        self.apply_work(documents, launches)
+        Ok(self.apply_work(documents, launches))
     }
 }
 

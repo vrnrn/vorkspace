@@ -122,7 +122,7 @@ pub fn content_hash(text: &str) -> String {
 
 /// Write beside the target and rename over it, so a crash mid-write leaves
 /// the old file whole. Owner-only, since memory can hold personal details.
-fn write_atomic(path: &Path, text: &str) -> Result<(), String> {
+pub(super) fn write_atomic(path: &Path, text: &str) -> Result<(), String> {
     use std::io::Write;
 
     let temp = path.with_extension(format!("{}.tmp", crate::session::new_id()));

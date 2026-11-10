@@ -244,23 +244,8 @@ fn publish_session(
     if previous.as_deref() == Some(&text) {
         return Ok(());
     }
-    let temp = path.with_extension(format!("{}.tmp", crate::session::new_id()));
-    let result = (|| {
-        let mut file = std::fs::OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .mode(0o600)
-            .open(&temp)?;
-        file.write_all(text.as_bytes())?;
-        file.sync_all()?;
-        std::fs::rename(&temp, &path)?;
-        std::fs::File::open(path.parent().unwrap())?.sync_all()
-    })();
-    if let Err(error) = result {
-        let _ = std::fs::remove_file(temp);
-        return Err(format!("Could not write Bot session pointer: {error}"));
-    }
-    Ok(())
+    files::write_atomic(&path, &text)
+        .map_err(|error| format!("Could not write Bot session pointer: {error}"))
 }
 
 #[cfg(test)]
