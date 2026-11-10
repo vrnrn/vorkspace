@@ -3,7 +3,6 @@ use super::*;
 use crate::popover::{MenuAction, MenuItem};
 use gpui::Div;
 use unicode_segmentation::UnicodeSegmentation;
-use vorkspace_core::files::path_key;
 use vorkspace_ui::radius;
 
 /// A stable tint for a vorkspace's initial, from its id.
@@ -296,6 +295,7 @@ impl Shell {
 mod tests {
     use super::*;
     use gpui::TestAppContext;
+    use vorkspace_core::files::path_key;
 
     #[gpui::test]
     fn history_switches_vorkspace_with_the_conversation(cx: &mut TestAppContext) {

@@ -222,24 +222,13 @@ impl Shell {
                     .rounded(px(radius::CONTROL))
                     .relative()
                     .when(self.app_search.is_some(), |d| d.bg(content(0.1)))
-                    .text_color(content(
-                        if self.app_search.is_some() || self.sidebar_hover == Some("Search") {
-                            1.
-                        } else {
-                            0.5
-                        },
-                    ))
+                    .text_color(content(if self.app_search.is_some() { 1. } else { 0.5 }))
                     .font_weight(FontWeight::MEDIUM)
                     .hover(|s| {
                         s.bg(vorkspace_ui::fluid::hover(0.08))
                             .text_color(content(1.))
                     })
                     .focus(|s| s.bg(content(0.1)).text_color(content(1.)))
-                    .on_hover(cx.listener(|this, hovered, _, cx| {
-                        this.sidebar_hover = if *hovered { Some("Search") } else { None };
-                        this.sidebar_frame.update(cx, |_, cx| cx.notify());
-                        this.project_rail_frame.update(cx, |_, cx| cx.notify());
-                    }))
                     .on_click(cx.listener(|this, _, window, cx| this.focus_search(window, cx)))
                     .flex()
                     .items_center()

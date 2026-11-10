@@ -136,7 +136,7 @@ impl Shell {
                 closing.push(terminal_id);
                 let terminal = terminal.read(cx);
                 if let Some(process) = terminal.foreground_process() {
-                    running.push((terminal.title.clone(), process));
+                    running.push((project_name(&terminal.cwd), process));
                 }
             }
         }
