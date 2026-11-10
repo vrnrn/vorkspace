@@ -106,8 +106,9 @@ impl StagedMessage {
         Ok(staged)
     }
 
-    pub fn publish(&mut self) {
+    pub fn publish(mut self) -> Message {
         self.cleanup = None;
+        std::mem::take(&mut self.message)
     }
 }
 

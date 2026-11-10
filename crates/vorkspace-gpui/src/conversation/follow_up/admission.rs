@@ -40,19 +40,19 @@ impl Conversation {
         mode: Option<String>,
         cx: &mut Context<Self>,
     ) {
+        let destination = ShelfDestination::Queue {
+            continuation: self.is_stopping() || self.settings.pending_provider_switch.is_some(),
+        };
         if self.follow_ups.state.messages.len() >= 128 {
-            self.status = "The session’s message queue is full.".into();
-            cx.notify();
+            self.shelf_admission_failed(
+                destination,
+                "The session’s message queue is full.".into(),
+                cx,
+            );
             return;
         }
         let message = self.queued_message(prompt, self.attachments.clone(), mode, cx);
-        self.offer_shelf_message(
-            message,
-            ShelfDestination::Queue {
-                continuation: self.is_stopping() || self.settings.pending_provider_switch.is_some(),
-            },
-            cx,
-        );
+        self.offer_shelf_message(message, destination, cx);
     }
 
     fn offer_shelf_message(
@@ -106,8 +106,13 @@ impl Conversation {
         else {
             return;
         };
-        let accepted = staged.and_then(|mut staged| {
-            if !self.history_ready() || self.user_read_only() || self.editing_last_turn.pending() {
+        let accepted = staged.and_then(|staged| {
+            if !self.history_ready()
+                || self.user_read_only()
+                || self.editing_last_turn.pending()
+                || self.settings.bot.is_some()
+                || self.is_remote()
+            {
                 return Err("Wait for the conversation to finish changing and retry.".into());
             }
             let message = &staged.message;
@@ -138,10 +143,9 @@ impl Conversation {
                 &origin,
                 &message.id,
             )?;
-            staged.publish();
-            Ok((next, staged))
+            Ok((next, staged.publish()))
         });
-        let (next, staged) = match accepted {
+        let (next, message) = match accepted {
             Ok(accepted) => accepted,
             Err(error) => {
                 self.finish_composer_submission(cx);
@@ -155,16 +159,14 @@ impl Conversation {
         self.accept_composer_submission(&origin, cx);
         match destination {
             ShelfDestination::Queue { continuation } => {
-                self.follow_ups
-                    .motion
-                    .insert(&staged.message.id, was_empty, true);
+                self.follow_ups.motion.insert(&message.id, was_empty, true);
                 if continuation {
-                    self.continue_after_stop(staged.message.id.clone());
+                    self.continue_after_stop(message.id);
                 }
                 self.pump_follow_ups(cx);
                 cx.emit(SessionChanged::Draft);
             }
-            ShelfDestination::Draft => self.show_saved_draft(staged.message.clone(), cx),
+            ShelfDestination::Draft => self.show_saved_draft(message, cx),
         }
         cx.notify();
     }

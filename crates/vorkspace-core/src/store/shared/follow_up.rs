@@ -40,10 +40,8 @@ impl Store {
                 .into()
         };
         let mut query = sql(self.conn.prepare(&query))?;
-        let receipts = sql(query.query_map(params![source, encode(&ids)?], |row| row.get(0)))?
-            .collect::<rusqlite::Result<_>>()
-            .map_err(|error| error.to_string());
-        receipts
+        let receipts = sql(query.query_map(params![source, encode(&ids)?], |row| row.get(0)))?;
+        sql(receipts.collect())
     }
 
     fn shared_follow_up_revision(&self, id: i64, source: &str) -> Result<u64, String> {
