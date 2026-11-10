@@ -1,6 +1,7 @@
 //! Project indexes are fetched on workers; opening a row materializes the chat.
 use super::*;
 use serde_json::json;
+use vorkspace_core::store::RemoteListing;
 
 impl Shell {
     pub(super) fn refresh_remote_projects(&mut self, cx: &mut Context<Self>) {
@@ -27,11 +28,17 @@ impl Shell {
     pub(super) fn apply_remote_catalog(&mut self, event: &RemoteCatalog, cx: &mut Context<Self>) {
         let project = &event.project;
         match &event.result {
-            Ok((summaries, removed)) => {
+            Ok(RemoteListing {
+                entries, removed, ..
+            }) => {
+                let mut changed = !removed.is_empty();
+                if !removed.is_empty() {
+                    let removed: HashSet<_> = removed.iter().copied().collect();
+                    self.order.retain(|id| !removed.contains(id));
+                }
                 for &id in removed {
                     self.session_removal_epoch = self.session_removal_epoch.wrapping_add(1);
                     self.remote_marks.remove(&id);
-                    self.order.retain(|existing| *existing != id);
                     if let Some(view) = self.sessions.get(&id) {
                         view.update(cx, |view, cx| {
                             view.remote_connection_error(
@@ -46,7 +53,8 @@ impl Shell {
                         self.release_live_session(id, cx);
                     }
                 }
-                for (summary, running, waiting, draft) in summaries {
+                for entry in entries {
+                    let summary = &entry.summary;
                     let id = summary.id;
                     if self
                         .session_summaries
@@ -55,26 +63,30 @@ impl Shell {
                     {
                         continue;
                     }
-                    self.remote_marks.insert(id, (*running, *waiting));
-                    if *draft {
-                        self.draft_sessions.insert(id);
+                    let marks = (entry.running, entry.needs_input);
+                    changed |= self.remote_marks.insert(id, marks) != Some(marks);
+                    changed |= if entry.draft {
+                        self.draft_sessions.insert(id)
                     } else {
-                        self.draft_sessions.remove(&id);
-                    }
-                    if !self.session_summaries.contains_key(&id) {
-                        self.order.push(id);
-                    }
-                    if let Some(view) = self.sessions.get(&id) {
+                        self.draft_sessions.remove(&id)
+                    };
+                    if let Some(view) = self.sessions.get(&id)
+                        && !view.read(cx).busy
+                        && view.read(cx).summary != *summary
+                    {
                         view.update(cx, |view, cx| {
-                            if !view.busy {
-                                view.summary = summary.clone();
-                                cx.notify();
-                            }
+                            view.summary = summary.clone();
+                            cx.notify();
                         });
                     }
-                    self.session_summaries.insert(id, summary.clone());
+                    if self.session_summaries.get(&id) != Some(summary) {
+                        if self.session_summaries.insert(id, summary.clone()).is_none() {
+                            self.order.push(id);
+                        }
+                        changed = true;
+                    }
                 }
-                if self.workspace.vorkspace_has_project(project) {
+                if changed && self.workspace.vorkspace_has_project(project) {
                     self.invalidate_chrome(cx);
                     cx.notify();
                 }
@@ -93,11 +105,9 @@ impl Shell {
     }
 }
 
-type RemoteSnapshot = (Vec<(Session, bool, bool, bool)>, Vec<i64>);
-
 pub(super) struct RemoteCatalog {
     project: String,
-    result: Result<RemoteSnapshot, String>,
+    result: Result<RemoteListing, String>,
 }
 impl gpui::EventEmitter<RemoteCatalog> for app_core::AppCore {}
 
@@ -142,39 +152,16 @@ impl app_core::AppCore {
                 json!({"projectId":project.project_id}),
             )?;
             let values = response.as_array().ok_or("Invalid remote session list")?;
-            let store = locked(&store)?;
-            let mut summaries = Vec::new();
-            let host_ids: HashSet<String> = values
-                .iter()
-                .map(|value| {
-                    value["id"]
-                        .as_str()
-                        .filter(|id| !id.is_empty())
-                        .map(str::to_owned)
-                })
-                .collect::<Option<_>>()
-                .ok_or("Invalid remote session identity")?;
-            for value in values {
-                let summary = store.register_remote_summary(&project, value)?;
-                let state = store
-                    .remote_session(summary.id)?
-                    .ok_or("Remote session identity is missing")?;
-                summaries.push((
-                    summary,
-                    state.running,
-                    state.needs_input,
-                    value["draft"] == true,
-                ));
-            }
-            let removed = store.prune_remote_listing(&project, &host_ids, &baseline)?;
-            Ok::<_, String>((summaries, removed))
+            locked(&store)?.apply_remote_listing(&project, values, &baseline)
         });
         cx.spawn(async move |core, cx| {
             let result = work.await;
             let _ = core.update(cx, |core, cx| {
                 core.remote_refreshes
                     .insert(requested.clone(), Some(Instant::now()));
-                core.catalog_revision = core.catalog_revision.wrapping_add(1);
+                if result.as_ref().is_ok_and(|listing| listing.changed) {
+                    core.catalog_revision = core.catalog_revision.wrapping_add(1);
+                }
                 cx.emit(RemoteCatalog {
                     project: requested,
                     result,

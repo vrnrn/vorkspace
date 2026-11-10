@@ -684,27 +684,45 @@ impl Store {
         self.shared_save_settings(&[(key, value)])
     }
     pub(super) fn shared_save_settings(&self, values: &[(&str, &str)]) -> Result<(), String> {
-        self.mark_attachment_activity();
+        self.shared_update_settings(|_| {
+            Ok((
+                (),
+                values
+                    .iter()
+                    .map(|&(key, value)| (key.into(), value.into()))
+                    .collect(),
+            ))
+        })
+    }
+    pub(super) fn shared_settings_snapshot(&self) -> Result<BTreeMap<String, String>, String> {
+        let shared = self.shared.as_ref().unwrap();
+        match &shared.extras_path {
+            Some(path) => read_extras(path),
+            None => Ok(shared.extras.borrow().clone()),
+        }
+    }
+    /// Read and publish related sidecar settings while holding the same lock.
+    pub(super) fn shared_update_settings<T>(
+        &self,
+        update: impl FnOnce(&BTreeMap<String, String>) -> Result<(T, Vec<(String, String)>), String>,
+    ) -> Result<T, String> {
         self.shared_writable()?;
         let shared = self.shared.as_ref().unwrap();
         let _lock = shared.extras_path.as_deref().map(lock_extras).transpose()?;
-        let mut next = match &shared.extras_path {
-            Some(path) => read_extras(path)?,
-            None => shared.extras.borrow().clone(),
-        };
+        let mut next = self.shared_settings_snapshot()?;
+        let (result, values) = update(&next)?;
         let changed = values
             .iter()
-            .any(|(key, value)| next.get(*key).is_none_or(|old| old != value));
-        for (key, value) in values {
-            next.insert((*key).into(), (*value).into());
-        }
+            .any(|(key, value)| next.get(key) != Some(value));
         if changed {
+            self.mark_attachment_activity();
+            next.extend(values);
             if let Some(path) = &shared.extras_path {
                 atomic_json(path, &next)?;
             }
         }
         *shared.extras.borrow_mut() = next;
-        Ok(())
+        Ok(result)
     }
     pub(super) fn shared_sessions(&self) -> Result<Vec<Session>, String> {
         let user_presence = self.shared_has_user_message()?;

@@ -131,4 +131,6 @@ The host stores session metadata beside durable transcripts and indexes that met
 
 The desktop tracks the latest host metadata revision separately from the latest full configuration. Older responses cannot overwrite newer status or settings; a full snapshot may fill fields omitted by a listing at the same revision. Command receipts update their local journal while preserving newer host metadata. Revisionless legacy hosts remain readable until a versioned snapshot establishes that binding's revision boundary.
 
+The desktop validates and applies a project listing as one catalog update. New bindings, their initial settings, and the markers for removed legacy tabs commit together. An absent conversation is removed only if its binding still matches the revision captured before the request. Unbound drafts, uploads, pending commands, and rejected messages available for recovery stay on the desktop.
+
 Large changed snapshots use chunked transfer. The host retains up to eight serialized transfers, releases each on completion, expires abandoned transfers after two minutes of inactivity even when no further request arrives, and clears them when the server closes. A live transfer refreshes its inactivity deadline. The transfer count is bounded; total retained transfer bytes depend on the requested histories.

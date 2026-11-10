@@ -9,12 +9,33 @@ use crate::{
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, HashMap, HashSet};
+
+mod catalog;
+pub use catalog::RemoteListing;
 
 const PROJECTS: &str = "remote-projects.v2";
 const SESSIONS: &str = "remote-sessions.v1";
 
-pub struct ListingBaseline(HashMap<i64, (Option<String>, Option<u64>, u64)>);
+const HIDDEN: &str = "remote-hidden-legacy.v1";
+
+pub(super) fn agent_key(id: i64) -> String {
+    format!("remote-agent:{id}")
+}
+
+fn decode_sessions(raw: Option<&str>) -> Result<BTreeMap<i64, RemoteSession>, String> {
+    raw.map(serde_json::from_str)
+        .transpose()
+        .map(Option::unwrap_or_default)
+        .map_err(|error| format!("Cannot read remote sessions: {error}"))
+}
+
+fn decode_hidden(raw: Option<&str>) -> Result<HashSet<i64>, String> {
+    raw.map(serde_json::from_str)
+        .transpose()
+        .map(Option::unwrap_or_default)
+        .map_err(|error| format!("Cannot read hidden remote sessions: {error}"))
+}
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -167,34 +188,51 @@ impl Store {
         Ok(remote)
     }
     fn stored_remote_sessions(&self) -> Result<BTreeMap<i64, RemoteSession>, String> {
-        self.setting(SESSIONS)?
-            .map(|raw| {
-                serde_json::from_str(&raw).map_err(|e| format!("Cannot read remote sessions: {e}"))
-            })
-            .unwrap_or_else(|| Ok(BTreeMap::new()))
+        decode_sessions(self.setting(SESSIONS)?.as_deref())
     }
-    fn remote_sessions(&self) -> Result<BTreeMap<i64, RemoteSession>, String> {
-        let hidden = self.hidden_legacy_remote_sessions()?;
-        let mut sessions = self.legacy_remote_sessions()?;
-        sessions.retain(|id, _| !hidden.contains(id));
-        for (id, mut saved) in self.stored_remote_sessions()? {
-            let canonical = saved
-                .session_id
-                .as_ref()
-                .and_then(|host| {
-                    sessions.values().find(|legacy| {
-                        legacy.summary.id >= 0
-                            && legacy.project.environment_id == saved.project.environment_id
-                            && legacy.session_id.as_ref() == Some(host)
-                    })
-                })
-                .map(|legacy| legacy.summary.id)
-                .unwrap_or(id);
-            saved.summary.id = canonical;
-            sessions.insert(canonical, saved);
+
+    pub(super) fn hidden_legacy_remote_sessions(&self) -> Result<HashSet<i64>, String> {
+        decode_hidden(self.setting(HIDDEN)?.as_deref())
+    }
+
+    fn read_remote_catalog(&self) -> Result<(HashSet<i64>, BTreeMap<i64, RemoteSession>), String> {
+        let sidecar = self
+            .shared
+            .is_some()
+            .then(|| self.shared_settings_snapshot())
+            .transpose()?;
+        let catalog = catalog::Catalog::load(self, sidecar.as_ref())?;
+        Ok((catalog.hidden, catalog.sessions))
+    }
+
+    pub(super) fn read_remote_agent_settings(
+        &self,
+        id: i64,
+        raw: Option<&str>,
+        include_turns: bool,
+    ) -> Result<Option<Settings>, String> {
+        if let Some(raw) = raw {
+            return serde_json::from_str(raw)
+                .map(Some)
+                .map_err(|error| format!("Cannot read remote settings: {error}"));
         }
-        Ok(sessions)
+        if id < 0 || self.shared.is_none() {
+            return Ok(None);
+        }
+        let mut settings = if include_turns {
+            self.shared_agent(id)?
+        } else {
+            self.shared_agent_preferences(id)?
+        };
+        if let Some(settings) = settings
+            .as_mut()
+            .filter(|settings| settings.worktree_cwd.is_none())
+        {
+            settings.worktree_cwd = self.legacy_remote_worktree(id)?;
+        }
+        Ok(settings)
     }
+
     pub fn remote_session(&self, id: i64) -> Result<Option<RemoteSession>, String> {
         let mut stored = self.stored_remote_sessions()?;
         if let Some(remote) = stored.remove(&id) {
@@ -271,18 +309,14 @@ impl Store {
         )
     }
     pub fn sessions(&self) -> Result<Vec<Session>, String> {
-        let hidden = self.hidden_legacy_remote_sessions()?;
+        let (hidden, remote) = self.read_remote_catalog()?;
         let mut sessions: HashMap<_, _> = self
             .local_sessions()?
             .into_iter()
             .filter(|summary| !hidden.contains(&summary.id))
             .map(|summary| (summary.id, summary))
             .collect();
-        sessions.extend(
-            self.remote_sessions()?
-                .into_iter()
-                .map(|(id, remote)| (id, remote.summary)),
-        );
+        sessions.extend(remote.into_iter().map(|(id, remote)| (id, remote.summary)));
         let mut sessions: Vec<_> = sessions.into_values().collect();
         sessions.sort_by_key(|s| (std::cmp::Reverse(s.updated_at), std::cmp::Reverse(s.id)));
         Ok(sessions)
@@ -332,244 +366,6 @@ impl Store {
             running: false,
             needs_input: false,
         })?;
-        Ok(summary)
-    }
-    /// Reconcile only after a complete, successful host session listing. Draft
-    /// desktop handles and commands awaiting receipts survive external deletion.
-    pub fn prune_remote_sessions(
-        &self,
-        project: &RemoteProject,
-        live_host_ids: &std::collections::HashSet<String>,
-    ) -> Result<(), String> {
-        let baseline = self.remote_listing_baseline(project)?;
-        self.prune_remote_listing(project, live_host_ids, &baseline)
-            .map(drop)
-    }
-
-    pub fn remote_listing_baseline(
-        &self,
-        project: &RemoteProject,
-    ) -> Result<ListingBaseline, String> {
-        Ok(ListingBaseline(
-            self.remote_sessions()?
-                .into_iter()
-                .filter_map(|(id, remote)| {
-                    (remote.project.environment_id == project.environment_id
-                        && remote.project.project_id == project.project_id)
-                        .then_some((
-                            id,
-                            (
-                                remote.session_id,
-                                remote.host_revision,
-                                remote.summary.updated_at,
-                            ),
-                        ))
-                })
-                .collect(),
-        ))
-    }
-
-    pub fn prune_remote_listing(
-        &self,
-        project: &RemoteProject,
-        live_host_ids: &std::collections::HashSet<String>,
-        baseline: &ListingBaseline,
-    ) -> Result<Vec<i64>, String> {
-        let mut sessions = self.remote_sessions()?;
-        let before: std::collections::HashSet<_> = sessions.keys().copied().collect();
-        sessions.retain(|id, remote| {
-            remote.project.environment_id != project.environment_id
-                || remote.project.project_id != project.project_id
-                || remote
-                    .session_id
-                    .as_ref()
-                    .is_none_or(|id| live_host_ids.contains(id))
-                || !remote.outbox.is_empty()
-                || !remote.uploads.is_empty()
-                || baseline.0.get(id).is_none_or(|(host, revision, updated)| {
-                    host != &remote.session_id
-                        || *revision != remote.host_revision
-                        || *updated != remote.summary.updated_at
-                })
-        });
-        let removed: Vec<_> = before
-            .into_iter()
-            .filter(|id| !sessions.contains_key(id))
-            .collect();
-        if removed.is_empty() {
-            return Ok(removed);
-        }
-        self.hide_legacy_remote_sessions(removed.iter().copied())?;
-        self.save_setting(
-            SESSIONS,
-            &serde_json::to_string(&sessions).map_err(|e| e.to_string())?,
-        )?;
-        Ok(removed)
-    }
-
-    pub fn register_remote_summary(
-        &self,
-        project: &RemoteProject,
-        value: &Value,
-    ) -> Result<Session, String> {
-        let host = value.get("session").unwrap_or(value);
-        let host_id = host["id"]
-            .as_str()
-            .ok_or("Host session identity is missing")?;
-        let mut sessions = self.remote_sessions()?;
-        let id = sessions
-            .values()
-            .find(|r| {
-                r.project.environment_id == project.environment_id
-                    && r.session_id.as_deref() == Some(host_id)
-            })
-            .map_or_else(
-                || -shared::handle(&format!("remote:{}:{host_id}", project.environment_id)),
-                |r| r.summary.id,
-            );
-        let prior = sessions.remove(&id);
-        let full_snapshot = value.get("session").is_some_and(Value::is_object);
-        let revision = value["revision"].as_u64();
-        // Unknown versions remain supported for older hosts, but cannot
-        // supersede state after this binding has observed an ordered revision.
-        if revision.is_none()
-            && prior
-                .as_ref()
-                .is_some_and(|remote| remote.host_revision.is_some())
-        {
-            return Ok(prior.unwrap().summary);
-        }
-        if let (Some(prior), Some(revision)) = (&prior, revision) {
-            if prior.host_revision.is_some_and(|known| revision < known)
-                || (prior.host_revision == Some(revision)
-                    && (!full_snapshot || prior.configuration_revision == Some(revision)))
-            {
-                return Ok(prior.summary.clone());
-            }
-        }
-        let previous = prior.as_ref().map(|remote| &remote.summary);
-        let summary = Session {
-            id,
-            title: host["title"]
-                .as_str()
-                .or_else(|| previous.map(|summary| summary.title.as_str()))
-                .unwrap_or("Remote session")
-                .into(),
-            provider: host["harness"]
-                .as_str()
-                .or_else(|| previous.map(|summary| summary.provider.as_str()))
-                .unwrap_or("codex")
-                .into(),
-            cwd: project.key.clone(),
-            provider_id: host.get("providerSessionId").map_or_else(
-                || previous.and_then(|summary| summary.provider_id.clone()),
-                |value| value.as_str().map(str::to_owned),
-            ),
-            has_messages: host.get("blocks").and_then(Value::as_array).map_or_else(
-                || previous.is_none_or(|summary| summary.has_messages),
-                |b| !b.is_empty(),
-            ),
-            updated_at: value["updatedAt"]
-                .as_u64()
-                .or_else(|| previous.map(|summary| summary.updated_at))
-                .unwrap_or(0),
-            archived: value["archived"]
-                .as_bool()
-                .or_else(|| previous.map(|summary| summary.archived))
-                .unwrap_or(false),
-            pinned: value["pinned"]
-                .as_bool()
-                .or_else(|| previous.map(|summary| summary.pinned))
-                .unwrap_or(false),
-            work_item: host.get("linkedWorkItem").map_or_else(
-                || previous.and_then(|summary| summary.work_item.clone()),
-                |value| serde_json::from_value(value.clone()).ok(),
-            ),
-        };
-        let imported = host_settings(project, host);
-        let configuration = if full_snapshot {
-            Some(crate::remote::protocol::settings_configuration(
-                &summary.provider,
-                &imported,
-            ))
-        } else {
-            prior
-                .as_ref()
-                .and_then(|remote| remote.configuration.clone())
-        };
-        let existing = self.agent_settings(id)?;
-        let mut settings_to_save = None;
-        match existing {
-            None => settings_to_save = Some(imported),
-            Some(mut settings) if full_snapshot => {
-                let pending = prior
-                    .as_ref()
-                    .is_some_and(|remote| !remote.outbox.is_empty() || !remote.uploads.is_empty());
-                let local =
-                    crate::remote::protocol::settings_configuration(&summary.provider, &settings);
-                let unchanged = prior
-                    .as_ref()
-                    .and_then(|remote| remote.configuration.as_ref())
-                    .map_or(settings.revision == 0, |baseline| baseline == &local);
-                if !pending
-                    && unchanged
-                    && (configuration.as_ref() != Some(&local)
-                        || settings.worktree_cwd != imported.worktree_cwd)
-                {
-                    adopt_host_configuration(&mut settings, imported);
-                    settings_to_save = Some(settings);
-                }
-            }
-            _ => {}
-        }
-        if let Some(settings) = settings_to_save {
-            self.save_agent_settings(id, &settings)?;
-        }
-        let remote = RemoteSession {
-            summary: summary.clone(),
-            project: project.clone(),
-            session_id: Some(host_id.into()),
-            outbox: prior.as_ref().map(|r| r.outbox.clone()).unwrap_or_default(),
-            uploads: prior
-                .as_ref()
-                .map(|r| r.uploads.clone())
-                .unwrap_or_default(),
-            rejected: prior.as_ref().and_then(|remote| remote.rejected.clone()),
-            configuration,
-            host_revision: revision
-                .or_else(|| prior.as_ref().and_then(|remote| remote.host_revision)),
-            configuration_revision: if full_snapshot {
-                revision
-            } else {
-                prior
-                    .as_ref()
-                    .and_then(|remote| remote.configuration_revision)
-            },
-            running: value["status"].as_str().map_or_else(
-                || prior.as_ref().is_some_and(|remote| remote.running),
-                |status| status == "running",
-            ),
-            needs_input: if host.get("needsInput").is_some()
-                || host.get("pendingQuestion").is_some()
-                || host.get("blocks").is_some()
-            {
-                host["needsInput"] == true
-                    || host["pendingQuestion"].is_object()
-                    || host["blocks"].as_array().is_some_and(|blocks| {
-                        blocks.iter().any(|b| {
-                            b["approval"].is_object()
-                                && b["approval"].get("decided").is_none_or(Value::is_null)
-                        })
-                    })
-            } else {
-                prior.as_ref().is_some_and(|remote| remote.needs_input)
-            },
-        };
-        sessions.insert(id, remote);
-        self.save_setting(
-            SESSIONS,
-            &serde_json::to_string(&sessions).map_err(|e| e.to_string())?,
-        )?;
         Ok(summary)
     }
     pub fn project_remote_history(
@@ -634,13 +430,7 @@ impl Store {
                 json!({"sessionId": session_id,"projectId": remote.project.project_id}),
             )?;
         }
-        let mut sessions = self.remote_sessions()?;
-        sessions.remove(&id);
-        self.hide_legacy_remote_sessions([id])?;
-        self.save_setting(
-            SESSIONS,
-            &serde_json::to_string(&sessions).map_err(|e| e.to_string())?,
-        )
+        self.forget_remote_binding(id)
     }
 }
 

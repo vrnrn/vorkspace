@@ -48,6 +48,8 @@ Temporary downloads share a size budget. If it is busy, retry after another down
 
 A slow reply from the host cannot undo newer status or settings. Partial chat lists can be filled in by a matching complete reply without treating missing fields as deleted.
 
+The desktop saves a refreshed list of remote chats all at once. If a chat changes while that list is on the way, the newer local entry stays. Drafts, uploads, and messages you can recover stay available when a chat disappears from the remote list.
+
 When a message includes a ticket reference, the app can give its details to the remote agent while your chat still shows what you typed. The remote computer needs an updated host for this. Older hosts give a clear upgrade message before the app sends that request or its attachments. Saved drafts keep your original wording.
 
 To check changes to the host, run `npm run host:build`, then `npm run test:host`, then `npm run check`.

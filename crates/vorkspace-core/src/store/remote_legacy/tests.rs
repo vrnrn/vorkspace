@@ -188,8 +188,13 @@ fn native_host_refresh_reuses_legacy_handle_and_deletion_cannot_resurrect_shell_
     let prefs = Arc::new(preferences(&original, &blank_original));
     let store = Store::open_vorkspace_with_preferences_for_test(&path, prefs).unwrap();
     let project = store.remote_projects().unwrap()[PROJECT].clone();
-    let refreshed=store.register_remote_summary(&project,&json!({"id":"host-session","title":"Fresh host title","harness":"codex","updatedAt":456})).unwrap();
-    assert_eq!(refreshed.id, bound);
+    let baseline = store.remote_listing_baseline(&project).unwrap();
+    let refreshed = store.apply_remote_listing(
+        &project,
+        &[json!({"id":"host-session","title":"Fresh host title","harness":"codex","updatedAt":456})],
+        &baseline,
+    ).unwrap();
+    assert_eq!(refreshed.entries[0].summary.id, bound);
     assert_eq!(
         store
             .sessions()
@@ -199,9 +204,11 @@ fn native_host_refresh_reuses_legacy_handle_and_deletion_cannot_resurrect_shell_
             .count(),
         1
     );
-    store
-        .prune_remote_sessions(&project, &HashSet::new())
+    let baseline = store.remote_listing_baseline(&project).unwrap();
+    let deleted = store
+        .apply_remote_listing(&project, &[], &baseline)
         .unwrap();
+    assert_eq!(deleted.removed, [bound]);
     assert!(store.remote_session(bound).unwrap().is_none());
     assert!(!store.sessions().unwrap().iter().any(|row| row.id == bound));
     let source_id: String = store

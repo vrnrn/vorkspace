@@ -150,10 +150,10 @@ fn a_listing_cannot_prune_a_binding_created_or_updated_while_it_was_pending() {
     let mut newer = snapshot("current");
     newer["revision"] = json!(100);
     store.register_remote_summary(&project, &newer).unwrap();
-    let removed = store
-        .prune_remote_listing(&project, &Default::default(), &baseline)
+    let listing = store
+        .apply_remote_listing(&project, &[], &baseline)
         .unwrap();
-    assert_eq!(removed, [gone.id]);
+    assert_eq!(listing.removed, [gone.id]);
     assert!(store.remote_session(current.id).unwrap().is_some());
     assert!(store.remote_session(new.id).unwrap().is_some());
 }
@@ -175,20 +175,77 @@ fn pruning_external_deletions_keeps_pending_and_unbound_sessions() {
     let present = store
         .register_remote_summary(&project, &snapshot("present"))
         .unwrap();
+    let rejected = store
+        .register_remote_summary(&project, &snapshot("rejected"))
+        .unwrap();
+    let mut rejected_binding = store.remote_session(rejected.id).unwrap().unwrap();
+    rejected_binding.rejected = Some(json!({"commands":[{"text":"Keep this original"}]}));
+    store.save_remote_session(&rejected_binding).unwrap();
     let other = self::project(&store, "other-env");
     let elsewhere = store
         .register_remote_summary(&other, &snapshot("gone"))
         .unwrap();
-    store
-        .prune_remote_sessions(
+    let baseline = store.remote_listing_baseline(&project).unwrap();
+    let listing = store
+        .apply_remote_listing(
             &project,
-            &std::collections::HashSet::from(["present".into()]),
+            &[json!({"id":"present","revision":3,"title":"Stale","status":"running"})],
+            &baseline,
         )
         .unwrap();
+    assert_eq!(listing.removed, [gone.id]);
+    assert_eq!(listing.entries[0].summary, present);
+    assert!(!listing.entries[0].running);
     assert!(store.remote_session(gone.id).unwrap().is_none());
-    for id in [blank.id, pending.id, present.id, elsewhere.id] {
+    for id in [blank.id, pending.id, present.id, rejected.id, elsewhere.id] {
         assert!(store.remote_session(id).unwrap().is_some());
     }
+}
+
+#[test]
+fn listing_and_seed_preferences_publish_together_after_every_row_is_valid() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("vorkspace.db");
+    let store = Store::open_vorkspace(&path).unwrap();
+    let project = project(&store, "env");
+    let broken = store
+        .register_remote_summary(&project, &snapshot("broken"))
+        .unwrap();
+    let baseline = store.remote_listing_baseline(&project).unwrap();
+    let broken_key = agent_key(broken.id);
+    store.save_setting(&broken_key, "{").unwrap();
+    let sidecar = path.with_file_name("vorkspace.db.gpui.json");
+    let before = std::fs::read(&sidecar).unwrap();
+    let fresh = json!({"id":"fresh","revision":1,"title":"New","status":"running","needsInput":true,"draft":true});
+    let changed = json!({"id":"broken","revision":5,"title":"Changed"});
+
+    let err = store
+        .apply_remote_listing(&project, &[fresh.clone(), changed.clone()], &baseline)
+        .unwrap_err();
+    assert!(err.starts_with("Cannot read remote settings"));
+    assert_eq!(std::fs::read(&sidecar).unwrap(), before);
+    assert_eq!(store.sessions().unwrap(), [broken.clone()]);
+
+    store.save_setting(&broken_key, "{}").unwrap();
+    let listing = store
+        .apply_remote_listing(&project, &[fresh, changed], &baseline)
+        .unwrap();
+    assert!(listing.removed.is_empty());
+    let id = listing.entries[0].summary.id;
+    assert!(listing.entries[0].running && listing.entries[0].needs_input);
+    assert!(listing.entries[0].draft);
+    drop(store);
+    let reopened = Store::open_vorkspace(&path).unwrap();
+    assert!(reopened.agent_preferences(id).unwrap().is_some());
+    assert_eq!(
+        reopened
+            .remote_session(broken.id)
+            .unwrap()
+            .unwrap()
+            .summary
+            .title,
+        "Changed"
+    );
 }
 
 #[test]

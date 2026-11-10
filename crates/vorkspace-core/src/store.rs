@@ -24,7 +24,7 @@ mod peer_history;
 mod remote;
 mod remote_legacy;
 mod vorkspace_import;
-pub use remote::{RemoteProject, RemoteSession, RemoteUpload};
+pub use remote::{RemoteListing, RemoteProject, RemoteSession, RemoteUpload};
 pub(crate) use shared::handle as desktop_session_handle;
 mod session_metadata;
 pub use session_metadata::{SessionMetadata, SessionSidebarMetadata};
@@ -419,31 +419,16 @@ impl Store {
         id: i64,
         include_turns: bool,
     ) -> Result<Option<crate::agent::Settings>, String> {
-        let remote = id < 0 || self.remote_session(id)?.is_some();
-        if remote {
-            if let Some(raw) = self.setting(&format!("remote-agent:{id}"))? {
-                return serde_json::from_str(&raw)
-                    .map(Some)
-                    .map_err(|e| format!("Cannot read remote settings: {e}"));
-            }
-            if id < 0 || self.shared.is_none() {
-                return Ok(None);
-            }
+        if id < 0 || self.remote_session(id)?.is_some() {
+            let raw = self.setting(&remote::agent_key(id))?;
+            return self.read_remote_agent_settings(id, raw.as_deref(), include_turns);
         }
         if self.shared.is_some() {
-            let mut settings = if include_turns {
-                self.shared_agent(id)?
+            return if include_turns {
+                self.shared_agent(id)
             } else {
-                self.shared_agent_preferences(id)?
+                self.shared_agent_preferences(id)
             };
-            if remote {
-                if let Some(settings) = settings.as_mut() {
-                    if settings.worktree_cwd.is_none() {
-                        settings.worktree_cwd = self.legacy_remote_worktree(id)?;
-                    }
-                }
-            }
-            return Ok(settings);
         }
 
         use rusqlite::OptionalExtension;
@@ -561,7 +546,7 @@ impl Store {
     ) -> Result<(), String> {
         if id < 0 || self.remote_session(id)?.is_some() {
             return self.save_setting(
-                &format!("remote-agent:{id}"),
+                &remote::agent_key(id),
                 &serde_json::to_string(settings).map_err(|e| e.to_string())?,
             );
         }

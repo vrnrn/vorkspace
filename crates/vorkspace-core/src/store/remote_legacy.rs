@@ -3,9 +3,8 @@
 use super::{desktop_session_handle, RemoteSession, Session, Store};
 use rusqlite::OptionalExtension;
 use serde_json::{json, Value};
-use std::collections::{BTreeMap, HashSet};
+use std::collections::BTreeMap;
 
-const HIDDEN: &str = "remote-hidden-legacy.v1";
 const OWNERS: &str = "remote-legacy-command-owners.v1";
 
 impl Store {
@@ -343,23 +342,6 @@ impl Store {
                     ))
                 }
             }))
-    }
-
-    pub(super) fn hidden_legacy_remote_sessions(&self) -> Result<HashSet<i64>, String> {
-        self.setting(HIDDEN)?
-            .map(|raw| serde_json::from_str(&raw).map_err(|error| error.to_string()))
-            .unwrap_or_else(|| Ok(HashSet::new()))
-    }
-    pub(super) fn hide_legacy_remote_sessions(
-        &self,
-        ids: impl IntoIterator<Item = i64>,
-    ) -> Result<(), String> {
-        let mut hidden = self.hidden_legacy_remote_sessions()?;
-        hidden.extend(ids.into_iter().filter(|id| *id >= 0));
-        self.save_setting(
-            HIDDEN,
-            &serde_json::to_string(&hidden).map_err(|error| error.to_string())?,
-        )
     }
 }
 
