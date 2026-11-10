@@ -1,7 +1,7 @@
 //! Host-owned sessions keep only their desktop identity and command receipts here.
 //! Transcripts remain on the host and use the same lossless block projection as
 //! desktop conversations; no remote row is inserted into the local session table.
-use super::{shared, Session, Store};
+use super::{remote_legacy::OWNERS, shared, Session, Store};
 use crate::{
     agent::{Settings, TurnInfo},
     remote::{Connections, Machine},
@@ -47,7 +47,7 @@ pub struct RemoteProject {
 }
 
 /// Local bytes needed to retry the same journaled attachment references.
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct RemoteUpload {
     pub command_id: String,
@@ -86,6 +86,13 @@ pub struct RemoteSession {
     pub needs_input: bool,
 }
 impl RemoteSession {
+    pub fn same_binding(&self, other: &Self) -> bool {
+        self.summary.id == other.summary.id
+            && self.session_id == other.session_id
+            && self.project.environment_id == other.project.environment_id
+            && self.project.project_id == other.project.project_id
+    }
+
     pub fn machine(&self, client: &Connections) -> Result<Machine, String> {
         client
             .list()?
@@ -301,6 +308,15 @@ impl Store {
 
     pub fn remote_session(&self, id: i64) -> Result<Option<RemoteSession>, String> {
         let mut stored = self.stored_remote_sessions()?;
+        self.take_remote_session(id, &mut stored, || self.hidden_legacy_remote_sessions())
+    }
+
+    fn take_remote_session(
+        &self,
+        id: i64,
+        stored: &mut BTreeMap<i64, RemoteSession>,
+        hidden: impl FnOnce() -> Result<HashSet<i64>, String>,
+    ) -> Result<Option<RemoteSession>, String> {
         if let Some(remote) = stored.remove(&id) {
             if remote
                 .rejected
@@ -315,7 +331,7 @@ impl Store {
             }
             return Ok(Some(remote));
         }
-        if id >= 0 && !self.hidden_legacy_remote_sessions()?.contains(&id) {
+        if id >= 0 && !hidden()?.contains(&id) {
             if let Some(legacy) = self.legacy_remote_session(id)? {
                 if let Some(mut saved) = legacy
                     .session_id
@@ -336,43 +352,141 @@ impl Store {
         }
         Ok(None)
     }
+
+    fn edit_remote_session(
+        &self,
+        id: i64,
+        edit: impl FnOnce(Option<RemoteSession>) -> Result<Option<RemoteSession>, String>,
+    ) -> Result<Option<RemoteSession>, String> {
+        self.update_settings(|settings| {
+            let mut stored = decode_sessions(settings.get(SESSIONS).map(String::as_str))?;
+            let current = self.take_remote_session(id, &mut stored, || {
+                decode_hidden(settings.get(HIDDEN).map(String::as_str))
+            })?;
+            let Some(next) = edit(current)? else {
+                return Ok((None, Vec::new()));
+            };
+            if id >= 0 && next.session_id.is_some() {
+                stored.retain(|_, existing| {
+                    existing.project.environment_id != next.project.environment_id
+                        || existing.session_id != next.session_id
+                });
+            }
+            let claim =
+                self.legacy_remote_claim(&next, settings.get(OWNERS).map(String::as_str))?;
+            stored.insert(id, next);
+            let encoded = serde_json::to_string(&stored).map_err(|error| error.to_string())?;
+            let mut writes = vec![(SESSIONS.into(), encoded)];
+            if let Some(claim) = claim {
+                writes.push((OWNERS.into(), claim));
+            }
+            Ok((stored.remove(&id), writes))
+        })
+    }
+
     pub fn save_remote_session(&self, session: &RemoteSession) -> Result<(), String> {
-        self.claim_legacy_remote_commands(session)?;
-        let mut sessions = self.stored_remote_sessions()?;
-        if session.summary.id >= 0 && session.session_id.is_some() {
-            sessions.retain(|id, existing| {
-                *id == session.summary.id
-                    || existing.project.environment_id != session.project.environment_id
-                    || existing.session_id != session.session_id
-            });
-        }
-        let mut next = session.clone();
-        if let Some(current) = sessions.get(&session.summary.id) {
-            if current.session_id == next.session_id
-                && current.project.environment_id == next.project.environment_id
-            {
-                // The command journal owns outbox/receipt transitions, while
-                // host snapshots own versioned metadata. A slow receipt must
-                // not restore the worker's older view of that metadata.
-                if current.host_revision.is_some() && next.host_revision < current.host_revision {
+        self.edit_remote_session(session.summary.id, |current| {
+            let mut next = session.clone();
+            if let Some(current) = current.filter(|current| current.same_binding(&next)) {
+                // Host observations can commit while a command is in flight.
+                // Legacy writes still preserve newer revisioned metadata.
+                if next.host_revision < current.host_revision {
                     next.host_revision = current.host_revision;
-                    next.summary = current.summary.clone();
+                    next.summary = current.summary;
                     next.running = current.running;
                     next.needs_input = current.needs_input;
                 }
-                if current.configuration_revision.is_some()
-                    && next.configuration_revision < current.configuration_revision
-                {
+                if next.configuration_revision < current.configuration_revision {
                     next.configuration_revision = current.configuration_revision;
-                    next.configuration = current.configuration.clone();
+                    next.configuration = current.configuration;
                 }
             }
-        }
-        sessions.insert(session.summary.id, next);
-        self.save_setting(
-            SESSIONS,
-            &serde_json::to_string(&sessions).map_err(|e| e.to_string())?,
-        )
+            Ok(Some(next))
+        })
+        .map(|_| ())
+    }
+
+    /// Publish the command journal only if its exact admitted base still owns
+    /// this desktop handle. Host observations may advance independently.
+    pub fn commit_remote_journal(
+        &self,
+        before: &RemoteSession,
+        next: RemoteSession,
+    ) -> Result<RemoteSession, String> {
+        self.edit_remote_session(before.summary.id, |current| {
+            let mut current = current
+                .filter(|current| {
+                    current.same_binding(before)
+                        && current.summary.provider == before.summary.provider
+                        && current.outbox == before.outbox
+                        && current.uploads == before.uploads
+                        && current.rejected == before.rejected
+                })
+                .ok_or("The local remote command journal changed. Refresh the conversation before retrying.")?;
+            if current.session_id.is_some() && current.session_id != next.session_id {
+                return Err("A remote receipt cannot change an existing session binding".into());
+            }
+            current.session_id = next.session_id;
+            current.outbox = next.outbox;
+            current.uploads = next.uploads;
+            current.rejected = next.rejected;
+            if next.summary.has_messages != before.summary.has_messages {
+                current.summary.has_messages = next.summary.has_messages;
+            }
+            if next.summary.updated_at != before.summary.updated_at {
+                current.summary.updated_at = current.summary.updated_at.max(next.summary.updated_at);
+            }
+            Ok(Some(current))
+        })?
+        .ok_or_else(|| "Remote journal did not publish".into())
+    }
+
+    /// A live poll owns Host metadata at its observed revision. It never
+    /// republishes the command state that happened to be present at admission.
+    pub fn observe_remote_activity(
+        &self,
+        binding: &RemoteSession,
+        snapshot: &Value,
+        needs_input: bool,
+    ) -> Result<(), String> {
+        self.edit_remote_session(binding.summary.id, |current| {
+            let mut current = current
+                .filter(|current| current.same_binding(binding))
+                .ok_or("The observed remote conversation changed or was removed")?;
+            let session = &snapshot["session"];
+            if session["id"].as_str() != current.session_id.as_deref()
+                || snapshot["projectId"]
+                    .as_str()
+                    .is_some_and(|project| project != current.project.project_id)
+            {
+                return Err("Host returned activity for another conversation".into());
+            }
+            let revision = snapshot["revision"].as_u64();
+            if revision < current.host_revision {
+                return Ok(None);
+            }
+            let running = snapshot["status"] == "running";
+            let summary = catalog::host_summary(
+                &current.project,
+                current.summary.id,
+                snapshot,
+                session,
+                Some(&current.summary),
+            );
+            if revision == current.host_revision
+                && running == current.running
+                && needs_input == current.needs_input
+                && summary == current.summary
+            {
+                return Ok(None);
+            }
+            current.host_revision = revision;
+            current.running = running;
+            current.needs_input = needs_input;
+            current.summary = summary;
+            Ok(Some(current))
+        })
+        .map(|_| ())
     }
     pub fn sessions(&self) -> Result<Vec<Session>, String> {
         let (hidden, remote) = self.read_remote_catalog()?;
@@ -449,30 +563,53 @@ impl Store {
         Ok((history, turns))
     }
     pub fn patch_remote_session(&self, id: i64, patch: Value) -> Result<(), String> {
-        let mut remote = self
+        let remote = self
             .remote_session(id)?
             .ok_or("Remote session no longer exists")?;
         if let Some(session_id) = &remote.session_id {
             let client = crate::remote::default_connections()?;
             let machine = remote.machine(&client)?;
-            let mut params = patch.clone();
+            let clear_link = patch.get("linkedWorkItem").is_some_and(Value::is_null);
+            let mut params = patch;
             params["sessionId"] = json!(session_id);
             params["projectId"] = json!(remote.project.project_id);
-            client.request(&machine.id, "sessions.update", params)?;
+            let mut receipt = client.request(&machine.id, "sessions.update", params)?;
+            if let Some(fields) = receipt.as_object_mut().filter(|_| clear_link) {
+                // Older Host versions omitted the cleared field in their receipt.
+                fields.entry("linkedWorkItem").or_insert(Value::Null);
+            }
+            self.observe_bound_remote_summary(&remote, &receipt)?;
+            return Ok(());
         }
-        if let Some(title) = patch["title"].as_str() {
-            remote.summary.title = title.into();
-        }
-        if let Some(archived) = patch["archived"].as_bool() {
-            remote.summary.archived = archived;
-        }
-        if let Some(pinned) = patch["pinned"].as_bool() {
-            remote.summary.pinned = pinned;
-        }
-        if let Some(item) = patch.get("linkedWorkItem") {
-            remote.summary.work_item = serde_json::from_value(item.clone()).ok();
-        }
-        self.save_remote_session(&remote)
+        self.edit_remote_session(id, |current| {
+            let mut current = current
+                .filter(|current| current.same_binding(&remote))
+                .ok_or("Remote conversation changed before the edit could be saved")?;
+            catalog::apply_card_fields(&mut current.summary, &patch, &patch);
+            Ok(Some(current))
+        })
+        .map(|_| ())
+    }
+
+    pub(super) fn change_remote_provider(
+        &self,
+        binding: &RemoteSession,
+        provider: &str,
+    ) -> Result<(), String> {
+        self.edit_remote_session(binding.summary.id, |current| {
+            let mut current = current
+                .filter(|current| current.same_binding(binding))
+                .ok_or("Remote conversation changed before the provider could be saved")?;
+            if current.summary.provider == provider {
+                return Ok(None);
+            }
+            if current.session_id.is_some() || !current.outbox.is_empty() {
+                return Err("Start a new remote conversation to change provider".into());
+            }
+            current.summary.provider = provider.into();
+            Ok(Some(current))
+        })
+        .map(|_| ())
     }
     pub fn delete_remote_session(&self, id: i64) -> Result<(), String> {
         let remote = self
@@ -487,7 +624,7 @@ impl Store {
                 json!({"sessionId": session_id,"projectId": remote.project.project_id}),
             )?;
         }
-        self.forget_remote_binding(id)
+        self.forget_remote_binding(&remote)
     }
 }
 

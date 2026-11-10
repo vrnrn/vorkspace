@@ -5,7 +5,14 @@ use rusqlite::OptionalExtension;
 use serde_json::{json, Value};
 use std::collections::BTreeMap;
 
-const OWNERS: &str = "remote-legacy-command-owners.v1";
+pub(super) const OWNERS: &str = "remote-legacy-command-owners.v1";
+
+fn decode_legacy_command_owners(raw: Option<&str>) -> Result<BTreeMap<String, i64>, String> {
+    raw.map(serde_json::from_str)
+        .transpose()
+        .map(Option::unwrap_or_default)
+        .map_err(|error| error.to_string())
+}
 
 impl Store {
     pub(super) fn legacy_remote_sessions(&self) -> Result<BTreeMap<i64, RemoteSession>, String> {
@@ -171,9 +178,7 @@ impl Store {
     }
 
     fn legacy_command_owners(&self) -> Result<BTreeMap<String, i64>, String> {
-        self.setting(OWNERS)?
-            .map(|raw| serde_json::from_str(&raw).map_err(|error| error.to_string()))
-            .unwrap_or_else(|| Ok(BTreeMap::new()))
+        decode_legacy_command_owners(self.setting(OWNERS)?.as_deref())
     }
 
     fn legacy_unbound_tabs(
@@ -223,21 +228,22 @@ impl Store {
 
     /// Record a deterministic legacy claim with the journal, so immutable old
     /// WebKit entries cannot later be adopted by another newly blank tab.
-    pub(super) fn claim_legacy_remote_commands(
+    pub(super) fn legacy_remote_claim(
         &self,
         remote: &RemoteSession,
-    ) -> Result<(), String> {
+        raw: Option<&str>,
+    ) -> Result<Option<String>, String> {
         let Some(preferences) = self.desktop_preferences() else {
-            return Ok(());
+            return Ok(None);
         };
         if remote.outbox.is_empty() {
-            return Ok(());
+            return Ok(None);
         }
         let prefix = format!(
             "vorkspace.remote-command.v1:{}:",
             json!([remote.project.key, remote.project.environment_id])
         );
-        let mut owners = self.legacy_command_owners()?;
+        let mut owners = decode_legacy_command_owners(raw)?;
         let mut changed = false;
         for (key, raw) in preferences
             .entries()
@@ -263,13 +269,9 @@ impl Store {
                 changed |= owners.insert(key.into(), remote.summary.id) != Some(remote.summary.id);
             }
         }
-        if changed {
-            self.save_setting(
-                OWNERS,
-                &serde_json::to_string(&owners).map_err(|error| error.to_string())?,
-            )?;
-        }
-        Ok(())
+        changed
+            .then(|| serde_json::to_string(&owners).map_err(|error| error.to_string()))
+            .transpose()
     }
 
     fn legacy_source_summary(&self, id: i64, original: &str) -> Result<Option<Session>, String> {

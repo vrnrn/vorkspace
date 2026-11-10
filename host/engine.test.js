@@ -455,7 +455,8 @@ describe("headless session ownership", () => {
     });
     expect(store.sync(id, initial.revision)).toMatchObject({ kind: "delta" });
     store.updateSession(id, { linkedWorkItem: null });
-    expect(store.summaries(project.id)[0].linkedWorkItem).toBeUndefined();
+    expect(store.summaries(project.id)[0].linkedWorkItem).toBeNull();
+    expect(store.session(id).session.linkedWorkItem).toBeNull();
     store.deleteSession(id);
     expect(store.summaries(project.id)).toEqual([]);
     expect(() => store.session(id)).toThrow("Session not found");

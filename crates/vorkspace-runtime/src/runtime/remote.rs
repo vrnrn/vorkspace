@@ -96,7 +96,7 @@ pub fn configure_saved(store: Database, id: i64) -> Result<(), String> {
         if binding.session_id.is_none() || !binding.outbox.is_empty() {
             return Ok(());
         }
-        (binding, store.agent_settings(id)?.unwrap_or_default())
+        (binding, store.agent_preferences(id)?.unwrap_or_default())
     };
     let client = vorkspace_core::remote::default_connections()?;
     let machine = binding.machine(&client)?;
@@ -104,22 +104,24 @@ pub fn configure_saved(store: Database, id: i64) -> Result<(), String> {
     if snapshot["status"] == "running" {
         return Ok(());
     }
-    let next = configure_command(
+    let configure = configure_command(
         &binding.summary.provider,
         &settings,
         binding.session_id.as_deref().unwrap(),
     )?;
-    if next["model"] == snapshot["session"]["model"]
-        && next["modelSettings"] == snapshot["session"]["modelSettings"]
-        && next["runtimeMode"] == snapshot["session"]["runtimeMode"]
+    if configure["model"] == snapshot["session"]["model"]
+        && configure["modelSettings"] == snapshot["session"]["modelSettings"]
+        && configure["runtimeMode"] == snapshot["session"]["runtimeMode"]
     {
         return Ok(());
     }
-    binding.outbox.push(next);
-    journal(&store, &binding)?;
+    let mut next = binding.clone();
+    next.outbox.push(configure);
+    commit(&store, &mut binding, next)?;
     dispatch_outbox(&client, &machine.id, &store, &mut binding).map(|_| ())
 }
 
+#[cfg(test)]
 fn journal(store: &Database, binding: &RemoteSession) -> Result<(), String> {
     locked(store)?.save_remote_session(binding)
 }
@@ -129,8 +131,7 @@ fn commit(
     binding: &mut RemoteSession,
     next: RemoteSession,
 ) -> Result<(), String> {
-    journal(store, &next)?;
-    *binding = next;
+    *binding = locked(store)?.commit_remote_journal(binding, next)?;
     Ok(())
 }
 /// The admitted turn retains its identity until the desktop detaches.
@@ -290,14 +291,12 @@ fn dispatch_control(
     let _guard = lock.lock().map_err(|_| "Remote session is unavailable")?;
     let mut current = locked(store)?
         .remote_session(binding.summary.id)?
-        .filter(|current| {
-            current.session_id == binding.session_id
-                && current.project.environment_id == binding.project.environment_id
-        })
+        .filter(|current| current.same_binding(binding))
         .ok_or("Remote conversation changed before the request could be sent")?;
     let index = current.outbox.len();
-    current.outbox.push(command);
-    journal(store, &current)?;
+    let mut next = current.clone();
+    next.outbox.push(command);
+    commit(store, &mut current, next)?;
     let result = dispatch_pending(client, machine, store, &mut current, index);
     *binding = current;
     result.map(|_| ())
@@ -633,6 +632,11 @@ pub fn run_with_client(
         }
         let machine = binding.machine(&client)?;
         if !attaching && !retrying {
+            if binding.summary.provider != summary.provider {
+                return Err(
+                    "Remote provider changed. Refresh the conversation before sending.".into(),
+                );
+            }
             if !binding.outbox.is_empty() {
                 return Err("A remote command needs confirmation. Choose Retry before sending another message.".into());
             }
@@ -695,6 +699,7 @@ pub fn run_with_client(
             if ticket_context.is_some() {
                 require_ticket_context(&descriptor)?;
             }
+            let before = binding.clone();
             if binding.session_id.is_none() {
                 let mut create = command("create", None);
                 create["projectId"] = json!(binding.project.project_id);
@@ -764,7 +769,7 @@ pub fn run_with_client(
             binding.rejected = None;
             binding.summary.has_messages = true;
             binding.summary.updated_at = vorkspace_core::time::now_ms();
-            journal(&store, &binding)?;
+            binding = locked(&store)?.commit_remote_journal(&before, binding)?;
         }
         let mut run = if attaching {
             Some(ObservedRun {
@@ -805,7 +810,6 @@ pub fn run_with_client(
                     .map_err(|_| "Window closed")?;
                     break;
                 }
-                let revision = snapshot["revision"].as_u64();
                 let host_running = snapshot["status"] == "running";
                 let running = host_running && run.is_some();
                 let current_approvals = approvals(snapshot);
@@ -860,20 +864,11 @@ pub fn run_with_client(
                     .cloned()
                     .collect();
                 seen_questions = question_ids;
-                // Keep the selected desktop handle when creation's receipt binds a
-                // new host session. Metadata refreshes find this binding by host ID.
-                binding.running = host_running;
-                binding.host_revision = revision.or(binding.host_revision);
-                binding.needs_input = !seen_approvals.is_empty() || !seen_questions.is_empty();
-                binding.summary.title = snapshot["session"]["title"]
-                    .as_str()
-                    .unwrap_or(&binding.summary.title)
-                    .into();
-                binding.summary.provider_id = next.provider_id.clone();
-                binding.summary.updated_at = snapshot["updatedAt"]
-                    .as_u64()
-                    .unwrap_or(binding.summary.updated_at);
-                journal(&store, &binding)?;
+                locked(&store)?.observe_remote_activity(
+                    &binding,
+                    snapshot,
+                    !seen_approvals.is_empty() || !seen_questions.is_empty(),
+                )?;
                 tx.send_blocking(next).map_err(|_| "Window closed")?;
                 if !running {
                     break;

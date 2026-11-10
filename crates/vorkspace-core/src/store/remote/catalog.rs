@@ -139,45 +139,13 @@ impl<'a> Catalog<'a> {
                 return Ok(());
             }
         }
-        let previous = prior.map(|remote| &remote.summary);
-        let summary = Session {
+        let summary = host_summary(
+            project,
             id,
-            title: host["title"]
-                .as_str()
-                .or_else(|| previous.map(|summary| summary.title.as_str()))
-                .unwrap_or("Remote session")
-                .into(),
-            provider: host["harness"]
-                .as_str()
-                .or_else(|| previous.map(|summary| summary.provider.as_str()))
-                .unwrap_or("codex")
-                .into(),
-            cwd: project.key.clone(),
-            provider_id: host.get("providerSessionId").map_or_else(
-                || previous.and_then(|summary| summary.provider_id.clone()),
-                |value| value.as_str().map(str::to_owned),
-            ),
-            has_messages: host.get("blocks").and_then(Value::as_array).map_or_else(
-                || previous.is_none_or(|summary| summary.has_messages),
-                |b| !b.is_empty(),
-            ),
-            updated_at: value["updatedAt"]
-                .as_u64()
-                .or_else(|| previous.map(|summary| summary.updated_at))
-                .unwrap_or(0),
-            archived: value["archived"]
-                .as_bool()
-                .or_else(|| previous.map(|summary| summary.archived))
-                .unwrap_or(false),
-            pinned: value["pinned"]
-                .as_bool()
-                .or_else(|| previous.map(|summary| summary.pinned))
-                .unwrap_or(false),
-            work_item: host.get("linkedWorkItem").map_or_else(
-                || previous.and_then(|summary| summary.work_item.clone()),
-                |value| serde_json::from_value(value.clone()).ok(),
-            ),
-        };
+            value,
+            host,
+            prior.map(|remote| &remote.summary),
+        );
         let imported = host_settings(project, host);
         let configuration = if full_snapshot {
             Some(crate::remote::protocol::settings_configuration(
@@ -316,6 +284,57 @@ fn in_project(remote: &RemoteSession, project: &RemoteProject) -> bool {
         && remote.project.project_id == project.project_id
 }
 
+pub(super) fn host_summary(
+    project: &RemoteProject,
+    id: i64,
+    value: &Value,
+    host: &Value,
+    previous: Option<&Session>,
+) -> Session {
+    let mut summary = previous.cloned().unwrap_or_else(|| Session {
+        id,
+        title: "Remote session".into(),
+        provider: "codex".into(),
+        cwd: project.key.clone(),
+        provider_id: None,
+        has_messages: true,
+        updated_at: 0,
+        archived: false,
+        pinned: false,
+        work_item: None,
+    });
+    summary.cwd.clone_from(&project.key);
+    if let Some(provider) = host["harness"].as_str() {
+        summary.provider = provider.into();
+    }
+    if let Some(provider_id) = host.get("providerSessionId") {
+        summary.provider_id = provider_id.as_str().map(str::to_owned);
+    }
+    if let Some(blocks) = host["blocks"].as_array() {
+        summary.has_messages = !blocks.is_empty();
+    }
+    if let Some(updated_at) = value["updatedAt"].as_u64() {
+        summary.updated_at = updated_at;
+    }
+    apply_card_fields(&mut summary, value, host);
+    summary
+}
+
+pub(super) fn apply_card_fields(summary: &mut Session, value: &Value, host: &Value) {
+    if let Some(title) = host["title"].as_str() {
+        summary.title = title.into();
+    }
+    if let Some(archived) = value["archived"].as_bool() {
+        summary.archived = archived;
+    }
+    if let Some(pinned) = value["pinned"].as_bool() {
+        summary.pinned = pinned;
+    }
+    if let Some(item) = host.get("linkedWorkItem") {
+        summary.work_item = serde_json::from_value(item.clone()).ok();
+    }
+}
+
 fn host_key(remote: &RemoteSession) -> Option<(String, String)> {
     Some((
         remote.project.environment_id.clone(),
@@ -343,24 +362,11 @@ impl Store {
         &self,
         edit: impl FnOnce(&mut Catalog<'_>) -> Result<T, String>,
     ) -> Result<T, String> {
-        let update = |sidecar: Option<&Sidecar>| {
-            let mut catalog = Catalog::load(self, sidecar)?;
+        self.update_settings(|settings| {
+            let mut catalog = Catalog::load(self, Some(settings))?;
             let result = edit(&mut catalog)?;
             Ok((result, catalog.writes()?))
-        };
-        if self.shared.is_some() {
-            self.shared_update_settings(|settings| update(Some(settings)))
-        } else {
-            let (result, writes) = update(None)?;
-            if !writes.is_empty() {
-                let values: Vec<_> = writes
-                    .iter()
-                    .map(|(key, value)| (key.as_str(), value.as_str()))
-                    .collect();
-                self.save_settings(&values)?;
-            }
-            Ok(result)
-        }
+        })
     }
 
     pub fn remote_listing_baseline(
@@ -467,10 +473,45 @@ impl Store {
         })
     }
 
-    pub(super) fn forget_remote_binding(&self, id: i64) -> Result<(), String> {
+    /// Publish a response only into the binding that admitted the request.
+    pub fn observe_bound_remote_summary(
+        &self,
+        binding: &RemoteSession,
+        value: &Value,
+    ) -> Result<RemoteSession, String> {
+        let session = value.get("session").filter(|host| host.is_object());
+        let host_id = host_identity(session.unwrap_or(value))?;
+        if Some(host_id) != binding.session_id.as_deref()
+            || value["projectId"]
+                .as_str()
+                .is_some_and(|project| project != binding.project.project_id)
+        {
+            return Err("Host returned metadata for another conversation".into());
+        }
         self.edit_remote_catalog(|catalog| {
-            catalog.sessions.remove(&id);
-            catalog.record_removal(id);
+            let id = binding.summary.id;
+            let project = &catalog
+                .sessions
+                .get(&id)
+                .filter(|current| current.same_binding(binding))
+                .ok_or("The observed remote conversation changed or was removed")?
+                .project
+                .clone();
+            catalog.import(project, id, host_id, value, session)?;
+            Ok(catalog.sessions[&id].clone())
+        })
+    }
+
+    pub(super) fn forget_remote_binding(&self, binding: &RemoteSession) -> Result<(), String> {
+        self.edit_remote_catalog(|catalog| {
+            let id = binding.summary.id;
+            if let Some(current) = catalog.sessions.get(&id) {
+                if !current.same_binding(binding) {
+                    return Err("Remote conversation changed before it could be removed".into());
+                }
+                catalog.sessions.remove(&id);
+                catalog.record_removal(id);
+            }
             Ok(())
         })
     }

@@ -72,20 +72,18 @@ impl Refresh {
             advanced = first_changed.is_some();
             let (latest, settings) = {
                 let store = locked(&database)?;
-                let mut latest = binding(&store, id)?;
                 // A deleted or rebound desktop handle cannot publish an
                 // observation admitted for its previous Host session.
-                if latest.session_id != before.session_id
-                    || latest.project.environment_id != before.project.environment_id
-                    || latest.project.project_id != before.project.project_id
-                {
-                    local = None;
-                    return Err("Remote session changed while loading".into());
-                }
-                if advanced && let Some(snapshot) = observation.snapshot() {
-                    let summary = store.register_remote_summary(&latest.project, snapshot)?;
-                    latest = binding(&store, summary.id)?;
-                }
+                let latest = if advanced && let Some(snapshot) = observation.snapshot() {
+                    store.observe_bound_remote_summary(before, snapshot)?
+                } else {
+                    let latest = binding(&store, id)?;
+                    if !latest.same_binding(before) {
+                        local = None;
+                        return Err("Remote session changed while loading".into());
+                    }
+                    latest
+                };
                 let settings = store
                     .agent_preferences(latest.summary.id)?
                     .unwrap_or_default();

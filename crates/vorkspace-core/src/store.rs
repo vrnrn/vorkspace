@@ -44,6 +44,7 @@ use crate::transcript::{Row, Transcript};
 pub use edit::EditSnapshot;
 use rusqlite::{params, Connection};
 pub use side_threads::DesktopSideThread;
+use std::collections::BTreeMap;
 use std::path::Path;
 pub use vorkspace_import::{vorkspace_database, ImportReport};
 
@@ -390,6 +391,45 @@ impl Store {
         }
         transaction.commit().map_err(|e| e.to_string())
     }
+
+    /// Read and update related settings under the same durable write fence.
+    fn update_settings<T>(
+        &self,
+        update: impl FnOnce(&BTreeMap<String, String>) -> Result<(T, Vec<(String, String)>), String>,
+    ) -> Result<T, String> {
+        if self.shared.is_some() {
+            return self.shared_update_settings(update);
+        }
+        let tx = rusqlite::Transaction::new_unchecked(
+            &self.conn,
+            rusqlite::TransactionBehavior::Immediate,
+        )
+        .map_err(|error| error.to_string())?;
+        let snapshot = {
+            let mut query = tx
+                .prepare("SELECT key,value FROM native_settings")
+                .map_err(|error| error.to_string())?;
+            let rows = query
+                .query_map([], |row| Ok((row.get(0)?, row.get(1)?)))
+                .map_err(|error| error.to_string())?;
+            rows.collect::<rusqlite::Result<BTreeMap<_, _>>>()
+                .map_err(|error| error.to_string())?
+        };
+        let (result, writes) = update(&snapshot)?;
+        if !writes.is_empty() {
+            self.mark_attachment_activity();
+        }
+        for (key, value) in writes {
+            tx.execute(
+                "INSERT INTO native_settings(key,value) VALUES(?1,?2)
+                 ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+                params![key, value],
+            )
+            .map_err(|error| error.to_string())?;
+        }
+        tx.commit().map_err(|error| error.to_string())?;
+        Ok(result)
+    }
     pub fn ui_state(&self) -> Result<Option<String>, String> {
         if self.shared.is_some() {
             return self.shared_ui_state();
@@ -586,16 +626,8 @@ impl Store {
         self.save_agent_settings(id, settings)
     }
     pub fn change_provider(&self, id: i64, provider: &str) -> Result<(), String> {
-        if let Some(mut remote) = self.remote_session(id)? {
-            if remote.summary.provider != provider {
-                // The host fixes the harness at creation, as React's remote view does.
-                if remote.session_id.is_some() {
-                    return Err("Start a new remote conversation to change provider".into());
-                }
-                remote.summary.provider = provider.into();
-                self.save_remote_session(&remote)?;
-            }
-            return Ok(());
+        if let Some(remote) = self.remote_session(id)? {
+            return self.change_remote_provider(&remote, provider);
         }
         if self.shared.is_some() {
             return self.shared_change_provider(id, provider);

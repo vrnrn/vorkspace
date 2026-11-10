@@ -380,7 +380,7 @@ export class HostStore {
             ...(patch.title === undefined ? {} : { title: patch.title.trim() }),
             ...(patch.linkedWorkItem === undefined
               ? {}
-              : { linkedWorkItem: patch.linkedWorkItem ?? undefined }),
+              : { linkedWorkItem: patch.linkedWorkItem }),
           },
         },
         { type: "session.metadata", patch },

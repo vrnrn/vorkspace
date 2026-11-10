@@ -83,6 +83,103 @@ fn host_refresh_preserves_selected_handle_pending_commands_and_unsent_settings()
 }
 
 #[test]
+fn independent_stores_keep_remote_commands_and_host_metadata_at_their_own_revision() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("vorkspace.db");
+    let observing = Store::open_vorkspace(&path).unwrap();
+    let sending = Store::open_vorkspace(&path).unwrap();
+    let project = project(&observing, "env");
+    let id = observing
+        .register_remote_summary(&project, &snapshot("session"))
+        .unwrap()
+        .id;
+    let adjacent = observing
+        .register_remote_summary(&project, &snapshot("adjacent"))
+        .unwrap();
+    let admitted = observing.remote_session(id).unwrap().unwrap();
+    let mut pending = admitted.clone();
+    pending
+        .outbox
+        .push(json!({"type":"send","commandId":"kept","text":"unsent"}));
+    pending.uploads.push(RemoteUpload {
+        command_id: "kept".into(),
+        id: "attachment".into(),
+        path: dir.path().join("photo.png"),
+        size: 3,
+    });
+    let pending = sending.commit_remote_journal(&admitted, pending).unwrap();
+
+    let mut running = snapshot("session");
+    running["revision"] = json!(6);
+    running["status"] = json!("running");
+    running["pinned"] = json!(true);
+    running["session"]["title"] = json!("Renamed on Host");
+    observing
+        .observe_remote_activity(&admitted, &running, true)
+        .unwrap();
+    observing
+        .observe_remote_activity(&admitted, &snapshot("session"), false)
+        .unwrap();
+    assert!(observing
+        .commit_remote_journal(&admitted, admitted.clone())
+        .is_err());
+
+    let mut accepted = pending.clone();
+    accepted.outbox.clear();
+    accepted.uploads.clear();
+    let accepted = sending.commit_remote_journal(&pending, accepted).unwrap();
+    assert_eq!(accepted.host_revision, Some(6));
+    assert!(accepted.running && accepted.needs_input && accepted.summary.pinned);
+    assert_eq!(accepted.summary.title, "Renamed on Host");
+    assert!(accepted.outbox.is_empty() && accepted.uploads.is_empty());
+    assert_eq!(
+        observing
+            .remote_session(adjacent.id)
+            .unwrap()
+            .unwrap()
+            .summary,
+        adjacent
+    );
+
+    sending.forget_remote_binding(&accepted).unwrap();
+    assert!(observing
+        .observe_remote_activity(&admitted, &running, true)
+        .is_err());
+    assert!(observing
+        .observe_bound_remote_summary(&admitted, &running)
+        .is_err());
+    assert!(observing.remote_session(id).unwrap().is_none());
+}
+
+#[test]
+fn a_remote_metadata_receipt_cannot_replace_a_newer_host_summary_or_local_journal() {
+    let store = Store::open(Path::new(":memory:")).unwrap();
+    let project = project(&store, "env");
+    let summary = store
+        .register_remote_summary(&project, &snapshot("session"))
+        .unwrap();
+    let admitted = store.remote_session(summary.id).unwrap().unwrap();
+    let mut pending = admitted.clone();
+    pending
+        .outbox
+        .push(json!({"type":"send","commandId":"pending"}));
+    let pending = store.commit_remote_journal(&admitted, pending).unwrap();
+    let older = json!({"id":"session","projectId":"project","revision":5,"title":"Earlier edit"});
+    let newer = json!({"id":"session","projectId":"project","revision":6,"title":"Later edit"});
+    store
+        .observe_bound_remote_summary(&admitted, &newer)
+        .unwrap();
+    let current = store
+        .observe_bound_remote_summary(&admitted, &older)
+        .unwrap();
+    assert_eq!(current.summary.title, "Later edit");
+    assert_eq!(current.outbox, pending.outbox);
+    assert!(store
+        .observe_bound_remote_summary(&admitted, &json!({"id":"session","projectId":"other"}))
+        .is_err());
+}
+
+#[test]
 fn imported_host_handles_are_scoped_to_environment_and_use_remote_worktree_paths() {
     let store = Store::open(Path::new(":memory:")).unwrap();
     let one = project(&store, "one");
