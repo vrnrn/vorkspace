@@ -27,10 +27,11 @@ impl Shell {
         let project = live
             .map(|view| view.summary.cwd.as_str())
             .or_else(|| record.map(|row| row.summary.cwd.as_str()))?;
-        let checkout = record
-            .and_then(SessionRecord::worktree)
-            .or_else(|| live.and_then(|view| view.settings.worktree_cwd.as_deref()))
-            .unwrap_or(project);
+        let checkout = match record.and_then(|row| row.checkout.as_ref()) {
+            Some(checkout) => checkout.as_deref(),
+            None => live.and_then(|view| view.settings.worktree_cwd.as_deref()),
+        }
+        .unwrap_or(project);
         Some((project, checkout))
     }
 

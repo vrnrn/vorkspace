@@ -46,6 +46,21 @@ fn settings_projects_only_the_visible_page_and_reads_saved_checkout_identity(
                     .iter()
                     .any(|path| path == checkout)
             );
+
+            shell.sessions[&saved].update(cx, |view, _| {
+                view.settings.worktree_cwd = Some("/work/previous-checkout".into());
+            });
+            for (stored, expected) in [
+                (Some(None), project.as_str()),
+                (None, "/work/previous-checkout"),
+                (Some(Some(checkout.to_owned())), checkout),
+            ] {
+                shell.edit_session_record(saved, cx, |row| row.checkout = stored);
+                assert_eq!(
+                    shell.saved_session_scope(saved, cx),
+                    Some((project.as_str(), expected))
+                );
+            }
         })
         .unwrap();
 }
