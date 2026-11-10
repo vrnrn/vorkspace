@@ -1,5 +1,14 @@
 //! Submitting prompts and receiving a turn's updates.
 use super::*;
+use std::path::PathBuf;
+
+enum PromptSource<'a> {
+    User,
+    Bot {
+        message: &'a vorkspace_core::bot::Message,
+        mode: Option<&'a str>,
+    },
+}
 
 impl Conversation {
     pub(crate) fn quick_submit(
@@ -279,18 +288,44 @@ impl Conversation {
         }
     }
     pub(super) fn launch_prompt(&mut self, prompt: String, cx: &mut Context<Self>) {
-        if !self.team_dispatch && self.reject_user_entry(cx) {
-            return;
+        self.launch_turn(prompt, PromptSource::User, cx);
+    }
+
+    pub(super) fn launch_bot_prompt(
+        &mut self,
+        message: &vorkspace_core::bot::Message,
+        mode: Option<&str>,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        self.launch_turn(
+            message.text.clone(),
+            PromptSource::Bot { message, mode },
+            cx,
+        )
+    }
+
+    fn launch_turn(
+        &mut self,
+        prompt: String,
+        source: PromptSource<'_>,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        let from_user = matches!(source, PromptSource::User);
+        if from_user && self.reject_user_entry(cx) {
+            return false;
         }
         let kind = match self.execution_provider() {
             Ok(kind) => kind,
             Err(error) => {
                 self.status = error;
                 cx.notify();
-                return;
+                return false;
             }
         };
         if self.stopping {
+            if !from_user {
+                return false;
+            }
             let mode = if self.settings.orchestrator {
                 Some("orchestrator")
             } else if self.settings.plan {
@@ -313,27 +348,29 @@ impl Conversation {
                     self.follow_ups.requested = self.follow_ups.continuations.front().cloned();
                 }
             }
-            return;
+            return false;
         }
         if !self.history_ready() {
-            self.defer_history_action(move |this, cx| this.launch_prompt(prompt, cx), cx);
-            return;
+            if from_user {
+                self.defer_history_action(move |this, cx| this.launch_prompt(prompt, cx), cx);
+            }
+            return false;
         }
         if self.account_switching {
-            return;
+            return false;
         }
         if self.settings.account.id != vorkspace_core::accounts::DEFAULT
             && crate::accounts::get(cx)
                 .is_some_and(|center| !center.read(cx).book.exists(kind, &self.settings.account.id))
         {
             self.account_unavailable(cx);
-            return;
+            return false;
         }
         let view = cx.weak_entity();
         let Some(admission) = turn_driver::admit(&self.store, self.summary.id, view, cx) else {
             self.status = turn_driver::ALREADY_ACTIVE.into();
             cx.notify();
-            return;
+            return false;
         };
         self.settings.usage_limit = None;
         self.attach_account(cx);
@@ -357,6 +394,19 @@ impl Conversation {
         self.cancel = admission.cancel_handle();
         let summary = self.summary.clone();
         let mut settings = self.settings.clone();
+        if let PromptSource::Bot { message, mode } = source {
+            settings.bot_message_id = Some(message.id.clone());
+            settings.bot_sent_at = message.sent_at;
+            settings.internal_message = message.internal;
+            settings.attachments = message.attachments.iter().map(PathBuf::from).collect();
+            settings.prepared_prompt = message.prepared_prompt.clone();
+            settings.plan = mode == Some("plan");
+            settings.operator = mode == Some("operator");
+            settings.orchestrator = mode == Some("orchestrator");
+            self.planning_orchestration = settings.orchestrator;
+            self.orchestration_plan = None;
+            self.orchestration_error = None;
+        }
         settings.ticket_context = self.ticket_context.ready.take().map(Into::into);
         if let Some(model) = self.model_info() {
             for control in &model.controls {
@@ -423,7 +473,9 @@ impl Conversation {
         if settings.orchestrator {
             settings.plan = true;
             settings.operator = false;
-            self.settings.orchestrator = false;
+            if from_user {
+                self.settings.orchestrator = false;
+            }
         }
         if self.settings.handoff.take().is_some() {
             self.save_settings(cx);
@@ -457,6 +509,7 @@ impl Conversation {
         ));
         cx.emit(SessionChanged::Turn);
         cx.notify();
+        true
     }
     #[cfg(test)]
     pub(super) fn receive_turn_updates(

@@ -375,33 +375,7 @@ impl Conversation {
         {
             return false;
         }
-        self.settings.bot_message_id = Some(message.id.clone());
-        self.settings.bot_sent_at = message.sent_at;
-        self.settings.internal_message = message.internal;
-        self.settings.attachments = message.attachments.iter().map(PathBuf::from).collect();
-        let previous = (
-            self.settings.plan,
-            self.settings.operator,
-            self.settings.orchestrator,
-        );
-        self.settings.plan = mode == Some("plan");
-        self.settings.operator = mode == Some("operator");
-        self.settings.orchestrator = mode == Some("orchestrator");
-        self.planning_orchestration = self.settings.orchestrator;
-        self.orchestration_plan = None;
-        self.orchestration_error = None;
-        let previous_prepared = self.settings.prepared_prompt.take();
-        self.settings.prepared_prompt = message.prepared_prompt.clone();
-        self.team_dispatch = true;
-        self.launch_prompt(message.text.clone(), cx);
-        self.team_dispatch = false;
-        self.settings.prepared_prompt = previous_prepared;
-        (
-            self.settings.plan,
-            self.settings.operator,
-            self.settings.orchestrator,
-        ) = previous;
-        self.busy
+        self.launch_bot_prompt(message, mode, cx)
     }
     /// The user's own message joins the active turn through the provider's
     /// follow-up control, as in a session. Peer and automatic messages keep

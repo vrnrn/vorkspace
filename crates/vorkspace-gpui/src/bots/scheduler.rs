@@ -1561,7 +1561,7 @@ impl Bots {
             return;
         }
         if let Some(text) = self.running.get_mut(&session).and_then(|r| {
-            if r.mailbox.is_empty() {
+            if r.failure.is_some() || r.mailbox.is_empty() {
                 None
             } else {
                 Some(r.mailbox.remove(0))
@@ -1578,8 +1578,13 @@ impl Bots {
                 error: None,
                 attachments: Vec::new(),
             };
-            view.update(cx, |v, cx| v.bot_dispatch(&message, cx));
-            return;
+            if view.update(cx, |v, cx| v.bot_dispatch(&message, cx)) {
+                return;
+            }
+            if let Some(run) = self.running.get_mut(&session) {
+                run.failure =
+                    Some("The Habit could not start a reply to the delegated work".into());
+            }
         }
         if self
             .roster
