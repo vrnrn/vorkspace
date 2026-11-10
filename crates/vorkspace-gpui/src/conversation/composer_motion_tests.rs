@@ -93,7 +93,8 @@ fn composer_toolbar_selects_one_row_during_resize_and_preserves_draft(cx: &mut T
                             default: true,
                             tiers: Vec::new(),
                             controls: Vec::new(),
-                        }];
+                        }]
+                        .into();
                         cx.notify();
                     })
                     .unwrap();
@@ -173,7 +174,8 @@ fn compact_settings_keep_existing_actions_focus_and_anchor_on_resize(cx: &mut Te
                 default: true,
                 tiers: Vec::new(),
                 controls: Vec::new(),
-            }];
+            }]
+            .into();
             cx.notify();
         })
         .unwrap();
@@ -356,7 +358,8 @@ fn compact_bot_composer_keeps_queue_and_bot_settings_separate(cx: &mut TestAppCo
                 default: true,
                 tiers: Vec::new(),
                 controls: Vec::new(),
-            }];
+            }]
+            .into();
             cx.notify();
         })
         .unwrap();
@@ -440,7 +443,8 @@ fn native_narrow_composer_capture() {
                             default: true,
                             tiers: Vec::new(),
                             controls: Vec::new(),
-                        }];
+                        }]
+                        .into();
                         view
                     });
                     cx.new(|_| Capture(conversation))

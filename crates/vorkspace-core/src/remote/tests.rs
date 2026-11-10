@@ -270,3 +270,69 @@ fn public_machine_metadata_never_contains_the_token() {
     assert!(!value.contains("secret"));
     assert!(!value.contains("token"));
 }
+
+#[test]
+fn model_discovery_shares_the_project_and_respects_a_replaced_credential() {
+    let catalog = |model| {
+        json!({
+            "result": {"models": {"codex": [{"id":model,"name":model}]}, "errors":{}}
+        })
+    };
+    let (endpoint, received, server) = host_fixture(vec![
+        catalog("codex:first"),
+        catalog("codex:second"),
+        catalog("codex:new-account"),
+    ]);
+    let directory = tempfile::tempdir().unwrap();
+    let connection = Connections::new(directory.path());
+    let mut machine = StoredMachine {
+        id: "machine".into(),
+        name: "Fixture".into(),
+        endpoint,
+        environment_id: "fixture-host".into(),
+        token: "a".repeat(43),
+        ssh: None,
+    };
+    write(&connection.store_path(), std::slice::from_ref(&machine)).unwrap();
+    let project = |id: &str| RemoteProject {
+        key: "remote://fixture-host/project".into(),
+        environment_id: "fixture-host".into(),
+        project_id: id.into(),
+        cwd: "/project".into(),
+    };
+    let first = project("first");
+    let shared = std::thread::scope(|scope| {
+        let other = scope.spawn(|| connection.model_catalog(&first).unwrap());
+        let catalog = connection.model_catalog(&first).unwrap();
+        assert!(Arc::ptr_eq(&catalog, &other.join().unwrap()));
+        catalog
+    });
+    assert_eq!(
+        shared.models_for(crate::kind::Kind::Codex).unwrap()[0].id,
+        "codex:first"
+    );
+    let second = connection.model_catalog(&project("second")).unwrap();
+    assert_eq!(
+        second.models_for(crate::kind::Kind::Codex).unwrap()[0].id,
+        "codex:second"
+    );
+    machine.token = "b".repeat(43);
+    write(&connection.store_path(), std::slice::from_ref(&machine)).unwrap();
+    let replaced = connection.model_catalog(&first).unwrap();
+    assert_eq!(
+        replaced.models_for(crate::kind::Kind::Codex).unwrap()[0].id,
+        "codex:new-account"
+    );
+
+    server.join().unwrap();
+    let requests = received.into_iter().collect::<Vec<_>>();
+    assert_eq!(requests.len(), 3);
+    for (request, project) in requests.iter().zip(["first", "second", "first"]) {
+        assert_eq!(request.payload["method"], "models.list");
+        assert_eq!(request.payload["params"]["projectId"], project);
+        assert_eq!(request.payload["environmentId"], "fixture-host");
+    }
+    assert!(requests[2]
+        .headers
+        .contains(&format!("Bearer {}", machine.token)));
+}

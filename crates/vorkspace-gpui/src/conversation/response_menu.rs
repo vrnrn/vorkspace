@@ -7,7 +7,7 @@ use vorkspace_core::{
     response::{Target, TransferKind},
 };
 
-type Catalogs = Vec<(Kind, Option<Result<Vec<Model>, String>>)>;
+type Catalogs = Vec<(Kind, Option<Result<ModelRows, String>>)>;
 
 pub(super) struct ResponseMenu {
     pub(super) menu: Entity<Menu>,
@@ -30,22 +30,23 @@ impl Conversation {
         cx: &mut Context<Self>,
     ) {
         self.make_response_menu(turn, kind, anchor.clone(), None, window, cx);
-        let remote = self.is_remote().then(|| self.summary.cwd.clone());
+        let remote = self.host_models();
         let hidden = cx
             .try_global::<vorkspace_ui::preferences::Preferences>()
             .map(|prefs| prefs.hidden_providers.clone())
             .unwrap_or_default();
         let work = cx.background_executor().spawn(async move {
-            if let Some(project) = remote {
-                return catalog::remote_catalog(&project).map(|mut catalog| {
+            if let Some(host) = remote {
+                return host.read().map(|catalog| {
                     catalog
                         .providers
-                        .into_iter()
+                        .iter()
+                        .copied()
                         .map(|provider| {
-                            let rows = if let Some(error) = catalog.errors.remove(&provider) {
-                                Err(error)
+                            let rows = if let Some(error) = catalog.errors.get(&provider) {
+                                Err(error.clone())
                             } else {
-                                Ok(catalog.models.remove(&provider).unwrap_or_default())
+                                Ok(catalog.models.get(&provider).cloned().unwrap_or_default())
                             };
                             (provider, Some(rows))
                         })
@@ -134,7 +135,7 @@ impl Conversation {
                 (!self.is_remote())
                     .then(|| catalog::cached_models_for(provider, &profile))
                     .flatten()
-                    .map(Ok)
+                    .map(|rows| Ok(rows.into()))
             });
             let options = cached
                 .map(|result| self.response_model_items(turn, kind, provider, result, cx))
@@ -228,7 +229,7 @@ impl Conversation {
         let request = self.response_request;
         let work = cx
             .background_executor()
-            .spawn(async move { catalog::models_for(provider, &profile) });
+            .spawn(async move { catalog::models_for(provider, &profile).map(Into::into) });
         cx.spawn(async move |this, cx| {
             let result = work.await;
             let _ = this.update(cx, |this, cx| {
@@ -243,7 +244,7 @@ impl Conversation {
         request: Option<(usize, TransferKind, Instant)>,
         provider: Kind,
         menu: &Entity<Menu>,
-        result: Result<Vec<Model>, String>,
+        result: Result<ModelRows, String>,
         cx: &mut Context<Self>,
     ) {
         // A closed/reopened picker must not receive an older request.
@@ -273,7 +274,7 @@ impl Conversation {
         turn: usize,
         kind: TransferKind,
         provider: Kind,
-        result: Result<Vec<Model>, String>,
+        result: Result<ModelRows, String>,
         cx: &App,
     ) -> Vec<MenuItem> {
         let models = match result {
@@ -288,7 +289,7 @@ impl Conversation {
         let transcript = self.transcript.read(cx);
         let source = transcript.turns.get(&turn);
         let mut options = Vec::new();
-        for model in models {
+        for model in models.iter() {
             if cx
                 .try_global::<vorkspace_ui::preferences::Preferences>()
                 .is_some_and(|prefs| prefs.model_hidden(provider.id(), &model.id))

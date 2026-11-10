@@ -234,6 +234,27 @@ impl Store {
         self.remote_projects_from(self.setting(PROJECTS)?.as_deref())
     }
 
+    pub fn remote_project(&self, cwd: &str) -> Result<RemoteProject, String> {
+        let mut projects = self.remote_projects()?;
+        if let Some(project) = projects.remove(cwd) {
+            return Ok(project);
+        }
+        projects
+            .into_values()
+            .find(|project| {
+                project.key.trim_end_matches('/') == cwd.trim_end_matches('/')
+                    || crate::remote_path::remote_path(
+                        &project.environment_id,
+                        project.cwd.replace('\\', "/").trim_end_matches('/'),
+                    )
+                    .trim_end_matches('/')
+                        == cwd.trim_end_matches('/')
+            })
+            .ok_or_else(|| {
+                "Open this folder on its machine again to restore its project identity".into()
+            })
+    }
+
     fn remote_projects_from(
         &self,
         saved: Option<&str>,
@@ -556,19 +577,7 @@ impl Store {
             return self.local_create(provider, cwd);
         }
         let kind = crate::kind::Kind::parse(provider).ok_or("Unknown remote provider")?;
-        let project = self
-            .remote_projects()?
-            .into_values()
-            .find(|project| {
-                project.key.trim_end_matches('/') == cwd.trim_end_matches('/')
-                    || crate::remote_path::remote_path(
-                        &project.environment_id,
-                        project.cwd.replace('\\', "/").trim_end_matches('/'),
-                    )
-                    .trim_end_matches('/')
-                        == cwd.trim_end_matches('/')
-            })
-            .ok_or("Open this folder on its machine again to restore its project identity")?;
+        let project = self.remote_project(cwd)?;
         let id = -shared::handle(&format!("remote:blank:{}", uuid::Uuid::new_v4()));
         let summary = Session {
             id,

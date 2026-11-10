@@ -111,7 +111,7 @@ fn response_picker_loads_only_the_opened_provider_and_keeps_the_flyout(cx: &mut 
                 view.response_request,
                 Kind::Codex,
                 &models,
-                Ok(vec![model("review", "Review model")]),
+                Ok(vec![model("review", "Review model")].into()),
                 cx,
             );
             assert_eq!(view.response_menu.as_ref().unwrap().menu.entity_id(), root);
@@ -149,7 +149,7 @@ fn response_picker_ignores_old_completions_and_insets_model_rows(cx: &mut TestAp
                 anchor,
                 Some(vec![(
                     Kind::Codex,
-                    Some(Ok(vec![model("review", "Review model")])),
+                    Some(Ok(vec![model("review", "Review model")].into())),
                 )]),
                 window,
                 cx,
@@ -201,7 +201,7 @@ fn response_transfer_menus_hide_models_for_their_provider(cx: &mut TestAppContex
                         1,
                         kind,
                         provider,
-                        Ok(vec![model("hidden", "Hidden"), model("visible", "Visible")]),
+                        Ok(vec![model("hidden", "Hidden"), model("visible", "Visible")].into()),
                         cx,
                     );
                     let ids: Vec<_> = options
@@ -252,7 +252,7 @@ fn second_opinion_excludes_the_resolved_alias_of_the_current_model(cx: &mut Test
                 1,
                 TransferKind::SecondOpinion,
                 Kind::Claude,
-                Ok(vec![opus, model("sonnet", "Sonnet 5")]),
+                Ok(vec![opus, model("sonnet", "Sonnet 5")].into()),
                 cx,
             );
             assert_eq!(options.len(), 1);

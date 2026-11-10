@@ -1,12 +1,14 @@
 use super::*;
+use vorkspace_core::catalog::Model;
 
 #[gpui::test]
 fn local_inventory_hides_missing_tabs_but_preserves_current_and_successful_catalogs(
     cx: &mut gpui::TestAppContext,
 ) {
     cx.update(|cx| {
-        let list =
-            cx.new(|cx| ModelList::new_for(Kind::Codex, None, "/project", Default::default(), cx));
+        let list = cx.new(|cx| {
+            ModelList::new_for(Kind::Codex, None, "/project", Default::default(), None, cx)
+        });
         list.update(cx, |list, cx| {
             list.tab = ModelTab::Harness(Kind::Claude);
             list.apply_installation_probe(vec![Kind::Claude, Kind::Codex], cx);
@@ -15,7 +17,7 @@ fn local_inventory_hides_missing_tabs_but_preserves_current_and_successful_catal
             assert!(!list.enabled(Kind::Codex));
             assert!(matches!(list.tab, ModelTab::Harness(Kind::Codex)));
             // A newer successful discovery wins over a slow missing-CLI probe.
-            list.catalogs.push((Kind::Pi, Vec::new()));
+            list.catalogs.push((Kind::Pi, Default::default()));
             list.tab = ModelTab::Harness(Kind::Pi);
             list.apply_installation_probe(vec![Kind::Pi], cx);
             assert!(list.provider_visible(Kind::Pi));
@@ -49,6 +51,7 @@ fn hidden_models_leave_the_picker_but_the_current_model_stays(cx: &mut gpui::Tes
                 Some("a".into()),
                 "/project",
                 Default::default(),
+                None,
                 cx,
             )
         });
@@ -101,6 +104,7 @@ fn remote_model_availability_comes_from_the_host(cx: &mut gpui::TestAppContext) 
                 None,
                 "remote://env/home/code",
                 Default::default(),
+                None,
                 cx,
             )
             .hide_providers(vec!["claude".into()])
@@ -183,6 +187,7 @@ fn remembered_favorites_and_recents_keep_provider_identity_and_busy_rules(
                 Some("gpt-saved".into()),
                 "/work",
                 Default::default(),
+                None,
                 cx,
             )
             .allow_provider_switch(false)

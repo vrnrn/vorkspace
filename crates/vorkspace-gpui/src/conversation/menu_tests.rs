@@ -23,7 +23,8 @@ fn combined_picker_paints_effort_and_beside_mode_moves_it_to_its_own_control(
                 default: true,
                 tiers: Vec::new(),
                 controls: Vec::new(),
-            }];
+            }]
+            .into();
             cx.set_global(vorkspace_ui::preferences::Preferences::default());
             cx.notify();
         })
@@ -64,10 +65,10 @@ fn composer_labels_use_the_saved_model_effort_and_the_catalog_default(cx: &mut T
             view.summary.provider = "codex".into();
             view.model = Some("gpt-6.1-sol".into());
             view.settings.effort = Some("xhigh".into());
-            view.catalog.clear();
+            view.catalog = Default::default();
             assert_eq!(view.model_label(), "GPT-6.1-Sol");
             assert_eq!(view.trigger_effort_label().as_deref(), Some("Extra high"));
-            view.catalog.push(Model {
+            view.catalog = vec![Model {
                 alias_target: None,
                 id: "gpt-6.1-sol".into(),
                 name: "GPT-6.1 Sol".into(),
@@ -78,7 +79,8 @@ fn composer_labels_use_the_saved_model_effort_and_the_catalog_default(cx: &mut T
                 default: true,
                 tiers: Vec::new(),
                 controls: Vec::new(),
-            });
+            }]
+            .into();
             assert_eq!(view.model_label(), "GPT-6.1 Sol");
             assert_eq!(view.trigger_effort_label().as_deref(), Some("Extra high"));
             view.model = None;
@@ -178,7 +180,7 @@ fn response_target_picker_preserves_model_effort_and_working_copy(cx: &mut TestA
                 1,
                 vorkspace_core::response::TransferKind::Handoff,
                 AnchorSlot::default(),
-                Some(vec![(Kind::Codex, Some(Ok(vec![model])))]),
+                Some(vec![(Kind::Codex, Some(Ok(vec![model].into())))]),
                 window,
                 cx,
             );

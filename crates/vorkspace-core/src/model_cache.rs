@@ -3,7 +3,7 @@
 use crate::kind::Kind;
 use serde::{Deserialize, Serialize};
 use std::{
-    sync::{Mutex, OnceLock},
+    sync::{Arc, Mutex, OnceLock},
     time::Instant,
 };
 
@@ -29,6 +29,39 @@ pub struct ModelControl {
     pub name: String,
     pub current: String,
     pub choices: Vec<(String, String)>,
+}
+
+pub type ModelRows = Arc<[Model]>;
+
+impl Model {
+    pub(crate) fn estimated_bytes(&self) -> usize {
+        let pairs = |rows: &Vec<(String, String)>| {
+            rows.capacity() * std::mem::size_of::<(String, String)>()
+                + rows
+                    .iter()
+                    .map(|(id, name)| id.capacity() + name.capacity())
+                    .sum::<usize>()
+        };
+        std::mem::size_of::<Self>()
+            + self.id.capacity()
+            + self.name.capacity()
+            + self.alias_target.as_ref().map_or(0, String::capacity)
+            + self.default_effort.as_ref().map_or(0, String::capacity)
+            + self.efforts.capacity() * std::mem::size_of::<String>()
+            + self.efforts.iter().map(String::capacity).sum::<usize>()
+            + pairs(&self.tiers)
+            + self.controls.capacity() * std::mem::size_of::<ModelControl>()
+            + self
+                .controls
+                .iter()
+                .map(|control| {
+                    control.id.capacity()
+                        + control.name.capacity()
+                        + control.current.capacity()
+                        + pairs(&control.choices)
+                })
+                .sum::<usize>()
+    }
 }
 #[derive(Default)]
 pub(crate) struct CatalogCache {

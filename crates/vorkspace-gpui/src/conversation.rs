@@ -65,7 +65,7 @@ use std::{
 };
 use vorkspace_core::{
     agent::{AccessMode, Approval, Control, Decision, Settings},
-    catalog::{self, Model},
+    catalog::{self, Model, ModelRows},
 };
 use vorkspace_core::{provider::Kind, store::Session};
 use vorkspace_runtime::runtime::{Database, TurnOutcome, locked};
@@ -258,7 +258,7 @@ pub(crate) struct Conversation {
     pub(crate) submission_generation: u64,
     bot_ui: bot::ChatState,
     classic_layout: bool,
-    catalog: Vec<Model>,
+    catalog: ModelRows,
     catalog_epoch: u64,
     account_switching: bool,
     _usage_clock: gpui::Task<()>,
@@ -589,7 +589,7 @@ impl Conversation {
                 ..Default::default()
             },
             classic_layout: false,
-            catalog: Vec::new(),
+            catalog: Default::default(),
             catalog_epoch: 0,
             account_switching: false,
             _usage_clock: usage_clock,

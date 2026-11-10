@@ -654,8 +654,8 @@ pub fn run_with_client(
                 .as_deref()
                 .is_none_or(|value| value.trim().is_empty())
             {
-                let models =
-                    vorkspace_core::catalog::remote_models(&summary.cwd, &summary.provider)?;
+                let kind = Kind::parse(&summary.provider).ok_or("Unknown remote provider")?;
+                let models = client.model_catalog(&binding.project)?.models_for(kind)?;
                 if let Some(model) = models
                     .iter()
                     .find(|model| model.default)

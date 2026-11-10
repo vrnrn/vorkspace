@@ -19,32 +19,22 @@ impl Conversation {
         self.catalog_epoch += 1;
         let epoch = self.catalog_epoch;
         let account = self.settings.account.clone();
-        let work = cx.background_executor().spawn({
-            let remote_project = self.is_remote().then(|| self.summary.cwd.clone());
-            async move {
-                if let Some(project) = remote_project {
-                    vorkspace_core::catalog::remote_models(&project, kind.id())
-                } else {
-                    catalog::models_for(kind, &account)
-                }
+        let host = self.host_models();
+        let work = cx.background_executor().spawn(async move {
+            if let Some(host) = host {
+                host.read()?.models_for(kind)
+            } else {
+                catalog::models_for(kind, &account).map(Into::into)
             }
         });
         cx.spawn(async move |this, cx| {
             if let Ok(models) = work.await {
                 let _ = this.update(cx, |this, cx| {
-                    if Kind::from_id(&this.summary.provider) == kind && this.catalog_epoch == epoch
+                    if Kind::from_id(&this.summary.provider) == kind
+                        && this.catalog_epoch == epoch
+                        && !Arc::ptr_eq(&this.catalog, &models)
                     {
                         this.catalog = models;
-                        if this.is_remote() && this.model.is_none() {
-                            this.model = this
-                                .catalog
-                                .iter()
-                                .find(|m| m.default)
-                                .or_else(|| this.catalog.first())
-                                .map(|m| m.id.clone());
-                            this.settings.model = this.model.clone();
-                            this.save_settings(cx);
-                        }
                         cx.emit(SessionChanged::Configuration);
                         cx.notify();
                     }
@@ -419,7 +409,7 @@ impl Conversation {
             self.summary.provider = provider.into();
             self.completion
                 .update(cx, |completion, cx| completion.set_provider(provider, cx));
-            self.catalog.clear();
+            self.catalog = Default::default();
             if !self.summary.has_messages {
                 self.summary.title = format!("New {} session", picked.0.label());
             }
@@ -836,6 +826,7 @@ impl Conversation {
                         self.model.clone(),
                         &self.summary.cwd,
                         self.settings.account.clone(),
+                        self.host_models(),
                         cx,
                     )
                     .hide_providers(hidden)

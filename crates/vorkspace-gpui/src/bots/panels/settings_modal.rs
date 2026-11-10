@@ -958,7 +958,16 @@ impl Bots {
         } else {
             return;
         };
-        let list = cx.new(|cx| ModelList::new_for(provider, model, &project, account, cx));
+        let list = cx.new(|cx| {
+            ModelList::new_for(
+                provider,
+                model,
+                &project,
+                account,
+                crate::pickers::HostModels::for_project(&self.store, &project),
+                cx,
+            )
+        });
         let focus = list.read(cx).search_focus(cx);
         let picked = cx.subscribe(&list, move |this, _, picked: &ModelPicked, cx| {
             if let Some(target) = &target {

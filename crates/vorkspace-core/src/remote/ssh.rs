@@ -10,7 +10,7 @@ use std::sync::{
 };
 use std::time::{Duration, Instant};
 
-#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq, Hash)]
 #[serde(rename_all = "camelCase")]
 pub struct SshTarget {
     pub target: String,

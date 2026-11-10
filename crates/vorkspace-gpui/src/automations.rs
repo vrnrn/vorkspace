@@ -513,9 +513,20 @@ impl Automations {
         let profile = crate::accounts::get(cx)
             .map(|a| a.read(cx).selected(kind, &editor.draft.cwd))
             .unwrap_or_default();
-        let work = cx
-            .background_executor()
-            .spawn(async move { vorkspace_core::catalog::models_for(kind, &profile) });
+        let host = self
+            .database
+            .as_ref()
+            .and_then(|db| crate::pickers::HostModels::for_project(db, &editor.draft.cwd));
+        if editor.draft.cwd.starts_with("remote://") && host.is_none() {
+            return;
+        }
+        let work = cx.background_executor().spawn(async move {
+            if let Some(host) = host {
+                host.read()?.models_for(kind)
+            } else {
+                vorkspace_core::catalog::models_for(kind, &profile).map(Into::into)
+            }
+        });
         cx.spawn(async move |this, cx| {
             let result = work.await;
             let _ = this.update(cx, |this, cx| {
@@ -525,7 +536,13 @@ impl Automations {
                 if let Ok(models) = result
                     && let Some(model) = models
                         .iter()
-                        .find(|m| m.id == model)
+                        .find(|m| {
+                            m.id == model
+                                || m.id
+                                    .strip_prefix(kind.id())
+                                    .and_then(|id| id.strip_prefix(':'))
+                                    == Some(model.as_str())
+                        })
                         .or_else(|| models.iter().find(|m| m.default))
                 {
                     this.model_controls = model.controls.clone();
@@ -588,6 +605,9 @@ impl Automations {
                 vorkspace_core::store::native_model(&editor.draft.model, &editor.draft.harness),
                 &editor.draft.cwd,
                 profile,
+                self.database
+                    .as_ref()
+                    .and_then(|db| crate::pickers::HostModels::for_project(db, &editor.draft.cwd)),
                 cx,
             )
         });

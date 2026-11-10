@@ -35,6 +35,15 @@ impl Conversation {
         self.loaded = true;
     }
 
+    pub(crate) fn host_models(&self) -> Option<crate::pickers::HostModels> {
+        crate::pickers::HostModels::for_session(
+            &self.store,
+            &self.summary.cwd,
+            self.summary.id,
+            self.remote_state.client.clone(),
+        )
+    }
+
     pub(super) fn is_remote(&self) -> bool {
         self.summary.cwd.starts_with("remote://")
     }

@@ -12,14 +12,18 @@ use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, OnceLock, RwLock};
 
+use crate::catalog::{remote_catalog_response, ConnectionStamp, RemoteCatalog, RemoteCatalogCache};
+use crate::store::RemoteProject;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
+use sha2::{Digest, Sha256};
 
 pub struct Connections {
     data_dir: PathBuf,
     store: Mutex<()>,
     tunnels: Tunnels,
     jobs: Mutex<HashMap<String, Arc<Job>>>,
+    model_catalogs: RemoteCatalogCache,
 }
 
 impl Connections {
@@ -30,6 +34,7 @@ impl Connections {
             store: Mutex::new(()),
             tunnels: Tunnels::default(),
             jobs: Mutex::new(HashMap::new()),
+            model_catalogs: RemoteCatalogCache::default(),
         }
     }
 
@@ -38,10 +43,46 @@ impl Connections {
     }
 
     pub fn machine_for_environment(&self, environment_id: &str) -> Result<Machine, String> {
-        self.list()?
+        self.stored_machine(|machine| machine.environment_id == environment_id)
+            .map(|machine| machine.public())
+    }
+
+    fn stored_machine(
+        &self,
+        matches: impl FnMut(&StoredMachine) -> bool,
+    ) -> Result<StoredMachine, String> {
+        let _guard = self
+            .store
+            .lock()
+            .map_err(|_| "Connection store is locked")?;
+        read(&self.store_path())?
             .into_iter()
-            .find(|machine| machine.environment_id == environment_id)
+            .find(matches)
             .ok_or_else(|| "Machine is no longer connected".into())
+    }
+
+    pub fn model_catalog(&self, project: &RemoteProject) -> Result<Arc<RemoteCatalog>, String> {
+        let machine =
+            self.stored_machine(|machine| machine.environment_id == project.environment_id)?;
+        let connection = machine.catalog_stamp();
+        let result =
+            self.model_catalogs
+                .load(&machine.id, &project.project_id, &connection, || {
+                    let value = self.request_on(
+                        &machine,
+                        "models.list",
+                        json!({"projectId":project.project_id}),
+                    )?;
+                    remote_catalog_response(&value)
+                });
+        // A concurrent pairing can replace the credentials while discovery runs.
+        let current = self.stored_machine(|current| current.id == machine.id)?;
+        if current.catalog_stamp() != connection {
+            return Err(
+                "Machine connection changed while loading models. Reopen the model list.".into(),
+            );
+        }
+        result
     }
 
     pub fn shutdown(&self) {
@@ -127,6 +168,15 @@ impl StoredMachine {
             endpoint: self.endpoint.clone(),
             environment_id: self.environment_id.clone(),
             ssh: self.ssh.clone(),
+        }
+    }
+
+    fn catalog_stamp(&self) -> ConnectionStamp {
+        ConnectionStamp {
+            environment_id: self.environment_id.clone(),
+            endpoint: self.endpoint.clone(),
+            ssh: self.ssh.clone(),
+            credential: Sha256::digest(self.token.as_bytes()).into(),
         }
     }
 }
@@ -339,6 +389,7 @@ impl Connections {
         machines.retain(|m| m.id != machine_id);
         write(&path, &machines)?;
         self.tunnels.remove(machine_id);
+        self.model_catalogs.remove_machine(machine_id);
         Ok(())
     }
 
@@ -359,16 +410,16 @@ impl Connections {
         if !supported_remote_method(method) {
             return Err("Unsupported remote operation".into());
         }
-        let machine = {
-            let _guard = self
-                .store
-                .lock()
-                .map_err(|_| "Connection store is locked")?;
-            read(&self.store_path())?
-                .into_iter()
-                .find(|m| m.id == machine_id)
-                .ok_or("Machine is no longer connected")?
-        };
+        let machine = self.stored_machine(|machine| machine.id == machine_id)?;
+        self.request_on(&machine, method, params)
+    }
+
+    fn request_on(
+        &self,
+        machine: &StoredMachine,
+        method: &str,
+        params: Value,
+    ) -> Result<Value, String> {
         let tunnel_lease = if let Some(target) = &machine.ssh {
             Some(self.tunnels.endpoint(&machine.id, target)?)
         } else {

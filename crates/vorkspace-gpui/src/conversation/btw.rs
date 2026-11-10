@@ -775,7 +775,15 @@ impl Btw {
             account.root = crate::accounts::get(cx).map(|center| center.read(cx).root.clone());
         }
         let picker = cx.new(|cx| {
-            ModelList::new_for(provider, model, &cwd, account, cx).allow_provider_switch(false)
+            ModelList::new_for(
+                provider,
+                model,
+                &cwd,
+                account,
+                crate::pickers::HostModels::for_project(&self.store, &cwd),
+                cx,
+            )
+            .allow_provider_switch(false)
         });
         self.model_subscription = Some(cx.subscribe_in(
             &picker,

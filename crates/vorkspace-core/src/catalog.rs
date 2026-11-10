@@ -1,9 +1,14 @@
 //! The same live model catalogs the React model picker queries. No inference.
 mod claude;
+mod remote;
 use crate::{
     kind::Kind,
     process,
     provider::{self},
+};
+pub use remote::RemoteCatalog;
+pub(crate) use remote::{
+    remote_catalog_response, CatalogCache as RemoteCatalogCache, ConnectionStamp,
 };
 use serde_json::{json, Value};
 use std::{
@@ -16,167 +21,10 @@ use std::{
 
 pub(crate) use crate::model_cache::{cache, model};
 pub use crate::model_cache::{
-    cached_models_for, cached_name, generation, invalidate, Model, ModelControl,
+    cached_models_for, cached_name, generation, invalidate, Model, ModelControl, ModelRows,
 };
 
 const CATALOG_BYTES: usize = 2 * 1024 * 1024;
-
-/// Installed providers and their project-specific catalogs on a remote host.
-/// The host owns discovery, credentials, catalog caching, and model defaults.
-pub struct RemoteCatalog {
-    pub providers: Vec<Kind>,
-    pub models: std::collections::HashMap<Kind, Vec<Model>>,
-    pub errors: std::collections::HashMap<Kind, String>,
-}
-
-pub fn remote_catalog(cwd: &str) -> Result<RemoteCatalog, String> {
-    let remote = crate::remote_path::parse_remote_path(cwd).ok_or("Invalid remote project")?;
-    let connections = crate::remote::default_connections()?;
-    let machine = connections.machine_for_environment(&remote.environment_id)?;
-    let descriptor = connections.request(&machine.id, "environment.describe", json!({"supportedProviders":Kind::ALL.into_iter().map(|kind|kind.id()).collect::<Vec<_>>()}))?;
-    let providers: Vec<Kind> = descriptor["providers"]
-        .as_array()
-        .into_iter()
-        .flatten()
-        .filter_map(|value| value.as_str().and_then(Kind::parse))
-        .collect();
-    let projects = connections.request(&machine.id, "projects.list", json!({}))?;
-    let projects = projects
-        .as_array()
-        .ok_or("Invalid remote projects response")?;
-    let mut project = projects.iter().find(|project| {
-        project["cwd"].as_str().is_some_and(|path| {
-            crate::files::path_key(path) == crate::files::path_key(&remote.host_path)
-        })
-    });
-    if project.is_none() {
-        for candidate in projects {
-            let listed = connections.request(
-                &machine.id,
-                "git.worktrees",
-                json!({"projectId":candidate["id"]}),
-            );
-            if listed
-                .ok()
-                .as_ref()
-                .and_then(|value| value["worktrees"].as_array())
-                .is_some_and(|trees| {
-                    trees.iter().any(|tree| {
-                        tree["missing"] != true
-                            && tree["path"].as_str().is_some_and(|path| {
-                                crate::files::path_key(path)
-                                    == crate::files::path_key(&remote.host_path)
-                            })
-                    })
-                })
-            {
-                project = Some(candidate);
-                break;
-            }
-        }
-    }
-    let project = project.ok_or("Remote project is unavailable")?;
-    let response = connections.request(
-        &machine.id,
-        "models.list",
-        json!({"projectId":project["id"]}),
-    )?;
-    remote_catalog_response(&response, providers)
-}
-
-pub fn remote_models(cwd: &str, provider: &str) -> Result<Vec<Model>, String> {
-    let kind = Kind::parse(provider).ok_or("Unknown remote provider")?;
-    let mut catalog = remote_catalog(cwd)?;
-    if !catalog.providers.contains(&kind) {
-        return Err(format!(
-            "{} CLI is not installed on this machine",
-            kind.label()
-        ));
-    }
-    if let Some(error) = catalog.errors.remove(&kind) {
-        return Err(error);
-    }
-    catalog
-        .models
-        .remove(&kind)
-        .filter(|models| !models.is_empty())
-        .ok_or_else(|| format!("{} returned an empty model catalog", kind.label()))
-}
-
-fn remote_catalog_response(value: &Value, providers: Vec<Kind>) -> Result<RemoteCatalog, String> {
-    if !value["models"].is_object() || !value["errors"].is_object() {
-        return Err("Invalid remote model catalog".into());
-    }
-    let mut models = std::collections::HashMap::new();
-    let mut errors = std::collections::HashMap::new();
-    for kind in &providers {
-        if let Some(error) = value["errors"][kind.id()].as_str() {
-            errors.insert(*kind, error.into());
-        }
-        if let Some(rows) = value["models"][kind.id()].as_array() {
-            let mut seen = std::collections::HashSet::new();
-            let entries = rows
-                .iter()
-                .filter_map(|row| {
-                    let id = row["id"].as_str()?;
-                    if row["hidden"] == true || !seen.insert(id) {
-                        return None;
-                    }
-                    let mut model = model(id, row["name"].as_str().unwrap_or(id));
-                    model.default = row["isDefault"] == true || rows.first() == Some(row);
-                    for setting in row["settings"].as_array().into_iter().flatten() {
-                        let Some(id) = setting["id"].as_str() else {
-                            continue;
-                        };
-                        let choices: Vec<(String, String)> = setting["options"]
-                            .as_array()
-                            .into_iter()
-                            .flatten()
-                            .filter_map(|choice| {
-                                let value = choice["value"].as_str()?;
-                                Some((
-                                    value.into(),
-                                    choice["label"].as_str().unwrap_or(value).into(),
-                                ))
-                            })
-                            .collect();
-                        let current = setting["value"].as_str().unwrap_or("");
-                        match id {
-                            "effort" | "reasoningEffort" => {
-                                model.efforts =
-                                    choices.iter().map(|(value, _)| value.clone()).collect();
-                                model.default_effort =
-                                    (!current.is_empty()).then(|| current.into());
-                            }
-                            "serviceTier" => {
-                                model.tiers = choices
-                                    .into_iter()
-                                    .filter(|(value, _)| value != "default")
-                                    .collect()
-                            }
-                            "fast" => model.fast = true,
-                            "thinking" if setting["kind"] == "toggle" => model.thinking = true,
-                            _ if !choices.is_empty() => model.controls.push(ModelControl {
-                                id: id.into(),
-                                name: setting["label"].as_str().unwrap_or(id).into(),
-                                current: current.into(),
-                                choices,
-                            }),
-                            _ => {}
-                        }
-                    }
-                    Some(model)
-                })
-                .collect();
-            models.insert(*kind, entries);
-        }
-    }
-    Ok(RemoteCatalog {
-        providers,
-        models,
-        errors,
-    })
-}
 
 pub fn models(kind: Kind) -> Result<Vec<Model>, String> {
     models_for(kind, &crate::accounts::Profile::default())
@@ -789,30 +637,6 @@ mod tests {
         assert!(cached_models_for(Kind::Claude, &account).is_none());
     }
 
-    #[test]
-    fn remote_catalog_keeps_host_ids_defaults_settings_and_provider_errors() {
-        let catalog = remote_catalog_response(&json!({"models":{
-            "codex":[{"id":"codex:gpt-test","nativeId":"gpt-test","harness":"codex","name":"Host model","settings":[
-                {"id":"reasoningEffort","kind":"select","value":"high","options":[{"value":"low","label":"Low"},{"value":"high","label":"High"}]},
-                {"id":"serviceTier","kind":"select","value":"default","options":[{"value":"default","label":"Standard"},{"value":"fast","label":"Fast"}]},
-                {"id":"context","label":"Context window","kind":"select","value":"1m","options":[{"value":"1m","label":"1M"}]}]},
-                {"id":"codex:gpt-test","name":"Duplicate"}],
-            "claude":[{"id":"claude:opus","name":"Opus","settings":[{"id":"fast","kind":"toggle"},{"id":"thinking","kind":"toggle"}]}]
-        },"errors":{"antigravity":"Sign in on the host"}}), vec![Kind::Codex,Kind::Claude,Kind::Antigravity]).unwrap();
-        assert_eq!(catalog.models[&Kind::Codex].len(), 1);
-        let model = &catalog.models[&Kind::Codex][0];
-        assert_eq!(model.id, "codex:gpt-test");
-        assert!(model.default);
-        assert_eq!(model.efforts, ["low", "high"]);
-        assert_eq!(model.default_effort.as_deref(), Some("high"));
-        assert_eq!(model.tiers, [("fast".into(), "Fast".into())]);
-        assert_eq!(model.controls[0].id, "context");
-        assert_eq!(model.controls[0].current, "1m");
-        assert!(catalog.models[&Kind::Claude][0].fast);
-        assert!(catalog.models[&Kind::Claude][0].thinking);
-        assert_eq!(catalog.errors[&Kind::Antigravity], "Sign in on the host");
-        assert!(!catalog.models.contains_key(&Kind::Unsupported));
-    }
     #[test]
     fn acp_catalogs_accept_grouped_options_and_legacy_models() {
         let rows = acp_models(&json!({"configOptions":[

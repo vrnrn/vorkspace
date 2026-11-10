@@ -1,3 +1,6 @@
+mod host_models;
+pub(crate) use host_models::HostModels;
+
 use vorkspace_ui::radius;
 // The pickers that open as flyouts beside a menu row: ModelPicker.tsx's
 // ModelFlyout and SearchableProjectPicker.tsx's ProjectPickerPopover. Each
@@ -7,8 +10,12 @@ use gpui::{
     AnyElement, Context, CursorStyle, Entity, EventEmitter, FocusHandle, Focusable, Role,
     SharedString, Subscription, Window, div, prelude::*, px,
 };
-use vorkspace_core::catalog::{self, Model};
+use std::collections::HashMap;
 use vorkspace_core::provider::Kind;
+use vorkspace_core::{
+    accounts::Profile,
+    catalog::{self, ModelRows},
+};
 use vorkspace_ui::theme::*;
 
 /// Friendly names used before a provider's live catalog arrives.
@@ -133,16 +140,20 @@ struct ModelEntry {
 /// The model the next turn uses; `None` is the provider's default.
 pub(crate) struct ModelPicked(pub Kind, pub Option<String>);
 
+enum ModelScope {
+    Local(HashMap<Kind, Profile>),
+    Host(Option<HostModels>),
+}
+
 /// ModelFlyout: providers down a rail on the left, a search field over the
 /// selected provider's models on the right. Switching providers is available
 /// between turns.
 pub(crate) struct ModelList {
     provider: Kind,
-    remote_project: Option<String>,
+    scope: ModelScope,
     remote_providers: Option<Vec<Kind>>,
     current: Option<String>,
-    profiles: std::collections::HashMap<Kind, vorkspace_core::accounts::Profile>,
-    catalogs: Vec<(Kind, Vec<Model>)>,
+    catalogs: Vec<(Kind, ModelRows)>,
     errors: Vec<(Kind, String)>,
     loading: Vec<Kind>,
     missing: Vec<Kind>,
@@ -159,18 +170,24 @@ impl ModelList {
         provider: Kind,
         current: Option<String>,
         project: &str,
-        profile: vorkspace_core::accounts::Profile,
+        profile: Profile,
+        host: Option<HostModels>,
         cx: &mut Context<Self>,
     ) -> Self {
-        let mut profiles = crate::accounts::get(cx)
-            .map(|center| {
-                Kind::ALL
-                    .into_iter()
-                    .map(|kind| (kind, center.read(cx).selected(kind, project)))
-                    .collect::<std::collections::HashMap<_, _>>()
-            })
-            .unwrap_or_default();
-        profiles.insert(provider, profile);
+        let scope = if project.starts_with("remote://") {
+            ModelScope::Host(host)
+        } else {
+            let mut profiles = crate::accounts::get(cx)
+                .map(|center| {
+                    Kind::ALL
+                        .into_iter()
+                        .map(|kind| (kind, center.read(cx).selected(kind, project)))
+                        .collect::<HashMap<_, _>>()
+                })
+                .unwrap_or_default();
+            profiles.insert(provider, profile);
+            ModelScope::Local(profiles)
+        };
         let search = search_field("Search models", "Search models", 0.4, cx);
         let changed = cx.subscribe(&search, |this, _, _: &input::Changed, cx| {
             this.highlighted = this.current_index(cx);
@@ -178,11 +195,9 @@ impl ModelList {
         });
         let mut list = Self {
             provider,
-            remote_project: vorkspace_core::remote::parse_remote_path(project)
-                .map(|_| project.to_owned()),
+            scope,
             remote_providers: None,
             current,
-            profiles,
             catalogs: Vec::new(),
             errors: Vec::new(),
             loading: Vec::new(),
@@ -216,7 +231,7 @@ impl ModelList {
         list
     }
     pub(crate) fn hide_providers(mut self, hidden: Vec<String>) -> Self {
-        if self.remote_project.is_some() {
+        if self.is_remote() {
             return self;
         }
         if let ModelTab::Harness(kind) = self.tab
@@ -234,7 +249,7 @@ impl ModelList {
     }
 
     fn probe_installed(&mut self, cx: &mut Context<Self>) {
-        if cfg!(test) || self.remote_project.is_some() {
+        if cfg!(test) || self.is_remote() {
             return;
         }
         let work = cx.background_executor().spawn(async move {
@@ -253,7 +268,7 @@ impl ModelList {
     fn apply_installation_probe(&mut self, missing: Vec<Kind>, cx: &mut Context<Self>) {
         // A remote host owns its inventory. A completed local catalog also
         // outranks an older filesystem probe that finished out of order.
-        if self.remote_project.is_some() {
+        if self.is_remote() {
             return;
         }
         for kind in missing {
@@ -277,7 +292,7 @@ impl ModelList {
 
     fn provider_visible(&self, kind: Kind) -> bool {
         kind == self.provider
-            || if self.remote_project.is_some() {
+            || if self.is_remote() {
                 self.remote_providers
                     .as_ref()
                     .is_some_and(|providers| providers.contains(&kind))
@@ -286,55 +301,26 @@ impl ModelList {
             }
     }
 
+    fn is_remote(&self) -> bool {
+        matches!(&self.scope, ModelScope::Host(_))
+    }
+
     fn discover(&mut self, kind: Kind, cx: &mut Context<Self>) {
         if cfg!(test) || self.loading.contains(&kind) {
             return;
         }
-        if let Some(project) = self.remote_project.clone() {
-            self.loading = Kind::ALL.to_vec();
-            let work = cx
-                .background_executor()
-                .spawn(async move { catalog::remote_catalog(&project) });
-            cx.spawn(async move |this, cx| {
-                let result = work.await;
-                let _ = this.update(cx, |this, cx| {
-                    this.loading.clear();
-                    match result {
-                        Ok(catalog) => {
-                            this.missing = Kind::ALL
-                                .into_iter()
-                                .filter(|kind| !catalog.providers.contains(kind))
-                                .collect();
-                            this.remote_providers = Some(catalog.providers);
-                            this.catalogs = catalog.models.into_iter().collect();
-                            this.errors = catalog.errors.into_iter().collect();
-                            if let ModelTab::Harness(selected) = this.tab
-                                && this.missing.contains(&selected)
-                                && selected != this.provider
-                            {
-                                this.tab = ModelTab::Harness(this.provider);
-                            }
-                        }
-                        Err(error) => {
-                            this.errors = Kind::ALL
-                                .into_iter()
-                                .map(|kind| (kind, error.clone()))
-                                .collect();
-                        }
-                    }
-                    this.highlighted = this.current_index(cx);
-                    cx.notify();
-                });
-            })
-            .detach();
-            return;
-        }
+        let profile = match &self.scope {
+            ModelScope::Local(profiles) => profiles.get(&kind).cloned().unwrap_or_default(),
+            ModelScope::Host(host) => {
+                self.discover_host(host.clone(), cx);
+                return;
+            }
+        };
         self.loading.push(kind);
         self.errors.retain(|(k, _)| *k != kind);
-        let work = cx.background_executor().spawn({
-            let profile = self.profiles.get(&kind).cloned().unwrap_or_default();
-            async move { catalog::models_for(kind, &profile) }
-        });
+        let work = cx
+            .background_executor()
+            .spawn(async move { catalog::models_for(kind, &profile) });
         cx.spawn(async move |this, cx| {
             let result = work.await;
             let _ = this.update(cx, |this, cx| {
@@ -342,7 +328,7 @@ impl ModelList {
                 match result {
                     Ok(models) => {
                         this.catalogs.retain(|(k, _)| *k != kind);
-                        this.catalogs.push((kind, models));
+                        this.catalogs.push((kind, models.into()));
                     }
                     Err(error) => this.errors.push((kind, error)),
                 }
@@ -357,6 +343,53 @@ impl ModelList {
                 if this.query(cx).is_empty() {
                     this.highlighted = this.current_index(cx);
                 }
+                cx.notify();
+            });
+        })
+        .detach();
+    }
+    fn discover_host(&mut self, host: Option<HostModels>, cx: &mut Context<Self>) {
+        self.loading = Kind::ALL.to_vec();
+        let work = cx.background_executor().spawn(async move {
+            host.ok_or_else(|| "Open this project on its machine to load models.".to_owned())?
+                .read()
+        });
+        cx.spawn(async move |this, cx| {
+            let result = work.await;
+            let _ = this.update(cx, |this, cx| {
+                this.loading.clear();
+                match result {
+                    Ok(catalog) => {
+                        this.missing = Kind::ALL
+                            .into_iter()
+                            .filter(|kind| !catalog.providers.contains(kind))
+                            .collect();
+                        this.remote_providers = Some(catalog.providers.clone());
+                        this.catalogs = catalog
+                            .models
+                            .iter()
+                            .map(|(&kind, rows)| (kind, rows.clone()))
+                            .collect();
+                        this.errors = catalog
+                            .errors
+                            .iter()
+                            .map(|(&kind, error)| (kind, error.clone()))
+                            .collect();
+                        if let ModelTab::Harness(selected) = this.tab
+                            && this.missing.contains(&selected)
+                            && selected != this.provider
+                        {
+                            this.tab = ModelTab::Harness(this.provider);
+                        }
+                    }
+                    Err(error) => {
+                        this.errors = Kind::ALL
+                            .into_iter()
+                            .map(|kind| (kind, error.clone()))
+                            .collect();
+                    }
+                }
+                this.highlighted = this.current_index(cx);
                 cx.notify();
             });
         })
@@ -442,7 +475,7 @@ impl ModelList {
                 })
                 .collect();
             entries.extend(additional);
-        } else if kind == Kind::Claude && self.remote_project.is_none() {
+        } else if kind == Kind::Claude && !self.is_remote() {
             // Stable CLI aliases remain usable while discovery is loading.
             let additional: Vec<_> = [("sonnet", "Sonnet"), ("opus", "Opus"), ("haiku", "Haiku")]
                 .into_iter()
@@ -495,7 +528,7 @@ impl ModelList {
     fn enabled(&self, kind: Kind) -> bool {
         (kind == self.provider || self.switch_allowed)
             && !self.missing.contains(&kind)
-            && (self.remote_project.is_none()
+            && (!self.is_remote()
                 || self
                     .remote_providers
                     .as_ref()
@@ -640,7 +673,7 @@ impl Render for ModelList {
                     .aria_selected(current)
                     .when(!entry.enabled, |d| {
                         d.aria_description(if self.missing.contains(&entry.kind) {
-                            if self.remote_project.is_some() { "Install this provider's CLI and sign in on the connected machine, then retry model discovery" } else { "Install this provider's CLI and sign in, then retry model discovery" }
+                            if self.is_remote() { "Install this provider's CLI and sign in on the connected machine, then retry model discovery" } else { "Install this provider's CLI and sign in, then retry model discovery" }
                         } else {
                             "Wait for the current turn to finish before switching providers"
                         })

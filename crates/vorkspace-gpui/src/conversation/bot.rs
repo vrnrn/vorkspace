@@ -698,7 +698,7 @@ impl Conversation {
         if self.summary.provider != provider.id() {
             self.summary.provider = provider.id().into();
             self.summary.provider_id = None;
-            self.catalog.clear();
+            self.catalog = Default::default();
         }
         self.model = model;
         self.settings.effort = super::preferred_effort(provider.id(), cx);
@@ -1038,6 +1038,7 @@ impl Conversation {
                 self.model.clone(),
                 &self.summary.cwd,
                 self.settings.account.clone(),
+                self.host_models(),
                 cx,
             )
             .hide_providers(hidden)

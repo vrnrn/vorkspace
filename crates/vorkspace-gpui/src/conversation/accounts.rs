@@ -95,7 +95,7 @@ impl Conversation {
             return;
         }
         self.settings.account = profile;
-        self.catalog.clear();
+        self.catalog = Default::default();
         self.resolved_model = None;
         self.refresh_catalog(cx);
         self.save_settings(cx);
@@ -322,7 +322,7 @@ impl Conversation {
                     );
                 }
                 this.settings.account = profile;
-                this.catalog.clear();
+                this.catalog = Default::default();
                 this.refresh_catalog(cx);
                 this.save_settings(cx);
                 this.resume_usage(cx);
@@ -337,7 +337,7 @@ impl Conversation {
         self.follow_ups.requested = None;
         self.save_follow_ups(cx);
         self.catalog_epoch += 1;
-        self.catalog.clear();
+        self.catalog = Default::default();
         self.status =
             "This provider account is no longer signed in. Choose another account to continue."
                 .into();
