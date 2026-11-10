@@ -125,26 +125,8 @@ pub fn content_hash(text: &str) -> String {
 pub(super) fn write_atomic(path: &Path, text: &str) -> Result<(), String> {
     use std::io::Write;
 
-    let temp = path.with_extension(format!("{}.tmp", crate::session::new_id()));
-    let mut options = std::fs::OpenOptions::new();
-    options.write(true).create_new(true);
-    use std::os::unix::fs::OpenOptionsExt;
-    options.mode(0o600);
-    let mut file = options
-        .open(&temp)
-        .map_err(|e| format!("{}: {e}", temp.display()))?;
-    let result = (|| {
-        file.write_all(text.as_bytes())?;
-        file.sync_all()?;
-        drop(file);
-        std::fs::rename(&temp, path)?;
-        std::fs::File::open(path.parent().unwrap_or(Path::new(".")))?.sync_all()?;
-        Ok::<_, std::io::Error>(())
-    })();
-    if result.is_err() {
-        let _ = std::fs::remove_file(&temp);
-    }
-    result.map_err(|e| format!("{}: {e}", path.display()))
+    crate::private_file::replace(path, |file| file.write_all(text.as_bytes()))
+        .map_err(|error| format!("{}: {error}", path.display()))
 }
 
 fn read_optional(path: &Path) -> Result<Option<String>, String> {

@@ -3,7 +3,7 @@ use super::super::{remote::index::Index, RemoteSession, Store};
 use std::{
     cell::RefCell,
     collections::BTreeMap,
-    fs::{self, File, OpenOptions},
+    fs::{File, OpenOptions},
     io::{BufWriter, ErrorKind, Read, Write},
     os::unix::fs::{MetadataExt, OpenOptionsExt},
     path::{Path, PathBuf},
@@ -174,38 +174,19 @@ impl Sidecar {
 }
 
 fn write_atomic(path: &Path, values: &BTreeMap<String, String>) -> Result<(), String> {
-    let temporary = path.with_extension(format!("{}.tmp", crate::session::new_id()));
-    let mut file = OpenOptions::new()
-        .write(true)
-        .create_new(true)
-        .mode(0o600)
-        .open(&temporary)
-        .map_err(|error| error.to_string())?;
-    let result = (|| {
-        {
-            let mut writer = BufWriter::new(&mut file);
-            serde_json::to_writer(&mut writer, values).map_err(|error| error.to_string())?;
-            writer.flush().map_err(|error| error.to_string())?;
-        }
-        file.sync_all().map_err(|error| error.to_string())?;
-        fs::rename(&temporary, path).map_err(|error| error.to_string())
-    })();
-    if let Err(error) = result {
-        let _ = fs::remove_file(temporary);
-        return Err(error);
-    }
-    if let Some(parent) = path.parent() {
-        File::open(parent)
-            .and_then(|directory| directory.sync_all())
-            .map_err(|error| error.to_string())?;
-    }
-    Ok(())
+    crate::private_file::replace(path, |file| {
+        let mut writer = BufWriter::new(file);
+        serde_json::to_writer(&mut writer, values).map_err(std::io::Error::other)?;
+        writer.flush()
+    })
+    .map_err(|error| error.to_string())
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::store::Store;
+    use std::fs;
 
     #[test]
     fn independent_stores_observe_replacement_removal_and_restoration() {
