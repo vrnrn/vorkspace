@@ -1,11 +1,10 @@
 //! Desktop-compatible note persistence, deliberately separate from session handles.
+mod read;
+
 use super::Store;
-use crate::notes::{Note, NoteImageAsset, NoteUpsert, MAX_BODY};
+use crate::notes::{normalize_tags, Note, NoteImageAsset, NoteUpsert, MAX_BODY, MAX_TITLE};
 use rusqlite::{params, Connection, OptionalExtension, Transaction, TransactionBehavior};
 use std::path::{Component, Path, PathBuf};
-const TITLE_MAX: usize = 200;
-const TAG_MAX: usize = 48;
-const TAGS_MAX: usize = 20;
 
 /// A recording retains its note identity after deletion so recovery never
 /// imports it into a new note. A live link may precede its first saved note.
@@ -333,32 +332,9 @@ fn read_note(row: &rusqlite::Row<'_>) -> rusqlite::Result<Note> {
     })
 }
 
-fn normalize_tags(tags: &[String]) -> Vec<String> {
-    let mut normalized = Vec::new();
-    for input in tags {
-        let tag = input
-            .trim()
-            .trim_start_matches('#')
-            .split_whitespace()
-            .collect::<Vec<_>>()
-            .join("-")
-            .to_lowercase();
-        let tag: String = tag.chars().take(TAG_MAX).collect();
-        let tag = tag.trim_end_matches('-').to_string();
-        if tag.is_empty() || normalized.contains(&tag) {
-            continue;
-        }
-        normalized.push(tag);
-        if normalized.len() == TAGS_MAX {
-            break;
-        }
-    }
-    normalized
-}
-
 fn normalize_title(title: &str) -> String {
     let trimmed = title.trim();
-    let sliced: String = trimmed.chars().take(TITLE_MAX).collect();
+    let sliced: String = trimmed.chars().take(MAX_TITLE).collect();
     let sliced = sliced.trim().to_string();
     if sliced.is_empty() {
         "Untitled".into()
@@ -467,6 +443,21 @@ impl Store {
             .map_err(|e| e.to_string())
     }
 
+    pub fn note_recording(&self, note_id: &str) -> Result<Option<NoteRecording>, String> {
+        valid_id(note_id)?;
+        if !super::shared::has_table(&self.conn, "note_recordings")? {
+            return Ok(None);
+        }
+        self.conn
+            .query_row(
+                "SELECT note_id, recording_id, deleted FROM note_recordings WHERE note_id=?1",
+                [note_id],
+                read_note_recording,
+            )
+            .optional()
+            .map_err(|error| error.to_string())
+    }
+
     /// Reserve the identity before capture starts, even when the note is still
     /// ephemeral. An existing or deleted identity cannot be transferred.
     pub fn attach_note_recording(&self, note_id: &str, recording_id: &str) -> Result<(), String> {
@@ -543,70 +534,6 @@ impl Store {
             };
         tx.commit().map_err(|e| e.to_string())?;
         Ok(Some(note))
-    }
-
-    /// Full-fidelity desktop notes. Artifacts in the same table are excluded.
-    pub fn list_notes(&self) -> Result<Vec<Note>, String> {
-        let mut notes = if super::shared::has_table(&self.conn, "notes")? {
-            let columns = self
-                .conn
-                .prepare("PRAGMA table_info(notes)")
-                .map_err(|e| e.to_string())?
-                .query_map([], |row| row.get::<_, String>(1))
-                .map_err(|e| e.to_string())?
-                .collect::<rusqlite::Result<std::collections::HashSet<_>>>()
-                .map_err(|e| e.to_string())?;
-            let pending = if columns.contains("slug_pending") {
-                "slug_pending"
-            } else {
-                "0"
-            };
-            let tags = if columns.contains("tags_json") {
-                "tags_json"
-            } else {
-                "'[]'"
-            };
-            let kind = if columns.contains("content_kind") {
-                "WHERE content_kind='note'"
-            } else {
-                ""
-            };
-            let mut query = self.conn.prepare(&format!("SELECT id,slug,title,body,source_session_id,source_cwd,{tags},created_at,updated_at,{pending} FROM notes {kind} ORDER BY updated_at DESC,id ASC")).map_err(|e| e.to_string())?;
-            let rows = query.query_map([], read_note).map_err(|e| e.to_string())?;
-            rows.collect::<rusqlite::Result<Vec<_>>>()
-                .map_err(|e| e.to_string())?
-        } else {
-            Vec::new()
-        };
-        // Keep early native prototype notes accessible without modifying data on read.
-        if self.shared.is_none() {
-            for note in self.legacy_notes()? {
-                let id = format!("gpui-note-{}", note.id);
-                if notes.iter().any(|saved| saved.id == id) {
-                    continue;
-                }
-                notes.push(Note {
-                    id,
-                    slug: format!("note-{}", note.id),
-                    title: note.title,
-                    body: note.body,
-                    tags: note.tags,
-                    source_session_id: (note.source_session != 0)
-                        .then(|| note.source_session.to_string()),
-                    source_cwd: (!note.source_cwd.is_empty()).then_some(note.source_cwd),
-                    slug_pending: false,
-                    created_at: note.id.min(i64::MAX as u64) as i64,
-                    updated_at: note.id.min(i64::MAX as u64) as i64,
-                });
-            }
-        }
-        notes.sort_by(|a, b| b.updated_at.cmp(&a.updated_at).then(a.id.cmp(&b.id)));
-        Ok(notes)
-    }
-
-    pub fn get_note(&self, id: &str) -> Result<Option<Note>, String> {
-        valid_id(id)?;
-        Ok(self.list_notes()?.into_iter().find(|note| note.id == id))
     }
 
     pub fn create_note(&self, cwd: Option<String>) -> Result<Note, String> {
@@ -875,20 +802,6 @@ impl Store {
         note.source_session_id
             .as_deref()
             .and_then(|id| self.resolve_existing_session_id(id))
-    }
-
-    /// Resolves @note/slug mentions in the same order as the desktop composer.
-    pub fn apply_notes_to_turn(&self, text: &str) -> Result<String, String> {
-        let slugs = crate::notes::slugs_in_text(text);
-        if slugs.is_empty() {
-            return Ok(text.into());
-        }
-        let notes = self.list_notes()?;
-        let picked = slugs
-            .iter()
-            .filter_map(|slug| notes.iter().find(|note| &note.slug == slug).cloned())
-            .collect::<Vec<_>>();
-        Ok(crate::notes::inject_prompt(text, &picked))
     }
 
     pub(super) fn save_response_note(&self, note: &crate::response::Note) -> Result<(), String> {

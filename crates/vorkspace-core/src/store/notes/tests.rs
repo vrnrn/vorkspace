@@ -192,6 +192,62 @@ fn note_mentions_expand_in_reference_order_once_and_ignore_missing_slugs() {
 }
 
 #[test]
+fn desktop_note_reads_skip_unrelated_bodies_and_keep_legacy_columns_read_only() {
+    let store = Store::open_vorkspace(Path::new(":memory:")).unwrap();
+    let first = store
+        .upsert_note(&input("first", "First", "Kept body"))
+        .unwrap();
+    let second = store
+        .upsert_note(&input("second", "Second", "Also kept"))
+        .unwrap();
+    store
+        .conn
+        .execute_batch(
+            "INSERT INTO notes(id,slug,title,body,created_at,updated_at)
+        VALUES('broken','broken','Unreadable',x'FF',1,1);
+        INSERT INTO notes(id,slug,title,body,created_at,updated_at,content_kind)
+        VALUES('artifact','artifact','Artifact','Private',1,1,'artifact');",
+        )
+        .unwrap();
+    assert_eq!(store.get_note(&second.id).unwrap(), Some(second.clone()));
+    assert!(store.get_note("artifact").unwrap().is_none());
+    assert_eq!(
+        store.note_ids().unwrap(),
+        [first.id.clone(), second.id.clone(), "broken".into()]
+            .into_iter()
+            .collect()
+    );
+    let prompt = "Use @note/second and @note/first and @note/second and @note/artifact";
+    assert_eq!(
+        store.apply_notes_to_turn(prompt).unwrap(),
+        crate::notes::inject_prompt(prompt, &[second, first])
+    );
+
+    let root = tempfile::tempdir().unwrap();
+    let path = root.path().join("legacy.db");
+    let store = Store::open_vorkspace(&path).unwrap();
+    store
+        .conn
+        .execute_batch(
+            "ALTER TABLE notes DROP COLUMN content_kind;
+        ALTER TABLE notes DROP COLUMN tags_json; ALTER TABLE notes DROP COLUMN slug_pending;
+        INSERT INTO notes(id,slug,title,body,created_at,updated_at)
+        VALUES('older','old-slug','Older','Original',1,2);",
+        )
+        .unwrap();
+    let before = schema_version(&store);
+    let reader = Store::read_vorkspace(&path).unwrap();
+    let note = reader.get_note("older").unwrap().unwrap();
+    assert_eq!((&*note.slug, &*note.body), ("old-slug", "Original"));
+    assert!(note.tags.is_empty() && !note.slug_pending);
+    assert_eq!(
+        reader.apply_notes_to_turn("Read @note/old-slug").unwrap(),
+        crate::notes::inject_prompt("Read @note/old-slug", &[note])
+    );
+    assert_eq!(schema_version(&reader), before);
+}
+
+#[test]
 fn response_note_facade_and_legacy_settings_share_one_saved_identity() {
     let store = store();
     let session = store.create("codex", "/project").unwrap();

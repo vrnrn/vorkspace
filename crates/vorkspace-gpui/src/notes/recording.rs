@@ -6,12 +6,12 @@ type Loaded = (Vec<Note>, HashMap<String, String>);
 pub(super) fn load(store: &Database) -> Result<Loaded, String> {
     let (root, known, deleted) = {
         let store = locked(store)?;
-        let ids: HashSet<_> = store
-            .list_notes()?
-            .into_iter()
-            .map(|note| note.id)
-            .collect();
         let links = store.note_recordings()?;
+        let ids = if links.iter().any(|link| !link.deleted) {
+            store.note_ids()?
+        } else {
+            HashSet::new()
+        };
         let deleted: Vec<_> = links
             .iter()
             .filter(|link| link.deleted)
@@ -89,9 +89,9 @@ pub(super) fn load_pinned(store: &Database, note_id: &str) -> Result<Loaded, Str
     let store = locked(store)?;
     let notes = store.get_note(note_id)?.into_iter().collect();
     let links = store
-        .note_recordings()?
+        .note_recording(note_id)?
         .into_iter()
-        .filter(|link| !link.deleted && link.note_id == note_id)
+        .filter(|link| !link.deleted)
         .map(|link| (link.note_id, link.recording_id))
         .collect();
     Ok((notes, links))

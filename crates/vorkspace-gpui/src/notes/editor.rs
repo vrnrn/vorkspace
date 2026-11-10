@@ -2,12 +2,13 @@
 use super::*;
 
 impl Notes {
+    pub(super) fn selected_note(&self) -> Option<&Note> {
+        let id = self.selected.as_deref()?;
+        self.notes.iter().find(|note| note.id == id)
+    }
+
     pub(super) fn draft(&self, cx: &App) -> Option<Note> {
-        let mut note = self
-            .notes
-            .iter()
-            .find(|note| Some(&note.id) == self.selected.as_ref())?
-            .clone();
+        let mut note = self.selected_note()?.clone();
         note.title = self.title.read(cx).content.to_string();
         note.body = self.body.read(cx).content.to_string();
         Some(note)
@@ -19,15 +20,12 @@ impl Notes {
     /// freshly loaded view would stay dirty with nothing to save, and
     /// create/select/refresh would all refuse to proceed.
     pub(super) fn input_changed(&mut self, cx: &mut Context<Self>) {
-        let Some(draft) = self.draft(cx) else {
+        let Some(saved) = self.selected_note() else {
             return;
         };
-        let unchanged = self
-            .notes
-            .iter()
-            .find(|note| note.id == draft.id)
-            .is_some_and(|saved| saved.title == draft.title && saved.body == draft.body);
-        if !unchanged {
+        if saved.title != self.title.read(cx).content.as_str()
+            || saved.body != self.body.read(cx).content.as_str()
+        {
             self.edited(cx);
         }
     }

@@ -98,7 +98,7 @@ impl Notes {
         (!note.body.trim().is_empty()).then_some(note)
     }
 
-    fn detail(&mut self, note: Note, narrow: bool, cx: &mut Context<Self>) -> AnyElement {
+    fn detail(&self, note: &Note, narrow: bool, cx: &mut Context<Self>) -> AnyElement {
         let source = note.source_session_id.clone();
         let attached = self.recordings.contains_key(&note.id);
         let recording_ready = self.recording.read(cx).is_for_note(&note.id);
@@ -110,7 +110,7 @@ impl Notes {
                     .selected_text()
                     .is_some_and(|text| !text.trim().is_empty())
         } else {
-            !note.body.trim().is_empty()
+            !self.body.read(cx).content.trim().is_empty()
         };
         let can_delete = self.image_note.as_ref() != Some(&note.id)
             && (!attached || (recording_ready && self.recording.read(cx).can_delete_note()));
@@ -470,48 +470,15 @@ impl Notes {
             )
             .into_any_element()
     }
-}
 
-impl gpui::Render for Notes {
-    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        if !self.blurs_bound {
-            self.blurs_bound = true;
-            self._subscriptions.push(cx.on_blur(
-                &self.title.focus_handle(cx),
-                window,
-                |this, _, cx| this.flush(cx),
-            ));
-            self._subscriptions.push(cx.on_blur(
-                &self.tag.focus_handle(cx),
-                window,
-                |this, _, cx| this.add_tag(cx),
-            ));
-        }
-        if !cx.has_active_drag() {
-            self.image_drag = false;
-        }
+    fn library(&self, narrow: bool, cx: &mut Context<Self>) -> AnyElement {
         let query = self.query.read(cx).content.to_string();
         let visible: Vec<_> = self
             .notes
             .iter()
             .filter(|note| note.matches(&query))
-            .cloned()
             .collect();
-        let narrow = self.is_narrow(window);
-        let show_list =
-            self.pinned.is_none() && (!narrow || self.show_list || self.selected.is_none());
-        let show_detail = self.pinned.is_some() || !narrow || !show_list;
-        if show_detail
-            && self.show_recording
-            && self
-                .selected
-                .as_deref()
-                .is_some_and(|id| self.recording.read(cx).is_for_note(id))
-        {
-            self.recording
-                .update(cx, |page, cx| page.focus_pending(window, cx));
-        }
-        let list = div()
+        div()
             .relative()
             .w(px(self.list_width))
             .when(narrow, |d| d.w_full())
@@ -694,26 +661,65 @@ impl gpui::Render for Notes {
                         }),
                     ),
                 )
-            });
-        let detail = if let Some(note) = self.draft(cx) {
-            self.detail(note, narrow, cx)
-        } else {
-            page::empty(
-                icon("note", 24.),
-                if self.pinned.is_some() {
-                    "Note unavailable"
-                } else {
-                    "Select a note"
-                },
-                if self.pinned.is_some() {
-                    "This note was deleted or is not available."
-                } else {
-                    "Choose a saved note, or create one with the + button."
-                },
-            )
-            .flex_1()
+            })
             .into_any_element()
-        };
+    }
+}
+
+impl gpui::Render for Notes {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        if !self.blurs_bound {
+            self.blurs_bound = true;
+            self._subscriptions.push(cx.on_blur(
+                &self.title.focus_handle(cx),
+                window,
+                |this, _, cx| this.flush(cx),
+            ));
+            self._subscriptions.push(cx.on_blur(
+                &self.tag.focus_handle(cx),
+                window,
+                |this, _, cx| this.add_tag(cx),
+            ));
+        }
+        if !cx.has_active_drag() {
+            self.image_drag = false;
+        }
+        let narrow = self.is_narrow(window);
+        let show_list =
+            self.pinned.is_none() && (!narrow || self.show_list || self.selected.is_none());
+        let show_detail = self.pinned.is_some() || !narrow || !show_list;
+        if show_detail
+            && self.show_recording
+            && self
+                .selected
+                .as_deref()
+                .is_some_and(|id| self.recording.read(cx).is_for_note(id))
+        {
+            self.recording
+                .update(cx, |page, cx| page.focus_pending(window, cx));
+        }
+        let list = show_list.then(|| self.library(narrow, cx));
+        let detail = show_detail.then(|| {
+            if let Some(note) = self.selected_note() {
+                self.detail(note, narrow, cx)
+            } else {
+                page::empty(
+                    icon("note", 24.),
+                    if self.pinned.is_some() {
+                        "Note unavailable"
+                    } else {
+                        "Select a note"
+                    },
+                    if self.pinned.is_some() {
+                        "This note was deleted or is not available."
+                    } else {
+                        "Choose a saved note, or create one with the + button."
+                    },
+                )
+                .flex_1()
+                .into_any_element()
+            }
+        });
         div()
             .id("notes-view")
             .track_focus(&self.focus)
@@ -811,10 +817,10 @@ impl gpui::Render for Notes {
                     .min_h_0()
                     .min_w_0()
                     .flex()
-                    .when(show_list, |d| d.child(list))
-                    .when(show_detail, |d| {
-                        d.child(page::detail_pane(!narrow && show_list).child(detail))
-                    }),
+                    .children(list)
+                    .children(
+                        detail.map(|detail| page::detail_pane(!narrow && show_list).child(detail)),
+                    ),
             )
             .when_some(self.error.clone(), |d, error| {
                 d.child(
