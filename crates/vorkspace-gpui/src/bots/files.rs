@@ -276,6 +276,9 @@ impl Bots {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        if self.focus_chat_window(id, cx) {
+            return;
+        }
         let prompt = window.prompt(
             gpui::PromptLevel::Warning,
             "Reset conversation?",
@@ -304,6 +307,20 @@ impl Bots {
         })
         .detach();
     }
+    pub(super) fn stop_deleted_bot(&mut self, id: &str, cx: &mut Context<Self>) {
+        if let Some(view) = self.chats.remove(id) {
+            self.conversation_views
+                .borrow_mut()
+                .remove(&view.read(cx).summary.id);
+            view.update(cx, |view, cx| view.bot_stop(cx));
+        }
+        for run in self.running.values_mut().filter(|run| run.bot == id) {
+            run.mailbox.clear();
+            run.failure.get_or_insert_with(|| "Bot was deleted".into());
+            run.view.update(cx, |view, cx| view.bot_stop(cx));
+        }
+    }
+
     pub(super) fn delete_bot(&mut self, id: &str, window: &mut Window, cx: &mut Context<Self>) {
         let prompt = window.prompt(
             gpui::PromptLevel::Warning,
@@ -318,12 +335,7 @@ impl Bots {
                 return;
             }
             let _ = this.update(cx, |this, cx| {
-                if let Some(view) = this.chats.remove(&id) {
-                    view.update(cx, |v, cx| v.bot_stop(cx));
-                }
-                for run in this.running.values().filter(|r| r.bot == id) {
-                    run.view.update(cx, |v, cx| v.bot_stop(cx));
-                }
+                this.stop_deleted_bot(&id, cx);
                 this.roster.bots.retain(|m| m.id != id);
                 this.open_islands.remove(&id);
                 this.expanded_islands.remove(&id);

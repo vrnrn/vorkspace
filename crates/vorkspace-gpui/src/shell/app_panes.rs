@@ -39,6 +39,27 @@ impl Render for BotPaneView {
 }
 
 impl Shell {
+    pub(crate) fn open_owned_bot(
+        &mut self,
+        bot: &str,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if self.workspace.bot_hidden_in_vorkspace(bot)
+            && let Some(vorkspace) = self
+                .workspace
+                .vorkspaces
+                .iter()
+                .find(|vorkspace| vorkspace.bots.iter().any(|id| id == bot))
+                .map(|vorkspace| vorkspace.id.clone())
+        {
+            self.switch_vorkspace(&vorkspace, window, cx);
+        }
+        if let Some(manager) = self.bots.clone() {
+            manager.update(cx, |manager, cx| manager.open(bot, window, cx));
+        }
+    }
+
     fn bot_pane_body(
         &mut self,
         pane: i64,
@@ -470,6 +491,12 @@ impl Shell {
             return;
         };
         if matches!(&pane.content, AppPane::Bot(bot) | AppPane::BotDocument { bot, .. } if self.workspace.bot_hidden_in_vorkspace(bot))
+        {
+            return;
+        }
+        if let AppPane::Bot(bot) = &pane.content
+            && let Some(manager) = self.bots.clone()
+            && manager.update(cx, |manager, cx| manager.focus_chat_window(bot, cx))
         {
             return;
         }

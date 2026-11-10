@@ -287,7 +287,7 @@ impl AppCore {
                     .read(cx)
                     .bots
                     .as_ref()
-                    .is_some_and(|m| m.read(cx).is_bot_session(session))
+                    .is_some_and(|m| m.read(cx).calling_view(session, cx).is_some())
             })
     }
 

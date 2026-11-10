@@ -30,7 +30,7 @@ impl Bots {
         }
     }
 
-    pub(super) fn calling_view(&self, session: i64, cx: &App) -> Option<Entity<Conversation>> {
+    pub(crate) fn calling_view(&self, session: i64, cx: &App) -> Option<Entity<Conversation>> {
         self.chats
             .values()
             .chain(self.running.values().map(|r| &r.view))

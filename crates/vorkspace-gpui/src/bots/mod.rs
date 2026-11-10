@@ -56,6 +56,34 @@ use vorkspace_core::{
 };
 use vorkspace_runtime::runtime::{Database, locked};
 use vorkspace_ui::theme::*;
+pub(crate) fn conversation_in_other_window(
+    open: impl Fn(&gpui::ClickEvent, &mut Window, &mut App) + 'static,
+) -> gpui::Div {
+    div()
+        .flex_1()
+        .min_h_0()
+        .flex()
+        .flex_col()
+        .justify_center()
+        .items_center()
+        .gap_2()
+        .text_color(content(0.65))
+        .child("This conversation is open in another window.")
+        .child(
+            div()
+                .id("show-conversation-window")
+                .role(Role::Button)
+                .px_3()
+                .py_1()
+                .rounded(px(radius::SMALL))
+                .bg(content(0.08))
+                .hover(|button| button.bg(content(0.13)))
+                .cursor_pointer()
+                .on_click(open)
+                .child("Show conversation"),
+        )
+}
+
 fn load_backing_chat(
     db: &vorkspace_core::store::Store,
     root: &std::path::Path,
@@ -721,9 +749,19 @@ impl Bots {
         let Ok(committed) = &shared.snapshot else {
             return;
         };
+        let deleted: HashSet<_> = self
+            .chats
+            .keys()
+            .chain(self.running.values().map(|run| &run.bot))
+            .filter(|id| committed.get(id).is_none() && !self.awaiting_creation.contains(*id))
+            .cloned()
+            .collect();
         let changed = match self.roster.rebase_onto(committed) {
             Ok(changed) => changed,
             Err(error) => {
+                for id in deleted {
+                    self.stop_deleted_bot(&id, cx);
+                }
                 self.error = Some(error);
                 cx.emit(Changed);
                 cx.notify();
@@ -745,27 +783,30 @@ impl Bots {
                     .map(|message| message.id.clone())
             })
             .collect();
+        for id in deleted {
+            self.stop_deleted_bot(&id, cx);
+        }
         if changed {
-            let deleted: Vec<_> = self
-                .chats
-                .keys()
-                .filter(|id| self.roster.get(id).is_none())
-                .cloned()
-                .collect();
-            for id in deleted {
-                self.release_chat(&id, cx);
-                if let Some(view) = self.chats.remove(&id) {
-                    let session = view.read(cx).summary.id;
-                    self.conversation_views.borrow_mut().remove(&session);
-                    view.update(cx, |chat, cx| chat.bot_stop(cx));
-                }
-            }
             if let Some(id) = self.active.clone() {
                 if self.roster.get(&id).is_some() {
                     self.configure_chat(&id, cx);
                 } else {
                     self.close(cx);
                 }
+            }
+            let queued = self
+                .chats
+                .keys()
+                .filter(|id| {
+                    self.roster
+                        .get(id)
+                        .is_some_and(|bot| !bot.outbox.is_empty())
+                })
+                .cloned()
+                .collect::<Vec<_>>();
+            for id in queued {
+                self.configure_chat(&id, cx);
+                self.dispatch(&id, cx);
             }
             self.changed(cx);
         }
@@ -1526,9 +1567,43 @@ impl Bots {
         self.changed(cx);
     }
     pub(crate) fn open(&mut self, id: &str, window: &mut Window, cx: &mut Context<Self>) {
+        if self.focus_chat_window(id, cx) {
+            return;
+        }
         if self.open_workspace_pane(id, window, cx) {
             cx.emit(TabOpened(id.into()));
         }
+    }
+
+    fn other_chat_owner(&self, id: &str, cx: &Context<Self>) -> Option<WeakEntity<Self>> {
+        self.shared_roster
+            .read(cx)
+            .chat_owner(id)
+            .filter(|owner| **owner != cx.weak_entity())
+            .cloned()
+    }
+
+    pub(crate) fn focus_chat_window(&self, id: &str, cx: &mut Context<Self>) -> bool {
+        let Some(owner) = self.other_chat_owner(id, cx) else {
+            return false;
+        };
+        let id = id.to_owned();
+        cx.defer(move |cx| {
+            let Some(handle) = owner
+                .upgrade()
+                .and_then(|manager| manager.read(cx).parent_window)
+            else {
+                return;
+            };
+            let _ = handle.update(cx, |root, window, cx| {
+                if let Ok(shell) = root.downcast::<crate::shell::Shell>() {
+                    shell.update(cx, |shell, cx| shell.open_owned_bot(&id, window, cx));
+                }
+                vorkspace_ui::traffic_lights::show(window);
+                window.activate_window();
+            });
+        });
+        true
     }
     /// Prepare an already selected Bot pane synchronously. Sidebar navigation
     /// still uses `open` to ask Shell to select its workspace tab.
@@ -1942,6 +2017,13 @@ impl Bots {
         let Some(bot) = self.presentation_bot(id) else {
             return div().into_any_element();
         };
+        if self.other_chat_owner(id, cx).is_some() {
+            let id = id.to_owned();
+            return conversation_in_other_window(cx.listener(
+                move |manager, _: &gpui::ClickEvent, window, cx| manager.open(&id, window, cx),
+            ))
+            .into_any_element();
+        }
         let bg = self
             .backgrounds
             .entry(bot.id.clone())
