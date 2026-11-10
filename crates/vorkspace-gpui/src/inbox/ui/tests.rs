@@ -124,7 +124,7 @@ fn connector_detail_headers_start_at_the_pane_inset_at_every_zoom(cx: &mut TestA
                     ..Default::default()
                 };
                 inbox.state.source = provider.into();
-                inbox.selected = Some(item.key());
+                inbox.selected = Some(item.detail_key());
                 Rc::make_mut(&mut inbox.snapshot).items = vec![item];
                 inbox.details = Some(Details::default());
                 inbox.narrow_detail = true;
@@ -201,6 +201,57 @@ fn narrow_navigation_preserves_the_open_item_and_comment_draft(cx: &mut TestAppC
             assert!(inbox.details.is_some());
         })
         .unwrap();
+}
+
+#[gpui::test]
+fn pinned_connector_tabs_retain_server_identity_and_draft_after_reconnect(cx: &mut TestAppContext) {
+    let window = inbox_window_at_width(cx, 1100.);
+    let old = Item {
+        provider: "jira".into(),
+        kind: "issue".into(),
+        id: "10042".into(),
+        identifier: "DEMO-42".into(),
+        title: "Previous site issue".into(),
+        url: "https://previous.example/browse/DEMO-42".into(),
+        ..Default::default()
+    };
+    let new = Item {
+        title: "Current site issue".into(),
+        url: "https://current.example/browse/DEMO-42".into(),
+        updated_at: "2026-11-10T10:00:00Z".into(),
+        ..old.clone()
+    };
+    assert_eq!(old.key(), new.key());
+    let (previous, current) = window
+        .update(cx, |root, _, cx| {
+            let previous = root.connector_item_page("jira", old.clone(), cx);
+            previous.update(cx, |page, cx| {
+                page.comment.update(cx, |input, cx| {
+                    input.set_text("Draft for the previous site".into(), cx);
+                });
+            });
+            Rc::make_mut(&mut root.snapshot).items = vec![new.clone()];
+            let current = root.connector_item_page("jira", new.clone(), cx);
+            assert_ne!(previous, current);
+            assert!(
+                !crate::workspace::AppPane::ConnectorItem(Box::new(old.clone())).same_resource(
+                    &crate::workspace::AppPane::ConnectorItem(Box::new(new.clone()))
+                )
+            );
+            root.publish_pages(cx);
+            (previous, current)
+        })
+        .unwrap();
+    cx.run_until_parked();
+    cx.update(|cx| {
+        let previous = previous.read(cx);
+        assert_eq!(previous.pinned_item(), Some(&old));
+        assert_eq!(
+            previous.comment.read(cx).content.as_ref(),
+            "Draft for the previous site"
+        );
+        assert_eq!(current.read(cx).pinned_item(), Some(&new));
+    });
 }
 
 #[gpui::test]
@@ -786,7 +837,7 @@ fn retained_connector_pages_dispatch_with_current_defaults_and_preserve_explicit
                         .iter()
                         .find(|item| item.provider == *provider)
                         .unwrap()
-                        .key(),
+                        .detail_key(),
                 );
                 page.reset_destination();
                 assert_eq!(page.start_bot.as_deref(), Some("first"));
@@ -1174,7 +1225,7 @@ fn saved_bot_destination_is_preselected_and_explicit_project_choice_wins(cx: &mu
             };
             inbox.state.source = "jira".into();
             Rc::make_mut(&mut inbox.snapshot).items = vec![item.clone()];
-            inbox.selected = Some(item.key());
+            inbox.selected = Some(item.detail_key());
             inbox.details = Some(Details {
                 body: "Ticket description".into(),
                 ..Default::default()

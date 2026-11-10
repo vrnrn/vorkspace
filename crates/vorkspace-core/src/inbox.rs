@@ -4,6 +4,7 @@ mod bounded;
 pub(crate) mod connectors;
 pub use connectors::Connectors;
 mod notifications;
+mod target;
 pub use notifications::NotificationProject;
 mod media;
 pub use avatar::png as avatar_png;
@@ -119,6 +120,22 @@ impl Item {
             format!("{}:{}", self.kind, self.number)
         };
         format!("{}:{identity}", self.provider)
+    }
+
+    /// Pinned panes keep the server-qualified identity when a connector changes.
+    /// List and history keys retain their persisted format.
+    pub fn detail_key(&self) -> String {
+        let key = self.key();
+        if !matches!(self.provider.as_str(), "jira" | "gitlab") {
+            return key;
+        }
+        let Ok(mut url) = url::Url::parse(&self.url) else {
+            return format!("{key}\n{}", self.url);
+        };
+        url.set_query(None);
+        url.set_fragment(None);
+        let url = url.as_str().trim_end_matches('/');
+        format!("{key}\n{url}")
     }
     pub fn reference(&self) -> String {
         if self.identifier.is_empty() {
@@ -775,27 +792,6 @@ impl Service {
         snapshot.items.retain(|i| seen.insert(i.key()));
         snapshot
     }
-    pub fn details(&self, item: &Item) -> Result<Details, String> {
-        match item.provider.as_str() {
-            "jira" => convert(jira::jira_issue_details(
-                self.data_dir.clone(),
-                item.identifier.clone(),
-            )?),
-            "gitlab" => convert(gitlab::gitlab_work_item_details(
-                self.data_dir.clone(),
-                item.repo.clone(),
-                item.kind.clone(),
-                item.number,
-            )?),
-            "github" => convert(github::git_github_work_item_details_for(
-                self.project(item),
-                &item.repo,
-                &item.kind,
-                item.number,
-            )?),
-            _ => Err("Unsupported connector".into()),
-        }
-    }
     fn project<'a>(&'a self, item: &'a Item) -> &'a Path {
         if item.project_path.is_empty() {
             &self.cwd
@@ -803,26 +799,46 @@ impl Service {
             Path::new(&item.project_path)
         }
     }
-    pub fn thread(&self, item: &Item) -> Result<Thread, String> {
-        match item.provider.as_str() {
-            "jira" => convert(jira::jira_issue_thread(
-                self.data_dir.clone(),
-                item.identifier.clone(),
-            )?),
-            "gitlab" => convert(gitlab::gitlab_work_item_thread(
-                self.data_dir.clone(),
-                item.repo.clone(),
-                item.kind.clone(),
-                item.number,
-            )?),
-            "github" => convert(github::git_github_work_item_thread_for(
-                self.project(item),
-                &item.repo,
-                &item.kind,
-                item.number,
-            )?),
-            _ => Err("Unsupported connector".into()),
-        }
+    pub fn discussion(&self, item: &Item) -> (Result<Details, String>, Result<Thread, String>) {
+        let read = || -> Result<_, String> {
+            Ok(match item.provider.as_str() {
+                "jira" => {
+                    let target = jira::Issue::bind(&self.data_dir, item)?;
+                    (
+                        target.details().and_then(convert),
+                        target.thread().and_then(convert),
+                    )
+                }
+                "gitlab" => {
+                    let target = gitlab::WorkItem::bind(&self.data_dir, item)?;
+                    (
+                        target.details().and_then(convert),
+                        target.thread().and_then(convert),
+                    )
+                }
+                "github" => {
+                    let project = self.project(item);
+                    (
+                        github::git_github_work_item_details_for(
+                            project,
+                            &item.repo,
+                            &item.kind,
+                            item.number,
+                        )
+                        .and_then(convert),
+                        github::git_github_work_item_thread_for(
+                            project,
+                            &item.repo,
+                            &item.kind,
+                            item.number,
+                        )
+                        .and_then(convert),
+                    )
+                }
+                _ => return Err("Unsupported connector".into()),
+            })
+        };
+        read().unwrap_or_else(|error| (Err(error.clone()), Err(error)))
     }
     pub fn comment(
         &self,
@@ -831,16 +847,8 @@ impl Service {
         reply_to: String,
     ) -> Result<CommentReceipt, String> {
         match item.provider.as_str() {
-            "jira" => {
-                jira::jira_issue_comment(self.data_dir.clone(), item.identifier.clone(), body)
-            }
-            "gitlab" => gitlab::gitlab_work_item_comment(
-                self.data_dir.clone(),
-                item.repo.clone(),
-                item.kind.clone(),
-                item.number,
-                body,
-            ),
+            "jira" => jira::Issue::bind(&self.data_dir, item)?.comment(&body),
+            "gitlab" => gitlab::WorkItem::bind(&self.data_dir, item)?.comment(&body),
             "github" => github::git_github_work_item_comment_for(
                 self.project(item),
                 &item.repo,
@@ -854,11 +862,7 @@ impl Service {
     }
     pub fn diff(&self, item: &Item) -> Result<Diff, String> {
         match item.provider.as_str() {
-            "gitlab" => convert(gitlab::gitlab_mr_diff(
-                self.data_dir.clone(),
-                item.repo.clone(),
-                item.number,
-            )?),
+            "gitlab" => convert(gitlab::WorkItem::bind(&self.data_dir, item)?.diff()?),
             "github" => convert(github::git_github_pr_diff_for(
                 self.project(item),
                 &item.repo,

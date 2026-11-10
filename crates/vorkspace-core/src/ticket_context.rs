@@ -263,11 +263,13 @@ impl Fetch for Service {
             kind: reference.kind.clone(),
             id: reference.key.clone(),
             identifier: reference.key.clone(),
+            url: reference.url.clone(),
             repo: reference.repo.clone(),
             number: reference.number,
             ..Default::default()
         };
-        Ok((self.details(&item)?, self.thread(&item)?))
+        let (details, thread) = self.discussion(&item);
+        Ok((details?, thread?))
     }
 }
 fn prefix(text: &str, limit: usize) -> (&str, bool) {

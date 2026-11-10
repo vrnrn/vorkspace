@@ -403,7 +403,7 @@ impl Inbox {
         };
         let rows = items
             .map(|item| {
-                let key = item.key();
+                let key = item.detail_key();
                 let active = self.selected.as_ref() == Some(&key);
                 let unread = self.state.seen.unseen(item);
                 let sessions = self.sessions.matching(item).count();

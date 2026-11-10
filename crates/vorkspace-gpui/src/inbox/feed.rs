@@ -276,7 +276,7 @@ impl InboxFeed {
             .changed
             .into_iter()
             .filter(|item| {
-                let key = item.key();
+                let key = item.detail_key();
                 let expected = self.self_activity.get(&key).map(|(revision, _)| *revision);
                 if expected.is_some_and(|revision| item.updated_ms() >= revision) {
                     self.self_activity.remove(&key);
@@ -373,12 +373,12 @@ impl InboxFeed {
     }
 
     pub(super) fn update_item(&mut self, mut item: Item, cx: &mut Context<Self>) {
-        let key = item.key();
+        let key = item.detail_key();
         if let Some(index) = self
             .snapshot
             .items
             .iter()
-            .position(|old| old.key() == key && old.updated_ms() <= item.updated_ms())
+            .position(|old| old.detail_key() == key && old.updated_ms() <= item.updated_ms())
         {
             let old = &self.snapshot.items[index];
             item.project_path.clone_from(&old.project_path);

@@ -85,7 +85,7 @@ fn fixture(provider: &str, narrow_detail: bool, cx: &mut Context<Inbox>) -> Inbo
         login: "Morgan Lee".into(),
         avatar_url: AVATAR.into(),
     });
-    let key = selected.key();
+    let key = selected.detail_key();
     inbox.state.seen.mark(&selected);
     Rc::make_mut(&mut inbox.snapshot).items = vec![
         selected,

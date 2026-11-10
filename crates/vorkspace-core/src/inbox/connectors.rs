@@ -126,8 +126,9 @@ mod tests {
                     .unwrap_err(),
                 "Unsupported connector"
             );
-            assert_eq!(service.details(&item).unwrap_err(), "Unsupported connector");
-            assert_eq!(service.thread(&item).unwrap_err(), "Unsupported connector");
+            let (details, thread) = service.discussion(&item);
+            assert_eq!(details.unwrap_err(), "Unsupported connector");
+            assert_eq!(thread.unwrap_err(), "Unsupported connector");
             assert_eq!(
                 service
                     .comment(&item, "comment".into(), String::new())

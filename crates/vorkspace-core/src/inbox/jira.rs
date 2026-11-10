@@ -180,51 +180,68 @@ pub fn jira_list_issues(
     parse_jira_issues(&data, &config.site)
 }
 
-pub fn jira_issue_details(app: PathBuf, key: String) -> Result<JiraIssueDetails, String> {
-    let config = require_config(&app)?;
-    let key = require_issue_key(&key)?;
-    let data = jira_get(
-        &config,
-        &format!("/rest/api/3/issue/{key}?fields=description,reporter,creator,assignee"),
-    )?;
-    parse_jira_issue_details(&data)
+pub(super) struct Issue<'a> {
+    config: JiraConfig,
+    key: &'a str,
 }
 
-pub fn jira_issue_thread(app: PathBuf, key: String) -> Result<JiraIssueThread, String> {
-    let config = require_config(&app)?;
-    let key = require_issue_key(&key)?;
-    // Newest first so a long thread keeps its latest comments; re-sorted below.
-    let data = jira_get(
-        &config,
-        &format!("/rest/api/3/issue/{key}/comment?maxResults={COMMENT_LIMIT}&orderBy=-created"),
-    )?;
-    parse_jira_issue_thread(&data, &config.site, key)
-}
+impl<'a> Issue<'a> {
+    pub(super) fn bind(app: &Path, item: &'a super::Item) -> Result<Self, String> {
+        let config = require_config(app)?;
+        let key = require_issue_key(&item.identifier)?;
+        let matches = super::target::on_instance(&config.site, &item.url)
+            .and_then(|(_, url)| {
+                url.path()
+                    .trim_end_matches('/')
+                    .strip_prefix("/browse/")
+                    .map(|target| target.eq_ignore_ascii_case(key))
+            })
+            .unwrap_or(false);
+        if !matches {
+            return Err("Connect this issue's Jira site in Settings → Integrations.".into());
+        }
+        Ok(Self { config, key })
+    }
 
-pub fn jira_issue_comment(
-    app: PathBuf,
-    key: String,
-    body: String,
-) -> Result<super::CommentReceipt, String> {
-    let config = require_config(&app)?;
-    let key = require_issue_key(&key)?;
-    let body = body.trim();
-    if body.is_empty() {
-        return Err("Comment cannot be empty".into());
+    pub(super) fn details(&self) -> Result<JiraIssueDetails, String> {
+        let key = self.key;
+        let data = jira_get(
+            &self.config,
+            &format!("/rest/api/3/issue/{key}?fields=description,reporter,creator,assignee"),
+        )?;
+        parse_jira_issue_details(&data)
     }
-    let data = jira_post(
-        &config,
-        &format!("/rest/api/3/issue/{key}/comment"),
-        &json!({ "body": text_to_adf(body) }),
-    )?;
-    let id = string_field(&data, "id").unwrap_or_default();
-    if id.is_empty() {
-        return Err("Could not post Jira comment".into());
+
+    pub(super) fn thread(&self) -> Result<JiraIssueThread, String> {
+        let key = self.key;
+        // Keep the latest comments of a long thread; sort them for display.
+        let data = jira_get(
+            &self.config,
+            &format!("/rest/api/3/issue/{key}/comment?maxResults={COMMENT_LIMIT}&orderBy=-created"),
+        )?;
+        parse_jira_issue_thread(&data, &self.config.site, key)
     }
-    Ok(super::CommentReceipt {
-        url: comment_url(&config.site, key, &id),
-        revision: string_field(&data, "created").map(|time| normalize_jira_time(&time)),
-    })
+
+    pub(super) fn comment(&self, body: &str) -> Result<super::CommentReceipt, String> {
+        let body = body.trim();
+        if body.is_empty() {
+            return Err("Comment cannot be empty".into());
+        }
+        let key = self.key;
+        let data = jira_post(
+            &self.config,
+            &format!("/rest/api/3/issue/{key}/comment"),
+            &json!({ "body": text_to_adf(body) }),
+        )?;
+        let id = string_field(&data, "id").unwrap_or_default();
+        if id.is_empty() {
+            return Err("Could not post Jira comment".into());
+        }
+        Ok(super::CommentReceipt {
+            url: comment_url(&self.config.site, key, &id),
+            revision: string_field(&data, "created").map(|time| normalize_jira_time(&time)),
+        })
+    }
 }
 
 fn status_for(config: Option<&JiraConfig>) -> JiraStatus {

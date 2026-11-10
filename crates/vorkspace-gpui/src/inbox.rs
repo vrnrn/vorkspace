@@ -797,7 +797,8 @@ impl Inbox {
         cx: &mut Context<Self>,
     ) -> Entity<Self> {
         assert_eq!(source, item.provider, "item page provider must match item");
-        let page_key = format!("item:{}", item.key());
+        let item_key = item.detail_key();
+        let page_key = format!("item:{item_key}");
         if let Some(page) = self.pages.get(&page_key) {
             page.update(cx, |page, _| page.release_pending = false);
             return page.clone();
@@ -806,7 +807,7 @@ impl Inbox {
             .snapshot
             .items
             .iter()
-            .find(|current| current.key() == item.key())
+            .find(|current| current.detail_key() == item_key)
         {
             Self::refresh_pinned_summary(&mut item, current);
         }
@@ -832,7 +833,7 @@ impl Inbox {
             page.sessions = self.sessions.clone();
             page.bots = self.bots.clone();
             page.loading = self.loading;
-            page.selected = Some(item.key());
+            page.selected = Some(item_key);
             page.pinned_item = Some(item);
             page
         });
@@ -840,7 +841,7 @@ impl Inbox {
         page
     }
     pub(crate) fn release_item_page(&mut self, item: &Item, cx: &mut Context<Self>) {
-        let page_key = format!("item:{}", item.key());
+        let page_key = format!("item:{}", item.detail_key());
         let Some(page) = self.pages.get(&page_key) else {
             return;
         };
@@ -860,7 +861,7 @@ impl Inbox {
         let (Some(owner), Some(item)) = (self.owner.clone(), self.pinned_item.as_ref()) else {
             return;
         };
-        let page_key = format!("item:{}", item.key());
+        let page_key = format!("item:{}", item.detail_key());
         let page_entity = cx.entity();
         let _ = owner.update(cx, |owner, _| {
             if owner.pages.get(&page_key) == Some(&page_entity) {
@@ -873,7 +874,8 @@ impl Inbox {
     }
 
     fn refresh_pinned_summary(pinned: &mut Item, current: &Item) -> bool {
-        if current.key() != pinned.key() || current.updated_ms() < pinned.updated_ms() {
+        if current.detail_key() != pinned.detail_key() || current.updated_ms() < pinned.updated_ms()
+        {
             return false;
         }
         // Provider snapshots can prefer another clone of this repository.
@@ -987,13 +989,13 @@ impl Inbox {
                     if state.connectors.enabled(&page.state.source) {
                         page.snapshot = snapshot.clone();
                         page.sessions = sessions.clone();
-                        if let Some(pinned) = page.pinned_item.as_mut()
-                            && let Some(current) = snapshot
-                                .items
-                                .iter()
-                                .find(|item| item.key() == pinned.key())
-                        {
-                            Self::refresh_pinned_summary(pinned, current);
+                        if let Some(pinned) = page.pinned_item.as_mut() {
+                            let key = pinned.detail_key();
+                            if let Some(current) =
+                                snapshot.items.iter().find(|item| item.detail_key() == key)
+                            {
+                                Self::refresh_pinned_summary(pinned, current);
+                            }
                         }
                         if page.pinned_item.is_none()
                             && page.active
@@ -1023,7 +1025,7 @@ impl Inbox {
         })
     }
     fn first_visible_key(&self, cx: &App) -> Option<String> {
-        self.visible_items(cx).next().map(Item::key)
+        self.visible_items(cx).next().map(Item::detail_key)
     }
     fn item(&self) -> Option<Item> {
         if let Some(pinned) = &self.pinned_item {
@@ -1036,7 +1038,9 @@ impl Inbox {
             .items
             .iter()
             .find(|item| {
-                item.provider == self.state.source && item.key() == key && self.item_in_scope(item)
+                item.provider == self.state.source
+                    && item.detail_key() == key
+                    && self.item_in_scope(item)
             })
             .map(|item| self.scoped_item(item))
     }
@@ -1044,7 +1048,7 @@ impl Inbox {
         if self
             .pinned_item
             .as_ref()
-            .is_some_and(|item| item.key() != key)
+            .is_some_and(|item| item.detail_key() != key)
         {
             return;
         }
@@ -1133,11 +1137,11 @@ impl Inbox {
             self.document = None;
             self.comments.clear();
         }
-        let key = item.key();
+        let key = item.detail_key();
         let service = self.service.clone();
         let task = cx
             .background_executor()
-            .spawn(async move { (service.details(&item), service.thread(&item)) });
+            .spawn(async move { service.discussion(&item) });
         cx.spawn(async move |this, cx| {
             let (details, thread) = task.await;
             let _ = this.update(cx, |this, cx| {
@@ -1236,7 +1240,7 @@ impl Inbox {
         self.extra_loading = true;
         self.extra_request += 1;
         let request = self.extra_request;
-        let key = item.key();
+        let key = item.detail_key();
         let service = self.service.clone();
         let task = cx.background_executor().spawn(async move {
             if tab == Tab::Code {
@@ -1302,7 +1306,7 @@ impl Inbox {
         self.posting = true;
         self.post_error = None;
         let posted = PostedComment {
-            key: item.key(),
+            key: item.detail_key(),
             revision: self.comment_revision,
             reply: self.reply.clone(),
         };
@@ -1493,7 +1497,7 @@ impl Inbox {
         self.acting = true;
         self.action_error = None;
         let service = self.service.clone();
-        let key = item.key();
+        let key = item.detail_key();
         let merging = matches!(action.as_str(), "merge" | "squash" | "rebase");
         let task = cx
             .background_executor()
