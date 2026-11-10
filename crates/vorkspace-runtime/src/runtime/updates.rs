@@ -43,6 +43,7 @@ impl Update {
 pub enum TurnOutcome {
     Completed,
     Cancelled,
+    Superseded,
     Failed,
 }
 

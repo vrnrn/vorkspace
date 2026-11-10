@@ -46,6 +46,8 @@ While a reply streams, the host can reuse the message list it just saved. It che
 
 The desktop keeps the earlier messages it already loaded and updates the portion that changed. If you click Stop while messages are on their way, the final update still includes every saved message.
 
+Stop and approval buttons belong to the reply you see. If another computer has already started a new reply, the app refreshes before it can control that reply. A separate message awaiting Retry stays queued.
+
 Temporary downloads share a size budget. If it is busy, retry after another download finishes; active downloads are kept intact. A chat that exceeds the download size limit gets a clear error and stays saved on the host. Download limits do not delete conversation data.
 
 A slow reply from the host cannot undo newer status or settings. Partial chat lists can be filled in by a matching complete reply without treating missing fields as deleted.

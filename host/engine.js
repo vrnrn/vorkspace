@@ -574,6 +574,9 @@ export class HostEngine {
         commandId: command.commandId,
         sessionId: saved.session.id,
         revision: saved.revision,
+        ...(command.type === "send" || command.type === "compact"
+          ? { runId: saved.runId }
+          : {}),
       };
       this.store.recordReceipt(signature, result);
       return { receipt: result, saved };

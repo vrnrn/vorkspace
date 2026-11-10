@@ -73,6 +73,7 @@ impl Conversation {
             || !self.remote_state.online
             || self.remote_state.client.is_none()
             || self.remote_state.pending
+            || self.remote_state.awaiting_successor
             || self.busy
             || self.stopping
         {
@@ -110,7 +111,8 @@ impl Conversation {
                 self.busy
                     || self.stopping
                     || !self.remote_state.online
-                    || self.remote_state.pending,
+                    || self.remote_state.pending
+                    || self.remote_state.awaiting_successor,
             )
         });
         let title = self

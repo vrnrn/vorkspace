@@ -347,7 +347,7 @@ fn lost_create_receipt_retries_original_ids_from_durable_outbox() {
         .remote_session(binding.summary.id)
         .unwrap()
         .unwrap();
-    dispatch_outbox(&host.client, &host.machine.id, &store, &mut restored).unwrap();
+    let _ = dispatch_outbox(&host.client, &host.machine.id, &store, &mut restored).unwrap();
     assert!(restored.outbox.is_empty());
     assert_eq!(restored.session_id.as_deref(), Some("host-session"));
     let requests = requests.lock().unwrap();
@@ -554,6 +554,10 @@ fn explicit_stop_is_journaled_once_for_the_observed_run() {
     let store = dir.store();
     let mut binding = binding(&store);
     binding.session_id = Some("host-session".into());
+    let pending = json!({
+        "type":"send","commandId":"pending-send","sessionId":"host-session","text":"Awaiting retry"
+    });
+    binding.outbox.push(pending.clone());
     journal(&store, &binding).unwrap();
     let stops = Arc::new(AtomicUsize::new(0));
     let sent = stops.clone();
@@ -582,6 +586,7 @@ fn explicit_stop_is_journaled_once_for_the_observed_run() {
     };
     let client = host.client.clone();
     let summary = binding.summary.clone();
+    let worker_store = store.clone();
     let worker = thread::spawn(move || {
         run_with_client(
             client,
@@ -589,7 +594,7 @@ fn explicit_stop_is_journaled_once_for_the_observed_run() {
             String::new(),
             settings,
             controls,
-            store,
+            worker_store,
             Arc::new(AtomicBool::new(true)),
             tx,
         )
@@ -603,6 +608,89 @@ fn explicit_stop_is_journaled_once_for_the_observed_run() {
     }
     worker.join().unwrap();
     assert_eq!(stops.load(Ordering::Relaxed), 1);
+    assert_eq!(
+        locked(&store)
+            .unwrap()
+            .remote_session(binding.summary.id)
+            .unwrap()
+            .unwrap()
+            .outbox,
+        [pending]
+    );
+}
+
+#[test]
+fn stop_never_targets_a_successor_seen_during_observation() {
+    let dir = Directory::new();
+    let store = dir.store();
+    let mut binding = binding(&store);
+    binding.session_id = Some("host-session".into());
+    journal(&store, &binding).unwrap();
+    let cancel = Arc::new(AtomicBool::new(false));
+    let at_host = cancel.clone();
+    let commands = Arc::new(Mutex::new(Vec::new()));
+    let recorded = commands.clone();
+    let (polling, poll_started) = std::sync::mpsc::channel();
+    let mut polls = 0;
+    let host = Host::new(move |request| {
+        if request["method"] == "commands.dispatch" {
+            let command = &request["params"];
+            recorded.lock().unwrap().push(command.clone());
+            return Some(receipt(command));
+        }
+        polls += 1;
+        let mut value = snapshot(if polls <= 2 { "running" } else { "idle" }, polls);
+        if polls > 1 {
+            let _ = polling.send(());
+            let deadline = Instant::now() + Duration::from_secs(5);
+            while !at_host.load(Ordering::Relaxed) && Instant::now() < deadline {
+                thread::sleep(Duration::from_millis(1));
+            }
+            value["runId"] = json!("successor-run");
+        }
+        Some(json!({"kind":"snapshot","value":value}))
+    });
+    let (tx, rx) = async_channel::unbounded();
+    let (_controls_tx, controls) = std::sync::mpsc::channel();
+    let client = host.client.clone();
+    let worker_cancel = cancel.clone();
+    let worker = thread::spawn(move || {
+        run_with_client(
+            client,
+            binding.summary,
+            String::new(),
+            Settings {
+                remote_action: Some(json!({"type":"attach","runId":"host-run"})),
+                ..Default::default()
+            },
+            controls,
+            store,
+            worker_cancel,
+            tx,
+        )
+    });
+    assert!(!receive(&rx).finished());
+    poll_started.recv_timeout(Duration::from_secs(5)).unwrap();
+    cancel.store(true, Ordering::Relaxed);
+    assert_eq!(receive(&rx).outcome, Some(TurnOutcome::Superseded));
+    worker.join().unwrap();
+    assert!(commands.lock().unwrap().is_empty());
+}
+
+#[test]
+fn older_start_receipts_bind_only_the_command_prompt() {
+    let mut admitted = ObservedRun::from_receipt(&json!({}), "accepted");
+    let mut live = snapshot("running", 1);
+    assert!(!admitted.accepts(&live));
+    live["session"]["blocks"][0]["id"] = json!("accepted");
+    assert!(admitted.accepts(&live));
+    assert_eq!(admitted.id().unwrap(), "host-run");
+    live["runId"] = json!("successor");
+    assert!(!admitted.accepts(&live));
+
+    let mut versioned = ObservedRun::from_receipt(&json!({"runId":"successor"}), "other");
+    assert!(versioned.accepts(&live));
+    assert_eq!(versioned.id().unwrap(), "successor");
 }
 
 /// This crosses the production Rust client, Node HTTP server, SQLite engine,

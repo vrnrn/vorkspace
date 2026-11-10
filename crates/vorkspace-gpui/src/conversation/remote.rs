@@ -8,6 +8,7 @@ pub(super) struct State {
     pub(super) client: Option<Arc<vorkspace_core::remote::Connections>>,
     clock: Option<gpui::Task<()>>,
     pub(super) refreshing: bool,
+    pub(super) awaiting_successor: bool,
     pub(super) refresh_generation: u64,
     pub(super) pending: bool,
     pub(super) online: bool,
@@ -198,6 +199,7 @@ impl Conversation {
             return;
         }
         self.loading = false;
+        self.remote_state.awaiting_successor = false;
         match result {
             Ok((remote, settings, snapshot, history, descriptor)) => {
                 self.remote_state.online = true;
@@ -233,7 +235,8 @@ impl Conversation {
                 self.loaded = true;
                 self.history_unloaded = false;
                 self.status = "Ready".into();
-                let running = snapshot.as_ref().is_some_and(|s| s["status"] == "running");
+                let running = snapshot.as_ref().filter(|s| s["status"] == "running");
+                let run = running.map(|s| s["runId"].clone());
                 if let Some(snapshot) = &snapshot {
                     self.context = snapshot["session"]
                         .get("context")
@@ -259,8 +262,8 @@ impl Conversation {
                 if let Some((row, query)) = self.pending_search.take() {
                     self.reveal_search(row, query, cx);
                 }
-                if running && !self.busy && !self.stopping {
-                    self.settings.remote_action = Some(json!({"type":"attach"}));
+                if let Some(run) = run.filter(|_| !self.busy && !self.stopping) {
+                    self.settings.remote_action = Some(json!({"type":"attach", "runId":run}));
                     self.launch_prompt(String::new(), cx);
                 } else {
                     self.run_history_actions(cx);
@@ -296,6 +299,8 @@ impl Conversation {
             ))
         } else if self.busy || self.stopping {
             Some("Wait for this remote turn to finish before sending another message.")
+        } else if self.remote_state.awaiting_successor {
+            Some("Refreshing conversation…")
         } else {
             None
         };
@@ -360,7 +365,12 @@ impl Conversation {
             return;
         }
 
-        if self.busy || self.stopping || self.remote_state.pending || !self.remote_state.online {
+        if self.busy
+            || self.stopping
+            || self.remote_state.pending
+            || self.remote_state.awaiting_successor
+            || !self.remote_state.online
+        {
             return;
         }
         let Some(draft) = self.follow_ups.state.draft.as_ref() else {

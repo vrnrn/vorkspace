@@ -704,6 +704,8 @@ impl Conversation {
                             if this.is_remote() {
                                 this.settings.remote_action = None;
                                 this.remote_state.refreshing = false;
+                                this.remote_state.awaiting_successor =
+                                    outcome == TurnOutcome::Superseded;
                             }
                             this.summary.updated_at = vorkspace_core::time::now_ms();
                             this.busy = false;

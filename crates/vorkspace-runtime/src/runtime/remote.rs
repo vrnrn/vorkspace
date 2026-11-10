@@ -129,7 +129,7 @@ pub fn configure_saved(store: Database, id: i64) -> Result<(), String> {
     }
     binding.outbox.push(next);
     journal(&store, &binding)?;
-    dispatch_outbox(&client, &machine.id, &store, &mut binding)
+    dispatch_outbox(&client, &machine.id, &store, &mut binding).map(|_| ())
 }
 
 fn journal(store: &Database, binding: &RemoteSession) -> Result<(), String> {
@@ -145,69 +145,174 @@ fn commit(
     *binding = next;
     Ok(())
 }
+/// The admitted turn retains its identity until the desktop detaches.
+#[derive(Debug)]
+struct ObservedRun {
+    run_id: Option<String>,
+    legacy_prompt: Option<String>,
+}
+
+impl ObservedRun {
+    fn from_receipt(receipt: &Value, command_id: &str) -> Self {
+        let run_id = run_id(receipt).map(str::to_owned);
+        let legacy_prompt = run_id.is_none().then(|| command_id.to_owned());
+        Self {
+            run_id,
+            legacy_prompt,
+        }
+    }
+
+    fn accepts(&mut self, snapshot: &Value) -> bool {
+        let observed = run_id(snapshot);
+        if let Some(expected) = self.run_id.as_deref() {
+            // The v1 Host keeps its last run ID at settlement. Older hosts
+            // can omit it once idle, when there is no live run to control.
+            return observed.map_or(snapshot["status"] != "running", |id| id == expected);
+        }
+        if snapshot["status"] == "running"
+            && let Some(expected) = self.legacy_prompt.as_deref()
+        {
+            let prompt = snapshot["session"]["blocks"]
+                .as_array()
+                .and_then(|blocks| {
+                    blocks.iter().rev().find(|block| {
+                        block["role"] == "user"
+                            && block["draft"] != true
+                            && block["internal"] != true
+                    })
+                })
+                .and_then(|block| block["id"].as_str());
+            if prompt != Some(expected) {
+                return false;
+            }
+        }
+        self.run_id = observed.map(str::to_owned);
+        true
+    }
+
+    fn id(&self) -> Result<&str, String> {
+        self.run_id
+            .as_deref()
+            .ok_or_else(|| "Running host session has no run identity".into())
+    }
+}
+
+fn run_id(value: &Value) -> Option<&str> {
+    value["runId"].as_str().filter(|id| !id.is_empty())
+}
+
 /// Commands are written before I/O. A lost response leaves the original ID for
-/// Retry or restart recovery; the host's receipt is the only commit boundary.
+/// Retry or restart recovery. A receipt binds the observation to the accepted run.
 fn dispatch_outbox(
     client: &vorkspace_core::remote::Connections,
     machine: &str,
     store: &Database,
     binding: &mut RemoteSession,
-) -> Result<(), String> {
-    while let Some(mut next) = binding.outbox.first().cloned() {
-        if next["type"] != "create" && next["sessionId"].is_null() {
-            next["sessionId"] = json!(
-                binding
-                    .session_id
-                    .as_deref()
-                    .ok_or("Remote session creation has not been confirmed")?
-            );
-            let mut durable = binding.clone();
-            durable.outbox[0] = next.clone();
-            commit(store, binding, durable)?;
+) -> Result<Option<ObservedRun>, String> {
+    let mut run = None;
+    while !binding.outbox.is_empty() {
+        if let Some(started) = dispatch_pending(client, machine, store, binding, 0)? {
+            run = Some(started);
         }
-        if binding
-            .uploads
-            .iter()
-            .any(|upload| Some(upload.command_id.as_str()) == next["commandId"].as_str())
-        {
-            return Err("Remote attachments have not finished uploading".into());
-        }
-        let receipt = match client.request(machine, "commands.dispatch", next.clone()) {
-            Ok(receipt) => receipt,
-            Err(error) => {
-                if error.starts_with("Host rejected request:") {
-                    let mut durable = binding.clone();
+    }
+    Ok(run)
+}
+
+fn dispatch_pending(
+    client: &vorkspace_core::remote::Connections,
+    machine: &str,
+    store: &Database,
+    binding: &mut RemoteSession,
+    index: usize,
+) -> Result<Option<ObservedRun>, String> {
+    let mut next = binding.outbox[index].clone();
+    if next["type"] != "create" && next["sessionId"].is_null() {
+        next["sessionId"] = json!(
+            binding
+                .session_id
+                .as_deref()
+                .ok_or("Remote session creation has not been confirmed")?
+        );
+        let mut durable = binding.clone();
+        durable.outbox[index] = next.clone();
+        commit(store, binding, durable)?;
+    }
+    let command_id = next["commandId"]
+        .as_str()
+        .ok_or("Remote command identity is missing")?;
+    if binding
+        .uploads
+        .iter()
+        .any(|upload| upload.command_id == command_id)
+    {
+        return Err("Remote attachments have not finished uploading".into());
+    }
+    let receipt = match client.request(machine, "commands.dispatch", next.clone()) {
+        Ok(receipt) => receipt,
+        Err(error) => {
+            if error.starts_with("Host rejected request:") {
+                let mut durable = binding.clone();
+                if matches!(next["type"].as_str(), Some("cancel" | "approve" | "answer")) {
+                    // A stale control cannot invalidate an unrelated send.
+                    durable.outbox.remove(index);
+                } else {
                     durable.rejected = Some(
                         json!({"error":error,"commands":binding.outbox,"uploads":binding.uploads}),
                     );
                     durable.outbox.clear();
                     durable.uploads.clear();
-                    commit(store, binding, durable)?;
                 }
-                return Err(error);
+                commit(store, binding, durable)?;
             }
-        };
-        let id = receipt["sessionId"]
-            .as_str()
-            .filter(|id| !id.is_empty())
-            .ok_or("Host command receipt has no session identity")?;
-        if receipt["commandId"] != next["commandId"] {
-            return Err("Host returned a receipt for another command".into());
+            return Err(error);
         }
-        if next["type"] != "create" && binding.session_id.as_deref() != Some(id) {
-            return Err("Host returned a receipt for another session".into());
-        }
-        if receipt["revision"].as_u64().is_none() {
-            return Err("Host command receipt has no revision".into());
-        }
-        let mut durable = binding.clone();
-        if next["type"] == "create" {
-            durable.session_id = Some(id.into());
-        }
-        durable.outbox.remove(0);
-        commit(store, binding, durable)?;
+    };
+    let id = receipt["sessionId"]
+        .as_str()
+        .filter(|id| !id.is_empty())
+        .ok_or("Host command receipt has no session identity")?;
+    if receipt["commandId"].as_str() != Some(command_id) {
+        return Err("Host returned a receipt for another command".into());
     }
-    Ok(())
+    if next["type"] != "create" && binding.session_id.as_deref() != Some(id) {
+        return Err("Host returned a receipt for another session".into());
+    }
+    if receipt["revision"].as_u64().is_none() {
+        return Err("Host command receipt has no revision".into());
+    }
+    let mut durable = binding.clone();
+    if next["type"] == "create" {
+        durable.session_id = Some(id.into());
+    }
+    durable.outbox.remove(index);
+    commit(store, binding, durable)?;
+    Ok(matches!(next["type"].as_str(), Some("send" | "compact"))
+        .then(|| ObservedRun::from_receipt(&receipt, command_id)))
+}
+
+/// An attached run can be controlled while a different command awaits Retry.
+fn dispatch_control(
+    client: &vorkspace_core::remote::Connections,
+    machine: &str,
+    store: &Database,
+    binding: &mut RemoteSession,
+    command: Value,
+) -> Result<(), String> {
+    let lock = operation_lock(store, binding.summary.id);
+    let _guard = lock.lock().map_err(|_| "Remote session is unavailable")?;
+    let mut current = locked(store)?
+        .remote_session(binding.summary.id)?
+        .filter(|current| {
+            current.session_id == binding.session_id
+                && current.project.environment_id == binding.project.environment_id
+        })
+        .ok_or("Remote conversation changed before the request could be sent")?;
+    let index = current.outbox.len();
+    current.outbox.push(command);
+    journal(store, &current)?;
+    let result = dispatch_pending(client, machine, store, &mut current, index);
+    *binding = current;
+    result.map(|_| ())
 }
 const MAX_ATTACHMENT_BYTES: u64 = 20 * 1024 * 1024;
 const ATTACHMENT_CHUNK_BYTES: usize = 512 * 1024;
@@ -673,10 +778,15 @@ pub fn run_with_client(
             binding.summary.updated_at = vorkspace_core::time::now_ms();
             journal(&store, &binding)?;
         }
-        if !attaching {
+        let mut run = if attaching {
+            Some(ObservedRun {
+                run_id: run_id(&action).map(str::to_owned),
+                legacy_prompt: None,
+            })
+        } else {
             upload_pending(&client, &machine.id, &store, &mut binding)?;
-            dispatch_outbox(&client, &machine.id, &store, &mut binding)?;
-        }
+            dispatch_outbox(&client, &machine.id, &store, &mut binding)?
+        };
         drop(guard);
         let id = binding
             .session_id
@@ -688,8 +798,7 @@ pub fn run_with_client(
         let mut seen_approvals = HashSet::new();
         let mut seen_questions = HashSet::new();
         let mut current_question = None;
-        let mut control_commands = Vec::<Value>::new();
-        let mut stopping_run = None::<String>;
+        let mut stop_sent = false;
         loop {
             // Cancel is explicit Stop. Dropping the desktop receiver simply
             // ends observation, leaving the host process and run untouched.
@@ -700,8 +809,17 @@ pub fn run_with_client(
                 let snapshot = observation
                     .snapshot()
                     .ok_or("Host did not return a session snapshot")?;
+                if run.as_mut().is_some_and(|run| !run.accepts(snapshot)) {
+                    tx.send_blocking(update(
+                        "Refreshing conversation…",
+                        Some(TurnOutcome::Superseded),
+                    ))
+                    .map_err(|_| "Window closed")?;
+                    break;
+                }
                 let revision = snapshot["revision"].as_u64();
-                let running = snapshot["status"] == "running";
+                let host_running = snapshot["status"] == "running";
+                let running = host_running && run.is_some();
                 let current_approvals = approvals(snapshot);
                 current_question = question(snapshot);
                 let mut next = if running {
@@ -711,7 +829,7 @@ pub fn run_with_client(
                         "Host interrupted this turn. Inspect its work before continuing.",
                         Some(TurnOutcome::Failed),
                     )
-                } else if stopping_run.is_some() {
+                } else if stop_sent {
                     update("Ready", Some(TurnOutcome::Cancelled))
                 } else {
                     update("Ready", Some(TurnOutcome::Completed))
@@ -756,7 +874,7 @@ pub fn run_with_client(
                 seen_questions = question_ids;
                 // Keep the selected desktop handle when creation's receipt binds a
                 // new host session. Metadata refreshes find this binding by host ID.
-                binding.running = running;
+                binding.running = host_running;
                 binding.host_revision = revision.or(binding.host_revision);
                 binding.needs_input = !seen_approvals.is_empty() || !seen_questions.is_empty();
                 binding.summary.title = snapshot["session"]["title"]
@@ -773,22 +891,19 @@ pub fn run_with_client(
                     break;
                 }
             }
-            let snapshot = observation
-                .snapshot()
-                .ok_or("Host did not return a session snapshot")?;
-            if cancel.load(Ordering::Relaxed) && stopping_run.is_none() {
-                let run_id = snapshot["runId"]
-                    .as_str()
-                    .filter(|id| !id.is_empty())
-                    .ok_or("Running host session has no run identity")?;
+            let active = run.as_ref().ok_or("Host did not start a turn")?;
+            if cancel.load(Ordering::Relaxed) && !stop_sent {
                 let mut stop = command("cancel", Some(&id));
-                stop["runId"] = json!(run_id);
-                control_commands.push(stop);
-                stopping_run = Some(run_id.into());
+                stop["runId"] = json!(active.id()?);
+                dispatch_control(&client, &machine.id, &store, &mut binding, stop)?;
+                stop_sent = true;
             }
-            while let Ok(control) = controls.try_recv() {
+            while !cancel.load(Ordering::Relaxed) {
+                let Ok(control) = controls.try_recv() else {
+                    break;
+                };
                 let mut next = command("approve", Some(&id));
-                next["runId"] = snapshot["runId"].clone();
+                next["runId"] = json!(active.id()?);
                 next["requestId"] = json!(
                     control
                         .id
@@ -819,18 +934,13 @@ pub fn run_with_client(
                         return Err("Steering is not supported by this remote host".into());
                     }
                 }
-                control_commands.push(next);
-            }
-            for command in control_commands.drain(..) {
-                binding.outbox.push(command);
-                journal(&store, &binding)?;
-                dispatch_outbox(&client, &machine.id, &store, &mut binding)?;
+                dispatch_control(&client, &machine.id, &store, &mut binding, next)?;
             }
             for _ in 0..15 {
                 if tx.is_closed() {
                     return Ok(());
                 }
-                if cancel.load(Ordering::Relaxed) && stopping_run.is_none() {
+                if cancel.load(Ordering::Relaxed) && !stop_sent {
                     break;
                 }
                 std::thread::sleep(Duration::from_millis(50));

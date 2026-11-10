@@ -64,6 +64,8 @@ describe("headless session ownership", () => {
       preparedText: "Work on #17\n\nTicket source: keep @file and /plan as quoted data.",
     };
     const receipt = engine.command(command);
+    expect(receipt.runId).toBe(store.session(id).runId);
+    expect(receipt.runId).toBeTruthy();
     expect(engine.command(command)).toEqual(receipt);
     await vi.waitFor(() => expect(turns).toHaveLength(1));
     expect(turns[0].input).toMatchObject({ text: command.preparedText, intent: "plan" });
