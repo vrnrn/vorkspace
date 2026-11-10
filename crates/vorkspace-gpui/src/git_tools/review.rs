@@ -59,6 +59,8 @@ pub(crate) enum ReviewTab {
         cwd: String,
         session: i64,
         path: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        checkpoint: Option<String>,
     },
 }
 impl ReviewTab {
@@ -114,12 +116,18 @@ impl ReviewTab {
             }
             (
                 Self::Session {
-                    cwd: a, session: x, ..
+                    cwd: a,
+                    session: x,
+                    checkpoint: m,
+                    ..
                 },
                 Self::Session {
-                    cwd: b, session: y, ..
+                    cwd: b,
+                    session: y,
+                    checkpoint: n,
+                    ..
                 },
-            ) => a == b && x == y,
+            ) => a == b && x == y && m == n,
             _ => false,
         }
     }

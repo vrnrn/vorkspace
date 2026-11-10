@@ -12,6 +12,7 @@ use std::{
     time::Duration,
 };
 use vorkspace_core::{
+    checkpoint::RecordedReview,
     diff,
     scm::{self, ChangedFile, FileDiff, FileDiffVersion},
 };
@@ -22,7 +23,7 @@ const PUBLISH_INTERVAL: Duration = Duration::from_millis(16);
 enum FileReader {
     Checkout(scm::WorktreeReview),
     Commit(scm::CommitReview),
-    Session { cwd: String, id: String },
+    Session(RecordedReview),
 }
 
 impl FileReader {
@@ -30,11 +31,7 @@ impl FileReader {
         match self {
             Self::Checkout(reader) => reader.file(relative, staged == Some(true)),
             Self::Commit(reader) => reader.file(relative),
-            Self::Session { cwd, id } => {
-                let store =
-                    vorkspace_core::checkpoint::store().ok_or("Session changes are unavailable")?;
-                store.exclusive(|s| s.file_diff(id, cwd, relative))
-            }
+            Self::Session(reader) => reader.file(relative),
         }
     }
 }
@@ -45,12 +42,22 @@ struct Listed {
     reader: FileReader,
 }
 
-fn session_files(cwd: &str, session: i64) -> Result<Listed, String> {
+fn session_files(cwd: &str, session: i64, checkpoint: Option<&str>) -> Result<Listed, String> {
     let store = vorkspace_core::checkpoint::store().ok_or("Session changes are unavailable")?;
     let id = session.to_string();
-    let status = store.exclusive(|s| s.status(&id, cwd))?;
-    let files = status
-        .files
+    let (reader, files) = match checkpoint {
+        Some(checkpoint) => {
+            let reader = store.exclusive(|s| s.open_recorded_review(&id, cwd, Some(checkpoint)))?;
+            let files = reader.files()?;
+            (reader, files)
+        }
+        None => store.exclusive(|s| {
+            let status = s.status(&id, cwd)?;
+            let reader = s.open_recorded_review(&id, cwd, status.turn_id.as_deref())?;
+            Ok((reader, status.files))
+        })?,
+    };
+    let files = files
         .into_iter()
         .map(|f| ChangedFile {
             path: f.path,
@@ -65,10 +72,7 @@ fn session_files(cwd: &str, session: i64) -> Result<Listed, String> {
     Ok(Listed {
         files,
         versions: None,
-        reader: FileReader::Session {
-            cwd: cwd.to_owned(),
-            id,
-        },
+        reader: FileReader::Session(reader),
     })
 }
 
@@ -79,7 +83,11 @@ impl ReviewPane {
             && let Some(source) = self.sources.get(self.state.active)
             && matches!(
                 source.tab,
-                ReviewTab::Changes { .. } | ReviewTab::Session { .. }
+                ReviewTab::Changes { .. }
+                    | ReviewTab::Session {
+                        checkpoint: None,
+                        ..
+                    }
             )
         {
             self.load_active(cx);
@@ -107,7 +115,16 @@ impl ReviewPane {
         if source.editor.is_some() {
             return;
         }
-        if source.complete && matches!(source.tab, ReviewTab::Commit { .. }) {
+        if source.complete
+            && matches!(
+                source.tab,
+                ReviewTab::Commit { .. }
+                    | ReviewTab::Session {
+                        checkpoint: Some(_),
+                        ..
+                    }
+            )
+        {
             return;
         }
         if source.load.is_some() {
@@ -147,7 +164,12 @@ impl ReviewPane {
                             reader: FileReader::Commit(reader),
                         })
                     }
-                    ReviewTab::Session { cwd, session, .. } => session_files(cwd, *session),
+                    ReviewTab::Session {
+                        cwd,
+                        session,
+                        checkpoint,
+                        ..
+                    } => session_files(cwd, *session, checkpoint.as_deref()),
                 }
             }
         });

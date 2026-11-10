@@ -435,20 +435,22 @@ impl Conversation {
             crate::git_tools::session_review::SessionReview::new(summary.id, summary.cwd.clone())
         });
         let review_events = cx.subscribe(&review, |this, review, event, cx| match event {
-            crate::git_tools::session_review::SessionReviewEvent::Open { path } => {
+            crate::git_tools::session_review::SessionReviewEvent::Open { path, turn_id } => {
                 let (session, cwd) = review.read(cx).session();
                 cx.emit(OpenSessionChanges(
                     crate::git_tools::review::ReviewTab::Session {
                         cwd: cwd.to_owned(),
                         session,
                         path: path.clone(),
+                        checkpoint: Some(turn_id.clone()),
                     },
                 ));
             }
-            // Undo and Keep may rewrite files; the checkout's views reread.
-            crate::git_tools::session_review::SessionReviewEvent::Changed => {
-                this.refresh_git(cx);
-                cx.emit(SessionChanged::Checkout);
+            crate::git_tools::session_review::SessionReviewEvent::Changed { cwd } => {
+                if this.execution_cwd() == cwd {
+                    this.refresh_git(cx);
+                    cx.emit(SessionChanged::Checkout);
+                }
             }
         });
         let review_observation = cx.observe(&review, |this, review, cx| {
