@@ -88,11 +88,9 @@ pub fn token_at(text: &str, cursor: usize) -> Option<Token> {
     {
         return None;
     }
-    if text[..start]
-        .lines()
-        .last()
-        .is_some_and(|line| line.trim_start().starts_with('>'))
-    {
+    let prefix = &text[..start];
+    let line = prefix.rsplit(['\r', '\n']).next().unwrap_or(prefix);
+    if line.trim_start().starts_with('>') {
         return None;
     }
     let end = text[cursor..]
@@ -243,10 +241,12 @@ pub fn prepare_prompt(text: &str, cwd: &str, attachments: &[PathBuf]) -> Result<
     }
     // Mentions use full project-relative paths, including quoted paths with spaces.
     let mentions = mentions(text);
-    for relative in mentions {
-        let path = Path::new(cwd).join(&relative);
-        if let (Ok(root), Ok(path)) = (Path::new(cwd).canonicalize(), path.canonicalize()) {
-            if path.starts_with(&root) && path.is_file() {
+    if let Some(Ok(root)) = (!mentions.is_empty()).then(|| Path::new(cwd).canonicalize()) {
+        for relative in mentions {
+            if let Ok(path) = root.join(relative).canonicalize() {
+                if !path.starts_with(&root) || !path.is_file() {
+                    continue;
+                }
                 blocks.push(format!("Referenced project file: {}", path.display()));
             }
         }
@@ -305,8 +305,14 @@ fn read_text(path: &Path, max: usize) -> Result<String, String> {
     String::from_utf8(data).map_err(|e| e.to_string())
 }
 pub fn mention_text(relative: &str) -> String {
-    if relative.chars().any(char::is_whitespace) {
-        format!("@\"{}\"", relative.replace('"', "\\\""))
+    if relative
+        .chars()
+        .any(|ch| ch.is_whitespace() || matches!(ch, '"' | '\\'))
+    {
+        format!(
+            "@\"{}\"",
+            relative.replace('\\', "\\\\").replace('"', "\\\"")
+        )
     } else {
         format!("@{relative}")
     }
@@ -352,17 +358,25 @@ fn mentions_in_line(text: &str) -> Vec<String> {
                 chars.next();
             }
             let mut path = String::new();
+            let mut complete = !quoted;
             while let Some(&next) = chars.peek() {
-                if (quoted && next == '"') || (!quoted && next.is_whitespace()) {
+                if !quoted && next.is_whitespace() {
                     break;
                 }
-                path.push(next);
                 chars.next();
+                if quoted && next == '"' {
+                    complete = true;
+                    break;
+                }
+                if quoted && next == '\\' && matches!(chars.peek(), Some('"' | '\\')) {
+                    path.push(chars.next().expect("peeked escape"));
+                } else {
+                    path.push(next);
+                }
             }
-            if quoted {
-                chars.next();
+            if complete && !path.is_empty() {
+                result.push(path);
             }
-            result.push(path);
         }
         boundary = c.is_whitespace();
     }
@@ -379,6 +393,11 @@ mod tests {
         assert!(token_at("https://host", 12).is_none());
         assert!(token_at("me@host", 7).is_none());
         assert!(token_at("> /review", 9).is_none());
+        let after_quote = "> quoted text\n@src";
+        assert_eq!(
+            token_at(after_quote, after_quote.len()).unwrap().query,
+            "src"
+        );
         assert!(token_at("/tmp/file", 9).is_none());
         assert_eq!(token_at("@src/ma", 7).unwrap().trigger, Trigger::Mention);
     }
@@ -393,6 +412,12 @@ mod tests {
         assert_eq!(
             mentions("> @quoted.rs\n  > @also-quoted.rs\nUse @actual.rs"),
             vec!["actual.rs"]
+        );
+        let literal = r#"src/a\b\"c"#;
+        assert_eq!(mentions(&mention_text(literal)), vec![literal]);
+        assert_eq!(
+            mentions(r#"@"src/unclosed and @other.rs"#),
+            Vec::<String>::new()
         );
         assert!(score("cpr", "src/composer.rs").is_some());
         assert!(score("xyz", "src/composer.rs").is_none());
