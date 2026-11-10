@@ -88,22 +88,6 @@ if (
     .formatted !== '{ "a": 1 }\n'
 )
   throw new Error("Format smoke check failed");
-const paletteBuild = await build({
-  ...options,
-  entryPoints: [],
-  stdin: {
-    contents:
-      'import { WORKSPACE_THEMES } from "./themes"; globalThis.palettes = Object.fromEntries(WORKSPACE_THEMES.map(t => [t.id, { dark: { ...t.dark.syntax, heading: t.dark.heading }, light: { ...t.light.syntax, heading: t.light.heading } }]));',
-    resolveDir: here,
-  },
-  write: false,
-});
-const palettes = vm.createContext({});
-vm.runInContext(paletteBuild.outputFiles[0].text, palettes);
-await writeFile(
-  path.join(root, "crates/vorkspace-ui/assets/editor-palettes.json"),
-  JSON.stringify(palettes.palettes, null, 2) + "\n",
-);
 const notices = [
   await readFile(
     path.join(here, "node_modules/prettier/THIRD-PARTY-NOTICES.md"),
