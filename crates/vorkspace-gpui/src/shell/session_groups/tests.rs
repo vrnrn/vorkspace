@@ -8,7 +8,11 @@ fn a_reminder_survives_a_refused_open_until_its_project_is_reassigned(
     let (vorkspace, project) = window
         .update(cx, |shell, _, cx| {
             let vorkspace = shell.workspace.active_vorkspace.clone();
-            let project = shell.session_summaries[&reminder_session].cwd.clone();
+            let project = shell
+                .session_summary(reminder_session, cx)
+                .unwrap()
+                .cwd
+                .clone();
             shell
                 .workspace
                 .remove_project_from_vorkspace(&vorkspace, &project);
@@ -104,7 +108,7 @@ fn delete_confirmation_cancels_and_uses_selection_snapshot(cx: &mut TestAppConte
     cx.run_until_parked();
     window
         .update(cx, |shell, w, cx| {
-            assert!(shell.session_summaries.contains_key(&a));
+            assert!(shell.has_session(a, cx));
             shell.delete_sidebar_selection(w, cx);
             shell.selected_sessions.clear();
             shell.selected_sessions.insert(b);
@@ -114,9 +118,9 @@ fn delete_confirmation_cancels_and_uses_selection_snapshot(cx: &mut TestAppConte
     cx.simulate_prompt_answer("Delete");
     cx.run_until_parked();
     window
-        .update(cx, |shell, _, _| {
-            assert!(!shell.session_summaries.contains_key(&a));
-            assert!(shell.session_summaries.contains_key(&b));
+        .update(cx, |shell, _, cx| {
+            assert!(!shell.has_session(a, cx));
+            assert!(shell.has_session(b, cx));
         })
         .unwrap();
 }
@@ -136,8 +140,8 @@ fn delete_rechecks_detached_panes_after_confirmation(cx: &mut TestAppContext) {
     cx.simulate_prompt_answer("Delete");
     cx.run_until_parked();
     window
-        .update(cx, |shell, _, _| {
-            assert!(shell.session_summaries.contains_key(&a));
+        .update(cx, |shell, _, cx| {
+            assert!(shell.has_session(a, cx));
             assert!(
                 shell
                     .error
@@ -162,9 +166,9 @@ fn bulk_delete_keeps_guarded_session_and_deletes_the_other(cx: &mut TestAppConte
     cx.simulate_prompt_answer("Delete");
     cx.run_until_parked();
     window
-        .update(cx, |shell, _, _| {
-            assert!(shell.session_summaries.contains_key(&a));
-            assert!(!shell.session_summaries.contains_key(&b));
+        .update(cx, |shell, _, cx| {
+            assert!(shell.has_session(a, cx));
+            assert!(!shell.has_session(b, cx));
             assert!(
                 shell
                     .error
@@ -197,7 +201,7 @@ fn stale_confirmation_does_not_delete_reused_id(cx: &mut TestAppContext) {
         .update(cx, |shell, w, cx| {
             shell.request_delete_sessions(vec![a], w, cx);
             // Simulate removal and reuse while consent is pending.
-            let summary = shell.session_summaries[&a].clone();
+            let summary = shell.session_summary(a, cx).unwrap().clone();
             shell.workspace.close(a);
             shell.forget_session(a, cx);
             shell.add(summary, cx);
@@ -207,8 +211,8 @@ fn stale_confirmation_does_not_delete_reused_id(cx: &mut TestAppContext) {
     cx.simulate_prompt_answer("Delete");
     cx.run_until_parked();
     window
-        .update(cx, |shell, _, _| {
-            assert!(shell.session_summaries.contains_key(&a));
+        .update(cx, |shell, _, cx| {
+            assert!(shell.has_session(a, cx));
             assert!(
                 shell
                     .error
@@ -234,9 +238,9 @@ fn menu_delete_confirms_multiple_sessions(cx: &mut TestAppContext) {
     cx.simulate_prompt_answer("Delete");
     cx.run_until_parked();
     window
-        .update(cx, |shell, _, _| {
-            assert!(!shell.session_summaries.contains_key(&a));
-            assert!(!shell.session_summaries.contains_key(&b));
+        .update(cx, |shell, _, cx| {
+            assert!(!shell.has_session(a, cx));
+            assert!(!shell.has_session(b, cx));
         })
         .unwrap();
 }

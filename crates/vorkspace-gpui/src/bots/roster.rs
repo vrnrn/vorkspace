@@ -59,6 +59,20 @@ impl PreparedRoster {
 }
 
 impl SharedRoster {
+    pub(crate) fn internal_session_ids(&self) -> impl Iterator<Item = i64> + '_ {
+        self.snapshot.iter().flat_map(|roster| {
+            roster
+                .hidden_sessions
+                .iter()
+                .copied()
+                .chain(roster.bots.iter().flat_map(|bot| {
+                    bot.session_id
+                        .into_iter()
+                        .chain(bot.habit_sessions.iter().copied())
+                }))
+        })
+    }
+
     pub(crate) fn install(store: Database, cx: &mut App) -> Entity<Self> {
         let prepared = match locked(&store) {
             Ok(db) => PreparedRoster::read(&db),

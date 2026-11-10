@@ -174,7 +174,7 @@ fn hover_preview_waits_and_never_materializes_a_conversation(cx: &mut TestAppCon
             summary.has_messages = true;
             let id = summary.id;
             shell.order.push(id);
-            shell.session_summaries.insert(id, summary);
+            shell.seed_session_summary(summary, cx);
             let anchor = AnchorSlot::default();
             anchor.set(Some(Bounds::new(
                 window.mouse_position() - gpui::point(px(5.), px(5.)),
@@ -467,7 +467,10 @@ fn tab_lifecycle_new_and_split_requests_do_not_undo_project_navigation(cx: &mut 
                 if split {
                     assert_eq!(shell.workspace.tabs.len(), 3);
                     let created = shell.workspace.tabs[2];
-                    assert_eq!(shell.session_summaries[&created].cwd, "/work/vorkspace");
+                    assert_eq!(
+                        shell.session_summary(created, cx).unwrap().cwd,
+                        "/work/vorkspace"
+                    );
                     let saved = locked(&shell.store).unwrap().ui_state().unwrap().unwrap();
                     let restored: Workspace = serde_json::from_str(&saved).unwrap();
                     assert!(restored.tabs.contains(&created));
@@ -2423,13 +2426,13 @@ fn pane_limit_async_creation_rechecks_space_before_publication(cx: &mut TestAppC
         .unwrap();
     cx.run_until_parked();
     window
-        .update(cx, |shell, _, _| {
+        .update(cx, |shell, _, cx| {
             let new = shell.workspace.active.unwrap();
             assert_ne!(new, session);
             assert_eq!(shell.workspace.tab_of(new), Some(new));
             assert_eq!(shell.workspace.layout(session).leaf_ids(), [session]);
             assert_eq!(shell.error.as_deref(), Some(PANE_LIMIT_MESSAGE));
-            assert!(shell.session_summaries.contains_key(&new));
+            assert!(shell.has_session(new, cx));
         })
         .unwrap();
 }
@@ -2532,9 +2535,11 @@ fn pane_limit_overfull_layout_retains_and_reveals_all_panes(cx: &mut TestAppCont
             }
             let saved = serde_json::to_string(&shell.workspace).unwrap();
             let sessions = shell
-                .session_summaries
+                .directory
+                .read(cx)
+                .rows
                 .values()
-                .map(|s| (s.id, s.cwd.clone()))
+                .map(|row| (row.summary.id, row.summary.cwd.clone()))
                 .collect::<Vec<_>>();
             shell.workspace = Workspace::restore(Some(&saved), &sessions, "/work/vorkspace");
             cx.notify();
@@ -2933,7 +2938,7 @@ fn tab_delete_confirms_and_targets_the_original_session(cx: &mut TestAppContext)
     cx.run_until_parked();
     window
         .update(cx, |shell, w, cx| {
-            assert!(shell.session_summaries.contains_key(&a));
+            assert!(shell.has_session(a, cx));
             shell.open(a, w, cx);
             shell.run_menu(MenuTarget::Tab(a), "delete", None, w, cx);
             shell.open(b, w, cx);
@@ -2944,9 +2949,9 @@ fn tab_delete_confirms_and_targets_the_original_session(cx: &mut TestAppContext)
     cx.simulate_prompt_answer("Delete");
     cx.run_until_parked();
     window
-        .update(cx, |shell, _, _| {
-            assert!(!shell.session_summaries.contains_key(&a));
-            assert!(shell.session_summaries.contains_key(&b));
+        .update(cx, |shell, _, cx| {
+            assert!(!shell.has_session(a, cx));
+            assert!(shell.has_session(b, cx));
             assert!(
                 !locked(&shell.store)
                     .unwrap()

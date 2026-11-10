@@ -421,7 +421,7 @@ mod tests {
                         .iter()
                         .any(|session| session.id == victim)
                 );
-                assert!(!shell.session_summaries.contains_key(&victim));
+                assert!(!shell.has_session(victim, cx));
                 assert!(
                     view.read(cx)
                         .hits()
@@ -457,7 +457,7 @@ mod tests {
                 // a loaded Conversation publishing SessionChanged.
                 shell.release_live_session(renamed, cx);
                 let title = "Needle renamed while parked";
-                shell.session_summaries.get_mut(&renamed).unwrap().title = title.into();
+                shell.edit_session_record(renamed, cx, |row| row.summary.title = title.into());
                 locked(&shell.store).unwrap().title(renamed, title).unwrap();
             })
             .unwrap();

@@ -148,8 +148,8 @@ pub(crate) struct WorkspaceWindowStart {
 
 pub(crate) fn open_workspace_window(
     db: vorkspace_runtime::runtime::Database,
-    sessions: Vec<vorkspace_core::store::Session>,
-    metadata: vorkspace_core::store::SessionSidebarMetadata,
+    sessions: &[vorkspace_core::store::Session],
+    metadata: &vorkspace_core::store::SessionSidebarMetadata,
     start: WorkspaceWindowStart,
     cx: &mut App,
 ) -> gpui::Result<gpui::WindowHandle<shell::Shell>> {
@@ -210,6 +210,10 @@ fn restore_workspace_windows(
     explicit_cwd: bool,
     cx: &mut App,
 ) -> gpui::Result<()> {
+    let core = shell::AppCore::get(&db, cx);
+    core.update(cx, |core, cx| {
+        core.reconcile_session_directory(&sessions, &metadata, true, cx);
+    });
     // Open the last focused layout last so it comes to the front.
     layouts
         .entries
@@ -230,8 +234,8 @@ fn restore_workspace_windows(
         };
         match open_workspace_window(
             db.clone(),
-            sessions.clone(),
-            metadata.clone(),
+            &sessions,
+            &metadata,
             WorkspaceWindowStart {
                 cwd,
                 saved: Some(entry.workspace.to_string()),
@@ -245,7 +249,7 @@ fn restore_workspace_windows(
         }
     }
     if !restored {
-        open_workspace_window(db, sessions, metadata, fallback, cx)?;
+        open_workspace_window(db, &sessions, &metadata, fallback, cx)?;
     }
     Ok(())
 }

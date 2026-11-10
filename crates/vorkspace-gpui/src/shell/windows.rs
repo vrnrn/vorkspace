@@ -263,10 +263,13 @@ impl Shell {
                     {
                         return Err("That vorkspace was removed. Choose another one.".into());
                     }
+                    core.update(cx, |core, cx| {
+                        core.reconcile_session_directory(&sessions, &metadata, true, cx);
+                    });
                     crate::open_workspace_window(
                         store,
-                        sessions,
-                        metadata,
+                        &sessions,
+                        &metadata,
                         crate::WorkspaceWindowStart {
                             cwd,
                             saved: Some(saved),

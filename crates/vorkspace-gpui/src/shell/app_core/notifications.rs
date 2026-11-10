@@ -141,24 +141,14 @@ impl AppCore {
             .iter()
             .filter_map(WeakEntity::upgrade)
             .collect();
-        let mut linked: HashMap<i64, LinkedSession> = HashMap::new();
-        // Remote visibility can differ by window scope. Union the catalog
-        // projections before overlaying the owners of live conversations.
-        for window in &windows {
-            for session in window
-                .read(cx)
-                .session_summaries
-                .values()
-                .filter_map(LinkedSession::from_summary)
-            {
-                if linked
-                    .get(&session.id)
-                    .is_none_or(|current| session.updated_at > current.updated_at)
-                {
-                    linked.insert(session.id, session);
-                }
-            }
-        }
+        let mut linked: HashMap<_, _> = self
+            .directory
+            .read(cx)
+            .rows
+            .values()
+            .filter_map(|record| LinkedSession::from_summary(&record.summary))
+            .map(|session| (session.id, session))
+            .collect();
         for window in windows {
             for view in window.read(cx).notification_chats(cx) {
                 let summary = &view.read(cx).summary;

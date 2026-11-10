@@ -103,18 +103,27 @@ impl Shell {
     pub(super) fn apply_remote_catalog(&mut self, event: &RemoteCatalog, cx: &mut Context<Self>) {
         let project = &event.project;
         match &event.result {
-            Ok(RemoteListing {
-                entries, removed, ..
+            Ok(RemoteCatalogUpdate {
+                entries,
+                removed,
+                changed,
             }) => {
-                let mut changed = !removed.is_empty();
-                if !removed.is_empty() {
-                    let removed: HashSet<_> = removed.iter().copied().collect();
-                    self.order.retain(|id| !removed.contains(id));
+                let mut repaint = *changed;
+                let retired: HashSet<_> = removed
+                    .iter()
+                    .map(|(id, _)| *id)
+                    .filter(|id| !self.directory.read(cx).rows.contains_key(id))
+                    .collect();
+                if !retired.is_empty() {
+                    self.order.retain(|id| !retired.contains(id));
                 }
-                for &id in removed {
+                for (id, last_record) in removed {
+                    if !retired.contains(id) {
+                        continue;
+                    }
                     self.session_removal_epoch = self.session_removal_epoch.wrapping_add(1);
-                    self.remote_marks.remove(&id);
-                    if let Some(view) = self.sessions.get(&id) {
+                    self.remote_marks.remove(id);
+                    if let Some(view) = self.sessions.get(id) {
                         view.update(cx, |view, cx| {
                             view.remote_connection_error(
                                 "This conversation was deleted on the host.",
@@ -123,45 +132,45 @@ impl Shell {
                         });
                     }
                     // An open tab keeps its identity and an explanatory placeholder.
-                    if self.workspace.tab_of(id).is_none() {
-                        self.session_summaries.remove(&id);
-                        self.release_live_session(id, cx);
-                    }
-                }
-                for entry in entries {
-                    let summary = &entry.summary;
-                    let id = summary.id;
-                    if self
-                        .session_summaries
-                        .get(&id)
-                        .is_some_and(|known| known.updated_at > summary.updated_at)
-                    {
-                        continue;
-                    }
-                    let marks = (entry.running, entry.needs_input);
-                    changed |= self.remote_marks.insert(id, marks) != Some(marks);
-                    changed |= if entry.draft {
-                        self.draft_sessions.insert(id)
+                    if self.workspace.tab_of(*id).is_some() {
+                        if let Some(record) = last_record {
+                            self.remote_tombstones.insert(*id, record.clone());
+                        }
                     } else {
-                        self.draft_sessions.remove(&id)
+                        self.release_live_session(*id, cx);
+                    }
+                    self.forget_search_session(*id, cx);
+                }
+                let mut known: HashSet<_> = self.order.iter().copied().collect();
+                for &(id, marks) in entries {
+                    let Some(summary) = self
+                        .directory
+                        .read(cx)
+                        .rows
+                        .get(&id)
+                        .map(|row| &row.summary)
+                    else {
+                        continue;
                     };
+                    self.remote_tombstones.remove(&id);
+                    repaint |= self.remote_marks.insert(id, marks) != Some(marks);
                     if let Some(view) = self.sessions.get(&id)
                         && !view.read(cx).busy
+                        && view.read(cx).summary.updated_at <= summary.updated_at
                         && view.read(cx).summary != *summary
                     {
+                        let summary = summary.clone();
                         view.update(cx, |view, cx| {
-                            view.summary = summary.clone();
+                            view.summary = summary;
                             cx.notify();
                         });
                     }
-                    if self.session_summaries.get(&id) != Some(summary) {
-                        if self.session_summaries.insert(id, summary.clone()).is_none() {
-                            self.order.push(id);
-                        }
-                        changed = true;
+                    if known.insert(id) {
+                        self.order.push(id);
+                        repaint = true;
                     }
                 }
-                if changed && self.workspace.vorkspace_has_project(project) {
+                if repaint && self.workspace.vorkspace_has_project(project) {
                     self.invalidate_chrome(cx);
                     cx.notify();
                 }
@@ -182,11 +191,67 @@ impl Shell {
 
 pub(super) struct RemoteCatalog {
     project: String,
-    result: Result<RemoteListing, String>,
+    result: Result<RemoteCatalogUpdate, String>,
 }
 impl gpui::EventEmitter<RemoteCatalog> for app_core::AppCore {}
 
+struct RemoteCatalogUpdate {
+    entries: Vec<(i64, (bool, bool))>,
+    removed: Vec<(i64, Option<SessionRecord>)>,
+    changed: bool,
+}
+
 impl app_core::AppCore {
+    fn record_remote_catalog(
+        &mut self,
+        listing: RemoteListing,
+        cx: &mut Context<Self>,
+    ) -> RemoteCatalogUpdate {
+        let RemoteListing {
+            entries,
+            removed,
+            changed,
+        } = listing;
+        let update = self.directory.update(cx, |directory, _| {
+            let mut projected = Vec::with_capacity(entries.len());
+            let removed = removed
+                .into_iter()
+                .map(|id| (id, directory.rows.remove(&id)))
+                .collect::<Vec<_>>();
+            let mut changed = changed || !removed.is_empty();
+            for entry in entries {
+                let id = entry.summary.id;
+                let before = directory.rows.get(&id);
+                if before.is_some_and(|row| row.summary.updated_at > entry.summary.updated_at) {
+                    continue;
+                }
+                if before.is_none_or(|row| row.summary != entry.summary || row.draft != entry.draft)
+                {
+                    let checkout = before.and_then(|row| row.checkout.clone());
+                    directory.rows.insert(
+                        id,
+                        SessionRecord {
+                            summary: entry.summary,
+                            checkout,
+                            draft: entry.draft,
+                        },
+                    );
+                    changed = true;
+                }
+                projected.push((id, (entry.running, entry.needs_input)));
+            }
+            RemoteCatalogUpdate {
+                entries: projected,
+                removed,
+                changed,
+            }
+        });
+        if update.changed {
+            self.catalog_revision = self.catalog_revision.wrapping_add(1);
+        }
+        update
+    }
+
     pub(super) fn set_remote_scope(
         &mut self,
         window: u64,
@@ -275,10 +340,8 @@ impl app_core::AppCore {
             let result = work.await;
             let _ = core.update(cx, |core, cx| {
                 let observed = core.remote_poll.complete(&requested, Instant::now());
-                if result.as_ref().is_ok_and(|listing| listing.changed) {
-                    core.catalog_revision = core.catalog_revision.wrapping_add(1);
-                }
-                if observed {
+                let result = result.map(|listing| core.record_remote_catalog(listing, cx));
+                if observed || result.is_ok() {
                     cx.emit(RemoteCatalog {
                         project: requested,
                         result,

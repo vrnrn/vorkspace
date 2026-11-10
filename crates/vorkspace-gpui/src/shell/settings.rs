@@ -373,7 +373,7 @@ impl Shell {
                     this.open(*id, window, cx);
                 }
                 SettingsEvent::Archive(id, archived) => {
-                    if this.session_summaries.contains_key(id)
+                    if this.has_session(*id, cx)
                         && this.session_metadata(*id, cx).summary.archived != *archived
                     {
                         this.toggle_archive(*id, cx);
@@ -672,7 +672,9 @@ impl Shell {
                     return Err("Close the Bot conversations using this worktree first.".into());
                 }
                 let ids = this
-                    .session_summaries
+                    .directory
+                    .read(cx)
+                    .rows
                     .keys()
                     .filter(|id| is_resolved_inside(this.session_working_copy(**id, cx), &path))
                     .copied()
@@ -771,9 +773,15 @@ impl Shell {
                         {
                             continue;
                         }
-                        this.session_summaries.insert(summary.id, summary.clone());
-                        this.session_worktrees
-                            .insert(summary.id, settings.worktree_cwd.clone());
+                        let draft = this.session_record(id, cx).is_some_and(|row| row.draft);
+                        this.put_session_record(
+                            SessionRecord {
+                                summary: summary.clone(),
+                                checkout: Some(settings.worktree_cwd.clone()),
+                                draft,
+                            },
+                            cx,
+                        );
                         if let Some(view) = this.sessions.get(&summary.id) {
                             view.update(cx, |v, cx| v.worktree_deleted(summary, settings, cx));
                         }

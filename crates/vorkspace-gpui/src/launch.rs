@@ -281,11 +281,7 @@ fn prepare_desktop(mut db: Store, database: &Path, options: Options) -> Result<S
     if sessions.is_empty() {
         sessions.push(db.create("codex", &cwd)?);
     }
-    let paths = sessions
-        .iter()
-        .map(|session| (session.id, session.cwd.clone()))
-        .collect::<Vec<_>>();
-    let workspace = Workspace::restore(saved.as_deref(), &paths, &cwd);
+    let workspace = Workspace::restore_sessions(saved.as_deref(), &sessions, &cwd);
     let mut projects = workspace.projects;
     if !workspace.project.is_empty() && !projects.contains(&workspace.project) {
         projects.push(workspace.project);

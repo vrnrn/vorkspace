@@ -42,9 +42,7 @@ impl Shell {
         cx: &App,
     ) -> Result<(), String> {
         if let Some((target, edge)) = placement {
-            if self.workspace.tab_of(target).is_none()
-                || !self.session_summaries.contains_key(&target)
-            {
+            if self.workspace.tab_of(target).is_none() || !self.has_session(target, cx) {
                 return Err("Split target must be an open session pane".into());
             }
             if vorkspace_core::files::path_key(&self.session_metadata(target, cx).summary.cwd)
@@ -184,7 +182,6 @@ impl Shell {
         }
         self.forget_session(id, cx);
         self.started_by.remove(&id);
-        self.session_worktrees.remove(&id);
         let removed = locked(&self.store).and_then(|mut store| match install {
             Some(install) => install.discard(&mut store, id),
             None => store.delete(id),
@@ -280,9 +277,7 @@ impl Shell {
         } else {
             locked(&self.store)?.archive_app_session(caller, id, project)?;
         }
-        if let Some(summary) = self.session_summaries.get_mut(&id) {
-            summary.archived = true;
-        }
+        self.edit_session_record(id, cx, |row| row.summary.archived = true);
         if let Some(view) = self.sessions.get(&id) {
             view.update(cx, |view, _| view.summary.archived = true);
         }
@@ -506,7 +501,7 @@ impl Shell {
             }
             "sessions.read" => {
                 let id = match session_id(&input, &self.store) { Ok(id) => id, Err(e) => { self.finish_app_call(call, Err(e)); return; } };
-                if !self.session_summaries.contains_key(&id) || self.session_metadata(id, cx).summary.cwd != project { self.finish_app_call(call, Err("Session is outside this project.".into())); return; }
+                if !self.has_session(id, cx) || self.session_metadata(id, cx).summary.cwd != project { self.finish_app_call(call, Err("Session is outside this project.".into())); return; }
                 let limit = input.get("limit").and_then(Value::as_u64).unwrap_or(40).clamp(1,200) as usize;
                 self.app_background(call, move |store| {
                     let transcript = locked(&store)?.load(id)?;
@@ -526,7 +521,7 @@ impl Shell {
             }
             "folders.move" => {
                 let id = match session_id(&input, &self.store) { Ok(id) => id, Err(e) => { self.finish_app_call(call, Err(e)); return; } };
-                if !self.session_summaries.contains_key(&id) || self.session_metadata(id, cx).summary.cwd != project { self.finish_app_call(call, Err("Session is outside this project.".into())); return; }
+                if !self.has_session(id, cx) || self.session_metadata(id, cx).summary.cwd != project { self.finish_app_call(call, Err("Session is outside this project.".into())); return; }
                 self.app_background(call, move |store| {
                     let destination = vorkspace_core::session_groups::FolderDestination::from_parts(
                         input["folderId"].as_str(), input["newFolderName"].as_str(),

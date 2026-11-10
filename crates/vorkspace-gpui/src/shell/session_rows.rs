@@ -33,7 +33,7 @@ impl Shell {
             let Ok(Some(store)) = this.update_in(cx, |this, window, cx| {
                 if this.session_hover != Some(id)
                     || this.menu.is_some()
-                    || !this.session_summaries.contains_key(&id)
+                    || !this.has_session(id, cx)
                     || !anchor
                         .get()
                         .is_some_and(|bounds| bounds.contains(&window.mouse_position()))

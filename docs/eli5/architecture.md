@@ -2,7 +2,7 @@
 
 The desktop app window is drawn by GPUI. Rust keeps track of conversations, files, Bots, and running agents in the same desktop process. The code is split into several crates, which are smaller building blocks with one job each, such as colors and animation timing or understanding code in the editor. Splitting them changes how the code is organized, not how the app runs: they are all still one app. Saved history lives in SQLite, with extra window settings beside it.
 
-The app reads the saved workspace and Bot list once as it opens. Windows share that list and keep their own tabs and selected conversation.
+The app reads the saved workspace and Bot list once as it opens. Windows share the same conversation list, including names, draft markers, and working folders. Each window keeps its own tabs and selection. If a conversation is already open in another window, the app takes you to that window.
 
 All open windows share the same reminders and linked GitHub updates. Dismissing an update in one window clears it everywhere. Opening or snoozing an old reminder leaves any newer reminder you scheduled in place.
 

@@ -350,10 +350,16 @@ impl Shell {
             cx.subscribe(core, |shell, _, event: &RemindersChanged, cx| {
                 for (owner, reminder, summary) in &event.fired {
                     if *owner == cx.weak_entity() {
-                        shell
-                            .session_summaries
-                            .entry(summary.id)
-                            .or_insert_with(|| summary.clone());
+                        shell.directory.update(cx, |directory, _| {
+                            directory
+                                .rows
+                                .entry(summary.id)
+                                .or_insert_with(|| SessionRecord {
+                                    summary: summary.clone(),
+                                    checkout: None,
+                                    draft: false,
+                                });
+                        });
                         shell.deliver_reminder_notice(summary, reminder.due_at, cx);
                     }
                 }

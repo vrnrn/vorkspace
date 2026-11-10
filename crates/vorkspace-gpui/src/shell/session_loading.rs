@@ -36,24 +36,32 @@ impl Shell {
             return;
         };
         let view = view.read(cx);
-        let previous = self.session_summaries.get(&id);
+        let record = self.session_record(id, cx);
+        let previous = record.map(|record| &record.summary);
         let summary_changed = previous != Some(&view.summary);
         let provider_changed =
             previous.is_none_or(|summary| summary.provider != view.summary.provider);
         let project_changed = previous.is_none_or(|summary| summary.cwd != view.summary.cwd);
         let worktree = &view.settings.worktree_cwd;
-        let checkout_changed = self.session_worktrees.get(&id) != Some(worktree);
+        let checkout_changed = record.and_then(|row| row.checkout.as_ref()) != Some(worktree);
         let draft = view.has_saved_draft();
-        let draft_changed = self.draft_sessions.contains(&id) != draft;
+        let draft_changed = record.is_some_and(|row| row.draft) != draft;
         let needs_approval = view.needs_approval();
-        if summary_changed || checkout_changed || draft_changed {
-            self.session_summaries.insert(id, view.summary.clone());
-            self.session_worktrees.insert(id, worktree.clone());
-            if draft {
-                self.draft_sessions.insert(id);
-            } else {
-                self.draft_sessions.remove(&id);
-            }
+        if (summary_changed || checkout_changed || draft_changed)
+            && !self.remote_tombstones.contains_key(&id)
+            && self
+                .app_core
+                .as_ref()
+                .is_none_or(|core| core.read(cx).session_installs.permits(id, None))
+        {
+            self.put_session_record(
+                SessionRecord {
+                    summary: view.summary.clone(),
+                    checkout: Some(worktree.clone()),
+                    draft,
+                },
+                cx,
+            );
             self.publish_session_summary(id, cx);
         }
 
@@ -96,11 +104,14 @@ impl Shell {
     pub(super) fn session_metadata<'a>(&'a self, id: i64, cx: &'a App) -> Metadata<'a> {
         let live = self.sessions.get(&id).map(|view| view.read(cx));
         Metadata {
-            summary: live.map_or_else(|| &self.session_summaries[&id], |v| &v.summary),
+            summary: live.map_or_else(
+                || self.session_summary(id, cx).expect("available session"),
+                |v| &v.summary,
+            ),
             busy: live.is_some_and(|v| v.busy)
                 || self.remote_marks.get(&id).is_some_and(|state| state.0),
             live,
-            draft: self.draft_sessions.contains(&id),
+            draft: self.session_record(id, cx).is_some_and(|row| row.draft),
             remote_waiting: self.remote_marks.get(&id).is_some_and(|state| state.1),
         }
     }
@@ -114,7 +125,7 @@ impl Shell {
         if let Some(view) = self.sessions.get(&id) {
             return Some(view.clone());
         }
-        let summary = self.session_summaries.get(&id)?.clone();
+        let summary = self.session_summary(id, cx)?.clone();
         self.add_loaded(summary, cx)
     }
     pub(super) fn trim_session_histories(&self, cx: &mut Context<Self>) {

@@ -291,7 +291,7 @@ impl Shell {
         cx: &mut Context<Self>,
     ) {
         let (target, navigation_revision, dir) = request;
-        let project = self.session_summaries[&id].cwd.clone();
+        let project = self.session_metadata(id, cx).summary.cwd.clone();
         self.order.retain(|s| *s != id);
         self.order.insert(0, id);
         if self.navigation_revision != navigation_revision || self.workspace.active != target {

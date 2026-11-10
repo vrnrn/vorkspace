@@ -106,7 +106,7 @@ impl Shell {
     ) {
         ids.sort_unstable();
         ids.dedup();
-        ids.retain(|id| self.session_summaries.contains_key(id));
+        ids.retain(|id| self.has_session(*id, cx));
         if ids.is_empty() {
             return;
         }
@@ -333,7 +333,7 @@ impl Shell {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if !self.session_summaries.contains_key(&id) {
+        if !self.has_session(id, cx) {
             return;
         }
         let summary = self.session_metadata(id, cx).summary.clone();
@@ -363,9 +363,7 @@ impl Shell {
                     .iter()
                     .all(|id| self.session_metadata(*id, cx).summary.pinned);
                 for id in &ids {
-                    if let Some(summary) = self.session_summaries.get_mut(id) {
-                        summary.pinned = pinned;
-                    }
+                    self.edit_session_record(*id, cx, |row| row.summary.pinned = pinned);
                     if let Some(view) = self.sessions.get(id) {
                         view.update(cx, |s, _| s.summary.pinned = pinned);
                     }
@@ -479,7 +477,7 @@ impl Shell {
             cx.notify();
             return;
         }
-        if !self.session_summaries.contains_key(&id) || self.deleting.contains(&id) {
+        if !self.has_session(id, cx) || self.deleting.contains(&id) {
             return;
         }
         if !self.reserve_session_deletion(id, cx) {
@@ -541,7 +539,11 @@ impl Shell {
     }
 
     pub(super) fn remove_session_from_catalog(&mut self, id: i64, cx: &mut Context<Self>) {
-        if !self.session_summaries.contains_key(&id) {
+        if !self.order.contains(&id)
+            && !self.sessions.contains_key(&id)
+            && self.workspace.tab_of(id).is_none()
+            && !self.remote_tombstones.contains_key(&id)
+        {
             return;
         }
         // A layout restored in a peer can still contain an unavailable tab.
@@ -558,8 +560,7 @@ impl Shell {
         }
         self.release_live_session(id, cx);
         self.session_removal_epoch = self.session_removal_epoch.wrapping_add(1);
-        self.session_summaries.remove(&id);
-        self.draft_sessions.remove(&id);
+        self.remote_tombstones.remove(&id);
         self.history_recency.remove(&id);
         self.session_marks.remove(&id);
         self.tab_marks.remove(&id);
@@ -651,12 +652,10 @@ impl Shell {
                         cx.notify();
                         return;
                     }
-                    if self.session_summaries.contains_key(&id)
+                    if self.has_session(id, cx)
                         && self.session_metadata(id, cx).summary.title != name
                     {
-                        if let Some(summary) = self.session_summaries.get_mut(&id) {
-                            summary.title = name.clone();
-                        }
+                        self.edit_session_record(id, cx, |row| row.summary.title = name.clone());
                         if let Some(session) = self.sessions.get(&id) {
                             session.update(cx, |s, cx| {
                                 s.rename(name.clone(), cx);
@@ -833,9 +832,7 @@ impl Shell {
         } else {
             None
         };
-        if let Some(summary) = self.session_summaries.get_mut(&id) {
-            summary.work_item = item.clone();
-        }
+        self.edit_session_record(id, cx, |row| row.summary.work_item = item.clone());
         if let Some(session) = self.sessions.get(&id) {
             session.update(cx, |s, _| s.summary.work_item = item.clone());
         }

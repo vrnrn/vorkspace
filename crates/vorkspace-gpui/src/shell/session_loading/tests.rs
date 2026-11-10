@@ -14,8 +14,8 @@ fn a_title_change_updates_the_catalog_without_revisiting_chat_visibility(cx: &mu
         .unwrap();
     cx.run_until_parked();
     window
-        .update(cx, |shell, _, _| {
-            assert_eq!(shell.session_summaries[&id].title, "New title");
+        .update(cx, |shell, _, cx| {
+            assert_eq!(shell.session_summary(id, cx).unwrap().title, "New title");
             assert_eq!(shell.history_clock, before);
         })
         .unwrap();
@@ -169,7 +169,7 @@ fn restoring_large_history_materializes_only_visible_chats(cx: &mut TestAppConte
     });
     window
         .update(cx, |shell, window, cx| {
-            assert_eq!(shell.session_summaries.len(), 1200);
+            assert_eq!(shell.directory.read(cx).rows.len(), 1200);
             assert_eq!(shell.sessions.len(), 1);
             assert_eq!(shell.session_marks.len(), 1);
             assert_eq!(shell.tab_marks.len(), 1);
@@ -286,7 +286,7 @@ fn session_metadata_responding_preserves_remote_running_and_stopping_state(
                 .create("codex", "/work/project")
                 .unwrap();
             let remote_id = remote_summary.id;
-            shell.session_summaries.insert(remote_id, remote_summary);
+            shell.seed_session_summary(remote_summary, cx);
             assert!(!shell.session_metadata(remote_id, cx).responding());
             shell.remote_marks.insert(remote_id, (true, false));
             assert!(shell.session_metadata(remote_id, cx).responding());

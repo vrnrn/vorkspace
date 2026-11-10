@@ -109,8 +109,7 @@ impl Shell {
             return menu;
         }
         let title = |id: &i64| {
-            self.session_summaries
-                .get(id)
+            self.session_summary(*id, cx)
                 .map(|_| self.session_metadata(*id, cx).display_title())
                 .unwrap_or_default()
         };
@@ -191,8 +190,7 @@ impl Shell {
                 // Closing a tab keeps its session; archive also hides it from
                 // the active history while preserving everything on disk.
                 if let Some(id) = tab.session().filter(|id| {
-                    self.session_summaries.contains_key(id)
-                        && self.session_metadata(*id, cx).summary.has_messages
+                    self.has_session(*id, cx) && self.session_metadata(*id, cx).summary.has_messages
                 }) {
                     items.extend([
                         MenuItem::Separator,

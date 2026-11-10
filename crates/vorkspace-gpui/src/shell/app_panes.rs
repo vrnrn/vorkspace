@@ -398,7 +398,7 @@ impl Shell {
             return self
                 .workspace
                 .session_for_pane(id)
-                .filter(|id| self.session_summaries.contains_key(id))
+                .filter(|id| self.has_session(*id, cx))
                 .map(|id| self.session_metadata(id, cx).display_title())
                 .unwrap_or_default();
         };
@@ -464,7 +464,7 @@ impl Shell {
                         == vorkspace_core::files::path_key(self.working_copy()));
         }
         self.workspace.session_for_pane(id).is_some_and(|owner| {
-            self.session_summaries.contains_key(&owner)
+            self.has_session(owner, cx)
                 && self.session_metadata(owner, cx).summary.cwd == self.workspace.project
                 && self.in_worktree_scope(id, cx)
         })

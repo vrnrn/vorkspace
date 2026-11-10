@@ -401,11 +401,11 @@ fn failed_install(
             let error = result.unwrap_err();
             assert!(error.contains("injected"),"{error}");
             assert!(!shell.sessions.contains_key(&id));
-            assert!(!shell.session_summaries.contains_key(&id));
+            assert!(!shell.has_session(id, cx));
             assert!(!shell.session_marks.contains_key(&id));
             assert!(!shell.tab_marks.contains_key(&id));
             assert!(!shell.started_by.contains_key(&id));
-            assert!(!shell.session_worktrees.contains_key(&id));
+            assert!(shell.session_record(id, cx).is_none());
             assert!(!shell.order.contains(&id));
             assert!(shell.workspace.tab_of(id).is_none());
             assert_eq!(shell.active_leaves(),panes);
@@ -496,8 +496,8 @@ fn operator_preparation_link_failure_rolls_back_before_settling_the_request(
             input["workspaceMode"] = json!(workspace);
         }
         let before = vorkspace_core::git::snapshot(&project).unwrap();
-        let worktrees_before = window
-            .update(cx, |shell, _, _| shell.session_worktrees.clone())
+        let directory_before = window
+            .update(cx, |shell, _, cx| shell.directory.read(cx).rows.clone())
             .unwrap();
         let connection = rusqlite::Connection::open(root.path().join("state.db")).unwrap();
         connection.execute_batch("CREATE TRIGGER reject_started_link BEFORE INSERT ON native_settings WHEN NEW.key LIKE 'started-by:%' BEGIN SELECT RAISE(ABORT,'injected started link failure'); END;").unwrap();
@@ -534,7 +534,7 @@ fn operator_preparation_link_failure_rolls_back_before_settling_the_request(
                     vec![caller]
                 );
                 assert!(shell.started_by.is_empty());
-                assert_eq!(shell.session_worktrees, worktrees_before);
+                assert!(shell.directory.read(cx).rows == directory_before);
                 assert_eq!(
                     shell.sessions[&caller].read(cx).input.read(cx).content,
                     "Keep the caller's newer draft"

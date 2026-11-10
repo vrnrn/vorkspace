@@ -232,7 +232,7 @@ impl Shell {
                     .get(&id)
                     .or(local_bot.as_ref())
                     .map(|view| &view.read(cx).summary)
-                    .or_else(|| self.session_summaries.get(&id));
+                    .or_else(|| self.session_summary(id, cx));
                 let info = if let Some(summary) = summary {
                     SessionInfo {
                         title: summary.title.clone().into(),

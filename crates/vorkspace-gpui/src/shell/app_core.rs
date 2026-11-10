@@ -107,6 +107,7 @@ pub(crate) struct AppCore {
     automation_events: HashMap<String, vorkspace_core::inbox::Item>,
     dock_badges: HashMap<u64, usize>,
     idle_protection: HashMap<u64, HashSet<i64>>,
+    pub(super) directory: Entity<SessionDirectory>,
     sessions: HashMap<i64, WeakEntity<Shell>>,
     session_deletions: HashSet<i64>,
     pub(super) project_deletions: Arc<Mutex<HashSet<String>>>,
@@ -211,6 +212,7 @@ impl AppCore {
         };
         let checkouts = cx.new(|_| crate::git_status::CheckoutCatalog::default());
         let github_activity = cx.new(|_| Default::default());
+        let directory = cx.new(|_| SessionDirectory::default());
         let core = cx.new(|cx: &mut Context<AppCore>| {
             AppCore::observe_linked_activity(&github_activity, cx);
             cx.subscribe(&bot_roster, |core, _, event: &MembershipChanged, cx| {
@@ -248,6 +250,7 @@ impl AppCore {
                 automation_events,
                 dock_badges: HashMap::new(),
                 idle_protection: HashMap::new(),
+                directory,
                 sessions: HashMap::new(),
                 session_deletions: HashSet::new(),
                 project_deletions: Default::default(),

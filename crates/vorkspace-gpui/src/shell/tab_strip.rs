@@ -51,7 +51,7 @@ impl Shell {
             .iter()
             .copied()
             .filter(|id| !review(id).is_some_and(|r| r.chat_hidden))
-            .filter(|id| self.session_summaries.contains_key(id))
+            .filter(|id| self.has_session(*id, cx))
             .collect();
         let app = |id: &i64| {
             self.workspace
@@ -305,7 +305,7 @@ impl Shell {
             (self.pane_title(id, cx), self.app_pane_mark(id, cx))
         } else {
             let owner = self.workspace.session_for_pane(id)?;
-            self.session_summaries.get(&owner)?;
+            self.session_summary(owner, cx)?;
             let session = self.session_metadata(owner, cx);
             let title = if self.workspace.review_owners.contains_key(&id) {
                 self.tab_copy(id, cx).headline
@@ -355,7 +355,7 @@ impl Shell {
         self.visible_tabs(cx).len() > 1
             || layout.is_split()
             || layout.leaf_ids().iter().any(|id| {
-                self.session_summaries.contains_key(id) && {
+                self.has_session(*id, cx) && {
                     let s = self.session_metadata(*id, cx);
                     s.summary.has_messages
                         || s.busy

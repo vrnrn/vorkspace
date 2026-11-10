@@ -13,6 +13,18 @@ fn scoped_sessions(
     sessions: &[Session],
     worktrees: &HashMap<i64, Option<String>>,
 ) -> Result<Vec<i64>, String> {
+    scoped_session_records(
+        path,
+        sessions
+            .iter()
+            .map(|session| (session, worktrees.get(&session.id).map(Option::as_deref))),
+    )
+}
+
+fn scoped_session_records<'a>(
+    path: &str,
+    sessions: impl IntoIterator<Item = (&'a Session, Option<Option<&'a str>>)>,
+) -> Result<Vec<i64>, String> {
     if path.starts_with("remote://") || !std::path::Path::new(path).is_absolute() {
         return Err("Only local projects with an absolute path can be deleted here.".into());
     }
@@ -27,9 +39,9 @@ fn scoped_sessions(
     let canonical = std::fs::canonicalize(path).ok();
     let key = vorkspace_core::files::path_key(path);
     let mut ids = Vec::new();
-    for session in sessions {
+    for (session, checkout) in sessions {
         let cwd = vorkspace_core::files::path_key(&session.cwd);
-        let worktree = worktrees.get(&session.id).and_then(|p| p.as_deref());
+        let worktree = checkout.flatten();
         if cwd != key
             && let (Some(root), Ok(candidate)) = (&canonical, std::fs::canonicalize(&session.cwd))
             && candidate.starts_with(root)
@@ -42,7 +54,7 @@ fn scoped_sessions(
             return Err("A conversation has a nested or ambiguous project/worktree. Move or remove it separately first.".into());
         }
         if cwd == key {
-            if !worktrees.contains_key(&session.id) {
+            if checkout.is_none() {
                 return Err("Worktree ownership is unavailable for a conversation; try again after it reloads.".into());
             }
             if session.id < 0 || worktree.is_some_and(|p| vorkspace_core::files::path_key(p) != key)
@@ -219,6 +231,16 @@ fn delete_saved(
 }
 
 impl Shell {
+    fn project_session_scope(&self, path: &str, cx: &App) -> Result<Vec<i64>, String> {
+        scoped_session_records(
+            path,
+            self.directory
+                .read(cx)
+                .rows
+                .values()
+                .map(|row| (&row.summary, row.checkout.as_ref().map(Option::as_deref))),
+        )
+    }
     pub(super) fn window_uses_project(&self, path: &str, cx: &App) -> bool {
         self.window_uses_path(path, cx, within)
     }
@@ -456,10 +478,9 @@ impl Shell {
             cx.notify();
             return;
         }
-        let busy = self.session_summaries.iter().any(|(id, summary)| {
-            let worktree = self.session_worktrees.get(id).and_then(|p| p.as_deref());
-            (within(&summary.cwd, path) || worktree.is_some_and(|p| within(p, path)))
-                && self.session_metadata(*id, cx).busy
+        let busy = self.directory.read(cx).rows.values().any(|row| {
+            (within(&row.summary.cwd, path) || row.worktree().is_some_and(|p| within(p, path)))
+                && self.session_metadata(row.summary.id, cx).busy
         });
         let terminals = self
             .terminals
@@ -502,8 +523,7 @@ impl Shell {
             cx.notify();
             return;
         }
-        let sessions: Vec<_> = self.session_summaries.values().cloned().collect();
-        let ids = match scoped_sessions(&path, &sessions, &self.session_worktrees).and_then(|ids| {
+        let ids = match self.project_session_scope(&path, cx).and_then(|ids| {
             self.project_delete_guard(&path, &ids, true, cx)?;
             self.other_project(&path)?;
             Ok(ids)
@@ -544,8 +564,7 @@ impl Shell {
         .detach();
     }
     fn begin_project_delete(&mut self, path: String, ids: Vec<i64>, cx: &mut Context<Self>) {
-        let current: Vec<_> = self.session_summaries.values().cloned().collect();
-        let guard = scoped_sessions(&path, &current, &self.session_worktrees).and_then(|now| {
+        let guard = self.project_session_scope(&path, cx).and_then(|now| {
             if now == ids {
                 self.project_delete_guard(&path, &ids, false, cx)
             } else {

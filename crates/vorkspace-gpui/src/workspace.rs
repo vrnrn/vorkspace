@@ -568,7 +568,32 @@ impl Default for Workspace {
     }
 }
 impl Workspace {
+    #[cfg(test)]
     pub fn restore(saved: Option<&str>, sessions: &[(i64, String)], cwd: &str) -> Self {
+        Self::restore_with_sessions(
+            saved,
+            sessions.iter().map(|(id, path)| (*id, path.as_str())),
+            cwd,
+        )
+    }
+
+    pub(crate) fn restore_sessions(
+        saved: Option<&str>,
+        sessions: &[vorkspace_core::store::Session],
+        cwd: &str,
+    ) -> Self {
+        Self::restore_with_sessions(
+            saved,
+            sessions.iter().map(|row| (row.id, row.cwd.as_str())),
+            cwd,
+        )
+    }
+
+    fn restore_with_sessions<'a>(
+        saved: Option<&str>,
+        sessions: impl Iterator<Item = (i64, &'a str)>,
+        cwd: &str,
+    ) -> Self {
         let mut state = saved
             .and_then(|s| serde_json::from_str::<serde_json::Value>(s).ok())
             .and_then(|mut value| {
@@ -631,23 +656,32 @@ impl Workspace {
         // Projects are no longer customized: each is a folder in the color
         // its path hashes to, with its folder name. Old customizations go.
         state.project_appearance.clear();
-        let mut known: HashSet<_> = sessions.iter().map(|s| s.0).collect();
+        let mut first_in_project = None;
+        let sessions: HashMap<_, _> = sessions
+            .inspect(|&(id, path)| {
+                if path == cwd && first_in_project.is_none() {
+                    first_in_project = Some(id);
+                }
+            })
+            .collect();
         state.review_owners.retain(|id, owner| {
             *id < 0
-                && known.contains(owner)
+                && sessions.contains_key(owner)
                 && state.reviews.get(id).is_some_and(|r| !r.tabs.is_empty())
         });
-        known.extend(state.review_owners.keys().copied());
         state.restore_terminal_tab_ids();
         state.restore_app_panes();
-        known.extend(state.app_panes.keys().copied());
         let mut seen = HashSet::new();
         let mut layouts = std::mem::take(&mut state.layouts);
         let mut focused = std::mem::take(&mut state.focused);
         for tab in std::mem::take(&mut state.tabs) {
             let layout = layouts.remove(&tab).unwrap_or_else(|| leaf(tab));
-            let Some(layout) = layout.retain(&mut |id| known.contains(&id) && seen.insert(id))
-            else {
+            let Some(layout) = layout.retain(&mut |id| {
+                (sessions.contains_key(&id)
+                    || state.review_owners.contains_key(&id)
+                    || state.app_panes.contains_key(&id))
+                    && seen.insert(id)
+            }) else {
                 continue;
             };
             let key = if layout.contains(tab) {
@@ -680,9 +714,10 @@ impl Workspace {
             .and_then(|source| source.get("projects"))
             .is_some()
             && state.active.is_some_and(|id| {
-                sessions.iter().any(|(known, path)| {
-                    Some(*known) == state.session_for_pane(id) && !state.projects.contains(path)
-                })
+                state
+                    .session_for_pane(id)
+                    .and_then(|owner| sessions.get(&owner))
+                    .is_some_and(|path| !state.projects.iter().any(|project| project == path))
             })
         {
             // An old native sidecar could focus an internal session folder.
@@ -696,9 +731,10 @@ impl Workspace {
                 .copied()
                 .filter(|id| {
                     state.tab_of(*id).is_some()
-                        && sessions.iter().any(|(known, path)| {
-                            Some(*known) == state.session_for_pane(*id) && *path == state.project
-                        })
+                        && state
+                            .session_for_pane(*id)
+                            .and_then(|owner| sessions.get(&owner))
+                            .is_some_and(|path| *path == state.project)
                 })
                 .or_else(|| {
                     state
@@ -707,10 +743,10 @@ impl Workspace {
                         .rev()
                         .map(|tab| state.tab_focus(*tab))
                         .find(|id| {
-                            sessions.iter().any(|(known, path)| {
-                                Some(*known) == state.session_for_pane(*id)
-                                    && *path == state.project
-                            })
+                            state
+                                .session_for_pane(*id)
+                                .and_then(|owner| sessions.get(&owner))
+                                .is_some_and(|path| *path == state.project)
                         })
                 })
                 .or_else(|| {
@@ -731,9 +767,9 @@ impl Workspace {
                 });
         }
         if saved.is_none()
-            && let Some((id, _)) = sessions.iter().find(|(_, path)| path == cwd)
+            && let Some(id) = first_in_project
         {
-            state.open(*id);
+            state.open(id);
         }
         state.sidebar_width = state.sidebar_width.clamp(200., 560.);
         state.project_rail_width = if state.project_rail_width.is_finite() {
@@ -752,9 +788,12 @@ impl Workspace {
             .clamp(crate::right_panel::WIDTH_MIN, crate::right_panel::WIDTH_MAX)
             .round();
         state.right_panel_tabs = crate::panel_kit::RightTab::normalize(&state.right_panel_tabs);
-        state
-            .reviews
-            .retain(|id, review| known.contains(id) && !review.tabs.is_empty());
+        state.reviews.retain(|id, review| {
+            (sessions.contains_key(id)
+                || state.review_owners.contains_key(id)
+                || state.app_panes.contains_key(id))
+                && !review.tabs.is_empty()
+        });
         state.docks.retain(|_, dock| !dock.terminals.is_empty());
         for dock in state.docks.values_mut() {
             dock.active = dock.active.min(dock.terminals.len() - 1);
@@ -793,20 +832,20 @@ impl Workspace {
         let review_owners = &state.review_owners;
         state.project_focus.retain(|project, id| {
             open.contains(id)
-                && sessions.iter().any(|(known, path)| {
-                    *known == review_owners.get(id).copied().unwrap_or(*id) && path == project
-                })
+                && sessions
+                    .get(review_owners.get(id).unwrap_or(id))
+                    .is_some_and(|path| *path == project)
         });
         if let Some(active) = state.active {
-            if let Some((_, project)) = sessions
-                .iter()
-                .find(|(id, _)| state.session_for_pane(active) == Some(*id))
+            if let Some(&project) = state
+                .session_for_pane(active)
+                .and_then(|id| sessions.get(&id))
             {
                 if state.is_project_available(project)
                     && (legacy_vorkspace || state.vorkspace_has_project(project))
                 {
-                    state.project = project.clone();
-                    state.project_focus.insert(project.clone(), active);
+                    state.project = project.to_owned();
+                    state.project_focus.insert(project.to_owned(), active);
                 } else {
                     state.active = None;
                 }

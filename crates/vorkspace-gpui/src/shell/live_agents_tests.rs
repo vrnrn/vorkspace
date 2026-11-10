@@ -203,7 +203,7 @@ fn metadata_only_remote_running_and_waiting_sessions_do_not_load_history(cx: &mu
             summary.has_messages = true;
             let id = summary.id;
             shell.order.push(id);
-            shell.session_summaries.insert(id, summary);
+            shell.seed_session_summary(summary, cx);
             shell.remote_marks.insert(id, (true, false));
             shell.invalidate_chrome(cx);
             id

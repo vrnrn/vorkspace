@@ -182,8 +182,7 @@ impl Shell {
                 })
                 .ok_or("Choose a session")?;
             if !self
-                .session_summaries
-                .get(&id)
+                .session_summary(id, cx)
                 .is_some_and(|s| projects.contains(&s.cwd))
             {
                 return Err("Session is outside known local projects".into());

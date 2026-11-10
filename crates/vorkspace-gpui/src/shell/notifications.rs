@@ -528,7 +528,7 @@ impl Shell {
             .iter()
             .filter(|r| r.due_at <= now)
             .filter_map(|r| {
-                let summary = self.session_summaries.get(&r.session_id)?;
+                let summary = self.session_summary(r.session_id, cx)?;
                 prefs
                     .allows_project_notification(&summary.cwd, "reminders", Some(r.due_at), now)
                     .then(|| reminders::Snapshot {
@@ -744,7 +744,6 @@ impl Shell {
             && let Some(view) = self.notification_chat(id, cx)
         {
             let summary = view.read(cx).summary.clone();
-            self.session_summaries.insert(id, summary.clone());
             self.session_marks
                 .insert(id, cx.new(|_| SessionMark::new(summary.provider.clone())));
             self.tab_marks
@@ -765,7 +764,7 @@ impl Shell {
                 self.order.push(id);
             }
         }
-        if !self.session_summaries.contains_key(&id) {
+        if !self.has_session(id, cx) {
             return false;
         }
         let revision = self.navigation_revision;
@@ -1015,7 +1014,7 @@ impl Shell {
         let current = chat
             .as_ref()
             .map(|chat| &chat.read(cx).summary)
-            .or_else(|| self.session_summaries.get(&id))?;
+            .or_else(|| self.session_summary(id, cx))?;
         self.notification_state
             .github
             .read(cx)
@@ -1034,7 +1033,7 @@ impl Shell {
         let ids: Vec<_> = self.notification_state.linked.keys().copied().collect();
         for id in ids {
             let card = self.linked_card(id, cx);
-            let can_cleanup = self.session_summaries.get(&id).is_some_and(|s| !s.archived);
+            let can_cleanup = self.session_summary(id, cx).is_some_and(|s| !s.archived);
             if let Some(notice) = self.notification_state.linked.get(&id) {
                 notice.update(cx, |notice, cx| {
                     notice.set_snapshot(card, can_cleanup, can_cleanup, cx)
@@ -1050,7 +1049,7 @@ impl Shell {
         cx: &mut Context<Self>,
     ) -> Option<Entity<LinkedActivity>> {
         let card = self.linked_card(id, cx)?;
-        let can_cleanup = self.session_summaries.get(&id).is_some_and(|s| !s.archived);
+        let can_cleanup = self.session_summary(id, cx).is_some_and(|s| !s.archived);
         if let Some(notice) = self.notification_state.linked.get(&id) {
             notice.update(cx, |notice, cx| {
                 notice.set_snapshot(Some(card), can_cleanup, can_cleanup, cx)
@@ -1081,8 +1080,7 @@ impl Shell {
             LinkedActivityEvent::OpenDiscussion(id) => {
                 // A native threaded discussion pane is not implemented yet.
                 if let Some(item) = self
-                    .session_summaries
-                    .get(&id)
+                    .session_summary(id, cx)
                     .and_then(|s| s.work_item.as_ref())
                 {
                     cx.open_url(&item.url);

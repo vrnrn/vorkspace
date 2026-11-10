@@ -282,7 +282,7 @@ mod tests {
                 remote_summary.has_messages = true;
                 remote_summary.updated_at = vorkspace_core::time::now_ms();
                 let remote_id = remote_summary.id;
-                shell.session_summaries.insert(remote_id, remote_summary);
+                shell.seed_session_summary(remote_summary, cx);
                 shell.order.push(remote_id);
                 shell.remote_marks.insert(remote_id, (true, false));
                 assert!(!shell.sessions.contains_key(&remote_id));

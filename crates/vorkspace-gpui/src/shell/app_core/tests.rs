@@ -271,7 +271,7 @@ fn scheduler_delivers_a_reminder_created_in_another_window(cx: &mut TestAppConte
     cx.run_until_parked();
     a.update(cx, |shell, _, cx| {
         let durable = locked(&shell.store).unwrap().reminders().unwrap();
-        assert!(shell.session_summaries.contains_key(&id));
+        assert!(shell.has_session(id, cx));
         assert_eq!(durable.as_slice(), shell.reminders(cx));
         assert_eq!(durable[0].session_id, id);
         assert!(durable[0].fired_at.is_some());
@@ -358,29 +358,55 @@ fn a_session_is_private_during_preparation_and_peers_receive_its_worktree(cx: &m
     b.update(cx, |shell, _, cx| {
         assert!(!shell.session_available_here(id, cx));
         assert!(shell.add_loaded(summary.clone(), cx).is_none());
-        assert!(!shell.session_summaries.contains_key(&id));
+        assert!(!shell.has_session(id, cx));
     })
     .unwrap();
     let worktree = format!("{}/checkout", summary.cwd);
-    a.update(cx, |shell, _, cx| {
-        let view = shell.install_prepared(summary, &install, cx).unwrap();
-        view.update(cx, |view, cx| {
-            view.seed_new_settings(
-                vorkspace_core::agent::Settings {
-                    worktree_cwd: Some(worktree.clone()),
-                    ..Default::default()
-                },
-                cx,
-            )
-        });
-        shell.publish_prepared(&view, Some(&mut install), cx);
+    let view = a
+        .update(cx, |shell, _, cx| {
+            let view = shell.install_prepared(summary, &install, cx).unwrap();
+            view.update(cx, |view, cx| {
+                view.seed_new_settings(
+                    vorkspace_core::agent::Settings {
+                        worktree_cwd: Some(worktree.clone()),
+                        ..Default::default()
+                    },
+                    cx,
+                )
+            });
+            view
+        })
+        .unwrap();
+    b.update(cx, |shell, _, cx| {
+        assert!(shell.session_record(id, cx).is_none());
+        assert!(!shell.order.contains(&id));
     })
     .unwrap();
+    cx.update(|cx| {
+        a.update(cx, |shell, _, cx| {
+            shell.publish_prepared(&view, Some(&mut install), cx);
+        })
+        .unwrap();
+        b.update(cx, |shell, _, cx| {
+            assert_eq!(
+                shell
+                    .session_record(id, cx)
+                    .and_then(SessionRecord::worktree),
+                Some(worktree.as_str())
+            );
+        })
+        .unwrap();
+    });
     drop(install);
     cx.run_until_parked();
     b.update(cx, |shell, _, cx| {
-        assert!(shell.session_summaries.contains_key(&id));
-        assert_eq!(shell.session_worktrees.get(&id), Some(&Some(worktree)));
+        assert!(shell.has_session(id, cx));
+        assert_eq!(
+            shell
+                .session_record(id, cx)
+                .and_then(SessionRecord::worktree),
+            Some(worktree.as_str())
+        );
         assert!(shell.ensure_session(id, cx).is_none());
     })
     .unwrap();
@@ -400,19 +426,19 @@ fn a_peer_cannot_claim_a_cold_session_until_its_archive_commits(cx: &mut TestApp
     let id = summary.id;
     cx.update(|cx| {
         a.update(cx, |shell, _, cx| {
-            shell.session_summaries.insert(id, summary.clone());
+            shell.seed_session_summary(summary, cx);
             shell.toggle_archive(id, cx);
         })
         .unwrap();
         b.update(cx, |shell, _, cx| {
-            shell.session_summaries.insert(id, summary);
+            assert!(shell.has_session(id, cx));
             assert!(shell.ensure_session(id, cx).is_none());
         })
         .unwrap();
     });
     cx.run_until_parked();
-    b.update(cx, |shell, _, _| {
-        assert!(shell.session_summaries[&id].archived)
+    b.update(cx, |shell, _, cx| {
+        assert!(shell.session_summary(id, cx).unwrap().archived)
     })
     .unwrap();
 }
@@ -572,7 +598,7 @@ fn a_session_keeps_one_live_owner_and_peers_follow_its_catalog(cx: &mut TestAppC
         .unwrap();
     cx.run_until_parked();
     b.update(cx, |shell, window, cx| {
-        assert!(shell.session_summaries.contains_key(&id));
+        assert!(shell.has_session(id, cx));
         assert!(!shell.sessions.contains_key(&id));
         let previous = shell.workspace.active;
         shell.open(id, window, cx);
@@ -593,8 +619,11 @@ fn a_session_keeps_one_live_owner_and_peers_follow_its_catalog(cx: &mut TestAppC
     })
     .unwrap();
     cx.run_until_parked();
-    b.update(cx, |shell, _, _| {
-        assert_eq!(shell.session_summaries[&id].title, "Shared session");
+    b.update(cx, |shell, _, cx| {
+        assert_eq!(
+            shell.session_summary(id, cx).unwrap().title,
+            "Shared session"
+        );
     })
     .unwrap();
 
@@ -686,9 +715,7 @@ fn a_session_is_live_in_one_window_at_a_time(cx: &mut TestAppContext) {
     assert!(a_has ^ b_has, "exactly one window holds the live session");
     let (holder, other) = if a_has { (a, b) } else { (b, a) };
     other
-        .update(cx, |shell, _, _| {
-            assert!(shell.session_summaries.contains_key(&id))
-        })
+        .update(cx, |shell, _, cx| assert!(shell.has_session(id, cx)))
         .unwrap();
     // Once the holder lets it go, the other window can take it.
     holder

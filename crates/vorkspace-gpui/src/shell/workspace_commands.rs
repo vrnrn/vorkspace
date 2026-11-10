@@ -47,7 +47,7 @@ impl Shell {
         let Some(owner) = self.workspace.session_for_pane(id) else {
             return false;
         };
-        self.session_summaries.contains_key(&owner)
+        self.has_session(owner, cx)
             && path_key(&self.session_metadata(owner, cx).summary.cwd) == path_key(project)
     }
 
@@ -451,8 +451,7 @@ impl Shell {
                 .or_else(|| value.as_str()?.parse().ok())
                 .ok_or("Provide an integer sessionId")?;
             let summary = self
-                .session_summaries
-                .get(&id)
+                .session_summary(id, cx)
                 .filter(|_| self.workspace.session_for_pane(id) == Some(id))
                 .ok_or("Session is unavailable")?;
             if path_key(&summary.cwd) != path_key(project) || self.deleting.contains(&id) {

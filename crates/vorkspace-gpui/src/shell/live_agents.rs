@@ -843,7 +843,7 @@ impl Shell {
         let agents: Vec<_> = ids
             .into_iter()
             .filter_map(|id| {
-                if !self.session_summaries.contains_key(&id) {
+                if !self.has_session(id, cx) {
                     return None;
                 }
                 let status = self.sidebar_status(id, cx)?;

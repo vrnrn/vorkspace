@@ -43,9 +43,11 @@ mod quick_open;
 mod remote_projects;
 mod remote_sessions;
 mod search;
+mod session_directory;
 mod session_filters;
 mod session_groups;
 mod session_loading;
+use session_directory::{SessionDirectory, SessionRecord};
 mod session_preview;
 mod settings;
 mod shortcuts;
@@ -500,8 +502,8 @@ pub(crate) struct Shell {
     remote_marks: HashMap<i64, (bool, bool)>,
     sessions: HashMap<i64, Entity<Conversation>>,
     /// Lightweight history index; only opened or previewed chats own GPUI entities.
-    session_summaries: HashMap<i64, Session>,
-    draft_sessions: HashSet<i64>,
+    directory: Entity<SessionDirectory>,
+    remote_tombstones: HashMap<i64, SessionRecord>,
     visible_chats: HashSet<i64>,
     history_recency: HashMap<i64, u64>,
     history_clock: u64,
@@ -617,7 +619,6 @@ pub(crate) struct Shell {
     pending_project_creations: HashMap<String, usize>,
     new_tab_task: Option<gpui::Task<()>>,
     worktree_focus: HashMap<String, crate::git_tools::worktree_switcher::WorktreeFocus>,
-    session_worktrees: HashMap<i64, Option<String>>,
     worktree_returns: HashMap<(String, String), i64>,
     tab_drag: Option<TabDrag>,
     /// Tabs sliding between slots: neighbours making room for a drag and,
@@ -716,11 +717,7 @@ impl Shell {
         cx: &mut Context<Self>,
     ) -> Self {
         vorkspace_ui::clock::use_test_clock(cx);
-        let paths = summaries
-            .iter()
-            .map(|s| (s.id, s.cwd.clone()))
-            .collect::<Vec<_>>();
-        let workspace = Workspace::restore(saved.as_deref(), &paths, &cwd);
+        let workspace = Workspace::restore_sessions(saved.as_deref(), &summaries, &cwd);
         let mut projects = workspace.projects;
         if !workspace.project.is_empty() && !projects.contains(&workspace.project) {
             projects.push(workspace.project);
@@ -728,14 +725,18 @@ impl Shell {
         let metadata = locked(&store)
             .map(|db| db.session_sidebar_metadata(&projects))
             .unwrap_or_default();
-        Self::new_with_metadata(store, summaries, cwd, saved, metadata, None, cx)
+        let core = app_core::AppCore::get(&store, cx);
+        core.update(cx, |core, cx| {
+            core.reconcile_session_directory(&summaries, &metadata, false, cx);
+        });
+        Self::new_with_metadata(store, &summaries, cwd, saved, &metadata, None, cx)
     }
     pub(crate) fn new_with_metadata(
         store: Database,
-        summaries: Vec<Session>,
+        summaries: &[Session],
         cwd: String,
         saved: Option<String>,
-        sidebar_metadata: vorkspace_core::store::SessionSidebarMetadata,
+        sidebar_metadata: &vorkspace_core::store::SessionSidebarMetadata,
         window_layout: Option<u64>,
         cx: &mut Context<Self>,
     ) -> Self {
@@ -751,8 +752,7 @@ impl Shell {
             .detach();
         }
         let remote = app_core.read(cx).remote.clone();
-        let metadata: Vec<_> = summaries.iter().map(|s| (s.id, s.cwd.clone())).collect();
-        let mut workspace = Workspace::restore(saved.as_deref(), &metadata, &cwd);
+        let mut workspace = Workspace::restore_sessions(saved.as_deref(), summaries, &cwd);
         let layouts = &app_core.read(cx).layouts;
         let window_shared = layouts.shared.clone();
         if window_layout.is_some() && window_layout == layouts.focused {
@@ -828,7 +828,7 @@ impl Shell {
             this.stop_resource_turn(request, cx);
         });
         let worktree_focus = workspace.worktree_focus.clone();
-        let session_worktrees = sidebar_metadata.worktrees;
+        let directory = app_core.read(cx).directory.clone();
         let github_activity = app_core.read(cx).github_activity.clone();
         let notification_state = notifications::State::new(&workspace, github_activity, cx);
         let owner = cx.weak_entity();
@@ -839,8 +839,8 @@ impl Shell {
             quick_open: None,
             image_lightbox: None,
             orchestrations: HashMap::new(),
-            orchestration_summaries: sidebar_metadata.orchestrations,
-            started_by: sidebar_metadata.started_by,
+            orchestration_summaries: sidebar_metadata.orchestrations.clone(),
+            started_by: sidebar_metadata.started_by.clone(),
             usage_footer: cx.new(|cx| UsageFooter::new(active_kind, cx)),
             resources,
             sidebar_frame,
@@ -857,8 +857,8 @@ impl Shell {
             remote_project_picker: None,
             remote_marks: HashMap::new(),
             sessions: HashMap::new(),
-            session_summaries: HashMap::new(),
-            draft_sessions: sidebar_metadata.drafts,
+            directory,
+            remote_tombstones: HashMap::new(),
             visible_chats: HashSet::new(),
             history_recency: HashMap::new(),
             history_clock: 0,
@@ -872,9 +872,12 @@ impl Shell {
             archiving: HashSet::new(),
             groups: sidebar_metadata
                 .groups
-                .into_iter()
+                .iter()
                 .map(|(project, groups)| {
-                    (project, Arc::new(session_groups::FolderIndex::new(groups)))
+                    (
+                        project.clone(),
+                        Arc::new(session_groups::FolderIndex::new(groups.clone())),
+                    )
                 })
                 .collect(),
             renaming: None,
@@ -965,7 +968,6 @@ impl Shell {
             pending_project_creations: HashMap::new(),
             new_tab_task: None,
             worktree_focus,
-            session_worktrees,
             worktree_returns: HashMap::new(),
             tab_drag: None,
             tab_shifts: HashMap::new(),
@@ -1141,7 +1143,6 @@ impl Shell {
                 continue;
             }
             this.order.push(summary.id);
-            this.session_summaries.insert(summary.id, summary);
         }
         if let Some(id) = this
             .workspace
@@ -1320,14 +1321,12 @@ impl Shell {
     ) {
         let view = view.read(cx);
         let id = view.summary.id;
-        self.session_summaries.insert(id, view.summary.clone());
-        self.session_worktrees
-            .insert(id, view.settings.worktree_cwd.clone());
-        if view.has_saved_draft() {
-            self.draft_sessions.insert(id);
-        } else {
-            self.draft_sessions.remove(&id);
-        }
+        let record = SessionRecord {
+            summary: view.summary.clone(),
+            checkout: Some(view.settings.worktree_cwd.clone()),
+            draft: view.has_saved_draft(),
+        };
+        self.put_session_record(record, cx);
         if let Some(install) = install {
             install.expose();
         }
@@ -1353,7 +1352,10 @@ impl Shell {
         if let Some(view) = self.sessions.get(&id) {
             return Some(view.clone());
         }
-        let worktree = self.session_worktrees.get(&id).cloned().flatten();
+        let record = self.session_record(id, cx);
+        let worktree = record.and_then(SessionRecord::worktree).map(str::to_owned);
+        let draft = record.is_some_and(|record| record.draft);
+        let known = record.is_some();
         if !self.allow_project_entry(&summary.cwd, cx)
             || worktree
                 .as_deref()
@@ -1364,7 +1366,16 @@ impl Shell {
         if !self.claim_session(id, install, cx) {
             return None;
         }
-        self.session_summaries.insert(id, summary.clone());
+        if install.is_none() && !known {
+            self.put_session_record(
+                SessionRecord {
+                    summary: summary.clone(),
+                    checkout: None,
+                    draft: false,
+                },
+                cx,
+            );
+        }
         self.session_marks
             .insert(id, cx.new(|_| SessionMark::new(summary.provider.clone())));
         self.tab_marks
@@ -1383,7 +1394,7 @@ impl Shell {
             // Events may arrive before the first asynchronous agent load. Seed
             // the indexed working directory so those events cannot erase it.
             view.restore_worktree(worktree, None, cx);
-            view.draft_hint = self.draft_sessions.contains(&id);
+            view.draft_hint = draft;
             if let Some(environment) = bridge {
                 view.set_app_environment(environment);
             }
@@ -1542,9 +1553,7 @@ impl Shell {
                 this.complete_linked_cleanup(id, archived && result.is_ok(), cx);
                 match result {
                     Ok(()) => {
-                        if let Some(summary) = this.session_summaries.get_mut(&id) {
-                            summary.archived = archived;
-                        }
+                        this.edit_session_record(id, cx, |row| row.summary.archived = archived);
                         if let Some(view) = this.sessions.get(&id) {
                             view.update(cx, |session, cx| {
                                 session.summary.archived = archived;
@@ -1966,7 +1975,7 @@ impl Shell {
             self.open_file_pane(id, window, cx);
             return;
         }
-        if !self.session_summaries.contains_key(&id) || self.deleting.contains(&id) {
+        if !self.has_session(id, cx) || self.deleting.contains(&id) {
             return;
         }
         self.navigation_revision += 1;
@@ -1987,9 +1996,7 @@ impl Shell {
         let cwd = &self.session_metadata(id, cx).summary.cwd;
         let working_copy = vorkspace_core::files::path_key(self.session_working_copy(id, cx));
         let blank = |pane: i64| {
-            if self.workspace.review_owners.contains_key(&pane)
-                || !self.session_summaries.contains_key(&pane)
-            {
+            if self.workspace.review_owners.contains_key(&pane) || !self.has_session(pane, cx) {
                 return false;
             }
             let s = self.session_metadata(pane, cx);

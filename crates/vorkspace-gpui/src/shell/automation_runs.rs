@@ -249,31 +249,25 @@ impl Shell {
                     && !self.automation_state.reserved.contains(id)
             })
             .filter(|id| {
-                self.session_summaries.get(id).is_some_and(|summary| {
+                self.session_record(*id, cx).is_some_and(|record| {
+                    let summary = &record.summary;
                     summary.provider == automation.harness
                         && !summary.archived
-                        && !self.draft_sessions.contains(id)
+                        && !record.draft
                         && self
                             .sessions
                             .get(id)
                             .is_none_or(|view| view.read(cx).available_for_managed_run(cx))
                         && match automation.workspace_mode.as_str() {
                             "current" => {
-                                self.session_worktrees
-                                    .get(id)
-                                    .and_then(Option::as_deref)
-                                    .is_none()
+                                record.worktree().is_none()
                                     && vorkspace_core::files::path_key(&summary.cwd)
                                         == vorkspace_core::files::path_key(&automation.cwd)
                             }
-                            "existing" => self
-                                .session_worktrees
-                                .get(id)
-                                .and_then(Option::as_deref)
-                                .is_some_and(|cwd| {
-                                    vorkspace_core::files::path_key(cwd)
-                                        == vorkspace_core::files::path_key(&automation.worktree_cwd)
-                                }),
+                            "existing" => record.worktree().is_some_and(|cwd| {
+                                vorkspace_core::files::path_key(cwd)
+                                    == vorkspace_core::files::path_key(&automation.worktree_cwd)
+                            }),
                             _ => false,
                         }
                 })

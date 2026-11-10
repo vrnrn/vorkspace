@@ -1,18 +1,10 @@
 //! Live session leases, admission and catalog events shared by workspace windows.
 use super::*;
 
-enum SessionCatalogChange {
-    Saved {
-        summary: Box<Session>,
-        worktree: Option<String>,
-        draft: bool,
-    },
-    Deleted(i64),
-}
-
 struct CatalogChanged {
-    source: WeakEntity<Shell>,
-    change: SessionCatalogChange,
+    source: Option<WeakEntity<Shell>>,
+    saved: Vec<i64>,
+    deleted: Vec<i64>,
 }
 
 impl EventEmitter<CatalogChanged> for AppCore {}
@@ -25,6 +17,57 @@ struct GroupsChanged {
 impl EventEmitter<GroupsChanged> for AppCore {}
 
 impl AppCore {
+    pub(crate) fn reconcile_session_directory(
+        &mut self,
+        sessions: &[Session],
+        metadata: &vorkspace_core::store::SessionSidebarMetadata,
+        remove_missing: bool,
+        cx: &mut Context<Self>,
+    ) {
+        let protected: HashSet<_> = self
+            .sessions
+            .iter()
+            .chain(self.metadata_writes.iter())
+            .filter_map(|(&id, owner)| owner.upgrade().is_some().then_some(id))
+            .collect();
+        let internal: HashSet<_> = self.bot_roster.read(cx).internal_session_ids().collect();
+        let (saved, deleted) = self.directory.update(cx, |directory, _| {
+            let saved = directory.reconcile(sessions, metadata, &protected, &internal);
+            let mut deleted = Vec::new();
+            if remove_missing {
+                let visible: HashSet<_> = sessions.iter().map(|row| row.id).collect();
+                directory.rows.retain(|&id, _| {
+                    let keep = (visible.contains(&id) && !internal.contains(&id))
+                        || protected.contains(&id);
+                    if !keep {
+                        deleted.push(id);
+                    }
+                    keep
+                });
+            }
+            (saved, deleted)
+        });
+        self.session_catalog_changed(None, saved, deleted, cx);
+    }
+
+    fn session_catalog_changed(
+        &mut self,
+        source: Option<WeakEntity<Shell>>,
+        saved: Vec<i64>,
+        deleted: Vec<i64>,
+        cx: &mut Context<Self>,
+    ) {
+        if saved.is_empty() && deleted.is_empty() {
+            return;
+        }
+        self.catalog_revision = self.catalog_revision.wrapping_add(1);
+        cx.emit(CatalogChanged {
+            source,
+            saved,
+            deleted,
+        });
+    }
+
     /// Whether `shell` may load session `id` live. Another window keeps it
     /// only while that window exists and still has the session loaded.
     fn claim_session(
@@ -98,36 +141,28 @@ impl Shell {
     ) {
         self.observations
             .push(cx.subscribe(core, |this, _, event: &CatalogChanged, cx| {
-                if cx.weak_entity() == event.source {
+                if event.source.as_ref() == Some(&cx.weak_entity()) {
                     return;
                 }
-                match &event.change {
-                    SessionCatalogChange::Saved {
-                        summary,
-                        worktree,
-                        draft,
-                    } => {
-                        let id = summary.id;
-                        if this.sessions.contains_key(&id) {
-                            return;
-                        }
-                        if this
-                            .session_summaries
-                            .insert(id, (**summary).clone())
-                            .is_none()
-                        {
-                            this.order.push(id);
-                        }
-                        this.session_worktrees.insert(id, worktree.clone());
-                        if *draft {
-                            this.draft_sessions.insert(id);
-                        } else {
-                            this.draft_sessions.remove(&id);
-                        }
+                for &id in &event.saved {
+                    if !this.directory.read(cx).rows.contains_key(&id)
+                        || this
+                            .bots
+                            .as_ref()
+                            .is_some_and(|bots| bots.read(cx).is_bot_session(id))
+                    {
+                        continue;
+                    }
+                    if !this.order.contains(&id) {
+                        this.order.push(id);
+                    }
+                    if !this.sessions.contains_key(&id) {
                         this.sync_search_session(id, cx);
                     }
-                    SessionCatalogChange::Deleted(id) => {
-                        this.remove_session_from_catalog(*id, cx);
+                }
+                for &id in &event.deleted {
+                    if !this.directory.read(cx).rows.contains_key(&id) {
+                        this.remove_session_from_catalog(id, cx);
                     }
                 }
                 this.invalidate_chrome(cx);
@@ -328,32 +363,29 @@ impl Shell {
         }
     }
 
-    fn emit_catalog_change(&self, change: SessionCatalogChange, cx: &mut Context<Self>) {
+    pub(in crate::shell) fn publish_session_summary(&self, id: i64, cx: &mut Context<Self>) {
+        if !self.directory.read(cx).rows.contains_key(&id) {
+            return;
+        }
         if let Some(core) = &self.app_core {
             let source = cx.weak_entity();
             core.update(cx, |core, cx| {
-                core.catalog_revision = core.catalog_revision.wrapping_add(1);
-                cx.emit(CatalogChanged { source, change });
+                core.session_catalog_changed(Some(source), vec![id], vec![], cx)
             });
         }
     }
 
-    pub(in crate::shell) fn publish_session_summary(&mut self, id: i64, cx: &mut Context<Self>) {
-        let Some(summary) = self.session_summaries.get(&id).cloned() else {
-            return;
-        };
-        let worktree = self.session_worktrees.get(&id).cloned().flatten();
-        self.emit_catalog_change(
-            SessionCatalogChange::Saved {
-                summary: Box::new(summary),
-                worktree,
-                draft: self.draft_sessions.contains(&id),
-            },
-            cx,
-        );
-    }
-
     pub(in crate::shell) fn publish_session_deletion(&self, id: i64, cx: &mut Context<Self>) {
-        self.emit_catalog_change(SessionCatalogChange::Deleted(id), cx);
+        let removed = self
+            .directory
+            .update(cx, |directory, _| directory.rows.remove(&id));
+        if removed.is_some()
+            && let Some(core) = &self.app_core
+        {
+            let source = cx.weak_entity();
+            core.update(cx, |core, cx| {
+                core.session_catalog_changed(Some(source), vec![], vec![id], cx)
+            });
+        }
     }
 }

@@ -259,9 +259,7 @@ fn copies_keep_running_sessions_and_route_new_tabs_and_splits(cx: &mut TestAppCo
                     .input
                     .update(cx, |input, cx| input.set_text("keep this draft".into(), cx));
             });
-            shell
-                .session_worktrees
-                .insert(feature_session, Some(feature.path.clone()));
+            shell.set_session_worktree(feature_session, Some(feature.path.clone()), cx);
             shell
                 .workspace
                 .tab_workspaces
