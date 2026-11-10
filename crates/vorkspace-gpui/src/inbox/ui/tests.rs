@@ -1056,7 +1056,11 @@ fn own_successful_revision_is_read_suppressed_and_later_remote_revision_can_chim
             );
             assert!(!inbox.state.seen.unseen(&item));
             assert!(
-                inbox.feed.read(cx).mutation_revision(&item.detail_key()).is_none(),
+                inbox
+                    .feed
+                    .read(cx)
+                    .mutation_revision(&item.detail_key())
+                    .is_none(),
                 "coalesced own mutations are consumed by one remote revision"
             );
             item.updated_at = "2026-10-22T12:00:00Z".into();
@@ -1161,7 +1165,11 @@ fn a_coalesced_external_revision_is_never_consumed_as_own_activity(cx: &mut Test
             inbox.record_self_activity(previous.detail_key(), own, cx);
             inbox.record_self_activity(item.detail_key(), 0, cx);
             assert!(
-                inbox.feed.read(cx).mutation_revision(&item.detail_key()).is_none(),
+                inbox
+                    .feed
+                    .read(cx)
+                    .mutation_revision(&item.detail_key())
+                    .is_none(),
                 "an uncertain receipt cannot suppress anything"
             );
             inbox.record_self_activity(item.detail_key(), own, cx);
@@ -1197,9 +1205,18 @@ fn a_coalesced_external_revision_is_never_consumed_as_own_activity(cx: &mut Test
                 cx,
             );
             assert!(inbox.state.seen.unseen(&item));
-            assert!(inbox.feed.read(cx).mutation_revision(&item.detail_key()).is_none());
+            assert!(
+                inbox
+                    .feed
+                    .read(cx)
+                    .mutation_revision(&item.detail_key())
+                    .is_none()
+            );
             assert_eq!(
-                inbox.feed.read(cx).mutation_revision(&previous.detail_key()),
+                inbox
+                    .feed
+                    .read(cx)
+                    .mutation_revision(&previous.detail_key()),
                 Some(own),
                 "a revision from a replacement server cannot consume another server's receipt"
             );
