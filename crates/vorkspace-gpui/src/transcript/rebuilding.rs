@@ -917,8 +917,14 @@ impl TranscriptView {
         };
         self.phase_toggle = None;
         self.rows.extend(merged);
-        self.windowed_phases = self
-            .rows
+        // The preserved prefix cannot acquire a windowed phase from a suffix
+        // update unless it already owned a window or scroll state.
+        let phase_start = if self.windowed_phases.is_empty() && self.phase_scrolls.is_empty() {
+            display_start
+        } else {
+            0
+        };
+        self.windowed_phases = self.rows[phase_start..]
             .iter()
             .filter_map(|row| match row.body {
                 Body::Phase { group, active, .. }
@@ -963,7 +969,14 @@ impl TranscriptView {
         if following {
             self.list.scroll_to_end();
         } else if let Some(key) = anchor
-            && let Some(item_ix) = self.rows.iter().position(|r| r.key == key)
+            && let Some(item_ix) = (offset.item_ix < display_start)
+                .then_some(offset.item_ix)
+                .or_else(|| {
+                    self.rows[display_start..]
+                        .iter()
+                        .position(|r| r.key == key)
+                        .map(|ix| display_start + ix)
+                })
         {
             self.list.scroll_to(ListOffset {
                 item_ix,
