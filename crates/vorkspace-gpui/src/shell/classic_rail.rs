@@ -188,7 +188,6 @@ impl Shell {
         self.usage_footer.update(cx, |usage, cx| {
             usage.set_compact(!self.workspace.project_rail_open, cx)
         });
-        self.reconcile_vorkspace_bots(cx);
 
         if !self.workspace.project_rail_open {
             return self.compact_project_rail(rail, cx);

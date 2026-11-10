@@ -31,6 +31,7 @@ pub(crate) struct AppStart {
 pub(crate) type WorktreeRemoved = Box<dyn FnOnce(Result<(), String>, &mut App)>;
 
 pub(crate) trait BotsHost {
+    fn open_owned_bot(&self, id: &str, window: &mut Window, cx: &mut App);
     /// Remove as an agent would: it refuses rather than discards.
     fn remove_worktree(&self, project: String, path: String, done: WorktreeRemoved, cx: &mut App);
     fn session_views(&self, cx: &App) -> Vec<BotSession>;

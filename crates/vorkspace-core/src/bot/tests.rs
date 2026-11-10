@@ -317,8 +317,12 @@ fn sidecar_and_roster_merge_stale_writes_without_erasing_other_settings() {
     a.message_modes.insert("first".into(), "plan".into());
     b.held_messages.insert("second".into());
     b.message_modes.insert("second".into(), "operator".into());
+    a.hidden_sessions.push(10);
+    b.hidden_sessions.push(20);
     a.save(&first).unwrap();
-    b.save(&second).unwrap();
+    let committed = b.save_snapshot(&second).unwrap();
+    assert_eq!(committed.hidden_sessions, [10, 20]);
+    assert_eq!(committed.get("bot").unwrap().outbox.len(), 2);
     assert_eq!(b.get("bot").unwrap().outbox[0].id, "second");
     let reopened = Store::open_vorkspace(&path).unwrap();
     assert_eq!(
@@ -356,6 +360,7 @@ fn sidecar_and_roster_merge_stale_writes_without_erasing_other_settings() {
         Some("operator")
     );
     assert_eq!(saved.get("bot").unwrap().name, "Renamed");
+    assert_eq!(saved.hidden_sessions, [10, 20]);
 }
 
 fn release_process_race(gate: &Path, one: &Path, two: &Path) {

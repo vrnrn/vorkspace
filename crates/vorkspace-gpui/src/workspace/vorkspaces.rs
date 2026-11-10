@@ -6,6 +6,7 @@
 //! they are listed.
 use super::Workspace;
 use serde::{Deserialize, Serialize};
+use std::collections::HashSet;
 use unicode_segmentation::UnicodeSegmentation;
 use vorkspace_core::files::path_key;
 
@@ -31,6 +32,41 @@ pub(crate) struct VorkspaceDef {
 }
 
 impl VorkspaceDef {
+    pub(crate) fn apply_window_edits(&mut self, before: &Self, edited: &Self) {
+        if edited.name != before.name {
+            self.name.clone_from(&edited.name);
+        }
+        if edited.color != before.color {
+            self.color = edited.color;
+        }
+        if edited.icon_letters != before.icon_letters {
+            self.icon_letters.clone_from(&edited.icon_letters);
+        }
+        if edited.background != before.background {
+            self.background.clone_from(&edited.background);
+        }
+        if edited.projects != before.projects {
+            let before: HashSet<_> = before.projects.iter().map(|path| path_key(path)).collect();
+            let edited_keys: HashSet<_> =
+                edited.projects.iter().map(|path| path_key(path)).collect();
+            self.projects.retain(|path| {
+                let key = path_key(path);
+                !before.contains(&key) || edited_keys.contains(&key)
+            });
+            let mut current: HashSet<_> = self.projects.iter().map(|path| path_key(path)).collect();
+            self.projects.extend(
+                edited
+                    .projects
+                    .iter()
+                    .filter(|path| {
+                        let key = path_key(path);
+                        !before.contains(&key) && current.insert(key)
+                    })
+                    .cloned(),
+            );
+        }
+    }
+
     pub(crate) fn icon_letters(&self) -> &str {
         self.icon_letters.as_deref().unwrap_or_default()
     }
@@ -118,7 +154,7 @@ impl Workspace {
 
     /// The first launch after vorkspaces exist keeps everything visible by
     /// putting every known project into one vorkspace. Bots join through
-    /// `assign_unowned_bots` once their roster loads.
+    /// the shared roster once it loads.
     pub(crate) fn ensure_vorkspaces(&mut self) {
         if self.vorkspaces.is_empty() {
             let projects = self
@@ -268,16 +304,9 @@ impl Workspace {
     }
 
     /// A Bot belongs to one vorkspace: adding it here takes it out of any other.
+    #[cfg(test)]
     pub(crate) fn move_bot_to_vorkspace(&mut self, id: &str, bot: &str) {
-        for v in &mut self.vorkspaces {
-            if v.id == id {
-                if !v.bots.iter().any(|b| b == bot) {
-                    v.bots.push(bot.to_owned());
-                }
-            } else {
-                v.bots.retain(|b| b != bot);
-            }
-        }
+        move_bot(&mut self.vorkspaces, id, bot);
         self.seen_bots.insert(bot.to_owned());
     }
 
@@ -304,42 +333,14 @@ impl Workspace {
         true
     }
 
-    /// A Bot that belongs to no vorkspace, whether new or from before
-    /// vorkspaces, joins the active one. Bots that no longer exist leave.
-    /// Returns whether membership changed.
+    #[cfg(test)]
     pub(crate) fn assign_unowned_bots(&mut self, roster: &[String]) -> bool {
-        let mut changed = false;
-        for v in &mut self.vorkspaces {
-            let before = v.bots.len();
-            v.bots.retain(|b| roster.contains(b));
-            changed |= v.bots.len() != before;
-        }
-        let before = self.seen_bots.len();
-        self.seen_bots.retain(|b| roster.contains(b));
-        changed |= self.seen_bots.len() != before;
-        // Only a Bot never seen before is placed; one deliberately removed
-        // from every vorkspace stays out until someone adds it back.
-        let unowned: Vec<_> = roster
-            .iter()
-            .filter(|id| {
-                !self.seen_bots.contains(*id)
-                    && !self.vorkspaces.iter().any(|v| v.bots.contains(id))
-            })
-            .cloned()
-            .collect();
-        for id in roster {
-            changed |= self.seen_bots.insert(id.clone());
-        }
-        if !unowned.is_empty()
-            && let Some(active) = self
-                .vorkspaces
-                .iter_mut()
-                .find(|v| v.id == self.active_vorkspace)
-        {
-            active.bots.extend(unowned);
-            changed = true;
-        }
-        changed
+        reconcile_bots(
+            &mut self.vorkspaces,
+            &mut self.seen_bots,
+            &self.active_vorkspace,
+            roster,
+        )
     }
 
     /// The project to show on entering a vorkspace: the one it last showed,
@@ -363,6 +364,57 @@ impl Workspace {
             })
             .unwrap_or_default()
     }
+}
+
+pub(crate) fn move_bot(vorkspaces: &mut [VorkspaceDef], destination: &str, bot: &str) {
+    for def in vorkspaces {
+        if def.id == destination {
+            if !def.bots.iter().any(|id| id == bot) {
+                def.bots.push(bot.to_owned());
+            }
+        } else {
+            def.bots.retain(|id| id != bot);
+        }
+    }
+}
+
+/// Place newly committed Bots and remove deleted ones from every vorkspace.
+/// A deliberately unassigned Bot stays out until someone adds it again.
+pub(crate) fn reconcile_bots(
+    vorkspaces: &mut [VorkspaceDef],
+    seen: &mut HashSet<String>,
+    destination: &str,
+    roster: &[String],
+) -> bool {
+    let current: HashSet<_> = roster.iter().collect();
+    let mut changed = false;
+    for def in vorkspaces.iter_mut() {
+        let before = def.bots.len();
+        def.bots.retain(|id| current.contains(id));
+        changed |= def.bots.len() != before;
+    }
+    let before = seen.len();
+    seen.retain(|id| current.contains(id));
+    changed |= seen.len() != before;
+    let unowned: Vec<_> = roster
+        .iter()
+        .filter(|id| !seen.contains(*id) && !vorkspaces.iter().any(|def| def.bots.contains(id)))
+        .cloned()
+        .collect();
+    for id in roster {
+        changed |= seen.insert(id.clone());
+    }
+    let landing = vorkspaces
+        .iter()
+        .position(|def| def.id == destination)
+        .unwrap_or(0);
+    if !unowned.is_empty()
+        && let Some(def) = vorkspaces.get_mut(landing)
+    {
+        def.bots.extend(unowned);
+        changed = true;
+    }
+    changed
 }
 
 #[cfg(test)]

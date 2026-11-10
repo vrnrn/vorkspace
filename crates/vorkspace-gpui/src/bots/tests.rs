@@ -21,6 +21,249 @@ struct Setup {
     store: Database,
 }
 
+fn peer_window(s: &Setup, cx: &mut TestAppContext) -> WindowHandle<Shell> {
+    let (store, project) = (s.store.clone(), s.project.clone());
+    let peer = cx.update(|cx| {
+        cx.open_window(Default::default(), |_, cx| {
+            cx.new(|cx| Shell::new(store, vec![], project, None, cx))
+        })
+        .unwrap()
+    });
+    cx.run_until_parked();
+    peer
+}
+
+#[gpui::test]
+fn a_peer_reports_to_a_bot_conversation_parked_in_another_window(cx: &mut TestAppContext) {
+    let s = setup_bot(cx);
+    close_bot_pane(&s, cx);
+    let peer = peer_window(&s, cx);
+    s.manager.read_with(cx, |bots, cx| {
+        assert!(bots.active.is_none());
+        assert!(bots.chats[&s.id].read(cx).ready_for_external(cx));
+    });
+    peer.update(cx, |shell, _, cx| {
+        shell.bot_manager().update(cx, |bots, cx| {
+            bots.roster
+                .get_mut(&s.id)
+                .unwrap()
+                .pending_reports
+                .push("A report from the peer window".into());
+            bots.save(cx);
+        });
+    })
+    .unwrap();
+    cx.run_until_parked();
+    s.manager.read_with(cx, |bots, cx| {
+        assert!(
+            bots.chats[&s.id]
+                .read(cx)
+                .bot_rows(cx)
+                .iter()
+                .any(|row| row.text == "A report from the peer window")
+        );
+        assert!(bots.roster.get(&s.id).unwrap().pending_reports.is_empty());
+    });
+}
+
+#[gpui::test]
+fn vox_reads_and_edits_the_live_bot_composer_from_a_peer_window(cx: &mut TestAppContext) {
+    let s = setup(cx);
+    close_bot_pane(&s, cx);
+    let peer = peer_window(&s, cx);
+    let edit = peer
+        .update(cx, |shell, window, cx| {
+            shell.vox_action(
+                "composer.write",
+                &json!({"bot":s.id, "text":"A draft from Vox"}),
+                window,
+                cx,
+            )
+        })
+        .unwrap()
+        .unwrap();
+    assert_eq!(edit["sent"], false);
+    s.manager.read_with(cx, |bots, cx| {
+        assert_eq!(
+            bots.chats[&s.id].read(cx).input.read(cx).content,
+            "A draft from Vox"
+        );
+    });
+    let read = peer
+        .update(cx, |shell, window, cx| {
+            shell.vox_action("composer.read", &json!({"bot":s.id}), window, cx)
+        })
+        .unwrap()
+        .unwrap();
+    assert_eq!(read["text"], "A draft from Vox");
+    let other = peer
+        .update(cx, |shell, window, cx| {
+            let other = shell.workspace.create_vorkspace("Other");
+            shell.workspace.active_vorkspace = other.clone();
+            assert!(shell.workspace.bot_hidden_in_vorkspace(&s.id));
+            let result = shell
+                .vox_action("workspace.open", &json!({"bot":s.id}), window, cx)
+                .unwrap();
+            assert_eq!(result["sessionId"], s.session);
+            other
+        })
+        .unwrap();
+    cx.run_until_parked();
+    s.window
+        .update(cx, |shell, _, _| {
+            assert!(
+                shell
+                    .workspace
+                    .active
+                    .is_some_and(|id| shell.is_bot_pane(id))
+            );
+        })
+        .unwrap();
+    peer.update(cx, |shell, _, _| {
+        assert_eq!(shell.workspace.active_vorkspace, other)
+    })
+    .unwrap();
+}
+
+#[gpui::test]
+fn ordinary_bot_work_survives_its_owning_window_closing_after_save(cx: &mut TestAppContext) {
+    let s = setup(cx);
+    close_bot_pane(&s, cx);
+    let peer = peer_window(&s, cx);
+    let manager = peer.update(cx, |shell, _, _| shell.bot_manager()).unwrap();
+    s.manager.update(cx, |bots, cx| {
+        bots.chats[&s.id].update(cx, |view, _| view.busy = true)
+    });
+    manager.update(cx, |bots, cx| {
+        bots.enqueue_held(
+            &s.id,
+            "Deliver after handoff".into(),
+            vec![],
+            false,
+            true,
+            Some("handoff-message".into()),
+            None,
+            None,
+            cx,
+        );
+    });
+    cx.run_until_parked();
+    manager.read_with(cx, |bots, _| assert!(!bots.chats.contains_key(&s.id)));
+    {
+        // Simulate an admitted send with an unknown result. Recovery should
+        // open the chat, but must not attempt a second provider submission.
+        let db = locked(&s.store).unwrap();
+        let saved = Roster::load(&db).unwrap();
+        let message = &saved.get(&s.id).unwrap().outbox[0];
+        assert!(
+            db.claim_bot_message(&s.id, message, "original-owner")
+                .unwrap()
+        );
+    }
+    drop(s.manager);
+    cx.update_window(s.window.into(), |_, window, _| window.remove_window())
+        .unwrap();
+    cx.run_until_parked();
+    manager.update(cx, |bots, cx| bots.resume_pending_work(cx));
+    cx.run_until_parked();
+    manager.read_with(cx, |bots, cx| {
+        assert_eq!(bots.chats[&s.id].read(cx).summary.id, s.session);
+        let message = &bots.roster.get(&s.id).unwrap().outbox[0];
+        assert!(
+            message
+                .error
+                .as_deref()
+                .is_some_and(|error| error.contains("uncertain"))
+        );
+    });
+}
+
+#[gpui::test]
+fn confirming_reset_does_not_replace_a_chat_that_opened_in_another_window(cx: &mut TestAppContext) {
+    let s = setup(cx);
+    close_bot_pane(&s, cx);
+    s.manager.update(cx, |bots, cx| {
+        bots.stop_chat(&s.id, cx);
+        bots.release_chat(&s.id, cx);
+    });
+    let peer = peer_window(&s, cx);
+    s.window
+        .update(cx, |_, window, cx| {
+            s.manager
+                .update(cx, |bots, cx| bots.reset_conversation(&s.id, window, cx));
+        })
+        .unwrap();
+    cx.run_until_parked();
+    let manager = peer
+        .update(cx, |shell, _, cx| {
+            let manager = shell.bot_manager();
+            manager.update(cx, |bots, cx| bots.ensure_chat(&s.id, cx));
+            manager
+        })
+        .unwrap();
+    cx.run_until_parked();
+    let visual = &mut gpui::VisualTestContext::from_window(s.window.into(), cx);
+    assert_eq!(visual.pending_prompt().unwrap().0, "Reset conversation?");
+    visual.simulate_prompt_answer("Reset");
+    visual.run_until_parked();
+    manager.read_with(visual, |bots, cx| {
+        assert_eq!(bots.chats[&s.id].read(cx).summary.id, s.session);
+    });
+    let db = locked(&s.store).unwrap();
+    assert_eq!(
+        Roster::load(&db).unwrap().get(&s.id).unwrap().session_id,
+        Some(s.session)
+    );
+}
+
+#[gpui::test]
+fn retiring_a_minion_revokes_the_permit_and_stops_its_chat_in_the_peer_window(
+    cx: &mut TestAppContext,
+) {
+    let s = setup(cx);
+    let peer = peer_window(&s, cx);
+    let manager = peer.update(cx, |shell, _, _| shell.bot_manager()).unwrap();
+    for bots in [&s.manager, &manager] {
+        bots.update(cx, |bots, cx| {
+            let mut prefs = bots.prefs.clone();
+            prefs.minions = true;
+            bots.set_preferences(prefs, cx);
+        });
+    }
+    let hired = call_as(
+        &s,
+        s.session,
+        "hire",
+        "minions.hire",
+        json!({"name": "Scout", "role": "Research"}),
+        cx,
+    )
+    .unwrap();
+    let id = hired["id"].as_str().unwrap();
+    manager.update(cx, |bots, cx| bots.ensure_chat(id, cx));
+    cx.run_until_parked();
+    let view = manager.read_with(cx, |bots, _| bots.chats[id].clone());
+    let permit = manager.read_with(cx, |bots, cx| {
+        bots.shared_roster
+            .read(cx)
+            .minion_permit(id, std::slice::from_ref(&s.project))
+            .unwrap()
+    });
+    view.update(cx, |view, _| view.busy = true);
+    let retired = call_as(
+        &s,
+        s.session,
+        "fire",
+        "minions.fire",
+        json!({"minion": id}),
+        cx,
+    )
+    .unwrap();
+    assert_eq!(retired["retired"], true);
+    assert!(permit.run(|| Ok(())).is_err());
+    view.read_with(cx, |view, _| assert!(!view.busy));
+}
+
 #[gpui::test]
 fn bot_session_and_document_requests_leave_the_island_as_a_browser(cx: &mut TestAppContext) {
     let s = setup(cx);
@@ -231,8 +474,8 @@ fn peer_delivery_is_durable_replies_once_and_accepts_the_next_message(cx: &mut T
             projects: vec![s.project.clone()],
             ..Default::default()
         });
-        m.ensure_chat("peer-beta", cx);
         m.save(cx);
+        m.ensure_chat("peer-beta", cx);
         m.chats[&s.id].update(cx, |v, _| v.busy = true);
     });
     cx.run_until_parked();
@@ -394,12 +637,14 @@ fn cold_peer_recovery_loads_inactive_recipients_and_pauses_submitted_work(cx: &m
             m.roster.save(&db).unwrap();
             (m.owner.clone(), m.prefs.clone(), receipt)
         });
+        let roster = cx.update(|cx| SharedRoster::install(s.store.clone(), cx));
         let restored = cx.new(|cx| {
             Bots::new(
-                s.store.clone(),
+                roster,
                 owner,
                 prefs,
                 Some("cold-sender".into()),
+                None,
                 AnchorSlot::default(),
                 cx,
             )

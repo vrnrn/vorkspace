@@ -276,6 +276,13 @@ impl Bots {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        if self.focus_chat_window(id, cx) {
+            return;
+        }
+        let identity = |bot: &Bot| (bot.session_id, bot.unavailable_session.clone());
+        let Some(expected) = self.roster.get(id).map(identity) else {
+            return;
+        };
         let prompt = window.prompt(
             gpui::PromptLevel::Warning,
             "Reset conversation?",
@@ -289,21 +296,55 @@ impl Bots {
                 return;
             }
             let _ = this.update(cx, |this, cx| {
-                if let Some(view) = this.chats.remove(&id) {
-                    view.update(cx, |v, cx| v.bot_stop(cx));
+                if this.focus_chat_window(&id, cx) {
+                    return;
                 }
-                if let Some(bot) = this.roster.get_mut(&id) {
-                    bot.session_id = None;
-                    bot.unavailable_session = None;
-                    bot.seen_rows = 0;
-                    bot.outbox.clear();
+                let committed = this.shared_roster.read(cx).committed();
+                if this.loading_chats.contains(&id)
+                    || this.roster.get(&id).map(identity) != Some(expected.clone())
+                    || committed.and_then(|roster| roster.get(&id)).map(identity) != Some(expected)
+                {
+                    this.error = Some(
+                        "The conversation changed while the reset was open. Try again.".into(),
+                    );
+                    this.changed(cx);
+                    return;
                 }
+                if !this.claim_chat(&id, cx) {
+                    return;
+                }
+                this.stop_chat(&id, cx);
+                let bot = this.roster.get_mut(&id).expect("validated reset target");
+                bot.session_id = None;
+                bot.unavailable_session = None;
+                bot.seen_rows = 0;
+                bot.outbox.clear();
                 this.save(cx);
                 this.ensure_chat(&id, cx);
             });
         })
         .detach();
     }
+    pub(super) fn stop_chat(&mut self, id: &str, cx: &mut Context<Self>) {
+        if let Some(view) = self.chats.remove(id) {
+            self.conversation_views
+                .borrow_mut()
+                .remove(&view.read(cx).summary.id);
+            view.update(cx, |view, cx| view.bot_stop(cx));
+        }
+    }
+
+    pub(super) fn stop_deleted_bot(&mut self, id: &str, cx: &mut Context<Self>) {
+        self.stop_chat(id, cx);
+        self.open_islands.remove(id);
+        self.expanded_islands.remove(id);
+        for run in self.running.values_mut().filter(|run| run.bot == id) {
+            run.mailbox.clear();
+            run.failure.get_or_insert_with(|| "Bot was deleted".into());
+            run.view.update(cx, |view, cx| view.bot_stop(cx));
+        }
+    }
+
     pub(super) fn delete_bot(&mut self, id: &str, window: &mut Window, cx: &mut Context<Self>) {
         let prompt = window.prompt(
             gpui::PromptLevel::Warning,
@@ -317,23 +358,22 @@ impl Bots {
             if prompt.await.ok() != Some(1) {
                 return;
             }
-            let _ = this.update(cx, |this, cx| {
-                if let Some(view) = this.chats.remove(&id) {
-                    view.update(cx, |v, cx| v.bot_stop(cx));
-                }
-                for run in this.running.values().filter(|r| r.bot == id) {
-                    run.view.update(cx, |v, cx| v.bot_stop(cx));
-                }
-                this.roster.bots.retain(|m| m.id != id);
-                this.open_islands.remove(&id);
-                this.expanded_islands.remove(&id);
-                if this.active.as_ref() == Some(&id) {
-                    this.active = None;
-                    this.settings = None;
-                    this.picker = None;
-                }
-                this.save(cx);
-            });
+            let Ok(saved) = this.update(cx, |this, cx| {
+                this.shared_roster
+                    .update(cx, |shared, cx| shared.delete_bot(id, cx))
+            }) else {
+                return;
+            };
+            let result = saved
+                .recv()
+                .await
+                .unwrap_or_else(|_| Err("Bot deletion was interrupted".into()));
+            if let Err(error) = result {
+                let _ = this.update(cx, |this, cx| {
+                    this.error = Some(format!("Could not delete the Bot: {error}"));
+                    this.changed(cx);
+                });
+            }
         })
         .detach();
     }

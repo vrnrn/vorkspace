@@ -602,6 +602,7 @@ pub(crate) struct Shell {
     pub(super) vorkspace_dialog: Option<vorkspaces::VorkspaceDialog>,
     /// What every window shares; `None` only before the window joins it.
     app_core: Option<Entity<app_core::AppCore>>,
+    vorkspace_baseline: Vec<crate::workspace::VorkspaceDef>,
     rail_sessions_expanded: bool,
     rail_list: gpui::ListState,
     rail_list_ids: std::rc::Rc<Vec<i64>>,
@@ -985,6 +986,7 @@ impl Shell {
             background_dialog: None,
             vorkspace_dialog: None,
             app_core: None,
+            vorkspace_baseline: Vec::new(),
             rail_sessions_expanded: false,
             rail_list: gpui::ListState::new(0, gpui::ListAlignment::Top, px(96.)),
             rail_list_ids: Default::default(),
@@ -1072,12 +1074,14 @@ impl Shell {
                     TitleTab::Bot { id, .. } => Some(id.clone()),
                     _ => None,
                 });
+        let roster = this.app_core.as_ref().unwrap().read(cx).bot_roster.clone();
         let bots = cx.new(|cx| {
             crate::bots::Bots::new(
-                this.store.clone(),
+                roster,
                 bot_owner,
                 this.workspace.preferences.clone(),
                 bot_active,
+                Some(this.workspace.active_vorkspace.clone()),
                 this.notification_state.region.clone(),
                 cx,
             )
@@ -1096,7 +1100,6 @@ impl Shell {
         }
         this.observations.push(
             cx.subscribe(&bots, |this, _, _: &crate::bots::Changed, cx| {
-                this.reconcile_vorkspace_bots(cx);
                 if this.prune_deleted_bot_tabs(cx) {
                     this.persist(cx);
                 }

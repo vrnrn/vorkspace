@@ -1215,7 +1215,7 @@ impl Bots {
         for view in self.chats.values() {
             view.update(cx, |chat, cx| chat.sync_native_history(cx));
         }
-        self.resume_peer_queues(cx);
+        self.resume_pending_work(cx);
         self.check_habits(cx);
         cx.notify();
     }
@@ -1340,37 +1340,84 @@ impl Bots {
         })
         .detach();
     }
+    fn habit_bot(&self, id: &str, cx: &App) -> Option<Bot> {
+        self.roster.get(id)?;
+        self.shared_roster
+            .read(cx)
+            .committed()?
+            .get(id)
+            .filter(|bot| !bot.is_minion())
+            .cloned()
+    }
+
     fn start_habit(&mut self, id: &str, habit: Habit, cx: &mut Context<Self>) {
-        if self.roster.get(id).is_none_or(Bot::is_minion) {
-            return;
-        }
-        self.active_run = Some(-1);
-        let Some(bot) = self.roster.get(id).cloned() else {
+        let Some(bot) = self.habit_bot(id, cx) else {
             return;
         };
+        self.active_run = Some(-1);
         self.ensure_chat(id, cx);
-        let inherited = self
-            .chats
-            .get(id)
-            .map(|v| v.read(cx).bot_execution_settings())
-            .unwrap_or_default();
-        let provider = self
-            .chats
-            .get(id)
-            .map(|v| v.read(cx).summary.provider.clone())
-            .unwrap_or_else(|| "codex".into());
+        let other = self
+            .other_chat_owner(id, cx)
+            .and_then(|owner| owner.upgrade());
+        let live = self.chats.get(id).or_else(|| {
+            other
+                .as_ref()
+                .and_then(|manager| manager.read(cx).chats.get(id))
+        });
+        let inherited = live.map(|view| {
+            let view = view.read(cx);
+            (view.summary.provider.clone(), view.bot_execution_settings())
+        });
         let store = self.store.clone();
+        let cleanup = store.clone();
         let target = id.to_string();
         let work = cx.background_executor().spawn(async move {
-            let db = locked(&store)?;
+            let mut db = locked(&store)?;
+            let (provider, inherited) = match (inherited, bot.session_id) {
+                (Some(live), _) => live,
+                (None, Some(session)) => (
+                    db.bot_session(session)?
+                        .ok_or("Bot conversation is unavailable")?
+                        .provider,
+                    db.agent_settings(session)?.unwrap_or_default(),
+                ),
+                (None, None) => bot
+                    .initial_configuration
+                    .as_ref()
+                    .map(|config| (config.provider.clone(), config.settings.clone()))
+                    .unwrap_or_else(|| ("codex".into(), Settings::default())),
+            };
             let cwd = std::env::var("HOME").unwrap_or_else(|_| ".".into());
             let mut s = db.create(&provider, &cwd)?;
             s.title = format!("{} · {}", bot.label(), habit.name);
-            db.title(s.id, &s.title)?;
-            Ok::<_, String>((s, bot, inherited, habit))
+            if let Err(error) = db.title(s.id, &s.title) {
+                return match db.delete(s.id) {
+                    Ok(()) => Err(error),
+                    Err(cleanup) => Err(format!(
+                        "{error}. Could not discard the Habit session: {cleanup}"
+                    )),
+                };
+            }
+            Ok((s, inherited, habit))
         });
-        cx.spawn(async move|this,cx|{let result=work.await;let _=this.update(cx,|this,cx|{
-            match result{Err(e)=>{this.active_run=None;this.error=Some(e);},Ok((summary,bot,mut settings,habit))=>{
+        cx.spawn(async move |this, cx| {
+            let result = work.await;
+            let session = result.as_ref().ok().map(|(summary, _, _)| summary.id);
+            let installed = this.update(cx, |this, cx| {
+                let (summary, mut settings, habit) = match result {
+                    Ok(prepared) => prepared,
+                    Err(error) => {
+                        this.active_run = None;
+                        this.error = Some(error);
+                        this.changed(cx);
+                        return false;
+                    }
+                };
+                let Some(bot) = this.habit_bot(&target, cx) else {
+                    this.active_run = None;
+                    this.changed(cx);
+                    return false;
+                };
                 let session=summary.id;let view=cx.new(|cx|Conversation::new(summary,this.store.clone(),cx));let root=this.root.clone();let env=this.bridge.as_ref().map(|b|b.environment(session)).unwrap_or_default();
                 settings.access=AccessMode::FullAccess;settings.internal_message=true;settings.bot=None;settings.environment.clear();
                 view.update(cx,|v,cx|{v.install_transfer(settings,None,cx);v.configure_bot(bot,root,env,cx);});
@@ -1381,8 +1428,18 @@ impl Bots {
                 this.save(cx);
                 let message=Message{peer:None,sent_at:Some(vorkspace_core::time::now_ms()),id:bot::new_id(),text:format!("[Scheduled habit: {}]\n{}\n\nDo this scheduled work independently. Return a concise report; if nothing requires attention, reply exactly NOTHING_TO_REPORT. Any session you start belongs to this habit. Do not change the habit unless asked.",habit.name,habit.instructions),prepared_prompt:None,internal:true,error:None,attachments:Vec::new()};
                 view.update(cx,|v,cx|v.bot_dispatch(&message,cx));
-            }}this.changed(cx);
-        });}).detach();
+                this.changed(cx);
+                true
+            }).unwrap_or(false);
+            if let Some(session) = session.filter(|_| !installed) {
+                let result = cx.background_executor().spawn(async move {
+                    locked(&cleanup)?.delete(session)
+                }).await;
+                if let Err(error) = result {
+                    eprintln!("Could not discard unstarted Habit session {session}: {error}");
+                }
+            }
+        }).detach();
     }
     pub(super) fn habit_changed(&mut self, session: i64, cx: &mut Context<Self>) {
         cx.emit(NotificationChanged);

@@ -288,6 +288,11 @@ fn bot_tabs_restore_order_selection_and_project_scope(cx: &mut TestAppContext) {
             )
         })
         .unwrap();
+    // Restore after teardown so the new window can acquire the Bot chat.
+    window
+        .update(cx, |_, window, _| window.remove_window())
+        .unwrap();
+    cx.run_until_parked();
     let reopened = cx.update(|cx| {
         cx.open_window(Default::default(), |_, cx| {
             cx.new(|cx| Shell::new(store, summaries, "/work/vorkspace".into(), saved, cx))

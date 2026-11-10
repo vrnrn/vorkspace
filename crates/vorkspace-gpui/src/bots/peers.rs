@@ -5,7 +5,8 @@ use vorkspace_core::bot::peers;
 impl Bots {
     /// A saved queue owns work independently of which Bot is visible. Loading
     /// through ensure_chat checks submission receipts before any dispatch.
-    pub(super) fn resume_peer_queues(&mut self, cx: &mut Context<Self>) {
+    pub(super) fn resume_pending_work(&mut self, cx: &mut Context<Self>) {
+        let shared = self.shared_roster.read(cx);
         let recipients = self
             .roster
             .bots
@@ -14,14 +15,18 @@ impl Bots {
                 self.roster.is_active(&bot.id)
                     && (!bot.is_minion() || (self.prefs.bots && self.prefs.minions))
                     && !self.chats.contains_key(&bot.id)
-                    && bot.outbox.first().is_some_and(|message| {
-                        message.error.is_none() && self.persisted_messages.contains(&message.id)
-                    })
-                    && bot.outbox.iter().any(|message| {
-                        message.peer.is_some()
-                            && message.error.is_none()
-                            && self.persisted_messages.contains(&message.id)
-                    })
+                    && (!bot.pending_reports.is_empty()
+                        || bot.outbox.first().is_some_and(|first| {
+                            first.error.is_none()
+                                && self.persisted_messages.contains(&first.id)
+                                && ((shared.live_message(&first.id)
+                                    && shared.chat_owner(&bot.id).is_none())
+                                    || bot.outbox.iter().any(|message| {
+                                        message.peer.is_some()
+                                            && message.error.is_none()
+                                            && self.persisted_messages.contains(&message.id)
+                                    }))
+                        }))
             })
             .map(|bot| bot.id.clone())
             .collect::<Vec<_>>();
@@ -30,7 +35,7 @@ impl Bots {
         }
     }
 
-    pub(super) fn calling_view(&self, session: i64, cx: &App) -> Option<Entity<Conversation>> {
+    pub(crate) fn calling_view(&self, session: i64, cx: &App) -> Option<Entity<Conversation>> {
         self.chats
             .values()
             .chain(self.running.values().map(|r| &r.view))

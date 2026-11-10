@@ -448,6 +448,7 @@ fn stale_memory_reload_and_save_cannot_touch_another_bot_editor(cx: &mut TestApp
                     name: "Other".into(),
                     ..Default::default()
                 });
+                m.save(cx);
                 m.open("memory-other", window, cx);
                 m.settings = Some(SettingsSection::Memory);
                 m.reload_files("memory-other", cx);

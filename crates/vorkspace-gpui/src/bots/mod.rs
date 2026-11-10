@@ -20,6 +20,8 @@ mod notifications;
 mod panel_stack;
 mod panels;
 mod peers;
+mod roster;
+pub(crate) use roster::{MembershipChanged, SharedRoster};
 mod scheduler;
 mod search;
 #[cfg(test)]
@@ -54,6 +56,74 @@ use vorkspace_core::{
 };
 use vorkspace_runtime::runtime::{Database, locked};
 use vorkspace_ui::theme::*;
+pub(crate) fn conversation_in_other_window(
+    open: impl Fn(&gpui::ClickEvent, &mut Window, &mut App) + 'static,
+) -> gpui::Div {
+    div()
+        .flex_1()
+        .min_h_0()
+        .flex()
+        .flex_col()
+        .justify_center()
+        .items_center()
+        .gap_2()
+        .text_color(content(0.65))
+        .child("This conversation is open in another window.")
+        .child(
+            div()
+                .id("show-conversation-window")
+                .role(Role::Button)
+                .px_3()
+                .py_1()
+                .rounded(px(radius::SMALL))
+                .bg(content(0.08))
+                .hover(|button| button.bg(content(0.13)))
+                .cursor_pointer()
+                .on_click(open)
+                .child("Show conversation"),
+        )
+}
+
+fn load_backing_chat(
+    db: &vorkspace_core::store::Store,
+    root: &std::path::Path,
+    bot: &Bot,
+    session: i64,
+) -> Result<roster::PreparedChat, String> {
+    // Team work belongs exclusively to the Bot outbox. A migrated project
+    // session may still have a legacy user follow-up queue.
+    if bot.is_minion() {
+        let mut queue = db.follow_ups(session)?;
+        if !queue.paused {
+            queue.paused = true;
+            queue.revision += 1;
+            db.accept_follow_ups(session, &queue)?;
+        }
+    }
+    let mut summary = db.bot_session(session)?
+        .ok_or("This Bot's saved conversation is unavailable. Reset its conversation explicitly to start a new one.")?;
+    let settings = db.agent_settings(session)?.unwrap_or_default();
+    let mut warning = None;
+    if !bot.is_minion() && settings.worktree_cwd.is_none() {
+        let home = bot::home::ensure(root, bot, Some(std::path::Path::new(&summary.cwd)))?;
+        db.move_bot_home(&summary, &home.to_string_lossy())?;
+        summary.cwd = home.to_string_lossy().into_owned();
+        warning = bot::home::write_session(root, bot, &summary, &settings.account).err();
+    }
+    let delivered = bot
+        .outbox
+        .iter()
+        .filter(|q| {
+            db.setting(&format!("bot-delivered:{}:{}", summary.id, q.id))
+                .ok()
+                .flatten()
+                .is_some()
+        })
+        .map(|q| q.id.clone())
+        .collect();
+    Ok((summary, None, delivered, warning))
+}
+
 pub(crate) struct Changed;
 pub(crate) struct TabOpened(pub String);
 #[derive(Clone, Debug)]
@@ -84,7 +154,6 @@ pub(crate) use crate::conversation::{
 };
 
 pub(crate) struct Bots {
-    minion_effects: effects::MinionEffects,
     pub(crate) minion_registry: MinionRegistry,
     pub(crate) team_histories: TeamHistories,
     pub(crate) conversation_views: BotConversations,
@@ -96,6 +165,10 @@ pub(crate) struct Bots {
     prefs: vorkspace_ui::preferences::Preferences,
     pub(crate) roster: Roster,
     pub(crate) roster_loaded: bool,
+    shared_roster: Entity<SharedRoster>,
+    roster_revision: u64,
+    pending_roster_writes: usize,
+    vorkspace: Option<String>,
     /// Bots placed in another vorkspace, hidden from this window's rail.
     /// A Bot created a moment ago is not here, so it shows at once.
     pub(crate) vorkspace_hidden: HashSet<String>,
@@ -105,7 +178,6 @@ pub(crate) struct Bots {
     observations: Vec<Subscription>,
     _bridge_task: Option<gpui::Task<()>>,
     _clock: Option<gpui::Task<()>>,
-    writes: Option<gpui::Task<()>>,
     loading_chats: HashSet<String>,
     awaiting_creation: HashSet<String>,
     work: work::Cache,
@@ -343,29 +415,25 @@ impl Bots {
         self.save(cx);
     }
     pub(crate) fn new(
-        store: Database,
+        shared_roster: Entity<SharedRoster>,
         owner: std::rc::Rc<dyn host_api::BotsHost>,
         prefs: vorkspace_ui::preferences::Preferences,
         active: Option<String>,
+        vorkspace: Option<String>,
         notice_region: AnchorSlot,
         cx: &mut Context<Self>,
     ) -> Self {
         bot::set_minions_enabled(prefs.bots && prefs.minions);
-        let (roster, root, roster_error) = match locked(&store) {
-            Ok(db) => match Roster::load(&db) {
-                Ok(roster) => (roster, vorkspace_core::store::bot_root(&db), None),
-                Err(error) => (
-                    Roster::default(),
-                    vorkspace_core::store::bot_root(&db),
-                    Some(error),
-                ),
-            },
-            Err(error) => (
-                Roster::default(),
-                std::env::temp_dir().join(bot::new_id()),
-                Some(error),
-            ),
+        let shared = shared_roster.read(cx);
+        let store = shared.store.clone();
+        let root = shared.root.clone();
+        let roster_revision = shared.revision;
+        let (roster, roster_error) = match &shared.snapshot {
+            Ok(roster) => (roster.fork(), None),
+            Err(error) => (Roster::default(), Some(error.clone())),
         };
+        let roster_subscription =
+            cx.observe(&shared_roster, |this, _, cx| this.sync_shared_roster(cx));
         let (bridge, rx) = if cx.is_test() {
             (None, None)
         } else {
@@ -390,14 +458,17 @@ impl Bots {
             prefs,
             roster,
             roster_loaded: roster_error.is_none(),
+            shared_roster,
+            roster_revision,
+            pending_roster_writes: 0,
+            vorkspace,
             vorkspace_hidden: HashSet::new(),
             active: None,
             chats: HashMap::new(),
             bridge,
-            observations: Vec::new(),
+            observations: vec![roster_subscription],
             _bridge_task: None,
             _clock: None,
-            writes: None,
             loading_chats: HashSet::new(),
             awaiting_creation: HashSet::new(),
             work: work::Cache::default(),
@@ -408,7 +479,6 @@ impl Bots {
             expanded_islands: HashMap::new(),
             minion_registry: Default::default(),
             team_histories: Default::default(),
-            minion_effects: Default::default(),
             conversation_views: Default::default(),
             retired_teams: Default::default(),
             route: None,
@@ -485,8 +555,8 @@ impl Bots {
             this.ensure_chat(&id, cx);
             this.reload_files(&id, cx);
         }
-        this.resume_peer_queues(cx);
-        this.sync_minions();
+        this.resume_pending_work(cx);
+        this.sync_minions(cx);
         this.sync_team_histories(cx);
         this
     }
@@ -537,7 +607,7 @@ impl Bots {
         let was = self.prefs.bots;
         self.prefs = prefs;
         bot::set_minions_enabled(self.prefs.bots && self.prefs.minions);
-        self.sync_minions();
+        self.sync_minions(cx);
         if was && !self.prefs.bots {
             self.active = None;
             self.creation = None;
@@ -562,6 +632,21 @@ impl Bots {
     ) -> Option<Entity<Conversation>> {
         self.ensure_chat(id, cx);
         self.chats.get(id).cloned()
+    }
+    /// Vox can read and edit the live composer in another window. The Bot's
+    /// owning manager still controls its provider and transcript.
+    pub(crate) fn chat_for_vox(
+        &mut self,
+        id: &str,
+        cx: &mut Context<Self>,
+    ) -> Option<Entity<Conversation>> {
+        if let Some(owner) = self
+            .other_chat_owner(id, cx)
+            .and_then(|owner| owner.upgrade())
+        {
+            return owner.read(cx).chats.get(id).cloned();
+        }
+        self.chat_for_action(id, cx)
     }
     pub(crate) fn set_visible_panes(&mut self, visible: &HashSet<String>, cx: &mut Context<Self>) {
         for id in visible {
@@ -637,8 +722,138 @@ impl Bots {
         cx.emit(Changed);
         cx.notify();
     }
+    pub(crate) fn set_vorkspace(&mut self, id: String, hidden: HashSet<String>) {
+        self.vorkspace = Some(id);
+        self.vorkspace_hidden = hidden;
+    }
+
+    pub(crate) fn confirmed_missing(&self, id: &str, cx: &App) -> bool {
+        let shared = self.shared_roster.read(cx);
+        self.roster_loaded
+            && !self.awaiting_creation.contains(id)
+            && (self.roster.get(id).is_none() || shared.removed.contains_key(id))
+            && shared
+                .committed()
+                .is_some_and(|roster| roster.get(id).is_none())
+    }
+
+    fn persist_roster<T: Send + 'static>(
+        &mut self,
+        finalize: impl FnOnce(&vorkspace_core::store::Store) -> Result<T, String> + Send + 'static,
+        cx: &mut Context<Self>,
+    ) -> async_channel::Receiver<Result<T, String>> {
+        self.pending_roster_writes += 1;
+        self.shared_roster.update(cx, |shared, cx| {
+            shared.save(self.roster.clone(), self.vorkspace.clone(), finalize, cx)
+        })
+    }
+
+    fn roster_write_finished(&mut self, cx: &mut Context<Self>) {
+        self.pending_roster_writes -= 1;
+        self.sync_shared_roster(cx);
+    }
+
+    fn sync_shared_roster(&mut self, cx: &mut Context<Self>) {
+        let shared = self.shared_roster.read(cx);
+        if self.roster_revision == shared.revision {
+            return;
+        }
+        let Ok(committed) = &shared.snapshot else {
+            return;
+        };
+        let deleted: HashSet<_> = self
+            .chats
+            .keys()
+            .chain(self.running.values().map(|run| &run.bot))
+            .chain(self.roster.bots.iter().map(|bot| &bot.id))
+            .filter(|id| shared.removed.contains_key(*id))
+            .cloned()
+            .collect();
+        let replaced = self
+            .chats
+            .iter()
+            .filter(|(id, view)| {
+                committed
+                    .get(id)
+                    .is_some_and(|bot| bot.session_id != Some(view.read(cx).summary.id))
+            })
+            .map(|(id, _)| id.clone())
+            .collect::<Vec<_>>();
+        for id in replaced {
+            self.stop_chat(&id, cx);
+        }
+        for id in deleted {
+            self.stop_deleted_bot(&id, cx);
+        }
+        // A queued snapshot still needs its original editor's save baseline.
+        // Revoking a view is independent of whether its editor can rebase.
+        if self.pending_roster_writes > 0 {
+            return;
+        }
+        let shared = self.shared_roster.read(cx);
+        let committed = shared.committed().expect("published Bot roster");
+        // Deletion is an explicit committed operation on the latest Bot. A
+        // failed save from a former owner cannot keep a deleted local editor.
+        self.roster
+            .bots
+            .retain(|bot| !shared.removed.contains_key(&bot.id));
+        let changed = match self.roster.rebase_onto(committed) {
+            Ok(changed) => changed,
+            Err(error) => {
+                self.error = Some(error);
+                cx.emit(Changed);
+                cx.notify();
+                return;
+            }
+        };
+        let deletion_published = shared
+            .removed
+            .values()
+            .any(|&revision| revision > self.roster_revision);
+        self.roster_revision = shared.revision;
+        self.roster_loaded = true;
+        self.held.clone_from(&self.roster.held_messages);
+        self.persisted_messages = self
+            .roster
+            .bots
+            .iter()
+            .flat_map(|bot| {
+                let saved = committed.get(&bot.id);
+                bot.outbox
+                    .iter()
+                    .filter(move |message| saved.is_some_and(|bot| bot.outbox.contains(message)))
+                    .map(|message| message.id.clone())
+            })
+            .collect();
+        if changed || deletion_published {
+            if let Some(id) = self.active.clone() {
+                if self.roster.get(&id).is_some() {
+                    self.ensure_chat(&id, cx);
+                    self.configure_chat(&id, cx);
+                } else {
+                    self.close(cx);
+                }
+            }
+            let queued = self
+                .chats
+                .keys()
+                .filter(|id| {
+                    self.roster.get(id).is_some_and(|bot| {
+                        !bot.outbox.is_empty() || !bot.pending_reports.is_empty()
+                    })
+                })
+                .cloned()
+                .collect::<Vec<_>>();
+            for id in queued {
+                self.configure_chat(&id, cx);
+                self.dispatch(&id, cx);
+            }
+            self.resume_pending_work(cx);
+            self.changed(cx);
+        }
+    }
+
     fn save(&mut self, cx: &mut Context<Self>) {
-        self.sync_minions();
         let live: HashSet<_> = self
             .roster
             .bots
@@ -649,73 +864,85 @@ impl Bots {
         self.roster.message_modes.retain(|id, _| live.contains(id));
         self.held.retain(|id| live.contains(id));
         self.dispatch_claims.retain(|id| live.contains(id));
-        let roster = self.roster.clone();
-        let store = self.store.clone();
-        let queued = roster
+        let queued = self
+            .roster
             .bots
             .iter()
             .map(|m| (m.id.clone(), m.outbox.clone()))
             .collect::<Vec<_>>();
-        let previous = self.writes.take();
-        self.writes = Some(cx.spawn(async move |this, cx| {
-            if let Some(previous) = previous {
-                previous.await;
-            }
-            let work = cx.background_executor().spawn(async move {
-                let db = locked(&store)?;
-                roster.save(&db)
-            });
-            let result = work.await;
-            let _ = this.update(cx, |this, cx| match result {
-                Err(error) => {
-                    for (id, messages) in &queued {
-                        if let Some(view) = this.chats.get(id) {
-                            for message in messages {
-                                view.update(cx, |view, cx| {
-                                    view.bot_draft_outbox_failed(&message.id, &error, cx)
-                                });
-                            }
-                        }
-                    }
-                    this.error = Some(error);
-                    cx.notify();
-                }
-                Ok(()) => {
-                    for (id, messages) in queued {
-                        if this.awaiting_creation.remove(&id) {
-                            this.ensure_chat(&id, cx);
-                        }
-                        if let Some(view) = this.chats.get(&id) {
-                            for message in &messages {
-                                if !this.roster.get(&id).is_some_and(|bot| {
-                                    bot.outbox.iter().any(|current| {
-                                        current.id == message.id
-                                            && current.text == message.text
-                                            && current.attachments == message.attachments
-                                    })
-                                }) {
-                                    continue;
+        let saved = self.persist_roster(|_| Ok(()), cx);
+        cx.spawn(async move |this, cx| {
+            let result = saved
+                .recv()
+                .await
+                .unwrap_or_else(|_| Err("Bot roster write was interrupted".into()));
+            let _ = this.update(cx, |this, cx| {
+                match result {
+                    Err(error) => {
+                        for (id, messages) in &queued {
+                            if let Some(view) = this.chats.get(id) {
+                                for message in messages {
+                                    view.update(cx, |view, cx| {
+                                        view.bot_draft_outbox_failed(&message.id, &error, cx)
+                                    });
                                 }
-                                view.update(cx, |view, cx| {
-                                    view.bot_draft_outbox_saved(message, cx)
-                                });
                             }
                         }
-                        this.persisted_messages
-                            .extend(messages.into_iter().map(|message| message.id));
-                        this.dispatch(&id, cx);
+                        this.error = Some(error);
+                        cx.notify();
                     }
-                    this.persisted_messages.retain(|id| {
-                        this.roster
-                            .bots
-                            .iter()
-                            .any(|bot| bot.outbox.iter().any(|m| &m.id == id))
-                    });
+                    Ok(()) => {
+                        for (id, messages) in queued {
+                            if this.awaiting_creation.remove(&id) {
+                                this.ensure_chat(&id, cx);
+                            }
+                            if let Some(view) = this.chats.get(&id) {
+                                for message in &messages {
+                                    if !this.roster.get(&id).is_some_and(|bot| {
+                                        bot.outbox.iter().any(|current| {
+                                            current.id == message.id
+                                                && current.text == message.text
+                                                && current.attachments == message.attachments
+                                        })
+                                    }) {
+                                        continue;
+                                    }
+                                    view.update(cx, |view, cx| {
+                                        view.bot_draft_outbox_saved(message, cx)
+                                    });
+                                }
+                            }
+                            this.persisted_messages
+                                .extend(messages.into_iter().map(|message| message.id));
+                            this.dispatch(&id, cx);
+                        }
+                        this.persisted_messages.retain(|id| {
+                            this.roster
+                                .bots
+                                .iter()
+                                .any(|bot| bot.outbox.iter().any(|m| &m.id == id))
+                        });
+                    }
                 }
+                this.roster_write_finished(cx);
+                this.resume_pending_work(cx);
             });
-        }));
+        })
+        .detach();
         self.changed(cx);
     }
+    fn claim_chat(&self, id: &str, cx: &mut Context<Self>) -> bool {
+        let owner = cx.weak_entity();
+        self.shared_roster
+            .update(cx, |shared, _| shared.claim_chat(id, owner))
+    }
+
+    fn release_chat(&self, id: &str, cx: &mut Context<Self>) {
+        let owner = cx.weak_entity();
+        self.shared_roster
+            .update(cx, |shared, _| shared.release_chat(id, &owner));
+    }
+
     fn ensure_chat(&mut self, id: &str, cx: &mut Context<Self>) {
         if self.awaiting_creation.contains(id) {
             return;
@@ -726,82 +953,66 @@ impl Bots {
         let Some(bot) = self.presentation_bot(id) else {
             return;
         };
+        if !self.claim_chat(id, cx) {
+            return;
+        }
         self.loading_chats.insert(id.into());
-        let store = self.store.clone();
-        let prefs = self.prefs.clone();
-        let id = id.to_string();
-        let root = self.root.clone();
-        let work = cx.background_executor().spawn(async move {
-            let db = locked(&store)?;
-            if let Some(missing) = &bot.unavailable_session {
-                return Err(format!("This Bot's saved conversation ({missing}) is unavailable. Its identity and history have been preserved."));
-            }
-            if let Some(session) = bot.session_id {
-                // Team work belongs exclusively to the Bot outbox. A migrated
-                // project session may have a legacy user follow-up queue.
-                if bot.is_minion() {
-                    let mut queue = db.follow_ups(session)?;
-                    if !queue.paused {
-                        queue.paused = true;
-                        queue.revision += 1;
-                        db.accept_follow_ups(session, &queue)?;
-                    }
+        let id = id.to_owned();
+        let prepared = if bot.session_id.is_none() && bot.unavailable_session.is_none() {
+            let prefs = self.prefs.clone();
+            let id = id.clone();
+            let reply = self
+                .shared_roster
+                .update(cx, |shared, cx| shared.prepare_chat(id, prefs, cx));
+            cx.background_executor().spawn(async move {
+                reply
+                    .recv()
+                    .await
+                    .unwrap_or_else(|_| Err("Bot conversation preparation was interrupted".into()))
+            })
+        } else {
+            let store = self.store.clone();
+            let root = self.root.clone();
+            cx.background_executor().spawn(async move {
+                if let Some(missing) = &bot.unavailable_session {
+                    return Err(format!("This Bot's saved conversation ({missing}) is unavailable. Its identity and history have been preserved."));
                 }
-                let mut summary = db.bot_session(session)?
-                    .ok_or("This Bot's saved conversation is unavailable. Reset its conversation explicitly to start a new one.")?;
-                let settings = db.agent_settings(session)?.unwrap_or_default();
-                // Existing Minions may share a live project-session view.
-                // Keep their working directory; new members get their own home.
-                let mut warning = None;
-                if !bot.is_minion() && settings.worktree_cwd.is_none() {
-                    let home = bot::home::ensure(&root, &bot, Some(std::path::Path::new(&summary.cwd)))?;
-                    db.move_bot_home(&summary, &home.to_string_lossy())?;
-                    summary.cwd = home.to_string_lossy().into_owned();
-                    warning = bot::home::write_session(&root, &bot, &summary, &settings.account).err();
-                }
-                let delivered = bot
-                    .outbox
-                    .iter()
-                    .filter(|q| {
-                        db.setting(&format!("bot-delivered:{}:{}", summary.id, q.id))
-                            .ok()
-                            .flatten()
-                            .is_some()
-                    })
-                    .map(|q| q.id.clone())
-                    .collect::<Vec<_>>();
-                return Ok::<_, String>((summary, None, delivered, warning));
-            }
-            let home = bot::home::ensure(&root, &bot, None)?;
-            let provider = match &bot.initial_configuration {
-                Some(config) => Kind::parse(&config.provider).ok_or("This Bot's configured provider is unavailable.")?,
-                None => prefs.default_provider.as_deref().and_then(Kind::parse).unwrap_or(Kind::Codex),
-            };
-            let mut summary = db.create(provider.id(), &home.to_string_lossy())?;
-            summary.title = bot.label();
-            db.title(summary.id, &summary.title)?;
-            let settings = bot.initial_configuration.as_ref().map(|config| config.settings.clone()).unwrap_or_else(|| Settings {
-                access: AccessMode::Auto,
-                model: prefs.default_models.get(provider.id()).cloned(),
-                ..Default::default()
-            });
-            db.configure_agent(summary.id, provider.id(), &settings)?;
-            // A failed convenience document must not orphan a created session.
-            let warning = bot::home::write_session(&root, &bot, &summary, &settings.account).err();
-            Ok((summary, Some(settings), Vec::new(), warning))
-        });
+                let db = locked(&store)?;
+                load_backing_chat(&db, &root, &bot, bot.session_id.expect("existing Bot session"))
+            })
+        };
         cx.spawn(async move |this, cx| {
-            let result = work.await;
+            let result = prepared.await;
             let _ = this.update(cx, |this, cx| {
                 this.loading_chats.remove(&id);
                 let (summary, settings, delivered, warning) = match result {
                     Ok(value) => value,
                     Err(e) => {
+                        this.release_chat(&id, cx);
                         this.error = Some(e);
                         this.changed(cx);
                         return;
                     }
                 };
+                let shared = this.shared_roster.read(cx);
+                let owner = cx.weak_entity();
+                let saved = shared.committed().and_then(|roster| roster.get(&id));
+                let current = saved.or_else(|| this.roster.get(&id));
+                if shared.chat_owner(&id) != Some(&owner)
+                    || shared.removed.contains_key(&id)
+                    || current.is_none_or(|bot| bot.session_id != Some(summary.id))
+                {
+                    let refresh = this.active.as_deref() == Some(&id)
+                        && saved.is_some_and(|bot| bot.session_id != Some(summary.id));
+                    this.release_chat(&id, cx);
+                    this.sync_shared_roster(cx);
+                    if refresh && this.pending_roster_writes == 0
+                        && this.roster.get(&id).is_some_and(|bot| bot.session_id != Some(summary.id))
+                    {
+                        this.ensure_chat(&id, cx);
+                    }
+                    return;
+                }
                 if let Some(warning) = warning {
                     this.error = Some(warning);
                 }
@@ -809,6 +1020,7 @@ impl Bots {
                     this.roster.hidden_sessions.push(summary.id);
                 }
                 let Some(bot) = this.roster.get_mut(&id) else {
+                    this.release_chat(&id, cx);
                     return;
                 };
                 bot.session_id = Some(summary.id);
@@ -1128,7 +1340,13 @@ impl Bots {
     fn dispatch(&mut self, id: &str, cx: &mut Context<Self>) {
         if !self.roster.is_active(id)
             || (self.roster.get(id).is_some_and(Bot::is_minion)
-                && !(self.prefs.bots && self.prefs.minions))
+                && (!(self.prefs.bots && self.prefs.minions)
+                    || self
+                        .shared_roster
+                        .read(cx)
+                        .committed()
+                        .is_none_or(|roster| !roster.is_active(id))))
+            || self.shared_roster.read(cx).removed.contains_key(id)
         {
             return;
         }
@@ -1417,9 +1635,43 @@ impl Bots {
         self.changed(cx);
     }
     pub(crate) fn open(&mut self, id: &str, window: &mut Window, cx: &mut Context<Self>) {
+        if self.focus_chat_window(id, cx) {
+            return;
+        }
         if self.open_workspace_pane(id, window, cx) {
             cx.emit(TabOpened(id.into()));
         }
+    }
+
+    fn other_chat_owner(&self, id: &str, cx: &Context<Self>) -> Option<WeakEntity<Self>> {
+        self.shared_roster
+            .read(cx)
+            .chat_owner(id)
+            .filter(|owner| **owner != cx.weak_entity())
+            .cloned()
+    }
+
+    pub(crate) fn focus_chat_window(&self, id: &str, cx: &mut Context<Self>) -> bool {
+        let Some(owner) = self.other_chat_owner(id, cx) else {
+            return false;
+        };
+        let id = id.to_owned();
+        cx.defer(move |cx| {
+            let Some(manager) = owner.upgrade() else {
+                return;
+            };
+            let manager = manager.read(cx);
+            let Some(handle) = manager.parent_window else {
+                return;
+            };
+            let host = manager.owner.clone();
+            let _ = handle.update(cx, |_, window, cx| {
+                host.open_owned_bot(&id, window, cx);
+                vorkspace_ui::traffic_lights::show(window);
+                window.activate_window();
+            });
+        });
+        true
     }
     /// Prepare an already selected Bot pane synchronously. Sidebar navigation
     /// still uses `open` to ask Shell to select its workspace tab.
@@ -1833,6 +2085,13 @@ impl Bots {
         let Some(bot) = self.presentation_bot(id) else {
             return div().into_any_element();
         };
+        if self.other_chat_owner(id, cx).is_some() {
+            let id = id.to_owned();
+            return conversation_in_other_window(cx.listener(
+                move |manager, _: &gpui::ClickEvent, window, cx| manager.open(&id, window, cx),
+            ))
+            .into_any_element();
+        }
         let bg = self
             .backgrounds
             .entry(bot.id.clone())

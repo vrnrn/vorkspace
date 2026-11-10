@@ -169,7 +169,7 @@ impl Shell {
             self.bots
                 .as_ref()
                 .ok_or("Bots unavailable")?
-                .update(cx, |m, cx| m.chat_for_action(&bot.id, cx))
+                .update(cx, |m, cx| m.chat_for_vox(&bot.id, cx))
                 .ok_or("Bot conversation is opening; try again")?
         } else {
             let id = input["sessionId"]
@@ -197,7 +197,19 @@ impl Shell {
         match action {
             "workspace.open" => {
                 if let Some(bot) = bot {
-                    self.click_bot_tab(&bot.id, window, cx);
+                    if !self.workspace.preferences.bots {
+                        return Err("Bots are disabled".into());
+                    }
+                    let routed = self.bots.as_ref().is_some_and(|bots| {
+                        bots.update(cx, |bots, cx| bots.focus_chat_window(&bot.id, cx))
+                    });
+                    if !routed {
+                        if self.workspace.bot_hidden_in_vorkspace(&bot.id) {
+                            self.open_owned_bot(&bot.id, window, cx);
+                        } else {
+                            self.click_bot_tab(&bot.id, window, cx);
+                        }
+                    }
                 } else {
                     self.open(id, window, cx);
                 }

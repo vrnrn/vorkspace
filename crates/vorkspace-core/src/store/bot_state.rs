@@ -43,6 +43,12 @@ impl Roster {
         Ok(roster)
     }
     pub fn save(&self, store: &Store) -> Result<(), String> {
+        self.save_snapshot(store).map(|_| ())
+    }
+
+    /// Returns the roster actually committed, including concurrent edits from
+    /// other writers. The caller's queued snapshots keep their local baseline.
+    pub fn save_snapshot(&self, store: &Store) -> Result<Self, String> {
         let value = serde_json::to_string(self).map_err(|e| e.to_string())?;
         let mut baseline = self.storage_baseline.lock().map_err(|e| e.to_string())?;
         let empty = serde_json::to_value(Roster::default()).map_err(|e| e.to_string())?;
@@ -70,18 +76,61 @@ impl Roster {
             };
             let merged = merge_roster_value(Some(&base), Some(&local), Some(&remote), "roster")?
                 .ok_or("Cannot remove the Bot roster")?;
+            let snapshot = Self::with_baseline(merged.clone())?;
             let merged = overlay_roster_value(Some(&remote), &merged, Some(&raw), "roster");
             let merged = serde_json::to_string(&merged).map_err(|e| e.to_string())?;
             match store.compare_swap_setting("bot-roster", current.as_deref(), &merged) {
                 Ok(()) => {
                     *baseline = Some(value);
-                    return Ok(());
+                    return Ok(snapshot);
                 }
                 Err(error) if error.contains("another window") => continue,
                 Err(error) => return Err(error),
             }
         }
         Err("Bot roster is being changed in another window; your changes were preserved in this window.".into())
+    }
+
+    fn with_baseline(value: Value) -> Result<Self, String> {
+        let baseline = serde_json::to_string(&value).map_err(|e| e.to_string())?;
+        let roster: Self = serde_json::from_value(value).map_err(|e| e.to_string())?;
+        *roster.storage_baseline.lock().map_err(|e| e.to_string())? = Some(baseline);
+        Ok(roster)
+    }
+
+    /// Start a new editor with its own save lineage. Ordinary clones keep the
+    /// same lineage for the editor's ordered in-flight saves.
+    pub fn fork(&self) -> Self {
+        let mut roster = self.clone();
+        roster.storage_baseline = std::sync::Arc::new(std::sync::Mutex::new(
+            self.storage_baseline.lock().unwrap().clone(),
+        ));
+        roster
+    }
+
+    /// Incorporates committed changes while preserving this editor's local
+    /// edits. Use this after all saves of this lineage have completed.
+    pub fn rebase_onto(&mut self, committed: &Self) -> Result<bool, String> {
+        let local = serde_json::to_value(&*self).map_err(|e| e.to_string())?;
+        let remote = serde_json::to_value(committed).map_err(|e| e.to_string())?;
+        let base = self
+            .storage_baseline
+            .lock()
+            .map_err(|e| e.to_string())?
+            .as_deref()
+            .map(serde_json::from_str)
+            .transpose()
+            .map_err(|e| e.to_string())?
+            .unwrap_or(serde_json::to_value(Self::default()).map_err(|e| e.to_string())?);
+        let merged = merge_roster_value(Some(&base), Some(&local), Some(&remote), "roster")?
+            .ok_or("Cannot remove the Bot roster")?;
+        let changed = merged != local;
+        if changed {
+            *self = serde_json::from_value(merged).map_err(|e| e.to_string())?;
+        }
+        *self.storage_baseline.lock().map_err(|e| e.to_string())? =
+            Some(serde_json::to_string(&remote).map_err(|e| e.to_string())?);
+        Ok(changed)
     }
 }
 

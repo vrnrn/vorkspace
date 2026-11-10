@@ -122,7 +122,7 @@ impl Shell {
         self.selected_sessions.clear();
         self.selection_anchor = None;
         self.sidebar_target = None;
-        self.reconcile_vorkspace_bots(cx);
+        self.configure_vorkspace_bots(cx);
         true
     }
 
@@ -295,11 +295,11 @@ impl Shell {
     }
 
     fn vorkspace_bots(&self, cx: &App) -> Vec<vorkspace_core::bot::Bot> {
-        self.bots
+        self.app_core
             .as_ref()
-            .map(|m| {
-                m.read(cx)
-                    .roster
+            .and_then(|core| core.read(cx).bot_roster.read(cx).committed())
+            .map(|roster| {
+                roster
                     .bots
                     .iter()
                     .filter(|b| !b.is_minion())
@@ -309,25 +309,13 @@ impl Shell {
             .unwrap_or_default()
     }
 
-    /// New Bots join the active vorkspace; deleted ones leave every list.
-    pub(super) fn reconcile_vorkspace_bots(&mut self, cx: &mut Context<Self>) {
+    fn configure_vorkspace_bots(&self, cx: &mut Context<Self>) {
         let Some(manager) = self.bots.clone() else {
             return;
         };
-        if !manager.read(cx).roster_loaded {
-            return;
-        }
-        let ids: Vec<String> = self.vorkspace_bots(cx).into_iter().map(|b| b.id).collect();
-        if self.workspace.assign_unowned_bots(&ids) {
-            // Called while the rail renders: saving touches the chrome being
-            // drawn, so it waits until the frame is done.
-            let this = cx.entity().downgrade();
-            cx.defer(move |cx| {
-                let _ = this.update(cx, |this, cx| this.persist(cx));
-            });
-        }
         let hidden = self.workspace.hidden_bots();
-        manager.update(cx, |m, _| m.vorkspace_hidden = hidden);
+        let active = self.workspace.active_vorkspace.clone();
+        manager.update(cx, |m, _| m.set_vorkspace(active, hidden));
     }
 
     /// The vorkspace switcher at the top of the rail.
@@ -1265,9 +1253,7 @@ impl Shell {
                     )
                     .aria_label(format!("Remove {} from this vorkspace", bot.label()))
                     .on_click(cx.listener(move |this, _, window, cx| {
-                        if let Some(v) = this.workspace.vorkspace_mut(&editing) {
-                            v.bots.retain(|b| *b != id);
-                        }
+                        this.set_bot_membership(&id, &editing, false, cx);
                         this.reconcile_after_bot_move(window, cx);
                     })),
                 )
@@ -1281,7 +1267,7 @@ impl Shell {
                 crate::avatar::bot_avatar(&bot, "idle", 14., true),
             )
             .on_click(cx.listener(move |this, _, window, cx| {
-                this.workspace.move_bot_to_vorkspace(&editing, &id);
+                this.set_bot_membership(&id, &editing, true, cx);
                 this.reconcile_after_bot_move(window, cx);
             }))
         });
@@ -1408,7 +1394,7 @@ impl Shell {
                                             this.open_project_from_user(landing, window, cx);
                                         }
                                         let next = this.workspace.active_vorkspace.clone();
-                                        this.reconcile_vorkspace_bots(cx);
+                                        this.configure_vorkspace_bots(cx);
                                         this.persist(cx);
                                         this.open_vorkspace_dialog(Some(next), window, cx);
                                     }
@@ -1685,12 +1671,13 @@ impl Shell {
 
     pub(super) fn sync_vorkspace_bot_visibility(&mut self, cx: &mut Context<Self>) -> bool {
         let hidden = self.workspace.hidden_bots();
+        let active = self.workspace.active_vorkspace.clone();
         if let Some(manager) = self.bots.clone() {
             manager.update(cx, |m, cx| {
                 if m.active.as_ref().is_some_and(|id| hidden.contains(id)) {
                     m.close(cx);
                 }
-                m.vorkspace_hidden = hidden;
+                m.set_vorkspace(active, hidden);
                 cx.notify();
             });
         }
