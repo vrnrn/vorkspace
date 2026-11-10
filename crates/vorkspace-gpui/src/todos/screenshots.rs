@@ -78,11 +78,14 @@ fn native_todos_capture() {
                 cx.new(|cx| {
                     Surface(cx.new(|cx| {
                         let mut page = TodosPage::new(store.clone(), cx);
-                        page.choices.push(BoardChoice {
-                            board: board.clone(),
-                            label: "Release platform".into(),
-                        });
-                        page.board.update(cx, |view, cx| {
+                        page.set_choices(
+                            vec![BoardChoice {
+                                board: board.clone(),
+                                label: "Release platform".into(),
+                            }],
+                            cx,
+                        );
+                        page.board_for_capture().update(cx, |view, cx| {
                             // Supersede the initial personal-board load.
                             view.generation += 1;
                             view.board = Some(board.clone());
@@ -102,7 +105,7 @@ fn native_todos_capture() {
         window
             .update(&mut cx, |surface, _, cx| {
                 surface.0.update(cx, |page, cx| {
-                    page.board.update(cx, |view, cx| {
+                    page.board_for_capture().update(cx, |view, cx| {
                         view.create_open = true;
                         cx.notify();
                     });
@@ -117,7 +120,7 @@ fn native_todos_capture() {
         window
             .update(&mut cx, |surface, _, cx| {
                 surface.0.update(cx, |page, cx| {
-                    page.board.update(cx, |view, cx| {
+                    page.board_for_capture().update(cx, |view, cx| {
                         view.create_open = false;
                         view.open_details(&detail, cx);
                     });
@@ -132,7 +135,7 @@ fn native_todos_capture() {
         window
             .update(&mut cx, |surface, _, cx| {
                 surface.0.update(cx, |page, cx| {
-                    page.board.update(cx, |view, cx| {
+                    page.board_for_capture().update(cx, |view, cx| {
                         view.detail_editing = true;
                         cx.notify();
                     });

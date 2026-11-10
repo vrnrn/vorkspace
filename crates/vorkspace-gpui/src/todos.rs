@@ -12,13 +12,17 @@ use gpui::{
 use std::borrow::Cow;
 use std::collections::HashMap;
 use vorkspace_core::todos::{TodoBoard, TodoItem, TodoStatus, TodoSync};
-use vorkspace_runtime::runtime::{Database, locked};
+use vorkspace_runtime::runtime::Database;
+#[cfg(test)]
+use vorkspace_runtime::runtime::locked;
 use vorkspace_ui::radius;
 use vorkspace_ui::theme::*;
+mod board_picker;
 mod cards;
 mod creation;
 mod details;
 mod service;
+pub(crate) use board_picker::{BoardChoice, PageEvent, TodosPage};
 pub(crate) use service::action as todo_action;
 
 const STALE_DETAILS: &str = "This to-do changed while you were editing. Your draft is preserved; reload details before saving.";
@@ -1257,22 +1261,6 @@ impl TodoBoardView {
             .is_some_and(|issue| issue.dependencies_truncated);
         let attachment_refs = Self::reference_lines(&editor.attachments, cx);
         let selected_dependencies = Self::dependency_values(&editor.dependencies, cx);
-        let selected_keys = selected_dependencies
-            .iter()
-            .map(|reference| self.dependency_key(item, reference))
-            .collect::<std::collections::HashSet<_>>();
-        let own_reference = Self::dependency_ref(item);
-        let dependency_choices = self
-            .items
-            .iter()
-            .filter(|candidate| !remote || candidate.issue.is_some())
-            .filter_map(|candidate| {
-                let reference = Self::dependency_ref(candidate);
-                let selected = selected_keys.contains(reference.as_str());
-                (reference != own_reference)
-                    .then(|| (reference, Self::dependency_item_label(candidate), selected))
-            })
-            .collect::<Vec<_>>();
         Some(
             div()
                 .id("todo-details")
@@ -1488,6 +1476,23 @@ impl TodoBoardView {
                     )
                 })
                 .when(self.show_dependency_choices && !dependencies_truncated, |d| {
+                    let selected_keys = selected_dependencies
+                        .iter()
+                        .map(|reference| self.dependency_key(item, reference))
+                        .collect::<std::collections::HashSet<_>>();
+                    let own_reference = Self::dependency_ref(item);
+                    let choices = self.items.iter()
+                        .filter(|candidate| !remote || candidate.issue.is_some())
+                        .filter_map(|candidate| {
+                            let reference = Self::dependency_ref(candidate);
+                            if reference == own_reference {
+                                return None;
+                            }
+                            let selected = selected_keys.contains(reference.as_str());
+                            Some((reference, Self::dependency_item_label(candidate), selected))
+                        })
+                        .collect::<Vec<_>>();
+                    let choices_empty = choices.is_empty();
                     d.child(
                         div()
                             .id("todo-dependency-choices")
@@ -1496,14 +1501,13 @@ impl TodoBoardView {
                             .flex()
                             .flex_col()
                             .gap_1()
-                            .children(dependency_choices.iter().enumerate().map(
+                            .children(choices.into_iter().enumerate().map(
                                 |(index, (reference, label, selected))| {
-                                    let reference = reference.clone();
                                     labeled_secondary(
                                         SharedString::from(format!(
                                             "todo-dependency-choice-{index}"
                                         )),
-                                        format!("{} {label}", if *selected { "✓" } else { "+" }),
+                                        format!("{} {label}", if selected { "✓" } else { "+" }),
                                         false,
                                         false,
                                     )
@@ -1514,7 +1518,7 @@ impl TodoBoardView {
                                     ))
                                 },
                             ))
-                            .when(dependency_choices.is_empty(), |d| {
+                            .when(choices_empty, |d| {
                                 d.child("No other tasks on this board")
                             }),
                     )
@@ -1670,7 +1674,6 @@ impl TodoBoardView {
             .items
             .iter()
             .filter(|item| item.status == status)
-            .cloned()
             .collect();
         let count = items.len();
         div()
@@ -1702,7 +1705,7 @@ impl TodoBoardView {
                     .child(status.label())
                     .child(div().child(count.to_string())),
             )
-            .children(items.iter().map(|item| self.row(item, cx)))
+            .children(items.into_iter().map(|item| self.row(item, cx)))
             .when(count == 0, |d| {
                 d.child(
                     div()
@@ -1795,375 +1798,6 @@ impl Render for TodoBoardView {
             .children(self.create_popover(cx))
             .children(self.details_overlay(window, cx))
             .into_any_element()
-    }
-}
-
-/// A board the To-dos page can show.
-#[derive(Clone, Debug, PartialEq)]
-pub(crate) struct BoardChoice {
-    pub board: TodoBoard,
-    pub label: String,
-}
-
-#[derive(Clone)]
-struct LegacyTasks {
-    id: String,
-    label: String,
-    count: usize,
-    projects: Vec<String>,
-}
-
-impl BoardChoice {
-    fn group(&self) -> &'static str {
-        match self.board {
-            TodoBoard::Personal => "",
-            TodoBoard::Project(_) => "Projects",
-            TodoBoard::Bot(_) => "",
-        }
-    }
-}
-
-pub(crate) enum PageEvent {
-    Close,
-}
-
-/// The left sidebar's To-dos page: the personal board or a project board,
-/// picked from a dropdown.
-#[cfg(test)]
-impl TodosPage {
-    pub(crate) fn board_for_capture(&self) -> Entity<TodoBoardView> {
-        self.board.clone()
-    }
-}
-
-pub(crate) struct TodosPage {
-    store: Database,
-    board: Entity<TodoBoardView>,
-    choices: Vec<BoardChoice>,
-    open_counts: std::collections::HashMap<String, usize>,
-    legacy: Vec<LegacyTasks>,
-    assign_error: Option<String>,
-    anchor: AnchorSlot,
-    picker_open: bool,
-    _subscriptions: Vec<Subscription>,
-}
-
-impl gpui::EventEmitter<PageEvent> for TodosPage {}
-impl Focusable for TodosPage {
-    fn focus_handle(&self, cx: &App) -> FocusHandle {
-        self.board.focus_handle(cx)
-    }
-}
-
-impl TodosPage {
-    pub(crate) fn new(store: Database, cx: &mut Context<Self>) -> Self {
-        let board = cx.new(|cx| {
-            let mut view = TodoBoardView::new(store.clone(), true, cx);
-            view.set_board(Some(TodoBoard::Personal), cx);
-            view
-        });
-        let subscriptions =
-            vec![cx.observe_global::<TodoRevision>(|this, cx| this.load_counts(cx))];
-        let mut page = Self {
-            store,
-            board,
-            choices: vec![BoardChoice {
-                board: TodoBoard::Personal,
-                label: "Personal".into(),
-            }],
-            open_counts: Default::default(),
-            legacy: Vec::new(),
-            assign_error: None,
-            anchor: AnchorSlot::default(),
-            picker_open: false,
-            _subscriptions: subscriptions,
-        };
-        page.load_counts(cx);
-        page
-    }
-
-    /// Projects, after the personal board. A board that disappears
-    /// falls back to the personal one.
-    pub(crate) fn set_choices(&mut self, mut choices: Vec<BoardChoice>, cx: &mut Context<Self>) {
-        choices.retain(|choice| matches!(choice.board, TodoBoard::Project(_)));
-        choices.insert(
-            0,
-            BoardChoice {
-                board: TodoBoard::Personal,
-                label: "Personal".into(),
-            },
-        );
-        let current = self.board.read(cx).board().cloned();
-        if current.is_some_and(|board| !choices.iter().any(|c| c.board == board)) {
-            self.select(TodoBoard::Personal, cx);
-        }
-        self.choices = choices;
-        cx.notify();
-    }
-
-    pub(crate) fn select(&mut self, board: TodoBoard, cx: &mut Context<Self>) {
-        self.picker_open = false;
-        self.board
-            .update(cx, |view, cx| view.set_board(Some(board), cx));
-        cx.notify();
-    }
-
-    pub(crate) fn selected(&self, cx: &App) -> Option<TodoBoard> {
-        self.board.read(cx).board().cloned()
-    }
-
-    fn load_counts(&mut self, cx: &mut Context<Self>) {
-        let store = self.store.clone();
-        let work = cx.background_executor().spawn(async move {
-            let store = locked(&store)?;
-            let counts = store.open_todo_counts()?;
-            let legacy = store.legacy_bot_todo_counts()?;
-            let roster = vorkspace_core::bot::Roster::load(&store).ok();
-            let legacy = legacy
-                .into_iter()
-                .map(|(id, count)| {
-                    let bot = roster.as_ref().and_then(|roster| roster.get(&id));
-                    LegacyTasks {
-                        label: bot
-                            .map(|bot| bot.name.clone())
-                            .unwrap_or_else(|| format!("Former Bot {id}")),
-                        projects: bot.map(|bot| bot.projects.clone()).unwrap_or_default(),
-                        id,
-                        count,
-                    }
-                })
-                .collect::<Vec<_>>();
-            Ok::<_, String>((counts, legacy))
-        });
-        cx.spawn(async move |this, cx| {
-            if let Ok((counts, legacy)) = work.await {
-                let _ = this.update(cx, |this, cx| {
-                    this.open_counts = counts;
-                    this.legacy = legacy;
-                    cx.notify();
-                });
-            }
-        })
-        .detach();
-    }
-
-    fn assign_legacy(&mut self, id: String, project: String, cx: &mut Context<Self>) {
-        self.assign_error = None;
-        let store = self.store.clone();
-        let work = cx
-            .background_executor()
-            .spawn(async move { locked(&store)?.assign_legacy_bot_todos(&id, &project) });
-        cx.spawn(async move |this, cx| {
-            let result = work.await;
-            let _ = this.update(cx, |this, cx| {
-                match result {
-                    Ok(_) => {
-                        changed(cx);
-                        this.load_counts(cx);
-                    }
-                    Err(error) => this.assign_error = Some(error),
-                }
-                cx.notify();
-            });
-        })
-        .detach();
-    }
-
-    fn legacy_panel(&self, cx: &mut Context<Self>) -> Option<gpui::AnyElement> {
-        let Some(TodoBoard::Project(project)) = self.selected(cx) else {
-            return None;
-        };
-        let rows = self
-            .legacy
-            .iter()
-            .filter(|legacy| {
-                legacy.projects.is_empty()
-                    || legacy.projects.iter().any(|path| {
-                        vorkspace_core::files::path_key(path)
-                            == vorkspace_core::files::path_key(&project)
-                    })
-            })
-            .enumerate()
-            .map(|(ix, legacy)| {
-                let id = legacy.id.clone();
-                let project = project.clone();
-                div()
-                    .flex()
-                    .items_center()
-                    .gap_2()
-                    .child(
-                        div()
-                            .flex_1()
-                            .min_w_0()
-                            .truncate()
-                            .child(format!("{} · {} saved task(s)", legacy.label, legacy.count)),
-                    )
-                    .child(
-                        labeled_secondary(("todo-assign-legacy", ix), "Move here", false, false)
-                            .on_click(cx.listener(move |this, _, _, cx| {
-                                this.assign_legacy(id.clone(), project.clone(), cx)
-                            })),
-                    )
-                    .into_any_element()
-            })
-            .collect::<Vec<_>>();
-        if rows.is_empty() {
-            return None;
-        }
-        Some(
-            div()
-                .mx_3()
-                .mt_2()
-                .p_2()
-                .rounded(px(radius::CONTROL))
-                .border_1()
-                .border_color(page::divider())
-                .flex()
-                .flex_col()
-                .gap_2()
-                .text_size(px(page::META_SIZE))
-                .child("Saved Bot tasks need a project")
-                .children(rows)
-                .children(
-                    self.assign_error
-                        .clone()
-                        .map(|error| div().text_color(vorkspace_ui::theme::danger()).child(error)),
-                )
-                .into_any_element(),
-        )
-    }
-
-    fn label(&self, cx: &App) -> String {
-        let board = self.selected(cx);
-        self.choices
-            .iter()
-            .find(|choice| Some(&choice.board) == board.as_ref())
-            .map(|choice| choice.label.clone())
-            .unwrap_or_else(|| "Personal".into())
-    }
-
-    fn picker(&self, cx: &mut Context<Self>) -> gpui::AnyElement {
-        let weak = cx.weak_entity();
-        let selected = self.selected(cx);
-        let mut rows: Vec<gpui::AnyElement> = Vec::new();
-        let mut group = "";
-        for (ix, choice) in self.choices.iter().enumerate() {
-            if choice.group() != group {
-                group = choice.group();
-                rows.push(
-                    div()
-                        .px_2()
-                        .pt_2()
-                        .pb_1()
-                        .text_size(px(page::META_SIZE))
-                        .text_color(page::secondary_ink())
-                        .child(group)
-                        .into_any_element(),
-                );
-            }
-            let board = choice.board.clone();
-            let count = self.open_counts.get(&board.key()).copied().unwrap_or(0);
-            let current = selected.as_ref() == Some(&board);
-            rows.push(
-                div()
-                    .id(("todo-board-choice", ix))
-                    .debug_selector(move || format!("todo-board-choice-{ix}"))
-                    .role(Role::MenuItemRadio)
-                    .aria_label(SharedString::from(choice.label.clone()))
-                    .aria_selected(current)
-                    .px_2()
-                    .py_1p5()
-                    .rounded(px(radius::CONTROL))
-                    .flex()
-                    .items_center()
-                    .gap_2()
-                    .text_size(px(13.))
-                    .when(current, |d| d.bg(content(0.08)))
-                    .hover(|s| s.bg(vorkspace_ui::fluid::hover(0.08)))
-                    .child(
-                        div()
-                            .flex_1()
-                            .min_w_0()
-                            .truncate()
-                            .child(choice.label.clone()),
-                    )
-                    .when(count > 0, |d| {
-                        d.child(
-                            div()
-                                .text_size(px(page::META_SIZE))
-                                .text_color(page::secondary_ink())
-                                .child(count.to_string()),
-                        )
-                    })
-                    .on_click(cx.listener(move |this, _, _, cx| this.select(board.clone(), cx)))
-                    .into_any_element(),
-            );
-        }
-        popover("todo-board-picker", Anchor::Slot(self.anchor.clone()))
-            .width(260.)
-            .max_height(380.)
-            .on_dismiss(move |_, cx| {
-                let _ = weak.update(cx, |this, cx| {
-                    this.picker_open = false;
-                    cx.notify();
-                });
-            })
-            .child(
-                div()
-                    .id("todo-board-choices")
-                    .p_1()
-                    .overflow_y_scroll()
-                    .children(rows),
-            )
-            .into_any_element()
-    }
-}
-
-impl Render for TodosPage {
-    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let label = self.label(cx);
-        div()
-            .id("todos-page")
-            .debug_selector(|| "todos-page".into())
-            .role(Role::Region)
-            .aria_label("To-dos")
-            .size_full()
-            .flex()
-            .flex_col()
-            .text_color(content(1.))
-            .on_key_down(cx.listener(|this, event: &gpui::KeyDownEvent, _, cx| {
-                if event.keystroke.key == "escape" {
-                    if this.picker_open {
-                        this.picker_open = false;
-                        cx.notify();
-                    } else {
-                        cx.emit(PageEvent::Close);
-                    }
-                }
-            }))
-            .child(
-                page::toolbar().child(
-                    page::action("todo-board-picker-button", "Choose board", true)
-                        .debug_selector(|| "todo-board-picker-button".into())
-                        .relative()
-                        .text_size(px(page::LABEL_SIZE))
-                        .font_weight(FontWeight::SEMIBOLD)
-                        .when(self.picker_open, |d| d.bg(content(0.08)))
-                        .child(self.anchor.probe())
-                        .child(label)
-                        .child(icon("chevron-down", 11.))
-                        .on_click(cx.listener(|this, _, _, cx| {
-                            this.picker_open = !this.picker_open;
-                            if this.picker_open {
-                                this.load_counts(cx);
-                            }
-                            cx.notify();
-                        })),
-                ),
-            )
-            .when_some(self.legacy_panel(cx), |d, panel| d.child(panel))
-            .child(div().flex_1().min_h_0().child(self.board.clone()))
-            .when(self.picker_open, |d| d.child(self.picker(cx)))
     }
 }
 
