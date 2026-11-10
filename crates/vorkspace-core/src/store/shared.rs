@@ -11,6 +11,7 @@ pub use history_window::{IndexedHistoryCursor, IndexedHistoryPage};
 pub(super) use incremental::HistoryAppend;
 mod native_history;
 mod ordinary;
+mod settings;
 #[cfg(test)]
 mod tests;
 
@@ -33,8 +34,7 @@ pub(super) struct Shared {
     columns: HashSet<String>,
     earlier_bot_tables: Option<bot_tables::BotTables>,
     ids: RefCell<HashMap<i64, String>>,
-    extras: RefCell<BTreeMap<String, String>>,
-    extras_path: Option<PathBuf>,
+    settings: settings::Sidecar,
     snapshots: RefCell<HashMap<i64, HistoryRevision>>,
     incremental: RefCell<HashMap<i64, incremental::HistoryIndex>>,
     history_schema: std::cell::Cell<Option<i64>>,
@@ -205,55 +205,6 @@ pub(super) fn has_table(conn: &Connection, table: &str) -> Result<bool, String> 
         |r| r.get(0),
     ))
 }
-// The sidecar is shared by independent Store instances and processes. Lock a
-// stable sibling (not the atomically replaced sidecar inode) across read/modify/
-// publish, and always start from the latest on-disk root.
-fn lock_extras(path: &Path) -> Result<std::fs::File, String> {
-    let lock = path.with_file_name(format!(
-        "{}.lock",
-        path.file_name().unwrap_or_default().to_string_lossy()
-    ));
-    let mut options = std::fs::OpenOptions::new();
-    options.read(true).write(true).create(true);
-    use std::os::unix::fs::OpenOptionsExt;
-    options.mode(0o600).custom_flags(libc::O_NOFOLLOW);
-    let file = options.open(lock).map_err(|e| e.to_string())?;
-    file.lock().map_err(|e| e.to_string())?;
-    Ok(file)
-}
-fn read_extras(path: &Path) -> Result<BTreeMap<String, String>, String> {
-    match std::fs::read_to_string(path) {
-        Ok(raw) => crate::compatibility::settings(parse(&raw)?),
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(BTreeMap::new()),
-        Err(error) => Err(error.to_string()),
-    }
-}
-fn atomic_json(path: &Path, value: &impl serde::Serialize) -> Result<(), String> {
-    let temporary = path.with_extension(format!("{}.tmp", crate::session::new_id()));
-    let result = (|| {
-        use std::io::Write;
-        let mut options = std::fs::OpenOptions::new();
-        options.write(true).create_new(true);
-        use std::os::unix::fs::OpenOptionsExt;
-        options.mode(0o600);
-        let mut file = options.open(&temporary).map_err(|e| e.to_string())?;
-        file.write_all(encode(value)?.as_bytes())
-            .map_err(|e| e.to_string())?;
-        file.sync_all().map_err(|e| e.to_string())?;
-        std::fs::rename(&temporary, path).map_err(|e| e.to_string())?;
-        if let Some(parent) = path.parent() {
-            std::fs::File::open(parent)
-                .and_then(|directory| directory.sync_all())
-                .map_err(|e| e.to_string())?;
-        }
-        Ok(())
-    })();
-    if result.is_err() {
-        let _ = std::fs::remove_file(temporary);
-    }
-    result
-}
-
 /// Turn keys are row offsets, including invisible document/card metadata rows.
 /// Never substitute the session's current model for missing historical provenance.
 pub(super) fn project_turns(
@@ -419,11 +370,7 @@ impl Store {
                 path.file_name().unwrap_or_default().to_string_lossy()
             ))
         });
-        let extras = match extras_path.as_ref().map(std::fs::read_to_string) {
-            Some(Ok(raw)) => crate::compatibility::settings(parse(&raw)?)?,
-            Some(Err(e)) if e.kind() != std::io::ErrorKind::NotFound => return Err(e.to_string()),
-            _ => BTreeMap::new(),
-        };
+        let settings = settings::Sidecar::open(extras_path)?;
         let earlier_bot_tables = bot_tables::BotTables::discover(&conn)?;
         let store = Self {
             conn,
@@ -433,8 +380,7 @@ impl Store {
                 earlier_bot_tables,
                 columns,
                 ids: RefCell::new(HashMap::new()),
-                extras: RefCell::new(extras),
-                extras_path,
+                settings,
                 snapshots: RefCell::new(HashMap::new()),
                 card_revisions: RefCell::new(HashMap::new()),
                 refreshed_cards: RefCell::new(HashMap::new()),
@@ -630,10 +576,7 @@ impl Store {
             }
         }
         let shared = self.shared.as_ref().unwrap();
-        if let Some(path) = &shared.extras_path {
-            *shared.extras.borrow_mut() = read_extras(path)?;
-        }
-        Ok(shared.extras.borrow().get(key).cloned())
+        shared.settings.read(|settings| settings.get(key).cloned())
     }
     pub(super) fn shared_claim_bot_message(
         &self,
@@ -650,18 +593,16 @@ impl Store {
             &self.conn,
             rusqlite::TransactionBehavior::Immediate,
         ))?;
-        let _lock = shared.extras_path.as_deref().map(lock_extras).transpose()?;
-        let extras = match &shared.extras_path {
-            Some(path) => read_extras(path)?,
-            None => shared.extras.borrow().clone(),
-        };
-        super::validate_bot_claim(
-            extras
-                .get("bot-roster")
-                .ok_or("Bot outbox is unavailable")?,
-            bot,
-            message,
-        )?;
+        let _lock = shared.settings.lock()?;
+        shared.settings.read(|settings| {
+            super::validate_bot_claim(
+                settings
+                    .get("bot-roster")
+                    .ok_or("Bot outbox is unavailable")?,
+                bot,
+                message,
+            )
+        })??;
         incremental::ensure_bookkeeping_schema(&tx)?;
         let inserted = sql(tx.execute(
             "INSERT OR IGNORE INTO native_bot_dispatch_claims VALUES(?1,?2,?3)",
@@ -691,11 +632,8 @@ impl Store {
             return sql(tx.commit());
         }
         let shared = self.shared.as_ref().unwrap();
-        let _lock = shared.extras_path.as_deref().map(lock_extras).transpose()?;
-        let mut next = match &shared.extras_path {
-            Some(path) => read_extras(path)?,
-            None => shared.extras.borrow().clone(),
-        };
+        let _lock = shared.settings.lock()?;
+        let mut next = self.shared_settings_snapshot()?;
         if next.get(key).map(String::as_str) != expected {
             return Err(
                 "Setting changed in another window; your changes were preserved in this window."
@@ -703,11 +641,7 @@ impl Store {
             );
         }
         next.insert(key.into(), value.into());
-        if let Some(path) = &shared.extras_path {
-            atomic_json(path, &next)?;
-        }
-        *shared.extras.borrow_mut() = next;
-        Ok(())
+        shared.settings.save(next)
     }
     pub(super) fn shared_save_setting(&self, key: &str, value: &str) -> Result<(), String> {
         if key.starts_with("bot-draft-origin:") {
@@ -731,10 +665,7 @@ impl Store {
     }
     pub(super) fn shared_settings_snapshot(&self) -> Result<BTreeMap<String, String>, String> {
         let shared = self.shared.as_ref().unwrap();
-        match &shared.extras_path {
-            Some(path) => read_extras(path),
-            None => Ok(shared.extras.borrow().clone()),
-        }
+        shared.settings.read(Clone::clone)
     }
     /// Read and publish related sidecar settings while holding the same lock.
     pub(super) fn shared_update_settings<T>(
@@ -743,7 +674,7 @@ impl Store {
     ) -> Result<T, String> {
         self.shared_writable()?;
         let shared = self.shared.as_ref().unwrap();
-        let _lock = shared.extras_path.as_deref().map(lock_extras).transpose()?;
+        let _lock = shared.settings.lock()?;
         let mut next = self.shared_settings_snapshot()?;
         let (result, values) = update(&next)?;
         let changed = values
@@ -752,11 +683,8 @@ impl Store {
         if changed {
             self.mark_attachment_activity();
             next.extend(values);
-            if let Some(path) = &shared.extras_path {
-                atomic_json(path, &next)?;
-            }
+            shared.settings.save(next)?;
         }
-        *shared.extras.borrow_mut() = next;
         Ok(result)
     }
     pub(super) fn shared_sessions(&self) -> Result<Vec<Session>, String> {
@@ -1680,17 +1608,15 @@ impl Store {
         prefix: &str,
     ) -> Result<Vec<(i64, String)>, String> {
         let shared = self.shared.as_ref().unwrap();
-        if let Some(path) = &shared.extras_path {
-            *shared.extras.borrow_mut() = read_extras(path)?;
-        }
-        Ok(shared
-            .extras
-            .borrow()
-            .iter()
-            .filter_map(|(key, value)| {
-                Some((key.strip_prefix(prefix)?.parse().ok()?, value.clone()))
-            })
-            .collect())
+        shared.settings.read(|settings| {
+            settings
+                .range(prefix.to_owned()..)
+                .take_while(|(key, _)| key.starts_with(prefix))
+                .filter_map(|(key, value)| {
+                    Some((key.strip_prefix(prefix)?.parse().ok()?, value.clone()))
+                })
+                .collect()
+        })
     }
     pub(super) fn shared_drafts(&self) -> Result<HashSet<i64>, String> {
         let mut query = sql(self.conn.prepare(&format!(
@@ -1843,21 +1769,14 @@ impl Store {
         ]
         .map(|prefix| format!("{prefix}:{id}"));
         let delivered = format!("bot-delivered:{id}:");
-        let _lock = shared.extras_path.as_deref().map(lock_extras).transpose()?;
-        let mut next = match &shared.extras_path {
-            Some(path) => read_extras(path)?,
-            None => shared.extras.borrow().clone(),
-        };
+        let _lock = shared.settings.lock()?;
+        let mut next = self.shared_settings_snapshot()?;
         let before = next.len();
         next.retain(|key, _| !exact.contains(key) && !key.starts_with(&delivered));
         if next.len() == before {
             return Ok(());
         }
-        if let Some(path) = &shared.extras_path {
-            atomic_json(path, &next)?;
-        }
-        *shared.extras.borrow_mut() = next;
-        Ok(())
+        shared.settings.save(next)
     }
     pub(super) fn shared_delete_checked(
         &self,

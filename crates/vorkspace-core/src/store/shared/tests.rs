@@ -103,7 +103,14 @@ fn bot_claim_waiting_for_edit_or_detach_never_holds_the_sidecar_lock() {
         roster.save(&writer).unwrap();
         writer.save_setting("unrelated", "preserve").unwrap();
         let claimant = Store::open_vorkspace(&path).unwrap();
-        let sidecar = writer.shared.as_ref().unwrap().extras_path.clone().unwrap();
+        let sidecar = writer
+            .shared
+            .as_ref()
+            .unwrap()
+            .settings
+            .path()
+            .unwrap()
+            .to_owned();
 
         let (writer_ready_tx, writer_ready_rx) = mpsc::channel();
         let (writer_resume_tx, writer_resume_rx) = mpsc::channel();
@@ -241,7 +248,7 @@ fn claim_sidecar_failure_releases_sqlite_and_preserves_the_outbox() {
         ..Default::default()
     });
     roster.save(&store).unwrap();
-    let sidecar = store.shared.as_ref().unwrap().extras_path.as_ref().unwrap();
+    let sidecar = store.shared.as_ref().unwrap().settings.path().unwrap();
     let lock_path = sidecar.with_file_name(format!(
         "{}.lock",
         sidecar.file_name().unwrap().to_string_lossy()
@@ -1952,7 +1959,7 @@ fn deleting_a_session_removes_only_its_own_sidecar_metadata() {
             Some("keep boundary lookalike")
         );
     }
-    let extras = store.shared.as_ref().unwrap().extras.borrow();
+    let extras = store.shared_settings_snapshot().unwrap();
     assert!(!extras.contains_key(&format!("bot-delivered:{child}:message")));
     assert_eq!(extras[&format!("bot-delivered:{child}0:message")], "keep");
     assert_eq!(extras["unrelated-setting"], "keep unknown");
@@ -1968,7 +1975,14 @@ fn failed_sidecar_removal_reports_committed_deletion_and_can_finish_cleanup() {
     store
         .save_setting(&key, "preserve until cleanup succeeds")
         .unwrap();
-    let sidecar = store.shared.as_ref().unwrap().extras_path.clone().unwrap();
+    let sidecar = store
+        .shared
+        .as_ref()
+        .unwrap()
+        .settings
+        .path()
+        .unwrap()
+        .to_owned();
     let backup = root.path().join("saved-extras.json");
     std::fs::rename(&sidecar, &backup).unwrap();
     std::fs::create_dir(&sidecar).unwrap();
