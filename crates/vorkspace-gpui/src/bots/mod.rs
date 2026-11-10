@@ -21,7 +21,7 @@ mod panel_stack;
 mod panels;
 mod peers;
 mod roster;
-pub(crate) use roster::{MembershipChanged, SharedRoster};
+pub(crate) use roster::{MembershipChanged, PreparedRoster, SharedRoster};
 mod scheduler;
 mod search;
 #[cfg(test)]

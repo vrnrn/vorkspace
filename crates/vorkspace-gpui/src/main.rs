@@ -263,7 +263,7 @@ fn main() {
         db,
         sessions,
         metadata,
-        layouts,
+        core,
         saved,
         cwd,
         explicit_cwd,
@@ -307,6 +307,8 @@ fn main() {
             }
         })
         .detach();
+        let layouts = core.layouts.clone();
+        shell::AppCore::install(&db, core, cx);
         let bounds = launch_bounds(cx);
         restore_workspace_windows(
             db,

@@ -1,5 +1,9 @@
 //! Resolve the invocation and prepare desktop state before GPUI starts.
-use crate::{fixtures, shell::WindowLayouts, workspace::Workspace};
+use crate::{
+    fixtures,
+    shell::{PreparedCore, WindowLayouts},
+    workspace::Workspace,
+};
 use std::{
     path::{Path, PathBuf},
     sync::{Arc, Mutex},
@@ -97,22 +101,52 @@ impl DataSource {
                 .unwrap_or_else(vorkspace_core::store::vorkspace_database)),
             Self::Development => {
                 let database = development_dir().join("vorkspace.db");
-                if database
-                    .canonicalize()
-                    .ok()
-                    .zip(
-                        vorkspace_core::store::vorkspace_database()
-                            .canonicalize()
-                            .ok(),
-                    )
-                    .is_some_and(|(development, desktop)| development == desktop)
-                {
+                if same_database(&database, &vorkspace_core::store::vorkspace_database()) {
                     return Err("The isolated development directory points at the desktop database. Choose a separate VORKSPACE_NATIVE_DATA_DIR.".into());
                 }
                 Ok(database)
             }
         }
     }
+}
+
+fn same_database(left: &Path, right: &Path) -> bool {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt;
+        if std::fs::metadata(left)
+            .ok()
+            .zip(std::fs::metadata(right).ok())
+            .is_some_and(|(left, right)| left.dev() == right.dev() && left.ino() == right.ino())
+        {
+            return true;
+        }
+    }
+    database_location(left)
+        .zip(database_location(right))
+        .is_some_and(|(left, right)| left == right)
+}
+
+/// Resolve the existing part of a path even before its database is created.
+fn database_location(path: &Path) -> Option<PathBuf> {
+    let absolute = std::path::absolute(path).ok()?;
+    let (ancestor, mut location) = absolute.ancestors().find_map(|ancestor| {
+        ancestor
+            .canonicalize()
+            .ok()
+            .map(|resolved| (ancestor, resolved))
+    })?;
+    for component in absolute.strip_prefix(ancestor).ok()?.components() {
+        match component {
+            std::path::Component::Normal(name) => location.push(name),
+            std::path::Component::ParentDir => {
+                location.pop();
+            }
+            std::path::Component::CurDir => {}
+            _ => return None,
+        }
+    }
+    Some(location)
 }
 
 impl Samples {
@@ -154,7 +188,7 @@ pub(crate) struct Startup {
     pub db: Database,
     pub sessions: Vec<Session>,
     pub metadata: SessionSidebarMetadata,
-    pub layouts: WindowLayouts,
+    pub core: PreparedCore,
     pub saved: Option<String>,
     pub cwd: String,
     pub explicit_cwd: bool,
@@ -226,11 +260,12 @@ fn prepare_desktop(mut db: Store, database: &Path, options: Options) -> Result<S
             .unwrap_or(Path::new("."))
             .join("checkpoints"),
     );
-    let layouts = WindowLayouts::load(&db);
     let saved = db.ui_state().unwrap_or_else(|error| {
         eprintln!("Cannot read workspace settings: {error}");
         None
     });
+    let layouts = WindowLayouts::load_with_legacy(&db, saved.as_deref());
+    let core = PreparedCore::read(&db, layouts);
     let mut sessions = db.sessions()?;
     let explicit_cwd = options.cwd.is_some();
     let cwd = launch_cwd(
@@ -259,7 +294,7 @@ fn prepare_desktop(mut db: Store, database: &Path, options: Options) -> Result<S
         metadata: db.session_sidebar_metadata(&projects),
         db: Arc::new(Mutex::new(db)),
         sessions,
-        layouts,
+        core,
         saved,
         cwd,
         explicit_cwd,
@@ -384,5 +419,26 @@ mod tests {
         let isolated = parse(&["--dev-data", "--fixture"]).unwrap().unwrap();
         assert_eq!(isolated.source, DataSource::Development);
         assert!(isolated.samples.requested());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn development_paths_reject_aliases_before_and_after_database_creation() {
+        let dir = tempfile::tempdir().unwrap();
+        let desktop = dir.path().join("desktop");
+        let development = dir.path().join("development");
+        std::fs::create_dir(&desktop).unwrap();
+        std::os::unix::fs::symlink(&desktop, &development).unwrap();
+        let db = desktop.join("vorkspace.db");
+        assert!(same_database(&db, &development.join("vorkspace.db")));
+        assert!(same_database(&db, &desktop.join("missing/../vorkspace.db")));
+        assert!(!same_database(
+            &db,
+            &dir.path().join("isolated/vorkspace.db")
+        ));
+        std::fs::write(&db, "fixture").unwrap();
+        let alias = dir.path().join("hardlink.db");
+        std::fs::hard_link(&db, &alias).unwrap();
+        assert!(same_database(&db, &alias));
     }
 }

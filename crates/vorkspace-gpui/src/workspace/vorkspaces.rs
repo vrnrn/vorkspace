@@ -7,6 +7,7 @@
 use super::Workspace;
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
+use std::sync::Arc;
 use unicode_segmentation::UnicodeSegmentation;
 use vorkspace_core::files::path_key;
 
@@ -163,7 +164,7 @@ impl Workspace {
                 .filter(|p| self.is_project_available(p))
                 .cloned()
                 .collect();
-            self.vorkspaces.push(VorkspaceDef {
+            Arc::make_mut(&mut self.vorkspaces).push(VorkspaceDef {
                 id: new_id(),
                 name: FIRST_VORKSPACE_NAME.into(),
                 projects,
@@ -197,7 +198,8 @@ impl Workspace {
     }
 
     pub(crate) fn vorkspace_mut(&mut self, id: &str) -> Option<&mut VorkspaceDef> {
-        self.vorkspaces.iter_mut().find(|v| v.id == id)
+        let index = self.vorkspaces.iter().position(|v| v.id == id)?;
+        Arc::make_mut(&mut self.vorkspaces).get_mut(index)
     }
 
     /// The active vorkspace's projects that still exist, in its own order.
@@ -278,10 +280,15 @@ impl Workspace {
     /// Lists `path` in vorkspace `id` if it is not already there.
     pub(super) fn join_vorkspace(&mut self, id: &str, path: &str) {
         let key = path_key(path);
-        if let Some(v) = self.vorkspace_mut(id)
-            && !v.projects.iter().any(|p| path_key(p) == key)
+        if let Some(index) = self.vorkspaces.iter().position(|v| v.id == id)
+            && !self.vorkspaces[index]
+                .projects
+                .iter()
+                .any(|p| path_key(p) == key)
         {
-            v.projects.push(path.to_owned());
+            Arc::make_mut(&mut self.vorkspaces)[index]
+                .projects
+                .push(path.to_owned());
         }
     }
 
@@ -301,7 +308,7 @@ impl Workspace {
 
     pub(crate) fn purge_project_from_vorkspaces(&mut self, path: &str) {
         let key = path_key(path);
-        for v in &mut self.vorkspaces {
+        for v in Arc::make_mut(&mut self.vorkspaces) {
             v.projects.retain(|p| path_key(p) != key);
         }
         self.vorkspace_project.retain(|_, p| path_key(p) != key);
@@ -310,13 +317,13 @@ impl Workspace {
     /// A Bot belongs to one vorkspace: adding it here takes it out of any other.
     #[cfg(test)]
     pub(crate) fn move_bot_to_vorkspace(&mut self, id: &str, bot: &str) {
-        move_bot(&mut self.vorkspaces, id, bot);
-        self.seen_bots.insert(bot.to_owned());
+        move_bot(Arc::make_mut(&mut self.vorkspaces).as_mut_slice(), id, bot);
+        Arc::make_mut(&mut self.seen_bots).insert(bot.to_owned());
     }
 
     pub(crate) fn create_vorkspace(&mut self, name: &str) -> String {
         let id = new_id();
-        self.vorkspaces.push(VorkspaceDef {
+        Arc::make_mut(&mut self.vorkspaces).push(VorkspaceDef {
             id: id.clone(),
             name: name.to_owned(),
             ..Default::default()
@@ -329,7 +336,7 @@ impl Workspace {
         if self.vorkspaces.len() <= 1 {
             return false;
         }
-        self.vorkspaces.retain(|v| v.id != id);
+        Arc::make_mut(&mut self.vorkspaces).retain(|v| v.id != id);
         self.vorkspace_project.remove(id);
         if self.active_vorkspace == id {
             self.active_vorkspace = self.vorkspaces[0].id.clone();
@@ -340,8 +347,8 @@ impl Workspace {
     #[cfg(test)]
     pub(crate) fn assign_unowned_bots(&mut self, roster: &[String]) -> bool {
         reconcile_bots(
-            &mut self.vorkspaces,
-            &mut self.seen_bots,
+            Arc::make_mut(&mut self.vorkspaces).as_mut_slice(),
+            Arc::make_mut(&mut self.seen_bots),
             &self.active_vorkspace,
             roster,
         )
@@ -501,7 +508,9 @@ mod tests {
         assert!(!w.vorkspace_has_bot("old"));
         assert!(!w.assign_unowned_bots(&["new".into()]));
         // Removed from every vorkspace on purpose: it does not come back.
-        w.vorkspaces.iter_mut().for_each(|v| v.bots.clear());
+        Arc::make_mut(&mut w.vorkspaces)
+            .iter_mut()
+            .for_each(|v| v.bots.clear());
         assert!(!w.assign_unowned_bots(&["new".into()]));
         assert!(
             !w.vorkspaces

@@ -24,6 +24,13 @@ pub(crate) struct WindowLayouts {
 
 impl WindowLayouts {
     pub(crate) fn load(store: &vorkspace_core::store::Store) -> Self {
+        Self::load_with_legacy(store, store.ui_state().ok().flatten().as_deref())
+    }
+
+    pub(crate) fn load_with_legacy(
+        store: &vorkspace_core::store::Store,
+        legacy: Option<&str>,
+    ) -> Self {
         let mut layouts: Self = store
             .setting(WINDOW_STATE_KEY)
             .ok()
@@ -41,9 +48,9 @@ impl WindowLayouts {
             layouts.focused = layouts.entries.first().map(|entry| entry.id);
         }
         if !layouts.entries.is_empty()
-            && let Some(current) = store.ui_state().ok().flatten()
+            && let Some(current) = legacy
         {
-            layouts.reconcile_legacy(&current);
+            layouts.reconcile_legacy(current);
         }
         layouts
     }

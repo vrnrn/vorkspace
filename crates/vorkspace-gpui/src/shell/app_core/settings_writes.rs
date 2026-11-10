@@ -10,11 +10,16 @@ pub(super) struct SettingsWrites {
 struct Pending {
     values: HashMap<&'static str, Arc<str>>,
     layouts: Option<Arc<WindowLayouts>>,
+    definitions: Option<Arc<Saved>>,
 }
 
 impl Pending {
     fn matches_layout(&self, layout: Option<&Arc<WindowLayouts>>) -> bool {
         self.layouts.as_ref().map(Arc::as_ptr) == layout.map(Arc::as_ptr)
+    }
+
+    fn matches_definitions(&self, definitions: Option<&Arc<Saved>>) -> bool {
+        self.definitions.as_ref().map(Arc::as_ptr) == definitions.map(Arc::as_ptr)
     }
 }
 
@@ -31,9 +36,13 @@ impl SettingsWrites {
         self.pending.lock().unwrap().layouts = Some(Arc::new(layouts));
     }
 
+    pub(super) fn stage_definitions(&self, definitions: Saved) {
+        self.pending.lock().unwrap().definitions = Some(Arc::new(definitions));
+    }
+
     fn has_pending(&self) -> bool {
         let pending = self.pending.lock().unwrap();
-        pending.layouts.is_some() || !pending.values.is_empty()
+        pending.layouts.is_some() || pending.definitions.is_some() || !pending.values.is_empty()
     }
 
     pub(super) fn commit_layouts(
@@ -61,14 +70,24 @@ impl SettingsWrites {
         encode: impl Fn(&WindowLayouts) -> [(&'static str, String); 2],
     ) -> Result<(), String> {
         loop {
-            let layouts = self.pending.lock().unwrap().layouts.clone();
+            let (layouts, definitions) = {
+                let pending = self.pending.lock().unwrap();
+                (pending.layouts.clone(), pending.definitions.clone())
+            };
             let encoded = layouts.as_deref().map(&encode);
+            let encoded_definitions = definitions
+                .as_deref()
+                .map(serde_json::to_string)
+                .transpose()
+                .map_err(|error| error.to_string())?;
             let store = locked(store)?;
             let snapshot = {
                 let pending = self.pending.lock().unwrap();
                 // A newer stage or synchronous commit may have won while
                 // encoding. Recheck under the lock that orders publication.
-                if !pending.matches_layout(layouts.as_ref()) {
+                if !pending.matches_layout(layouts.as_ref())
+                    || !pending.matches_definitions(definitions.as_ref())
+                {
                     continue;
                 }
                 pending.values.clone()
@@ -79,6 +98,9 @@ impl SettingsWrites {
                 .collect();
             if let Some(encoded) = &encoded {
                 values.extend(encoded.iter().map(|(key, value)| (*key, value.as_str())));
+            }
+            if let Some(definitions) = &encoded_definitions {
+                values.push((STORE_KEY, definitions.as_str()));
             }
             if values.is_empty() {
                 return Ok(());
@@ -92,6 +114,9 @@ impl SettingsWrites {
             });
             if pending.matches_layout(layouts.as_ref()) {
                 pending.layouts = None;
+            }
+            if pending.matches_definitions(definitions.as_ref()) {
+                pending.definitions = None;
             }
             return Ok(());
         }
@@ -119,7 +144,13 @@ mod tests {
         ));
         let writes = SettingsWrites::default();
         writes.stage_layouts(layouts("/old"));
-        writes.stage([("vorkspaces", "pending definitions".into())]);
+        writes.stage_definitions(Saved {
+            vorkspaces: Arc::new(vec![VorkspaceDef {
+                id: "shared".into(),
+                ..Default::default()
+            }]),
+            ..Default::default()
+        });
         writes
             .flush_encoding(&database, |old| {
                 let encoded = old.settings_values();
@@ -134,10 +165,9 @@ mod tests {
         let saved = WindowLayouts::load(&store);
         let workspace: Workspace = serde_json::from_str(&saved.entries[0].workspace).unwrap();
         assert_eq!(workspace.project, "/new");
-        assert_eq!(
-            store.setting("vorkspaces").unwrap().as_deref(),
-            Some("pending definitions")
-        );
+        let definitions: Saved =
+            serde_json::from_str(&store.setting(STORE_KEY).unwrap().unwrap()).unwrap();
+        assert_eq!(definitions.vorkspaces[0].id, "shared");
         assert!(!writes.has_pending());
     }
 }

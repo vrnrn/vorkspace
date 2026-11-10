@@ -992,7 +992,7 @@ impl Shell {
             handle
         };
         let mut nav: Vec<AnyElement> = Vec::new();
-        for v in &self.workspace.vorkspaces {
+        for v in self.workspace.vorkspaces.iter() {
             let id = v.id.clone();
             let current = v.id == editing;
             let selected = current && open_project.is_none();

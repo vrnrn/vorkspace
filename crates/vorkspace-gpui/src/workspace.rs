@@ -7,6 +7,7 @@ mod vorkspaces;
 pub(crate) use panes::{AppPane, AppPaneState};
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
+use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 use vorkspace_model::pane_layout::{Edge, PaneNode, SplitDir, leaf};
 pub(crate) use vorkspaces::{VorkspaceDef, move_bot, reconcile_bots};
@@ -374,12 +375,12 @@ pub(crate) struct Workspace {
     pub desktop_preferences_metadata: Option<serde_json::Value>,
     /// Named sets of projects and Bots. Folders and Bots keep their own data;
     /// a vorkspace only decides what this window lists.
-    pub vorkspaces: Vec<VorkspaceDef>,
+    pub vorkspaces: Arc<Vec<VorkspaceDef>>,
     pub active_vorkspace: String,
     /// The project each vorkspace last showed, so switching back returns there.
     pub vorkspace_project: HashMap<String, String>,
     /// Bots already placed in a vorkspace once; a new one joins the active.
-    pub seen_bots: HashSet<String>,
+    pub seen_bots: Arc<HashSet<String>>,
     /// Folders first discovered during `restore`, carried into `AppCore` when
     /// shared vorkspaces load.
     #[serde(skip)]
@@ -558,10 +559,10 @@ impl Default for Workspace {
             desktop_project_preferences: None,
             desktop_workspace_snapshot: None,
             desktop_preferences_metadata: None,
-            vorkspaces: Vec::new(),
+            vorkspaces: Arc::default(),
             active_vorkspace: String::new(),
             vorkspace_project: HashMap::new(),
-            seen_bots: HashSet::new(),
+            seen_bots: Arc::default(),
             restored_new_projects: Vec::new(),
         }
     }

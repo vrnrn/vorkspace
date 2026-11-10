@@ -11,7 +11,7 @@ mod titlebar;
 mod workspace_commands;
 pub(crate) use crate::bots::host_api::AppStart;
 mod app_core;
-pub(crate) use app_core::bot_write_barriers;
+pub(crate) use app_core::{AppCore, PreparedCore, bot_write_barriers};
 mod app_panes;
 mod app_views;
 mod automation_runs;
@@ -596,7 +596,7 @@ pub(crate) struct Shell {
     /// What every window shares; `None` only before the window joins it.
     app_core: Option<Entity<app_core::AppCore>>,
     preparing_sessions: Arc<std::sync::atomic::AtomicUsize>,
-    vorkspace_baseline: Vec<crate::workspace::VorkspaceDef>,
+    vorkspace_baseline: Arc<Vec<crate::workspace::VorkspaceDef>>,
     window_layout: u64,
     window_shared: Option<Arc<windows::WindowShared>>,
     window_closing: bool,
@@ -946,7 +946,7 @@ impl Shell {
             vorkspace_dialog: None,
             app_core: None,
             preparing_sessions: Default::default(),
-            vorkspace_baseline: Vec::new(),
+            vorkspace_baseline: Arc::default(),
             window_layout: window_layout
                 .unwrap_or_else(|| app_core.update(cx, |core, _| core.allocate_window())),
             window_shared,

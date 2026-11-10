@@ -23,7 +23,7 @@ use self::settings_writes::SettingsWrites;
 use super::windows::{WindowLayouts, WindowShared};
 use super::*;
 use crate::{
-    bots::{MembershipChanged, SharedRoster},
+    bots::{MembershipChanged, PreparedRoster, SharedRoster},
     workspace::{VorkspaceDef, move_bot, reconcile_bots},
 };
 use gpui::{AppContext as _, EventEmitter, WeakEntity};
@@ -35,8 +35,44 @@ const AUTOMATION_EVENTS_KEY: &str = "native-automation-inbox-retries";
 #[derive(Default, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 struct Saved {
-    vorkspaces: Vec<VorkspaceDef>,
-    seen_bots: HashSet<String>,
+    vorkspaces: Arc<Vec<VorkspaceDef>>,
+    seen_bots: Arc<HashSet<String>>,
+}
+
+#[derive(Default)]
+pub(crate) struct PreparedCore {
+    saved: Saved,
+    pub(crate) layouts: WindowLayouts,
+    automation_events: HashMap<String, vorkspace_core::inbox::Item>,
+    remote_dir: Option<std::path::PathBuf>,
+    roster: Option<PreparedRoster>,
+}
+
+impl PreparedCore {
+    pub(crate) fn read(store: &vorkspace_core::store::Store, layouts: WindowLayouts) -> Self {
+        let saved = store
+            .setting(STORE_KEY)
+            .ok()
+            .flatten()
+            .and_then(|raw| serde_json::from_str(&raw).ok())
+            .unwrap_or_default();
+        let automation_events = store
+            .setting(AUTOMATION_EVENTS_KEY)
+            .ok()
+            .flatten()
+            .and_then(|raw| serde_json::from_str::<Vec<vorkspace_core::inbox::Item>>(&raw).ok())
+            .unwrap_or_default()
+            .into_iter()
+            .map(|item| (item.key(), item))
+            .collect();
+        Self {
+            saved,
+            layouts,
+            automation_events,
+            remote_dir: store.data_dir().map(std::path::Path::to_path_buf),
+            roster: Some(PreparedRoster::read(store)),
+        }
+    }
 }
 
 pub(crate) struct AppCore {
@@ -44,8 +80,8 @@ pub(crate) struct AppCore {
     writes: Arc<SettingsWrites>,
     settings_flush: Option<gpui::Task<()>>,
     settings_flush_again: bool,
-    pub(crate) vorkspaces: Vec<VorkspaceDef>,
-    pub(crate) seen_bots: HashSet<String>,
+    pub(crate) vorkspaces: Arc<Vec<VorkspaceDef>>,
+    pub(crate) seen_bots: Arc<HashSet<String>>,
     pub(super) bot_roster: Entity<SharedRoster>,
     pub(super) layouts: WindowLayouts,
     next_window_id: u64,
@@ -106,31 +142,28 @@ impl AppCore {
         if let Some(core) = cx.try_global::<Installed>().and_then(|i| i.0.get(&key)) {
             return core.clone();
         }
-        let (saved, layouts, automation_events, remote_dir) = locked(store)
-            .map(|db| {
-                let saved: Saved = db
-                    .setting(STORE_KEY)
-                    .ok()
-                    .flatten()
-                    .and_then(|json| serde_json::from_str(&json).ok())
-                    .unwrap_or_default();
-                (
-                    saved,
-                    WindowLayouts::load(&db),
-                    db.setting(AUTOMATION_EVENTS_KEY)
-                        .ok()
-                        .flatten()
-                        .and_then(|raw| {
-                            serde_json::from_str::<Vec<vorkspace_core::inbox::Item>>(&raw).ok()
-                        })
-                        .unwrap_or_default()
-                        .into_iter()
-                        .map(|item| (item.key(), item))
-                        .collect(),
-                    db.data_dir().map(std::path::Path::to_path_buf),
-                )
-            })
+        let prepared = locked(store)
+            .map(|db| PreparedCore::read(&db, WindowLayouts::load(&db)))
             .unwrap_or_default();
+        Self::install(store, prepared, cx)
+    }
+
+    pub(crate) fn install(
+        store: &Database,
+        prepared: PreparedCore,
+        cx: &mut App,
+    ) -> Entity<AppCore> {
+        let key = store_key(store);
+        if let Some(core) = cx.try_global::<Installed>().and_then(|i| i.0.get(&key)) {
+            return core.clone();
+        }
+        let PreparedCore {
+            saved,
+            layouts,
+            automation_events,
+            remote_dir,
+            roster,
+        } = prepared;
         let next_window_id = layouts
             .entries
             .iter()
@@ -159,7 +192,10 @@ impl AppCore {
             })
         })
         .detach();
-        let bot_roster = SharedRoster::install(store.clone(), cx);
+        let bot_roster = match roster {
+            Some(roster) => SharedRoster::install_prepared(store.clone(), roster, cx),
+            None => SharedRoster::install(store.clone(), cx),
+        };
         let checkouts = cx.new(|_| crate::git_status::CheckoutCatalog::default());
         let core = cx.new(|cx: &mut Context<AppCore>| {
             cx.subscribe(&bot_roster, |core, _, event: &MembershipChanged, cx| {
@@ -207,7 +243,12 @@ impl AppCore {
     fn reconcile_bots(&mut self, destination: &str, ids: &[String], cx: &mut Context<Self>) {
         let mut defs = self.vorkspaces.clone();
         let mut seen = self.seen_bots.clone();
-        if reconcile_bots(&mut defs, &mut seen, destination, ids) {
+        if reconcile_bots(
+            Arc::make_mut(&mut defs).as_mut_slice(),
+            Arc::make_mut(&mut seen),
+            destination,
+            ids,
+        ) {
             self.publish(&defs, &seen, cx);
         }
     }
@@ -220,14 +261,15 @@ impl AppCore {
         cx: &mut Context<Self>,
     ) {
         let mut defs = self.vorkspaces.clone();
-        let Some(destination) = defs.iter_mut().find(|def| def.id == vorkspace) else {
+        let mutable = Arc::make_mut(&mut defs);
+        let Some(destination) = mutable.iter_mut().find(|def| def.id == vorkspace) else {
             return;
         };
         if add {
             if !self.seen_bots.contains(bot) {
                 return;
             }
-            move_bot(&mut defs, vorkspace, bot);
+            move_bot(mutable, vorkspace, bot);
         } else {
             destination.bots.retain(|id| id != bot);
         }
@@ -240,7 +282,8 @@ impl AppCore {
         edited: &[VorkspaceDef],
         cx: &mut Context<Self>,
     ) {
-        let mut defs = self.vorkspaces.clone();
+        let mut definitions = self.vorkspaces.clone();
+        let defs = Arc::make_mut(&mut definitions);
         for def in edited {
             match before.iter().find(|base| base.id == def.id) {
                 Some(base) => {
@@ -262,27 +305,26 @@ impl AppCore {
         if defs.iter().any(|def| !deleted(&def.id)) {
             defs.retain(|def| !deleted(&def.id));
         }
-        self.publish(&defs, &self.seen_bots.clone(), cx);
+        self.publish(&definitions, &self.seen_bots.clone(), cx);
     }
 
     /// Replaces the shared definitions when a window changed them.
     fn publish(
         &mut self,
-        vorkspaces: &[VorkspaceDef],
-        seen: &HashSet<String>,
+        vorkspaces: &Arc<Vec<VorkspaceDef>>,
+        seen: &Arc<HashSet<String>>,
         cx: &mut Context<Self>,
     ) {
-        if self.vorkspaces == vorkspaces && &self.seen_bots == seen {
+        if &self.vorkspaces == vorkspaces && &self.seen_bots == seen {
             return;
         }
-        self.vorkspaces = vorkspaces.to_vec();
-        self.seen_bots = seen.clone();
-        let json = serde_json::to_string(&Saved {
+        self.vorkspaces.clone_from(vorkspaces);
+        self.seen_bots.clone_from(seen);
+        self.writes.stage_definitions(Saved {
             vorkspaces: self.vorkspaces.clone(),
             seen_bots: self.seen_bots.clone(),
-        })
-        .expect("vorkspace definitions serialize to JSON");
-        self.stage_settings([(STORE_KEY, json)], cx);
+        });
+        self.flush_settings(cx);
         self.reconcile_remote_projects(cx);
         cx.notify();
     }
@@ -505,19 +547,20 @@ impl Shell {
         core.bridge.as_ref().map(|bridge| bridge.environment(id))
     }
 
-    /// Copies the shared definitions in; returns whether anything changed.
+    /// Adopt the app's immutable definitions and discard the local edit copy.
     fn take_shared_vorkspaces(&mut self, core: &Entity<AppCore>, cx: &App) -> bool {
         let core = core.read(cx);
+        let same_definitions = Arc::ptr_eq(&self.workspace.vorkspaces, &core.vorkspaces)
+            || self.workspace.vorkspaces == core.vorkspaces;
+        let same_membership = Arc::ptr_eq(&self.workspace.seen_bots, &core.seen_bots)
+            || self.workspace.seen_bots == core.seen_bots;
         self.vorkspace_baseline.clone_from(&core.vorkspaces);
-        if self.workspace.vorkspaces == core.vorkspaces
-            && self.workspace.seen_bots == core.seen_bots
-        {
-            return false;
+        self.workspace.vorkspaces.clone_from(&core.vorkspaces);
+        self.workspace.seen_bots.clone_from(&core.seen_bots);
+        if !same_definitions || !same_membership {
+            self.workspace.ensure_vorkspaces();
         }
-        self.workspace.vorkspaces = core.vorkspaces.clone();
-        self.workspace.seen_bots = core.seen_bots.clone();
-        self.workspace.ensure_vorkspaces();
-        true
+        !same_definitions || !same_membership
     }
 
     fn reconcile_after_shared_change(&mut self, cx: &mut Context<Self>) {
@@ -599,7 +642,9 @@ impl Shell {
         let Some(core) = self.app_core.clone() else {
             return;
         };
-        if self.workspace.vorkspaces != self.vorkspace_baseline {
+        if !Arc::ptr_eq(&self.workspace.vorkspaces, &self.vorkspace_baseline)
+            && self.workspace.vorkspaces != self.vorkspace_baseline
+        {
             core.update(cx, |core, cx| {
                 core.apply_window_edits(&self.vorkspace_baseline, &self.workspace.vorkspaces, cx);
             });
