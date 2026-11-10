@@ -1,6 +1,5 @@
 //! Local meeting documents, transcript storage, and summary generation.
 use serde::{Deserialize, Serialize};
-use serde_json::{Value, json};
 use std::{
     ffi::OsStr,
     fmt::Write as _,
@@ -14,9 +13,9 @@ mod draft;
 mod summary;
 pub use catalog::NoteCandidate;
 use draft::Receipt;
-pub use draft::{DraftWrite, EditLease};
-pub use summary::{DEFAULT_PROMPT, Settings, Summary};
-use summary::{MAX_SETTINGS_BYTES, MAX_SUMMARY_BYTES};
+pub use draft::{Draft, DraftView, DraftWrite, EditLease};
+use summary::MAX_SETTINGS_BYTES;
+pub use summary::{DEFAULT_PROMPT, MAX_SUMMARY_BYTES, Settings, Summary};
 pub mod recording;
 use recording::{State, Transcript, atomic_json, read_json};
 const MAX_TITLE_CHARS: usize = 200;
@@ -27,7 +26,7 @@ pub const MAX_EDIT_MESSAGE_BYTES: usize =
 // The canonical document also includes provider and model values, whose
 // encoded size is bounded by the settings reader.
 const LIMIT: usize = MAX_EDIT_MESSAGE_BYTES + MAX_SETTINGS_BYTES;
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Meeting {
     pub id: String,
     pub title: String,
@@ -69,13 +68,16 @@ impl Meeting {
     }
 }
 
-#[derive(Serialize)]
-struct Document {
-    meeting: Meeting,
-    state: State,
-    transcript: String,
-    segments: Vec<recording::Segment>,
-    sequence: u64,
+/// A consistent editor read. The checkpoint version can also identify a
+/// consumed or discarded draft.
+#[derive(Debug, PartialEq)]
+pub struct Snapshot {
+    pub meeting: Meeting,
+    pub state: State,
+    pub transcript: String,
+    pub sequence: u64,
+    pub draft: Option<Draft>,
+    pub draft_version: Option<String>,
 }
 
 fn named(title: &str, title_set: bool) -> bool {
@@ -144,15 +146,6 @@ impl Drop for Lock {
         let _ = unsafe { libc::flock(self.0.as_raw_fd(), libc::LOCK_UN) };
     }
 }
-fn decode<T: serde::de::DeserializeOwned>(value: Value) -> Result<T, String> {
-    serde_json::from_value(value).map_err(|e| e.to_string())
-}
-fn value(value: impl Serialize) -> Result<Value, String> {
-    serde_json::to_value(value).map_err(|e| e.to_string())
-}
-fn required<'a>(params: &'a Value, key: &str) -> Result<&'a str, String> {
-    params[key].as_str().ok_or_else(|| format!("Missing {key}"))
-}
 impl Meetings {
     fn metadata_path(&self, id: &str) -> Result<PathBuf, String> {
         if !valid_id(id) {
@@ -173,14 +166,11 @@ impl Meetings {
     fn save(&self, meeting: &Meeting) -> Result<(), String> {
         atomic_json(&self.metadata_path(&meeting.id)?, meeting)
     }
-    pub fn read(&self, id: &str) -> Result<Value, String> {
-        value(self.document(id)?)
-    }
-    fn document(&self, id: &str) -> Result<Document, String> {
+    pub fn read(&self, id: &str) -> Result<Snapshot, String> {
         let _lock = self.lock()?;
         self.read_document(self.metadata(id)?)
     }
-    fn read_document(&self, mut meeting: Meeting) -> Result<Document, String> {
+    fn read_document(&self, mut meeting: Meeting) -> Result<Snapshot, String> {
         let transcript = recording::read(&self.directory, &meeting.id)?;
         let last = transcript.sequence();
         meeting.adopt_sequence(last)?;
@@ -199,28 +189,21 @@ impl Meetings {
             }
             None => transcript_markdown(&transcript),
         };
-        Ok(Document {
+        Ok(Snapshot {
             meeting,
             state: transcript.state,
             transcript: text,
-            segments: transcript.segments,
             sequence: last,
+            draft: None,
+            draft_version: None,
         })
-    }
-    pub fn update(&self, params: &Value) -> Result<Value, String> {
-        let id = required(params, "id")?;
-        let _lock = self.lock()?;
-        self.update_locked(self.metadata(id)?, params, None)
     }
     fn update_locked(
         &self,
         mut meeting: Meeting,
-        params: &Value,
+        draft: Draft,
         applied_draft: Option<String>,
-    ) -> Result<Value, String> {
-        let expected = params["revision"]
-            .as_u64()
-            .ok_or("Missing meeting revision")?;
+    ) -> Result<Meeting, String> {
         let transcript = recording::read(&self.directory, &meeting.id)?;
         meeting.adopt_sequence(transcript.sequence())?;
         let blank_checkpoint = applied_draft.is_some()
@@ -232,33 +215,25 @@ impl Meetings {
                 meeting.override_sequence,
             )
             && meeting.summary.is_none();
-        if meeting.revision != expected {
+        if meeting.revision != draft.revision {
             return Err("This meeting changed in another view. Reload before saving.".into());
         }
-        if let Some(title) = params["title"].as_str() {
+        if let Some(title) = draft.title {
             if title.chars().count() > MAX_TITLE_CHARS {
                 return Err("Meeting title must be 200 characters or fewer".into());
             }
             meeting.title = title.trim().into();
             meeting.title_set = !meeting.title.is_empty();
         }
-        if params.get("transcript").is_some() {
+        if let Some(text) = draft.transcript {
             if transcript.state.phase.active() {
                 return Err("Stop recording before editing its transcript".into());
             }
-            let text = if params["transcript"].is_null() {
-                None
-            } else {
-                Some(required(params, "transcript")?.to_owned())
-            };
-            if text
-                .as_ref()
-                .is_some_and(|text| text.len() > recording::MAX_TRANSCRIPT)
-            {
+            if text.len() > recording::MAX_TRANSCRIPT {
                 return Err("Transcript is too large".into());
             }
-            meeting.override_sequence = text.as_ref().map(|_| transcript.sequence());
-            meeting.transcript_override = text;
+            meeting.override_sequence = Some(transcript.sequence());
+            meeting.transcript_override = Some(text.to_string());
             meeting.transcript_revision += 1;
         }
         if !blank_checkpoint
@@ -272,14 +247,14 @@ impl Meetings {
         {
             return Err("Enter a title or transcript before saving this meeting.".into());
         }
-        if let Some(text) = params["summary"].as_str() {
+        if let Some(text) = draft.summary {
             if text.len() > MAX_SUMMARY_BYTES {
                 return Err("Summary is too large".into());
             }
             let Some(summary) = &mut meeting.summary else {
                 return Err("Generate a summary first".into());
             };
-            summary.text = text.into();
+            summary.text = text.to_string();
         }
         meeting.revision += 1;
         if let Some(token) = applied_draft {
@@ -289,7 +264,7 @@ impl Meetings {
             });
         }
         self.save(&meeting)?;
-        value(meeting)
+        Ok(meeting)
     }
     pub fn delete(&self, id: &str, expected_revision: u64) -> Result<(), String> {
         self.delete_with_commit(id, Some(expected_revision), || Ok(()))

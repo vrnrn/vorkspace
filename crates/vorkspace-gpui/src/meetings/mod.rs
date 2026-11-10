@@ -101,7 +101,12 @@ impl Page {
             vorkspace_meetings::recording::MAX_TRANSCRIPT,
             cx,
         );
-        let summary = Self::editor("Summary Markdown", "summary.md", 64 * 1024, cx);
+        let summary = Self::editor(
+            "Summary Markdown",
+            "summary.md",
+            vorkspace_meetings::MAX_SUMMARY_BYTES,
+            cx,
+        );
         let subscriptions = vec![
             cx.subscribe(&transcript, |this, _, _: &input::Changed, cx| {
                 this.edit(Field::Transcript, cx)

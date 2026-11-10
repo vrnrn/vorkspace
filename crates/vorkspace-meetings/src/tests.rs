@@ -1,6 +1,7 @@
 use super::summary::{SUMMARY_OUTPUT_INSTRUCTIONS, chunks};
 use super::*;
 use recording::Owner;
+use serde_json::json;
 use std::sync::atomic::{AtomicBool, Ordering};
 fn saved(directory: &Path) -> (Meetings, String) {
     let service = Meetings {
@@ -39,10 +40,33 @@ fn draft_write(
     revision: u64,
     title: &str,
 ) -> DraftWrite {
-    DraftWrite::from_params(json!({
-        "id": id, "expected": expected, "version": version,
-        "draft": {"revision": revision, "title": title, "view": "transcript", "title_focused": true, "start": 0, "end": 0}
-    })).unwrap()
+    DraftWrite::new(
+        id.into(),
+        expected.map(str::to_owned),
+        version.into(),
+        Draft {
+            revision,
+            title: Some(title.into()),
+            title_focused: true,
+            ..Draft::default()
+        },
+    )
+    .unwrap()
+}
+
+fn update(
+    meetings: &Meetings,
+    id: &str,
+    revision: u64,
+    edit: impl FnOnce(&mut Draft),
+) -> Result<Meeting, String> {
+    let mut draft = Draft {
+        revision,
+        ..Draft::default()
+    };
+    edit(&mut draft);
+    let _lock = meetings.lock()?;
+    meetings.update_locked(meetings.metadata(id)?, draft, None)
 }
 
 #[test]
@@ -52,15 +76,16 @@ fn resumed_takes_keep_corrected_text_and_invalidate_a_prior_summary() {
     let root = tempfile::tempdir().unwrap();
     let (meetings, id) = saved(root.path());
     let correction = "Corrected: we agreed to ship on Thursday. 🦊";
-    meetings
-        .update(&json!({"id":id,"revision":0,"transcript":correction}))
-        .unwrap();
+    update(&meetings, &id, 0, |draft| {
+        draft.transcript = Some(correction.into())
+    })
+    .unwrap();
     let summary = meetings
         .summarize(&id, &AtomicBool::new(false), |_, _| {
             Ok("Prior summary".into())
         })
         .unwrap();
-    assert_eq!(summary["meeting"]["summary"]["source_revision"], 1);
+    assert_eq!(summary.meeting.summary.as_ref().unwrap().source_revision, 1);
 
     let mut first = meetings
         .start_recording(&id, "take-one", None, CaptureSource::Microphone)
@@ -80,22 +105,28 @@ fn resumed_takes_keep_corrected_text_and_invalidate_a_prior_summary() {
     drop(first);
 
     let document = meetings.read(&id).unwrap();
-    let text = document["transcript"].as_str().unwrap();
+    let text = document.transcript.as_str();
     assert!(text.starts_with(&format!("{correction}\n\n")));
     assert!(text.ends_with("New detail."));
     assert!(!text.contains("Sam owns the release"));
-    assert_eq!(document["meeting"]["summary"]["text"], "Prior summary");
-    assert_eq!(document["meeting"]["transcript_revision"], 2);
-    assert_eq!(document["meeting"]["summary"]["source_revision"], 1);
+    assert_eq!(
+        document.meeting.summary.as_ref().unwrap().text,
+        "Prior summary"
+    );
+    assert_eq!(document.meeting.transcript_revision, 2);
+    assert_eq!(
+        document.meeting.summary.as_ref().unwrap().source_revision,
+        1
+    );
     assert!(
         meetings
             .start_recording(&id, "take-one", None, CaptureSource::Microphone)
             .is_err()
     );
     assert!(
-        meetings
-            .update(&json!({"id":id,"revision":2,"transcript":"Stale edit"}))
-            .is_err()
+        update(&meetings, &id, 2, |draft| draft.transcript =
+            Some("Stale edit".into()))
+        .is_err()
     );
 
     // A take admitted while a model is running invalidates its publication,
@@ -109,19 +140,19 @@ fn resumed_takes_keep_corrected_text_and_invalidate_a_prior_summary() {
                 CaptureSource::MicrophoneAndSystem,
             )
             .unwrap();
-        assert_eq!(
-            second.state.started_at,
-            document["state"]["started_at"].as_u64().unwrap()
-        );
+        assert_eq!(second.state.started_at, document.state.started_at);
         second.phase(Phase::Stopped, None).unwrap();
         Ok("Superseded output".into())
     });
     assert!(result.is_err());
     let recovered = meetings.read(&id).unwrap();
-    assert_eq!(recovered["transcript"], document["transcript"]);
-    assert_eq!(recovered["meeting"]["transcript_revision"], 2);
-    assert_eq!(recovered["meeting"]["summary"]["text"], "Prior summary");
-    assert_eq!(recovered["state"]["run"], "take-two");
+    assert_eq!(recovered.transcript, document.transcript);
+    assert_eq!(recovered.meeting.transcript_revision, 2);
+    assert_eq!(
+        recovered.meeting.summary.as_ref().unwrap().text,
+        "Prior summary"
+    );
+    assert_eq!(recovered.state.run.as_deref(), Some("take-two"));
 }
 
 #[test]
@@ -134,19 +165,15 @@ fn unrecorded_blank_checkpoints_and_empty_takes_stay_out_of_history() {
     assert!(meetings.read(id).is_err());
     meetings.prepare_document(id).unwrap();
     let dormant = meetings.open_document(id).unwrap();
-    assert_eq!(dormant["meeting"]["title"], "");
-    assert_eq!(dormant["state"]["started_at"], 0);
+    assert_eq!(dormant.meeting.title, "");
+    assert_eq!(dormant.state.started_at, 0);
     assert!(
         meetings
             .note_candidates(&Default::default())
             .unwrap()
             .is_empty()
     );
-    assert!(
-        meetings
-            .update(&json!({"id":id,"revision":0,"title":""}))
-            .is_err()
-    );
+    assert!(update(&meetings, id, 0, |draft| draft.title = Some("".into())).is_err());
 
     let first = "a".repeat(32);
     meetings
@@ -190,14 +217,15 @@ fn unrecorded_blank_checkpoints_and_empty_takes_stay_out_of_history() {
             .unwrap()
             .is_empty()
     );
-    meetings
-        .update(&json!({"id":id,"revision":1,"transcript":"Typed notes"}))
-        .unwrap();
+    update(&meetings, id, 1, |draft| {
+        draft.transcript = Some("Typed notes".into())
+    })
+    .unwrap();
     assert_eq!(
         meetings.note_candidates(&Default::default()).unwrap()[0].title,
         "Untitled meeting"
     );
-    assert_eq!(meetings.read(id).unwrap()["transcript"], "Typed notes");
+    assert_eq!(meetings.read(id).unwrap().transcript, "Typed notes");
 }
 
 #[test]
@@ -207,9 +235,10 @@ fn a_resumed_take_cannot_overrun_the_corrected_document_limit() {
     let root = tempfile::tempdir().unwrap();
     let (meetings, id) = saved(root.path());
     let text = "x".repeat(recording::MAX_TRANSCRIPT);
-    meetings
-        .update(&json!({"id":id,"revision":0,"transcript":text}))
-        .unwrap();
+    update(&meetings, &id, 0, |draft| {
+        draft.transcript = Some(text.as_str().into())
+    })
+    .unwrap();
     let mut owner = meetings
         .start_recording(&id, "too-long", None, CaptureSource::Microphone)
         .unwrap();
@@ -218,11 +247,8 @@ fn a_resumed_take_cannot_overrun_the_corrected_document_limit() {
             .append("microphone", 0, 20, "A new line".into())
             .is_err()
     );
-    assert_eq!(
-        meetings.read(&id).unwrap()["transcript"].as_str().unwrap(),
-        text
-    );
-    assert_eq!(meetings.read(&id).unwrap()["sequence"], 2);
+    assert_eq!(meetings.read(&id).unwrap().transcript.as_str(), text);
+    assert_eq!(meetings.read(&id).unwrap().sequence, 2);
 }
 
 #[test]
@@ -237,13 +263,17 @@ fn meeting_draft_reopens_without_changing_the_saved_revision() {
 
     let reopened = Meetings::open(root.path()).unwrap();
     let document = reopened.open_document(&id).unwrap();
-    assert_eq!(document["meeting"]["title"], "Planning");
-    assert_eq!(document["meeting"]["revision"], 0);
-    assert_eq!(document["draft"]["title"], "Draft");
-    assert_eq!(document["draft"]["revision"], 0);
-    reopened
-        .update(&json!({"id":id,"revision":0,"title":"Changed elsewhere"}))
-        .unwrap();
+    assert_eq!(document.meeting.title, "Planning");
+    assert_eq!(document.meeting.revision, 0);
+    assert_eq!(
+        document.draft.as_ref().unwrap().title.as_deref().unwrap(),
+        "Draft"
+    );
+    assert_eq!(document.draft.as_ref().unwrap().revision, 0);
+    update(&reopened, &id, 0, |draft| {
+        draft.title = Some("Changed elsewhere".into())
+    })
+    .unwrap();
     assert!(
         reopened
             .save_draft(&id, &version)
@@ -251,9 +281,12 @@ fn meeting_draft_reopens_without_changing_the_saved_revision() {
             .contains("changed")
     );
     let conflicted = reopened.open_document(&id).unwrap();
-    assert_eq!(conflicted["meeting"]["title"], "Changed elsewhere");
-    assert_eq!(conflicted["draft"]["title"], "Draft");
-    assert_eq!(conflicted["draft"]["revision"], 0);
+    assert_eq!(conflicted.meeting.title, "Changed elsewhere");
+    assert_eq!(
+        conflicted.draft.as_ref().unwrap().title.as_deref().unwrap(),
+        "Draft"
+    );
+    assert_eq!(conflicted.draft.as_ref().unwrap().revision, 0);
 }
 
 #[test]
@@ -276,19 +309,27 @@ fn older_draft_writes_and_clears_cannot_replace_newer_input() {
     assert!(meetings.save_draft(&id, older).is_err());
     meetings.discard_draft(&id, older).unwrap();
     assert_eq!(
-        meetings.open_document(&id).unwrap()["draft"]["title"],
+        meetings
+            .open_document(&id)
+            .unwrap()
+            .draft
+            .as_ref()
+            .unwrap()
+            .title
+            .as_deref()
+            .unwrap(),
         "Newest draft"
     );
 
     let checkpoint_path = root.path().join("drafts").join(format!("{id}.json"));
     let checkpoint = std::fs::read(&checkpoint_path).unwrap();
     assert_eq!(
-        meetings.save_draft(&id, newer).unwrap()["title"],
+        meetings.save_draft(&id, newer).unwrap().title,
         "Newest draft"
     );
     // Model a crash after canonical publication and before draft cleanup.
     std::fs::write(checkpoint_path, checkpoint).unwrap();
-    assert!(meetings.open_document(&id).unwrap()["draft"].is_null());
+    assert!(meetings.open_document(&id).unwrap().draft.is_none());
     assert!(meetings.checkpoint_draft(&new_write).is_err());
 
     let next = draft_write(&id, Some(newer), &other, 1, "Next draft");
@@ -311,7 +352,7 @@ fn edit_lease_blocks_a_second_editor_until_the_owner_releases_it() {
     let second = Meetings::open(root.path()).unwrap();
     let lease = meetings.try_edit(&id).unwrap().unwrap();
     assert!(second.try_edit(&id).unwrap().is_none());
-    assert_eq!(second.read(&id).unwrap()["meeting"]["title"], "Planning");
+    assert_eq!(second.read(&id).unwrap().meeting.title, "Planning");
     drop(lease);
     assert!(second.try_edit(&id).unwrap().is_some());
 }
@@ -337,11 +378,21 @@ fn input_arriving_after_commit_advances_only_to_its_own_save_receipt() {
             "During save",
         ))
         .unwrap();
-    assert_eq!(meetings.open_document(&id).unwrap()["draft"]["revision"], 1);
+    assert_eq!(
+        meetings
+            .open_document(&id)
+            .unwrap()
+            .draft
+            .as_ref()
+            .unwrap()
+            .revision,
+        1
+    );
 
-    meetings
-        .update(&json!({"id":id,"revision":1,"title":"External update"}))
-        .unwrap();
+    update(&meetings, &id, 1, |draft| {
+        draft.title = Some("External update".into())
+    })
+    .unwrap();
     meetings
         .checkpoint_draft(&draft_write(
             &id,
@@ -352,9 +403,12 @@ fn input_arriving_after_commit_advances_only_to_its_own_save_receipt() {
         ))
         .unwrap();
     let document = meetings.open_document(&id).unwrap();
-    assert_eq!(document["meeting"]["title"], "External update");
-    assert_eq!(document["draft"]["revision"], 1);
-    assert_eq!(document["draft"]["title"], "Latest edit");
+    assert_eq!(document.meeting.title, "External update");
+    assert_eq!(document.draft.as_ref().unwrap().revision, 1);
+    assert_eq!(
+        document.draft.as_ref().unwrap().title.as_deref().unwrap(),
+        "Latest edit"
+    );
     assert!(meetings.save_draft(&id, latest_version).is_err());
 }
 
@@ -368,22 +422,39 @@ fn escaped_edits_at_raw_limits_reopen_after_save() {
     let version = "b".repeat(32);
     let transcript = "\n".repeat(recording::MAX_TRANSCRIPT);
     let summary = "\u{1}".repeat(MAX_SUMMARY_BYTES);
-    let params = json!({
-        "id": id, "expected": null, "version": version,
-        "draft": {"revision": 1, "transcript": transcript, "summary": summary, "view": "transcript", "title_focused": false, "start": 0, "end": 0}
-    });
-    meetings
-        .checkpoint_draft(&DraftWrite::from_params(params).unwrap())
-        .unwrap();
+    let write = DraftWrite::new(
+        id.clone(),
+        None,
+        version.clone(),
+        Draft {
+            revision: 1,
+            transcript: Some(transcript.as_str().into()),
+            summary: Some(summary.as_str().into()),
+            ..Draft::default()
+        },
+    )
+    .unwrap();
+    meetings.checkpoint_draft(&write).unwrap();
     assert_eq!(
-        meetings.open_document(&id).unwrap()["draft"]["transcript"].as_str(),
+        meetings
+            .open_document(&id)
+            .unwrap()
+            .draft
+            .as_ref()
+            .unwrap()
+            .transcript
+            .as_deref(),
         Some(transcript.as_str())
     );
     meetings.save_draft(&id, &version).unwrap();
     let reopened = meetings.open_document(&id).unwrap();
-    assert_eq!(reopened["transcript"].as_str(), Some(transcript.as_str()));
+    assert_eq!(reopened.transcript, transcript);
     assert_eq!(
-        reopened["meeting"]["summary"]["text"].as_str(),
+        reopened
+            .meeting
+            .summary
+            .as_ref()
+            .map(|summary| summary.text.as_str()),
         Some(summary.as_str())
     );
 }
@@ -405,9 +476,9 @@ fn nested_symlinks_cannot_redirect_meeting_storage() {
         if child == "meetings" {
             assert!(meetings.prepare("Redirected").is_err());
             assert!(
-                meetings
-                    .update(&json!({"id":id,"revision":0,"title":"Redirected"}))
-                    .is_err()
+                update(&meetings, &id, 0, |draft| draft.title =
+                    Some("Redirected".into()))
+                .is_err()
             );
             assert_eq!(
                 meetings.note_candidates(&Default::default()).unwrap()[0].title,
@@ -436,11 +507,12 @@ fn nested_symlinks_cannot_redirect_meeting_storage() {
 fn deleting_checks_the_current_revision_and_prevents_late_publication() {
     let root = tempfile::tempdir().unwrap();
     let (meetings, id) = saved(root.path());
-    meetings
-        .update(&json!({"id":id,"revision":0,"title":"Latest"}))
-        .unwrap();
+    update(&meetings, &id, 0, |draft| {
+        draft.title = Some("Latest".into())
+    })
+    .unwrap();
     assert!(meetings.delete(&id, 0).unwrap_err().contains("changed"));
-    assert_eq!(meetings.read(&id).unwrap()["meeting"]["title"], "Latest");
+    assert_eq!(meetings.read(&id).unwrap().meeting.title, "Latest");
 
     let late = meetings.summarize(&id, &AtomicBool::new(false), |_, _| {
         meetings.delete(&id, 1).unwrap();
@@ -448,9 +520,9 @@ fn deleting_checks_the_current_revision_and_prevents_late_publication() {
     });
     assert!(late.is_err());
     assert!(
-        meetings
-            .update(&json!({"id":id,"revision":1,"title":"Stale"}))
-            .is_err()
+        update(&meetings, &id, 1, |draft| draft.title =
+            Some("Stale".into()))
+        .is_err()
     );
     assert!(meetings.read(&id).is_err());
     assert!(
@@ -510,9 +582,9 @@ fn listing_completes_cleanup_after_a_recording_has_been_retired() {
     std::fs::remove_dir(&retired).unwrap();
     std::fs::rename(&live, &retired).unwrap();
     assert!(
-        meetings
-            .update(&json!({"id":id,"revision":0,"title":"Stale"}))
-            .is_err()
+        update(&meetings, &id, 0, |draft| draft.title =
+            Some("Stale".into()))
+        .is_err()
     );
     assert!(
         meetings
@@ -551,17 +623,18 @@ fn canceled_summary_cannot_publish_generated_text() {
         Ok("Do not publish".into())
     });
     assert!(result.unwrap_err().contains("canceled"));
-    assert_eq!(meetings.read(&id).unwrap()["meeting"]["revision"], 0);
-    assert!(meetings.read(&id).unwrap()["meeting"]["summary"].is_null());
+    assert_eq!(meetings.read(&id).unwrap().meeting.revision, 0);
+    assert!(meetings.read(&id).unwrap().meeting.summary.is_none());
 }
 
 #[test]
 fn meeting_list_excludes_documents_but_reads_keep_saved_content() {
     let root = tempfile::tempdir().unwrap();
     let (meetings, id) = saved(root.path());
-    meetings
-        .update(&json!({"id":id,"revision":0,"transcript":"Edited transcript"}))
-        .unwrap();
+    update(&meetings, &id, 0, |draft| {
+        draft.transcript = Some("Edited transcript".into())
+    })
+    .unwrap();
     meetings
         .summarize(&id, &AtomicBool::new(false), |_, _| {
             Ok("Summary text".into())
@@ -578,8 +651,8 @@ fn meeting_list_excludes_documents_but_reads_keep_saved_content() {
             .is_empty()
     );
     let doc = meetings.read(&id).unwrap();
-    assert_eq!(doc["transcript"], "Edited transcript");
-    assert_eq!(doc["meeting"]["summary"]["text"], "Summary text");
+    assert_eq!(doc.transcript, "Edited transcript");
+    assert_eq!(doc.meeting.summary.as_ref().unwrap().text, "Summary text");
 }
 
 #[test]
@@ -588,7 +661,7 @@ fn built_in_meetings_can_reopen_and_update_legacy_data() {
     let legacy = root.path().join("plugins/meetings/data");
     let (_, id) = saved(&legacy);
     let meetings = Meetings::open(root.path()).unwrap();
-    assert_eq!(meetings.read(&id).unwrap()["meeting"]["title"], "Planning");
+    assert_eq!(meetings.read(&id).unwrap().meeting.title, "Planning");
     let mut settings = meetings.settings().unwrap();
     settings.model = "new-model".into();
     meetings.save_settings(&settings).unwrap();
@@ -639,25 +712,27 @@ fn summary_round_trip_preserves_original_and_uses_selected_model_and_effort() {
         })
         .unwrap();
     assert_eq!(
-        result["meeting"]["summary"]["text"],
+        result.meeting.summary.as_ref().unwrap().text,
         "## Action items\n- Sam: ship Friday."
     );
     assert_eq!(recording::read(&data, &id).unwrap().segments, before);
-    let changed = service
-        .update(&json!({"id":id,"revision":1,"title":"Renamed"}))
-        .unwrap();
+    let changed = update(&service, &id, 1, |draft| {
+        draft.title = Some("Renamed".into())
+    })
+    .unwrap();
     assert_eq!(
-        changed["summary"]["text"],
+        changed.summary.as_ref().unwrap().text,
         "## Action items\n- Sam: ship Friday."
     );
-    assert_eq!(changed["transcript_override"], Value::Null);
+    assert!(changed.transcript_override.is_none());
     let corrected = "## Corrected\n- Keep my wording.";
-    let edited = service
-        .update(&json!({"id":id,"revision":2,"summary":corrected}))
-        .unwrap();
-    assert_eq!(edited["summary"]["text"], corrected);
+    let edited = update(&service, &id, 2, |draft| {
+        draft.summary = Some(corrected.into())
+    })
+    .unwrap();
+    assert_eq!(edited.summary.as_ref().unwrap().text, corrected);
     let reopened = service.read(&id).unwrap();
-    assert_eq!(reopened["meeting"]["summary"]["text"], corrected);
+    assert_eq!(reopened.meeting.summary.as_ref().unwrap().text, corrected);
     assert_eq!(recording::read(&data, &id).unwrap().segments, before);
 }
 #[test]
@@ -685,9 +760,10 @@ fn failed_or_empty_regeneration_preserves_existing_user_edited_notes() {
             Ok("Original notes".into())
         })
         .unwrap();
-    service
-        .update(&json!({"id":id,"revision":1,"summary":"My wording: keep this exactly."}))
-        .unwrap();
+    update(&service, &id, 1, |draft| {
+        draft.summary = Some("My wording: keep this exactly.".into())
+    })
+    .unwrap();
     let before = service.read(&id).unwrap();
     for generated in [Err("Turn failed after final".into()), Ok("  ".into())] {
         let mut generated = Some(generated);
@@ -707,16 +783,17 @@ fn an_edit_during_ai_cannot_be_overwritten_and_failure_retains_the_transcript() 
     let (service, id) = saved(dir.path());
     let error = service
         .summarize(&id, &AtomicBool::new(false), |_, _| {
-            service
-                .update(&json!({"id":id,"revision":0,"transcript":"My corrected transcript"}))
-                .unwrap();
+            update(&service, &id, 0, |draft| {
+                draft.transcript = Some("My corrected transcript".into())
+            })
+            .unwrap();
             Ok("stale".into())
         })
         .unwrap_err();
     assert!(error.contains("changed while"));
     let saved = service.read(&id).unwrap();
-    assert_eq!(saved["transcript"], "My corrected transcript");
-    assert!(saved["meeting"]["summary"].is_null());
+    assert_eq!(saved.transcript, "My corrected transcript");
+    assert!(saved.meeting.summary.is_none());
     assert!(
         service
             .summarize(&id, &AtomicBool::new(false), |_, _| Err(
@@ -725,7 +802,7 @@ fn an_edit_during_ai_cannot_be_overwritten_and_failure_retains_the_transcript() 
             .is_err()
     );
     assert_eq!(
-        service.read(&id).unwrap()["transcript"],
+        service.read(&id).unwrap().transcript,
         "My corrected transcript"
     );
 }
@@ -737,9 +814,10 @@ fn long_inputs_shrink_in_bounded_passes_and_unicode_boundaries_survive() {
     assert!(parts.iter().all(|p| p.len() <= 32 * 1024));
     let dir = tempfile::tempdir().unwrap();
     let (service, id) = saved(dir.path());
-    service
-        .update(&json!({"id":id,"revision":0,"transcript":text}))
-        .unwrap();
+    update(&service, &id, 0, |draft| {
+        draft.transcript = Some(text.into())
+    })
+    .unwrap();
     let mut settings = service.settings().unwrap();
     settings.prompt = "Preserve discussion about battery testing.".into();
     service.save_settings(&settings).unwrap();
@@ -754,5 +832,5 @@ fn long_inputs_shrink_in_bounded_passes_and_unicode_boundaries_survive() {
         })
         .unwrap();
     assert!(calls > 1);
-    assert!(result["meeting"]["summary"].is_object());
+    assert!(result.meeting.summary.is_some());
 }

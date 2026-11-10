@@ -311,9 +311,10 @@ mod tests {
         let next = load(&store).unwrap();
         assert_eq!(next.0, notes);
         assert!(
-            meetings.read(id).unwrap()["transcript"]
-                .as_str()
+            meetings
+                .read(id)
                 .unwrap()
+                .transcript
                 .contains("Taylor owns")
         );
     }
@@ -339,14 +340,13 @@ mod tests {
             draft["title_focused"] = false.into();
             draft["start"] = 0.into();
             draft["end"] = 0.into();
-            let write = vorkspace_meetings::DraftWrite::from_params(serde_json::json!({
-                "id": id,
+            let drafts = meetings.directory.join("drafts");
+            std::fs::create_dir_all(&drafts).unwrap();
+            let slot = serde_json::json!({
                 "version": "0123456789abcdef0123456789abcdef",
-                "expected": null,
                 "draft": draft,
-            }))
-            .unwrap();
-            meetings.checkpoint_draft(&write).unwrap();
+            });
+            std::fs::write(drafts.join(format!("{id}.json")), slot.to_string()).unwrap();
             let (notes, links) = load(&store).unwrap();
             let note_id = links
                 .iter()
@@ -358,7 +358,8 @@ mod tests {
                 assert_eq!(note.title, "My pending title");
             }
             assert!(note.body.is_empty());
-            assert_eq!(meetings.open_document(&id).unwrap()["draft"], draft);
+            let reopened = meetings.open_document(&id).unwrap().draft.unwrap();
+            assert_eq!(serde_json::to_value(reopened).unwrap(), draft);
         }
     }
 }
