@@ -138,17 +138,19 @@ pub fn search(
     let (_runtime, context) = runtime()?;
     let json = context
         .with(|ctx| -> rquickjs::Result<String> {
-            ctx.eval::<(), _>(include_str!("../assets/native-editor.js"))?;
+            ctx.eval::<(), _>(include_str!("../assets/native-search.js"))?;
             let function: Function = ctx.globals().get("vorkspaceSearch")?;
             function.call((source, query, replacement, case, word, regex))
         })
         .map_err(|e| e.to_string())?;
     let mut result: SearchResult = serde_json::from_str(&json).map_err(|e| e.to_string())?;
     // Convert all positions in one pass, including large replace-all results.
-    let offsets = byte_offsets(source);
-    for m in &mut result.matches {
-        m.from = offsets[m.from.min(offsets.len() - 1)];
-        m.to = offsets[m.to.min(offsets.len() - 1)];
+    if !result.matches.is_empty() {
+        let offsets = byte_offsets(source);
+        for m in &mut result.matches {
+            m.from = offsets[m.from.min(offsets.len() - 1)];
+            m.to = offsets[m.to.min(offsets.len() - 1)];
+        }
     }
     Ok(result)
 }
@@ -206,13 +208,9 @@ fn transform(
         .with(|ctx| -> rquickjs::Result<String> {
             ctx.eval::<(), _>(bundle)?;
             let function: Function = ctx.globals().get(name)?;
-            if name == "vorkspaceFormat" || name == "vorkspaceEmmet" {
-                function
-                    .call::<_, Promise>((path, source, utf16(source, at)))?
-                    .finish()
-            } else {
-                function.call((path, source, utf16(source, at)))
-            }
+            function
+                .call::<_, Promise>((path, source, utf16(source, at)))?
+                .finish()
         })
         .map_err(|e| e.to_string())?;
     let mut result: Option<Formatted> = serde_json::from_str(&json).map_err(|e| e.to_string())?;

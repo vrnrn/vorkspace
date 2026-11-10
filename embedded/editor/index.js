@@ -1,9 +1,8 @@
-// The editor's parsers, completions, folding and search run without a DOM
+// The editor's parsers, completions and folding run without a DOM
 // in a bounded QuickJS worker. All offsets at this boundary are UTF-16.
 import { EditorState, Text } from "@codemirror/state";
 import { ensureSyntaxTree, foldable, syntaxTree } from "@codemirror/language";
 import { CompletionContext, completeFromList } from "@codemirror/autocomplete";
-import { SearchQuery } from "@codemirror/search";
 import { highlightTree } from "@lezer/highlight";
 import {
   languageForPath,
@@ -196,37 +195,6 @@ globalThis.vorkspaceEmmet = async (path, source, pos) => {
     },
   });
   return JSON.stringify(result);
-};
-globalThis.vorkspaceSearch = (
-  source,
-  query,
-  replacement,
-  caseSensitive,
-  wholeWord,
-  regexp,
-) => {
-  const state = EditorState.create({ doc: source });
-  const search = new SearchQuery({
-    search: query,
-    replace: replacement,
-    caseSensitive,
-    wholeWord,
-    regexp,
-    literal: true,
-  });
-  if (!search.valid) return JSON.stringify({ matches: [], invalid: !!query });
-  const cursor = search.getCursor(state);
-  const matches = [];
-  while (!cursor.next().done) {
-    const { from, to } = cursor.value;
-    if (to > from)
-      matches.push({
-        from,
-        to,
-        insert: search.create().getReplacement(cursor.value),
-      });
-  }
-  return JSON.stringify({ matches, invalid: false });
 };
 globalThis.vorkspaceChunkAction = (original, current, pos, start, end, stage) =>
   JSON.stringify(

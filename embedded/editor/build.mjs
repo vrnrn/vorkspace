@@ -36,6 +36,12 @@ await build({
   entryPoints: ["format.js"],
   outfile: asset.replace("native-editor.js", "native-format.js"),
 });
+const searchAsset = asset.replace("native-editor.js", "native-search.js");
+await build({
+  ...options,
+  entryPoints: ["search.js"],
+  outfile: searchAsset,
+});
 // No DOM, Node or external services are available in the native interpreter.
 const sandbox = vm.createContext({});
 vm.runInContext(await readFile(asset, "utf8"), sandbox);
@@ -73,8 +79,10 @@ const completion = JSON.parse(
 );
 if (!completion.some((option) => option.label === "const"))
   throw new Error("Completion smoke check failed");
+const searcher = vm.createContext({});
+vm.runInContext(await readFile(searchAsset, "utf8"), searcher);
 const search = JSON.parse(
-  sandbox.vorkspaceSearch("hello HELLO", "(hello)", "$1!", false, false, true),
+  searcher.vorkspaceSearch("hello HELLO", "(hello)", "$1!", false, false, true),
 );
 if (search.matches.length !== 2 || search.matches[0].insert !== "hello!")
   throw new Error("Search smoke check failed");
