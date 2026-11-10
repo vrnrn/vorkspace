@@ -677,11 +677,8 @@ impl Shell {
                             );
                         }
                     }
-                    let snapshot = vorkspace_core::git::snapshot(Path::new(&worker_cwd))?;
-                    let main = snapshot
-                        .worktrees
-                        .first()
-                        .ok_or("No main working copy found")?;
+                    let trees = vorkspace_core::git::worktrees(Path::new(&worker_cwd))?;
+                    let main = trees.first().ok_or("No main working copy found")?;
                     let paths = locked(&store)?.worktree_paths_for_removal(&worker_path)?;
                     guard.include_aliases(&paths);
                     if safe {

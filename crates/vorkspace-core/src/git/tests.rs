@@ -1,5 +1,62 @@
 use super::*;
 #[test]
+fn snapshot_uses_checkout_identity_and_rejects_metadata_directories() {
+    let temp = tempfile::tempdir().unwrap();
+    let cwd = temp.path().join("project");
+    let nested = cwd.join("src/deep");
+    std::fs::create_dir_all(&nested).unwrap();
+    git(&cwd, &["init", "-b", "main"]).unwrap();
+    let unborn = snapshot(&nested).unwrap();
+    assert_eq!(unborn.current.as_deref(), Some("main"));
+    assert!(!unborn.detached && !unborn.linked);
+    assert!(unborn.branches.is_empty());
+    git(
+        &cwd,
+        &[
+            "-c",
+            "user.name=Native test",
+            "-c",
+            "user.email=native@example.invalid",
+            "-c",
+            "commit.gpgsign=false",
+            "commit",
+            "--allow-empty",
+            "-m",
+            "Initial",
+        ],
+    )
+    .unwrap();
+    git(&cwd, &["tag", "main"]).unwrap();
+    let attached = snapshot(&nested).unwrap();
+    assert_eq!(attached.current.as_deref(), Some("main"));
+    assert!(!attached.detached && !attached.linked);
+    assert_eq!(attached.branches.len(), 1);
+    #[cfg(unix)]
+    {
+        let alias = temp.path().join("alias");
+        std::os::unix::fs::symlink(&nested, &alias).unwrap();
+        let state = snapshot(&alias).unwrap();
+        assert_eq!(state.current, attached.current);
+        assert_eq!(state.worktrees[0].path, attached.worktrees[0].path);
+        assert!(!state.linked);
+    }
+    for metadata in [cwd.join(".git"), cwd.join(".git/objects")] {
+        assert!(snapshot(&metadata).is_err());
+    }
+    let bare = temp.path().join("bare.git");
+    std::fs::create_dir(&bare).unwrap();
+    git(&bare, &["init", "--bare"]).unwrap();
+    assert!(snapshot(&bare).is_err());
+    git(&cwd, &["switch", "--detach", "HEAD"]).unwrap();
+    git(&cwd, &["config", "core.abbrev", "11"]).unwrap();
+    let detached = snapshot(&nested).unwrap();
+    let expected = git(&cwd, &["rev-parse", "--short", "HEAD"]).unwrap();
+    assert!(detached.detached && !detached.linked);
+    assert_eq!(detached.current.as_deref(), Some(expected.trim()));
+    assert_eq!(expected.trim().len(), 11);
+}
+
+#[test]
 fn remote_selection_reuses_only_its_tracking_branch_and_preserves_work() {
     let temp = tempfile::tempdir().unwrap();
     let cwd = temp.path().join("project");

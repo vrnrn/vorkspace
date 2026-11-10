@@ -67,12 +67,7 @@ pub fn is_being_removed(path: &str) -> bool {
         .flatten()
         .any(|root| crate::files::is_resolved_inside(path, root))
 }
-pub fn default_root(main: &Path) -> PathBuf {
-    main.with_file_name(format!(
-        "{}-worktrees",
-        main.file_name().unwrap_or_default().to_string_lossy()
-    ))
-}
+pub use crate::git::default_worktree_root as default_root;
 /// What removing a worktree would cost. Settings and the app actions share this,
 /// so a Bot can never remove something the UI would warn about.
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -215,8 +210,7 @@ fn checked_assessment(
 ) -> Result<(crate::git::Worktree, Assessment), String> {
     let canonical = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
     let key = crate::files::path_key(&canonical.to_string_lossy());
-    let tree = crate::git::snapshot(cwd)?
-        .worktrees
+    let tree = crate::git::worktrees(cwd)?
         .into_iter()
         .find(|t| {
             let canonical = Path::new(&t.path)
@@ -274,7 +268,7 @@ pub fn describe(
 ) -> Result<serde_json::Value, String> {
     let remote = crate::files::remote::is_remote(project);
     let mut rows = Vec::new();
-    for tree in crate::git::snapshot(project)?.worktrees {
+    for tree in crate::git::worktrees(project)? {
         let mut row = serde_json::json!({
             "path": tree.path, "branch": tree.branch, "head": tree.head, "main": tree.main,
         });

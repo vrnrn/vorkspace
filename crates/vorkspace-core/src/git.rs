@@ -52,22 +52,39 @@ pub fn snapshot(cwd: &Path) -> Result<Snapshot, String> {
     if crate::files::remote::is_remote(cwd) {
         return remote::snapshot(cwd);
     }
-    let root = git(cwd, &["rev-parse", "--show-toplevel"])?;
-    let current = git(cwd, &["symbolic-ref", "--short", "HEAD"])
-        .ok()
-        .map(|s| s.trim().to_owned());
+    let trees = worktrees(cwd)?;
+    let canonical = std::fs::canonicalize(cwd).unwrap_or_else(|_| cwd.to_owned());
+    let working_copy = trees
+        .iter()
+        .filter_map(|tree| {
+            let root = std::fs::canonicalize(&tree.path).ok()?;
+            (canonical.starts_with(&root)
+                && !canonical.starts_with(root.join(".git"))
+                && !tree.head.is_empty())
+            .then_some((root, tree))
+        })
+        .max_by_key(|(root, _)| root.components().count());
+    let (current, linked) = if let Some((_, tree)) = working_copy {
+        (tree.branch.clone(), !tree.main)
+    } else {
+        // Custom Git layouts can put the checkout outside its registered path.
+        // Git must also reject bare repositories and its own metadata directory.
+        let root = git(cwd, &["rev-parse", "--show-toplevel"])?;
+        let root = std::fs::canonicalize(root.trim()).unwrap_or(canonical);
+        let current = git(cwd, &["symbolic-ref", "--short", "HEAD"])
+            .ok()
+            .map(|s| s.trim().to_owned());
+        let linked = trees
+            .iter()
+            .any(|t| !t.main && std::fs::canonicalize(&t.path).ok().as_ref() == Some(&root));
+        (current, linked)
+    };
     let detached = current.is_none();
     let current = current.or_else(|| {
         git(cwd, &["rev-parse", "--short", "HEAD"])
             .ok()
             .map(|s| s.trim().to_owned())
     });
-    let trees = worktrees(cwd)?;
-    let canonical = std::fs::canonicalize(cwd).unwrap_or_else(|_| cwd.to_owned());
-    let root = std::fs::canonicalize(root.trim()).unwrap_or(canonical);
-    let linked = trees
-        .iter()
-        .any(|t| !t.main && std::fs::canonicalize(&t.path).ok().as_ref() == Some(&root));
     let branches = git(
         cwd,
         &[
@@ -126,6 +143,12 @@ pub fn worktrees(cwd: &Path) -> Result<Vec<Worktree>, String> {
         }
     }
     Ok(trees)
+}
+pub fn default_worktree_root(main: &Path) -> PathBuf {
+    main.with_file_name(format!(
+        "{}-worktrees",
+        main.file_name().unwrap_or_default().to_string_lossy()
+    ))
 }
 fn valid_branch(cwd: &Path, name: &str) -> Result<(), String> {
     if name.is_empty() || name.starts_with(['-', '@']) {
@@ -186,13 +209,10 @@ pub fn create_worktree(cwd: &Path, base: &str, session: i64) -> Result<PathBuf, 
         )
         .map(|tree| PathBuf::from(tree.path));
     }
-    let state = snapshot(cwd)?;
-    let main = state.worktrees.first().ok_or("No working copies found")?;
+    let trees = worktrees(cwd)?;
+    let main = trees.first().ok_or("No working copies found")?;
     let main = Path::new(&main.path);
-    let parent = main.with_file_name(format!(
-        "{}-worktrees",
-        main.file_name().unwrap_or_default().to_string_lossy()
-    ));
+    let parent = default_worktree_root(main);
     let stamp = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap_or_default()
@@ -243,25 +263,15 @@ pub fn create_project_worktree(
     }
     let branch = branch.trim();
     valid_branch(cwd, branch)?;
-    let state = snapshot(cwd)?;
-    if state
-        .worktrees
+    let trees = worktrees(cwd)?;
+    if trees
         .iter()
         .any(|tree| tree.branch.as_deref() == Some(branch))
     {
         return Err("This branch already has a working copy. Select it from the picker.".into());
     }
-    let main = Path::new(
-        &state
-            .worktrees
-            .first()
-            .ok_or("No working copies found")?
-            .path,
-    );
-    let parent = main.with_file_name(format!(
-        "{}-worktrees",
-        main.file_name().unwrap_or_default().to_string_lossy()
-    ));
+    let main = Path::new(&trees.first().ok_or("No working copies found")?.path);
+    let parent = default_worktree_root(main);
     let slug: String = branch
         .chars()
         .map(|c| {
@@ -315,8 +325,7 @@ pub fn create_project_worktree(
         )?;
     }
     crate::worktree_setup::mark_due(&[main, cwd], &path);
-    snapshot(cwd)?
-        .worktrees
+    worktrees(cwd)?
         .into_iter()
         .find(|tree| Path::new(&tree.path) == path)
         .ok_or_else(|| {
