@@ -770,6 +770,11 @@ impl Inbox {
         let mut next = Self::project_preferences(saved, source);
         let baseline = next.clone();
         if preserve_edits {
+            next.seen.seeded |= self.state.seen.seeded;
+            for (key, revision) in &self.state.seen.items {
+                let seen = next.seen.items.entry(key.clone()).or_default();
+                *seen = (*seen).max(*revision);
+            }
             if self.state.list_width != self.saved_state.list_width {
                 next.list_width = self.state.list_width;
             }
