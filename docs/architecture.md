@@ -28,11 +28,15 @@ Bot card refreshes use an application-owned persistence worker. Admission coales
 
 A transcript view owns one elapsed-time task while it is visible and streaming. Settled prose shares the same layout path as live prose and releases its pacing buffers when the reveal finishes. Transcript edits update the display index from the first changed row. The prompt outline uses the list's logical scroll position to find nearby prompts.
 
+Attachment thumbnails share two decode slots across windows. A thumbnail owns its queued task, and an active worker holds its slot until the read and decode finish. The transcript cache bounds retained thumbnail data separately. Full-screen image previews have an independent loading path.
+
 The [terminal](terminal.md) uses statically linked libghostty-vt for VT state and key encoding, with GPUI drawing the grid and a Unix PTY owning the shell. Terminal grids stay current when hidden. Repaint-only signals are coalesced before they reach the UI queue, while ordered PTY, clipboard, and exit effects are preserved.
 
 The title bar and Changes panel share one immutable snapshot per checkout. While an active window needs it, the checkout probes Git status and dirty file metadata every two seconds. It recalculates the full snapshot on a change, explicit refresh, or the 20-second reconciliation interval for other inputs such as remote refs. History panes share a lazily loaded commit graph in the same checkout cache. The checkout refreshes History on commit or branch changes and periodically reconciles other refs while History is visible. Windows retain their own search, selection, and scroll. The graph model produces typed geometry and the desktop paints it. Review resolves its Git context once per load and publishes file completions together as they arrive. Updated Hosts send file versions with the change list. Earlier Hosts use bounded diff reads to detect content changes. Changes retains ordinary commit-message drafts by checkout while the panel is open. Confirmations are tied to the checkout and branch tip where they started.
 
 The desktop turn driver admits one worker per store and session. It keeps the claim through the worker's final save and gives the attached conversation ordered updates for that run. **View → Running Work** and the pressure indicator open the app-wide list of local provider processes. Stop resolves the sampled turn's cancellation identity through the driver across windows. This identifies the correct reply even when a warm provider keeps its PID.
+
+Bot dispatch carries its message identity, permissions and one-shot options in the admitted run request. The same conversation's settings and composer remain available for its next user action.
 
 Side questions save drafts and transcripts under their parent conversation, with their own read-only provider runs. The visible sheet projects only its selected thread. Switching or dismissing the sheet releases that projection while other side threads retain their rows and drafts. Saves compare the revision they loaded so a window with an older copy cannot overwrite newer side questions.
 

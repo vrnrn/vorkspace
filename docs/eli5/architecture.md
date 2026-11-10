@@ -34,9 +34,13 @@ The app groups quick bursts of command output and keeps a readable tail. An idle
 
 The app keeps word-fade animation data while new text is arriving, then releases it. When you scroll a long chat, the prompt rail uses your position to find nearby prompts.
 
+The app prepares a few attachment thumbnails at a time across all windows. Opening a picture full screen has its own loading path.
+
 The Changes panel and title bar read from the same Git snapshot. The app checks for edits frequently and does the heavier refresh when something changes or the snapshot needs reconciling. Two windows on the same checkout share a commit graph, and each window keeps its own search and selection. If you switch checkouts while writing a commit message, each checkout keeps its own draft while Changes is open. A confirmation belongs to the checkout and branch where you opened it.
 
 Open **View → Running Work** to see the app’s local agents. A Stop click is tied to the reply shown in the list, even from another window. The app waits for a reply's final save before starting another reply in the same conversation.
+
+When a Bot receives a message, the app sends that message's attachments and options with its own reply. Your composer and chat settings stay ready for your next message.
 
 Side questions keep their own replies and unfinished drafts. You can switch between them or close the sheet and return later. A side question can read the conversation it came from and runs separately from the main reply.
 

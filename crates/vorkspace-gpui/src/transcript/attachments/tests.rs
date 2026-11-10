@@ -14,6 +14,7 @@ fn pending_thumbnail_reservations_bound_out_of_order_decode_publication(cx: &mut
                     mime: "image/gif".into(),
                     loading: true,
                     image: None,
+                    _decode: None,
                 });
                 let weak = photo.downgrade();
                 view.cache_photo(ix.to_string(), photo, cx);
@@ -66,6 +67,7 @@ fn pending_thumbnail_reservations_bound_out_of_order_decode_publication(cx: &mut
         mime: "image/gif".into(),
         loading: true,
         image: None,
+        _decode: None,
     });
     failed.update(cx, |photo, cx| {
         assert_eq!(
@@ -144,6 +146,7 @@ fn path_photos_match_by_path_even_when_the_arc_is_recreated() {
         loading: false,
         mime: "image/png".into(),
         image: None,
+        _decode: None,
     };
     assert!(photo.matches_source(&Arc::from("/tmp/photo.png"), &"image/png".into()));
     assert!(!photo.matches_source(&Arc::from("/tmp/other.png"), &"image/png".into()));
@@ -178,6 +181,7 @@ fn releasing_a_photo_drops_its_unique_render_sprite(cx: &mut TestAppContext) {
             loading: false,
             mime: "image/png".into(),
             image: Some(image.clone()),
+            _decode: None,
         }
     });
     let window = cx.update(|cx| {
