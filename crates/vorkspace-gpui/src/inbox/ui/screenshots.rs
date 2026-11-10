@@ -27,7 +27,7 @@ fn fixture(provider: &str, narrow_detail: bool, cx: &mut Context<Inbox>) -> Inbo
     let mut inbox = Inbox::new_inner(store, vec![], PathBuf::from(PROJECT), false, cx);
     inbox.state.source = provider.into();
     inbox.state.seen.seeded = true;
-    inbox.snapshot.connections.insert(
+    Rc::make_mut(&mut inbox.snapshot).connections.insert(
         provider.into(),
         model::Status {
             connected: true,
@@ -87,7 +87,7 @@ fn fixture(provider: &str, narrow_detail: bool, cx: &mut Context<Inbox>) -> Inbo
     });
     let key = selected.key();
     inbox.state.seen.mark(&selected);
-    inbox.snapshot.items = vec![
+    Rc::make_mut(&mut inbox.snapshot).items = vec![
         selected,
         make_item(
             43,

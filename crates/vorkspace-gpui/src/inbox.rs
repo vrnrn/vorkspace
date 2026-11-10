@@ -1,6 +1,7 @@
 //! Connector fetch owner and retained provider pages, backed by native adapters
 //! and the desktop app's existing credential files.
 mod avatar;
+mod catalog;
 mod diff;
 mod document;
 mod saved_preferences;
@@ -15,11 +16,10 @@ use gpui::{
     App, AppContext, Context, Entity, EventEmitter, FocusHandle, Focusable, ListAlignment,
     ListState, Pixels, ScrollHandle, Subscription, WeakEntity, px,
 };
-use std::time::Instant;
 use std::{path::PathBuf, time::Duration};
-use vorkspace_core::{
-    inbox::{self as model, Checks, Details, Diff, Item, Service, Snapshot, Thread, ViewState},
-    store::Session,
+use std::{rc::Rc, time::Instant};
+use vorkspace_core::inbox::{
+    self as model, Checks, Details, Diff, Item, Service, Snapshot, Thread, ViewState,
 };
 use vorkspace_runtime::runtime::{Database, locked};
 use vorkspace_ui::theme::*;
@@ -60,8 +60,9 @@ pub(crate) struct Inbox {
     state: ViewState,
     preferences: Entity<saved_preferences::SavedPreferences>,
     saved_state: ViewState,
-    snapshot: Snapshot,
-    sessions: Vec<Session>,
+    snapshot: Rc<Snapshot>,
+    sessions: Rc<catalog::RelatedSessions>,
+    publication_queued: bool,
     focus: FocusHandle,
     search: Entity<Input>,
     comment: Entity<Input>,
@@ -279,8 +280,9 @@ impl Inbox {
             saved_state: state.clone(),
             state,
             preferences,
-            snapshot: Snapshot::default(),
-            sessions: vec![],
+            snapshot: Default::default(),
+            sessions: Default::default(),
+            publication_queued: false,
             focus: cx.focus_handle(),
             search,
             comment,
@@ -400,9 +402,9 @@ impl Inbox {
                 }
             } else if self.pinned_item.is_none()
                 && self.selected.is_none()
-                && let Some(item) = self.visible_items(cx).first()
+                && let Some(key) = self.first_visible_key(cx)
             {
-                self.select(item.key(), cx);
+                self.select(key, cx);
             }
         }
         cx.notify();
@@ -525,13 +527,14 @@ impl Inbox {
             )
         })?;
         self.adopt_preferences(&saved, true, cx);
-        self.snapshot
+        let snapshot = Rc::make_mut(&mut self.snapshot);
+        snapshot
             .items
             .retain(|item| self.state.connectors.enabled(&item.provider));
-        self.snapshot
+        snapshot
             .connections
             .retain(|key, _| self.state.connectors.enabled(key));
-        self.snapshot
+        snapshot
             .errors
             .retain(|key, _| self.state.connectors.enabled(key));
         if self.item().is_none() {
@@ -609,7 +612,7 @@ impl Inbox {
             let sessions = locked(&store)
                 .and_then(|db| db.sessions())
                 .unwrap_or_default();
-            (snapshot, sessions)
+            (snapshot, catalog::RelatedSessions::new(sessions))
         });
         cx.spawn(async move |this, cx| {
             let (snapshot, sessions) = task.await;
@@ -625,7 +628,7 @@ impl Inbox {
         generation: u64,
         scope: String,
         mut snapshot: Snapshot,
-        sessions: Vec<Session>,
+        sessions: catalog::RelatedSessions,
         cx: &mut Context<Self>,
     ) {
         if self.generation != generation {
@@ -679,8 +682,8 @@ impl Inbox {
             .items
             .sort_by_key(|item| std::cmp::Reverse(item.updated_ms()));
         self.state.seen.seed(&snapshot.items);
-        self.snapshot = snapshot;
-        self.sessions = sessions;
+        self.snapshot = Rc::new(snapshot);
+        self.sessions = Rc::new(sessions);
         if self.active
             && let Some(item) = self.item()
         {
@@ -713,9 +716,9 @@ impl Inbox {
         }
         if self.active
             && self.selected.is_none()
-            && let Some(item) = self.visible_items(cx).first()
+            && let Some(key) = self.first_visible_key(cx)
         {
-            self.select(item.key(), cx);
+            self.select(key, cx);
         }
         if std::mem::take(&mut self.refresh_queued) {
             self.refresh(cx);
@@ -1006,24 +1009,31 @@ impl Inbox {
     }
     /// Publish the complete root snapshot before delivering it to pages. Reading
     /// the latest owner at delivery avoids replaying an older queued snapshot.
-    fn publish_pages(&self, cx: &mut Context<Self>) {
+    fn publish_pages(&mut self, cx: &mut Context<Self>) {
+        if self.pages.is_empty() || self.publication_queued {
+            return;
+        }
+        self.publication_queued = true;
         let owner = cx.weak_entity();
         cx.defer(move |cx| {
-            let Some(owner) = owner.upgrade() else {
+            let Ok((state, snapshot, sessions, projects, service, cwd, bots, loading, pages)) =
+                owner.update(cx, |root, _| {
+                    root.publication_queued = false;
+                    (
+                        root.state.clone(),
+                        root.snapshot.clone(),
+                        root.sessions.clone(),
+                        root.projects.clone(),
+                        root.service.clone(),
+                        root.start_project.clone(),
+                        root.bots.clone(),
+                        root.loading,
+                        root.pages.values().cloned().collect::<Vec<_>>(),
+                    )
+                })
+            else {
                 return;
             };
-            let root = owner.read(cx);
-            let (state, snapshot, sessions, projects, service, cwd, bots, loading, pages) = (
-                root.state.clone(),
-                root.snapshot.clone(),
-                root.sessions.clone(),
-                root.projects.clone(),
-                root.service.clone(),
-                root.start_project.clone(),
-                root.bots.clone(),
-                root.loading,
-                root.pages.values().cloned().collect::<Vec<_>>(),
-            );
             for page in pages {
                 page.update(cx, |page, cx| {
                     let scope_changed = page.projects != projects;
@@ -1053,9 +1063,9 @@ impl Inbox {
                         if page.pinned_item.is_none()
                             && page.active
                             && page.selected.is_none()
-                            && let Some(item) = page.visible_items(cx).first()
+                            && let Some(key) = page.first_visible_key(cx)
                         {
-                            page.select(item.key(), cx);
+                            page.select(key, cx);
                         } else if page.active
                             && let Some(item) = page.item()
                         {
@@ -1068,30 +1078,30 @@ impl Inbox {
             }
         });
     }
-    fn visible_items(&self, cx: &App) -> Vec<Item> {
-        let search = self.search.read(cx).content.as_ref();
-        self.snapshot
-            .items
-            .iter()
-            .filter(|item| {
-                self.state.connectors.enabled(&item.provider)
-                    && self.item_in_scope(item)
-                    && self.state.filters.matches(item, &self.state.source, search)
-            })
-            .map(|item| self.scoped_item(item))
-            .collect()
+    fn visible_items<'a>(&'a self, cx: &App) -> impl Iterator<Item = &'a Item> + use<'a> {
+        let filter = self.state.filters.prepare(&self.search.read(cx).content);
+        self.snapshot.items.iter().filter(move |item| {
+            item.provider == self.state.source
+                && self.state.connectors.enabled(&item.provider)
+                && self.item_in_scope(item)
+                && filter.matches(item, &self.state.source)
+        })
+    }
+    fn first_visible_key(&self, cx: &App) -> Option<String> {
+        self.visible_items(cx).next().map(Item::key)
     }
     fn item(&self) -> Option<Item> {
         if let Some(pinned) = &self.pinned_item {
             return Some(pinned.clone());
         }
+        self.item_in_list(self.selected.as_deref()?)
+    }
+    fn item_in_list(&self, key: &str) -> Option<Item> {
         self.snapshot
             .items
             .iter()
             .find(|item| {
-                item.provider == self.state.source
-                    && Some(item.key()) == self.selected
-                    && self.item_in_scope(item)
+                item.provider == self.state.source && item.key() == key && self.item_in_scope(item)
             })
             .map(|item| self.scoped_item(item))
     }
@@ -1169,8 +1179,8 @@ impl Inbox {
         self.comments.clear();
         self.search
             .update(cx, |input, cx| input.set_text(String::new(), cx));
-        if let Some(item) = self.visible_items(cx).first() {
-            self.select(item.key(), cx);
+        if let Some(key) = self.first_visible_key(cx) {
+            self.select(key, cx);
         }
         self.save(cx);
         cx.notify();
@@ -1359,10 +1369,14 @@ impl Inbox {
     fn update_item_summary(&mut self, item: Item, cx: &mut Context<Self>) {
         let key = item.key();
         let mut changed = false;
-        if let Some(old) = self.snapshot.items.iter_mut().find(|old| old.key() == key)
-            && old.updated_ms() <= item.updated_ms()
+        if let Some(index) = self
+            .snapshot
+            .items
+            .iter()
+            .position(|old| old.key() == key && old.updated_ms() <= item.updated_ms())
+            && self.snapshot.items[index] != item
         {
-            *old = item.clone();
+            Rc::make_mut(&mut self.snapshot).items[index] = item.clone();
             changed = true;
         }
         if let Some(pinned) = self.pinned_item.as_mut() {
@@ -1534,7 +1548,7 @@ impl Inbox {
                 match result {
                     Ok(status) => {
                         let connected = status.connected;
-                        this.snapshot.connections.insert(provider.clone(), status);
+                        Rc::make_mut(&mut this.snapshot).connections.insert(provider.clone(), status);
                         this.connect_token.update(cx, |input, cx| input.set_text(String::new(), cx));
                         if connected || disconnect {
                             this.connect_provider = None;

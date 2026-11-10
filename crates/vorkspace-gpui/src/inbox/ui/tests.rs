@@ -55,7 +55,7 @@ fn fixture(cx: &mut TestAppContext) -> WindowHandle<Fixture> {
             let inbox = cx.new(|cx| {
                 let store = Arc::new(Mutex::new(vorkspace_core::store::Store::open(std::path::Path::new(":memory:")).unwrap()));
                 let mut view = Inbox::new_inner(store, vec![], PathBuf::from("/private/tmp/inbox-regression"), false, cx);
-                view.snapshot.items = vec![item.clone()]; view.selected = Some(item.key());
+                Rc::make_mut(&mut view.snapshot).items = vec![item.clone()]; view.selected = Some(item.key());
                 view.details = Some(Details { body: "Description".into(), ..Default::default() });
                 let comments = (0..100).map(|ix| model::Comment {
                     id: format!("comment-{ix}"), body: (0..30).map(|line| format!("### Finding {line}\n\nReview **retry handling** in `src/main.rs` before returning.\n\n")).collect(),
@@ -126,7 +126,7 @@ fn connector_detail_headers_start_at_the_pane_inset_at_every_zoom(cx: &mut TestA
                 };
                 inbox.state.source = provider.into();
                 inbox.selected = Some(item.key());
-                inbox.snapshot.items = vec![item];
+                Rc::make_mut(&mut inbox.snapshot).items = vec![item];
                 inbox.details = Some(Details::default());
                 inbox.narrow_detail = true;
                 cx.notify();
@@ -168,7 +168,7 @@ fn narrow_navigation_preserves_the_open_item_and_comment_draft(cx: &mut TestAppC
                 ..Default::default()
             };
             let key = item.key();
-            inbox.snapshot.items = vec![item];
+            Rc::make_mut(&mut inbox.snapshot).items = vec![item];
             inbox.selected = Some(key.clone());
             inbox.details = Some(Details::default());
             inbox.narrow_detail = true;
@@ -239,7 +239,7 @@ fn a_narrow_connector_tile_uses_its_width_inside_a_wide_window(cx: &mut TestAppC
                             false,
                             cx,
                         );
-                        inbox.snapshot.items = vec![item];
+                        Rc::make_mut(&mut inbox.snapshot).items = vec![item];
                         inbox.selected = Some(key.clone());
                         inbox.details = Some(Details::default());
                         inbox
@@ -285,7 +285,7 @@ fn connector_pages_keep_drafts_filters_scroll_and_pending_details_with_one_obser
     let (github, jira) = window
         .update(cx, |root, _, cx| {
             root.loading = true;
-            root.snapshot.items = ["github", "jira"]
+            Rc::make_mut(&mut root.snapshot).items = ["github", "jira"]
                 .into_iter()
                 .map(|provider| Item {
                     provider: provider.into(),
@@ -309,7 +309,7 @@ fn connector_pages_keep_drafts_filters_scroll_and_pending_details_with_one_obser
         ] {
             page.update(cx, |page, cx| {
                 assert_eq!(page.state.source, source);
-                page.selected = Some(page.visible_items(cx)[0].key());
+                page.selected = Some(page.first_visible_key(cx).unwrap());
                 page.detail_generation = 5;
                 page.detail_loading = true;
                 page.search
@@ -369,7 +369,7 @@ fn connector_pages_keep_drafts_filters_scroll_and_pending_details_with_one_obser
                     output.set(output.get() + 1);
                 }
             });
-            let mut snapshot = root.snapshot.clone();
+            let mut snapshot = (*root.snapshot).clone();
             snapshot.connections.insert(
                 "jira".into(),
                 model::Status {
@@ -386,7 +386,7 @@ fn connector_pages_keep_drafts_filters_scroll_and_pending_details_with_one_obser
                 7,
                 root.state.fetch_scope(&root.projects),
                 snapshot,
-                vec![],
+                Default::default(),
                 cx,
             );
             subscription
@@ -418,6 +418,10 @@ fn connector_pages_keep_drafts_filters_scroll_and_pending_details_with_one_obser
         .update(cx, |root, _, cx| {
             assert_eq!(root.pages.len(), 2);
             assert_eq!(root.connector_page("github", cx), github);
+            for page in [&github, &jira] {
+                assert!(Rc::ptr_eq(&root.snapshot, &page.read(cx).snapshot));
+                assert!(Rc::ptr_eq(&root.sessions, &page.read(cx).sessions));
+            }
             let state = ViewState::load(&locked(&root.store).unwrap());
             assert_eq!(state.filters_for("github").time, "7d");
             assert_eq!(state.filters_for("jira").time, "30d");
@@ -447,7 +451,7 @@ fn item_pages_keep_pinned_identity_and_independent_view_state_across_snapshots(
     };
     let (section, first_page, second_page) = window
         .update(cx, |root, _, cx| {
-            root.snapshot.items = vec![
+            Rc::make_mut(&mut root.snapshot).items = vec![
                 Item {
                     project_path: "/work/clone-a".into(),
                     other_project_paths: vec![first.project_path.clone()],
@@ -508,7 +512,7 @@ fn item_pages_keep_pinned_identity_and_independent_view_state_across_snapshots(
     });
     window
         .update(cx, |root, _, cx| {
-            root.snapshot.items = vec![Item {
+            Rc::make_mut(&mut root.snapshot).items = vec![Item {
                 title: "Second issue updated".into(),
                 updated_at: "2026-11-02T10:00:00Z".into(),
                 ..second.clone()
@@ -549,7 +553,7 @@ fn item_pages_keep_pinned_identity_and_independent_view_state_across_snapshots(
     });
     window
         .update(cx, |root, _, cx| {
-            root.snapshot.items = vec![Item {
+            Rc::make_mut(&mut root.snapshot).items = vec![Item {
                 title: "First issue updated".into(),
                 updated_at: "2026-11-03T10:00:00Z".into(),
                 project_path: "/work/clone-a".into(),
@@ -587,7 +591,7 @@ fn item_page_read_receipts_do_not_restore_old_filters_and_closed_pages_are_relea
     };
     let page = window
         .update(cx, |root, _, cx| {
-            root.snapshot.items.push(item.clone());
+            Rc::make_mut(&mut root.snapshot).items.push(item.clone());
             root.connector_item_page("jira", item.clone(), cx)
         })
         .unwrap();
@@ -658,7 +662,7 @@ fn item_tab_actions_keep_ordinary_selection_and_pinned_page_has_no_list(cx: &mut
     let opened = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
     let _subscription = window
         .update(cx, |root, _, cx| {
-            root.snapshot.items = vec![first.clone(), second.clone()];
+            Rc::make_mut(&mut root.snapshot).items = vec![first.clone(), second.clone()];
             root.selected = Some(first.key());
             root.details = Some(Details::default());
             let opened = opened.clone();
@@ -735,7 +739,7 @@ fn pinned_item_page_renders_detail_without_a_library_list(cx: &mut TestAppContex
                         false,
                         cx,
                     );
-                    root.snapshot.items = vec![item.clone()];
+                    Rc::make_mut(&mut root.snapshot).items = vec![item.clone()];
                     root
                 });
                 let page = root.update(cx, |root, cx| {
@@ -767,7 +771,7 @@ fn retained_connector_pages_dispatch_with_current_defaults_and_preserve_explicit
                     .to_vec(),
                 cx,
             );
-            root.snapshot.items = ["jira", "gitlab"]
+            Rc::make_mut(&mut root.snapshot).items = ["jira", "gitlab"]
                 .map(|provider| Item {
                     provider: provider.into(),
                     identifier: format!("{provider}-42"),
@@ -893,10 +897,10 @@ fn disabling_a_source_removes_controls_unread_and_selection_and_rejects_inflight
         .collect::<Vec<_>>();
     let old_scope = window
         .update(cx, |inbox, _, cx| {
-            inbox.snapshot.items = items.clone();
+            Rc::make_mut(&mut inbox.snapshot).items = items.clone();
             inbox.state.seen.seeded = true;
             for provider in model::PROVIDERS {
-                inbox.snapshot.connections.insert(
+                Rc::make_mut(&mut inbox.snapshot).connections.insert(
                     provider.into(),
                     model::Status {
                         connected: true,
@@ -917,7 +921,6 @@ fn disabling_a_source_removes_controls_unread_and_selection_and_rejects_inflight
             assert_eq!(
                 inbox
                     .visible_items(cx)
-                    .iter()
                     .map(|item| item.provider.as_str())
                     .collect::<Vec<_>>(),
                 ["gitlab"]
@@ -949,7 +952,7 @@ fn disabling_a_source_removes_controls_unread_and_selection_and_rejects_inflight
                 .into(),
                 ..Default::default()
             };
-            inbox.finish_refresh(7, old_scope, stale, vec![], cx);
+            inbox.finish_refresh(7, old_scope, stale, Default::default(), cx);
             assert!(inbox.snapshot.items.is_empty());
             assert!(inbox.connection_statuses().is_empty());
             for provider in ["github", "linear", "azuredevops"] {
@@ -1000,7 +1003,7 @@ fn own_successful_revision_is_read_suppressed_and_later_remote_revision_can_chim
                     items: vec![item.clone()],
                     ..Default::default()
                 },
-                vec![],
+                Default::default(),
                 cx,
             );
             item.updated_at = "2026-10-22T11:00:00Z".into();
@@ -1012,7 +1015,7 @@ fn own_successful_revision_is_read_suppressed_and_later_remote_revision_can_chim
                     items: vec![item.clone()],
                     ..Default::default()
                 },
-                vec![],
+                Default::default(),
                 cx,
             );
             assert!(!inbox.state.seen.unseen(&item));
@@ -1028,7 +1031,7 @@ fn own_successful_revision_is_read_suppressed_and_later_remote_revision_can_chim
                     items: vec![item],
                     ..Default::default()
                 },
-                vec![],
+                Default::default(),
                 cx,
             );
             subscription
@@ -1066,7 +1069,7 @@ fn a_coalesced_external_revision_is_never_consumed_as_own_activity(cx: &mut Test
                     items: vec![item.clone()],
                     ..Default::default()
                 },
-                vec![],
+                Default::default(),
                 cx,
             );
             let own = model::timestamp_ms("2026-10-22T11:00:00Z");
@@ -1090,7 +1093,7 @@ fn a_coalesced_external_revision_is_never_consumed_as_own_activity(cx: &mut Test
                     items: vec![item.clone()],
                     ..Default::default()
                 },
-                vec![],
+                Default::default(),
                 cx,
             );
             assert_eq!(inbox.self_activity[&item.key()].0, own);
@@ -1103,7 +1106,7 @@ fn a_coalesced_external_revision_is_never_consumed_as_own_activity(cx: &mut Test
                     items: vec![item.clone()],
                     ..Default::default()
                 },
-                vec![],
+                Default::default(),
                 cx,
             );
             assert!(inbox.state.seen.unseen(&item));
@@ -1138,7 +1141,7 @@ fn saved_bot_destination_is_preselected_and_explicit_project_choice_wins(cx: &mu
                 ..Default::default()
             };
             inbox.state.source = "jira".into();
-            inbox.snapshot.items = vec![item.clone()];
+            Rc::make_mut(&mut inbox.snapshot).items = vec![item.clone()];
             inbox.selected = Some(item.key());
             inbox.details = Some(Details {
                 body: "Ticket description".into(),

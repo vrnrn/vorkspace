@@ -20,9 +20,9 @@ impl Inbox {
     pub(crate) fn filters_changed(&mut self, refetch: bool, cx: &mut Context<Self>) {
         self.save(cx);
         if self.active
-            && let Some(item) = self.visible_items(cx).first()
+            && let Some(key) = self.first_visible_key(cx)
         {
-            self.select(item.key(), cx);
+            self.select(key, cx);
         }
         if refetch {
             self.refresh(cx);

@@ -319,7 +319,7 @@ impl Inbox {
             .connections
             .get(&self.state.source)
             .is_some_and(|status| status.connected);
-        let items = self.visible_items(cx);
+        let mut items = self.visible_items(cx).peekable();
         let tools = page::toolbar()
             .when(!self.unavailable(), |d| {
                 d.child(
@@ -381,7 +381,7 @@ impl Inbox {
                 format!("Could not load {provider}"),
                 format!("{error}. Check Settings → {provider} or refresh."),
             )
-        } else if self.loading && items.is_empty() {
+        } else if self.loading && items.peek().is_none() {
             (format!("Loading {provider}…"), String::new())
         } else if !connected {
             (
@@ -402,12 +402,12 @@ impl Inbox {
             (format!("No {provider} items"), String::new())
         };
         let rows = items
-            .into_iter()
             .map(|item| {
                 let key = item.key();
                 let active = self.selected.as_ref() == Some(&key);
-                let unread = self.state.seen.unseen(&item);
-                let sessions = self.related_sessions(&item).len();
+                let unread = self.state.seen.unseen(item);
+                let sessions = self.sessions.matching(item).count();
+                let project = self.scoped_project(item).unwrap_or(&item.project_path);
                 let tracker = model::is_tracker(&item.provider);
                 let kind = if item.kind == "pr" {
                     if item.provider == "gitlab" {
@@ -423,12 +423,11 @@ impl Inbox {
                 } else if !item.repo.is_empty() {
                     item.repo.clone()
                 } else {
-                    project_name(std::path::Path::new(&item.project_path))
+                    project_name(std::path::Path::new(project))
                 };
                 let attention = attention_label(&item.attention_reason);
                 let row_id = format!("inbox-item-{key}");
-                let click_item = item.clone();
-                let middle_item = item.clone();
+                let middle_key = key.clone();
                 page::row(row_id.clone(), item.title.clone(), active)
                     .debug_selector(move || row_id.clone())
                     .role(Role::ListBoxOption)
@@ -439,7 +438,7 @@ impl Inbox {
                             .items_center()
                             .gap(px(4.))
                             .child(provider_mark(&item.provider))
-                            .child(icon(status_icon(&item), 12.).text_color(status_color(&item)))
+                            .child(icon(status_icon(item), 12.).text_color(status_color(item)))
                             .child(div().min_w_0().flex_1().truncate().child(format!(
                                 "{kind} · {}{}",
                                 item.reference(),
@@ -488,11 +487,8 @@ impl Inbox {
                                     .flex()
                                     .items_center()
                                     .gap(px(4.))
-                                    .when(!tracker && !item.project_path.is_empty(), |d| {
-                                        d.child(crate::project_mark::project_icon(
-                                            &item.project_path,
-                                            12.,
-                                        ))
+                                    .when(!tracker && !project.is_empty(), |d| {
+                                        d.child(crate::project_mark::project_icon(project, 12.))
                                     })
                                     .child(div().min_w_0().truncate().child(source)),
                             )
@@ -505,16 +501,20 @@ impl Inbox {
                     )
                     .on_mouse_up(
                         MouseButton::Middle,
-                        cx.listener(move |_, _, _, cx| {
+                        cx.listener(move |this, _, _, cx| {
                             cx.stop_propagation();
-                            cx.emit(Event::OpenTab(Box::new(middle_item.clone())));
+                            if let Some(item) = this.item_in_list(&middle_key) {
+                                cx.emit(Event::OpenTab(Box::new(item)));
+                            }
                         }),
                     )
                     .on_click(
                         cx.listener(move |this, event: &gpui::ClickEvent, window, cx| {
                             let modifiers = event.modifiers();
                             if modifiers.platform || modifiers.control {
-                                cx.emit(Event::OpenTab(Box::new(click_item.clone())));
+                                if let Some(item) = this.item_in_list(&key) {
+                                    cx.emit(Event::OpenTab(Box::new(item)));
+                                }
                                 cx.stop_propagation();
                                 return;
                             }
@@ -620,21 +620,6 @@ impl Inbox {
         self.narrow_detail = false;
         window.focus(&self.search.focus_handle(cx), cx);
         cx.notify();
-    }
-    fn related_sessions(&self, item: &Item) -> Vec<Session> {
-        let work_item = item.work_item();
-        self.sessions
-            .iter()
-            .filter(|s| {
-                s.work_item.as_ref().is_some_and(|work| {
-                    (!work.url.is_empty() && work.url == work_item.url)
-                        || (work.kind == work_item.kind
-                            && work.number == work_item.number
-                            && work.repo.eq_ignore_ascii_case(&work_item.repo))
-                })
-            })
-            .cloned()
-            .collect()
     }
 }
 

@@ -29,8 +29,9 @@ impl Inbox {
         };
         let inset = self.detail_inset(window);
         let is_pr = item.kind == "pr";
-        let details = self.details.clone().unwrap_or_default();
-        let related_sessions = self.related_sessions(&item);
+        let empty = Details::default();
+        let details = self.details.as_ref().unwrap_or(&empty);
+        let mut related_sessions = self.sessions.matching(&item).peekable();
         let assignees = item
             .assignees
             .iter()
@@ -190,7 +191,7 @@ impl Inbox {
                                 d.child(review_label(&details.review_decision))
                             }),
                     )
-                    .when(!related_sessions.is_empty(), |d| {
+                    .when(related_sessions.peek().is_some(), |d| {
                         d.child(
                             page::meta()
                                 .min_w_0()
@@ -200,11 +201,12 @@ impl Inbox {
                                 .gap(px(4.))
                                 .child(action_icon("message-multiple", page::secondary_ink()))
                                 .child("Related threads")
-                                .children(related_sessions.into_iter().map(|session| {
-                                    action(format!("inbox-session-{}", session.id), session.title)
+                                .children(related_sessions.map(|session| {
+                                    let id = session.id;
+                                    action(format!("inbox-session-{id}"), session.title.clone())
                                         .bg(content(0.05))
                                         .on_click(cx.listener(move |_, _, _, cx| {
-                                            cx.emit(Event::OpenSession(session.id))
+                                            cx.emit(Event::OpenSession(id))
                                         }))
                                 })),
                         )

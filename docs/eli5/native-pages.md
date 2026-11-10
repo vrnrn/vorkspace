@@ -4,6 +4,8 @@ Notes, Automations, GitHub, GitLab, Jira, Todos and Search share the same compac
 
 If an automation changes in another window, Reset loads that saved version into your editor. An older editor cannot overwrite it or run with out-of-date settings. You can keep typing during a save and save the new text again when ready.
 
+Inbox tabs in a window share one copy of the loaded items and related threads. Each tab keeps its own selected item, unfinished comment, filters and reading position.
+
 Filters sit quietly in their toolbar until you click or focus them to type. The field background disappears when you move focus elsewhere. Press **+** above the Notes list to create a note. Every note offers **Start recording** and a choice of audio sources. Opening a blank note or capturing no words in an unnamed recording does not add an empty saved note.
 
 Pages can open as tabs beside your conversations. Different notes and connector items can each have a tab, with their own unfinished text and reading position. Drag tabs into a split to keep related work together. Reopening a page already beside a project’s conversation brings that project and layout back together. An agent in another project cannot use that page to open the unrelated conversation. Search keeps your query when you switch projects, but searches and opens files from the new working copy. Before you type, Search shows your recent conversations, the files you opened last and your projects, so you can jump straight back in. Clicking a session or document in a Bot's list opens it beside the Bot when there is room, or in its own tab when there is not.

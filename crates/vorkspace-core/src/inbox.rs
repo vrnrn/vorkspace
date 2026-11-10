@@ -322,20 +322,52 @@ impl Filters {
         }
     }
     pub fn matches(&self, item: &Item, source: &str, search: &str) -> bool {
+        self.prepare(search).matches(item, source)
+    }
+    pub fn prepare(&self, search: &str) -> PreparedFilter<'_> {
+        let start = match self.time.as_str() {
+            "today" => {
+                let now = Local::now();
+                Local
+                    .with_ymd_and_hms(now.year(), now.month(), now.day(), 0, 0, 0)
+                    .single()
+                    .map_or(0, |day| day.timestamp_millis())
+            }
+            "7d" => Local::now().timestamp_millis() - 7 * 86400000,
+            "30d" => Local::now().timestamp_millis() - 30 * 86400000,
+            _ => 0,
+        };
+        PreparedFilter {
+            filters: self,
+            start,
+            words: search.split_whitespace().map(str::to_lowercase).collect(),
+        }
+    }
+}
+
+pub struct PreparedFilter<'a> {
+    filters: &'a Filters,
+    start: i64,
+    words: Vec<String>,
+}
+
+impl PreparedFilter<'_> {
+    pub fn matches(&self, item: &Item, source: &str) -> bool {
         if item.provider != source {
             return false;
         }
+        let filters = self.filters;
         let tracker = is_tracker(source);
         if !tracker
-            && !(source == "gitlab" && self.assigned_to_me)
-            && self.hidden_projects.contains(&item.project_path)
+            && !(source == "gitlab" && filters.assigned_to_me)
+            && filters.hidden_projects.contains(&item.project_path)
         {
             return false;
         }
-        if !tracker && self.hidden_kinds.contains(&item.kind) {
+        if !tracker && filters.hidden_kinds.contains(&item.kind) {
             return false;
         }
-        let s = &self.status;
+        let s = &filters.status;
         if (s.open || s.closed || (!tracker && (s.draft || s.merged)))
             && !match item.status() {
                 "Open" => s.open,
@@ -347,19 +379,11 @@ impl Filters {
         {
             return false;
         }
-        let now = Local::now();
-        let start = match self.time.as_str() {
-            "today" => Local
-                .with_ymd_and_hms(now.year(), now.month(), now.day(), 0, 0, 0)
-                .single()
-                .map(|d| d.timestamp_millis())
-                .unwrap_or(0),
-            "7d" => now.timestamp_millis() - 7 * 86400000,
-            "30d" => now.timestamp_millis() - 30 * 86400000,
-            _ => 0,
-        };
-        if start > 0 && item.updated_ms() < start {
+        if self.start > 0 && item.updated_ms() < self.start {
             return false;
+        }
+        if self.words.is_empty() {
+            return true;
         }
         let text = format!(
             "{} {} {} {} {} {}",
@@ -375,9 +399,7 @@ impl Filters {
                 .join(" ")
         )
         .to_lowercase();
-        search
-            .split_whitespace()
-            .all(|word| text.contains(&word.to_lowercase()))
+        self.words.iter().all(|word| text.contains(word))
     }
 }
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
