@@ -490,15 +490,9 @@ impl Shell {
     // Archive only after the workspace has been durably saved. Existing tabs and
     // processes remain owned by their current lifecycle and are never closed here.
     pub(super) fn commit_project_archive(&mut self, next: Workspace, cx: &mut Context<Self>) {
-        let state = serde_json::to_string(&next).expect("serialize workspace");
-        // Cancel queued older snapshots before acquiring the store lock.
-        self.generation.fetch_add(1, Ordering::SeqCst);
-        let result = locked(&self.store).and_then(|store| store.save_ui_state(&state));
-        if let Err(error) = result {
+        if let Err(error) = self.save_window_state(Some(next), true, cx) {
             self.error = Some(format!("Could not save project archive: {error}"));
         } else {
-            *self.latest_state.lock().unwrap_or_else(|e| e.into_inner()) = state;
-            self.workspace = next;
             self.share_vorkspaces(cx);
             self.invalidate_chrome(cx);
         }

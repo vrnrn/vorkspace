@@ -30,13 +30,18 @@ pub(crate) struct Controller {
     pub window: Option<WindowHandle<QuickComposer>>,
     pub last: Option<Launch>,
     pub error: Option<String>,
-    pub task: Option<Task<()>>,
     pub events: Option<Subscription>,
+}
+
+#[derive(Default)]
+pub(crate) struct Shortcut {
+    pub error: Option<String>,
+    pub task: Option<Task<()>>,
     config: String,
     #[cfg(not(test))]
     registration: Option<hotkey::Registration>,
 }
-impl Controller {
+impl Shortcut {
     pub fn configure(
         &mut self,
         prefs: &vorkspace_ui::preferences::Preferences,
@@ -90,10 +95,6 @@ pub(crate) struct QuickComposer {
 }
 impl EventEmitter<Launch> for QuickComposer {}
 impl QuickComposer {
-    pub(crate) fn observe_scale(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        self._subscriptions
-            .push(vorkspace_ui::preferences::observe_window_scale(window, cx));
-    }
     pub fn new(
         projects: Vec<String>,
         choice: Launch,

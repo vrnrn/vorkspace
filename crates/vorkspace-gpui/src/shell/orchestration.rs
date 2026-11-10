@@ -321,6 +321,7 @@ impl Shell {
         for (ix, task, cwd, provider, mut settings, reports) in jobs {
             let store = self.store.clone();
             let project = self.sessions[&lead].read(cx).summary.cwd.clone();
+            let mut install = self.session_install(cx);
             let work = cx.background_executor().spawn(async move {
                 let root = std::path::Path::new(&cwd)
                     .canonicalize()
@@ -343,6 +344,7 @@ impl Shell {
                 }
                 let store = locked(&store)?;
                 let mut summary = store.create(&provider, &project)?;
+                install.track(summary.id);
                 summary.title = format!("Agent · {}", task.title);
                 store.title(summary.id, &summary.title)?;
                 settings.worktree_cwd = Some(cwd);
@@ -351,15 +353,24 @@ impl Shell {
                     summary,
                     settings,
                     orchestration::worker_prompt(&task, &reports),
+                    install,
                 ))
             });
             cx.spawn(async move |this, cx| {
                 let result = work.await;
                 let _ = this.update(cx, |this, cx| {
                     match result {
-                        Ok((summary, settings, prompt)) => {
+                        Ok((summary, settings, prompt, mut install)) => {
                             let id = summary.id;
-                            this.add(summary, cx);
+                            let Some(view) = this.install_prepared(summary, &install, cx) else {
+                                if let Some(run) = this.orchestrations.get_mut(&lead) {
+                                    run.tasks[ix].state = State::Failed;
+                                    run.tasks[ix].report =
+                                        "Could not install the worker session".into();
+                                }
+                                this.schedule_orchestration(lead, cx);
+                                return;
+                            };
                             let start = this.orchestrations.get(&lead).is_some_and(|run| {
                                 !run.stopped && run.tasks[ix].state == State::Starting
                             });
@@ -368,10 +379,11 @@ impl Shell {
                                     run.tasks[ix].session = Some(id);
                                     run.tasks[ix].state = State::Running;
                                 }
-                                this.sessions[&id].update(cx, |v, cx| {
+                                view.update(cx, |v, cx| {
                                     v.install_transfer(settings, Some(prompt), cx)
                                 });
                             }
+                            this.publish_prepared(&view, Some(&mut install), cx);
                         }
                         Err(error) => {
                             if let Some(run) = this.orchestrations.get_mut(&lead) {

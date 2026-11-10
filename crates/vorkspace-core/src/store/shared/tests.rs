@@ -115,7 +115,7 @@ fn bot_claim_waiting_for_edit_or_detach_never_holds_the_sidecar_lock() {
                 writer.shared_finish_edit(id, &snapshot, "fork")
             } else {
                 writer
-                    .shared_detach_worktree("/project-worktrees/feature", "/project")
+                    .detach_worktree("/project-worktrees/feature", "/project")
                     .map(|_| ())
             };
             writer_done_tx.send(result).unwrap();

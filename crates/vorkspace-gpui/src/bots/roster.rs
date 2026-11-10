@@ -33,6 +33,7 @@ pub(crate) struct SharedRoster {
     // from the snapshot. Keep the deletion revision to distinguish them.
     pub(super) removed: HashMap<String, u64>,
     chat_owners: HashMap<String, WeakEntity<Bots>>,
+    habit_runner: Option<WeakEntity<Bots>>,
     // New ordinary messages can hand off within this process. Leave older
     // queues on the existing cold recovery policy after app restart.
     live_messages: HashSet<String>,
@@ -59,6 +60,7 @@ impl SharedRoster {
             revision: 0,
             removed: HashMap::new(),
             chat_owners: HashMap::new(),
+            habit_runner: None,
             live_messages: HashSet::new(),
             minion_effects: MinionEffects::default(),
             minions_enabled: false,
@@ -88,6 +90,26 @@ impl SharedRoster {
         self.snapshot.as_ref().ok()
     }
 
+    pub(crate) fn has_pending_writes(&self) -> bool {
+        self.writes.as_ref().is_some_and(|task| !task.is_ready())
+    }
+
+    pub(crate) fn write_barrier(
+        &mut self,
+        cx: &mut Context<Self>,
+    ) -> Option<async_channel::Receiver<()>> {
+        if !self.has_pending_writes() {
+            return None;
+        }
+        let previous = self.writes.take().expect("pending roster writer");
+        let (send, receive) = async_channel::bounded(1);
+        self.writes = Some(cx.spawn(async move |_, _| {
+            previous.await;
+            let _ = send.try_send(());
+        }));
+        Some(receive)
+    }
+
     pub(super) fn chat_owner(&self, id: &str) -> Option<&WeakEntity<Bots>> {
         self.chat_owners
             .get(id)
@@ -108,6 +130,16 @@ impl SharedRoster {
         if self.chat_owners.get(id) == Some(owner) {
             self.chat_owners.remove(id);
         }
+    }
+
+    pub(super) fn claim_habits(&mut self, owner: WeakEntity<Bots>) -> bool {
+        if let Some(holder) = &self.habit_runner
+            && holder.upgrade().is_some()
+        {
+            return holder == &owner;
+        }
+        self.habit_runner = Some(owner);
+        true
     }
 
     pub(super) fn live_message(&self, id: &str) -> bool {

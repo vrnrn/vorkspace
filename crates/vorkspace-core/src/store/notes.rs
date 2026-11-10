@@ -622,6 +622,131 @@ impl Store {
     }
 
     pub fn upsert_note(&self, note: &NoteUpsert) -> Result<Note, String> {
+        self.prepare_note_upsert(note)?;
+        upsert_note(&self.conn, note).map_err(|e| e.to_string())
+    }
+
+    /// Save an editor's draft only over the exact note it loaded. None means
+    /// the editor started a new draft. A mismatch preserves both versions.
+    pub fn upsert_note_if_current(
+        &self,
+        note: &NoteUpsert,
+        expected: Option<&Note>,
+    ) -> Result<Option<Note>, String> {
+        self.prepare_note_upsert(note)?;
+        let tx = Transaction::new_unchecked(&self.conn, TransactionBehavior::Immediate)
+            .map_err(|e| e.to_string())?;
+        let mut current = get_content(&tx, &note.id, "note").map_err(|e| e.to_string())?;
+        if current.is_none() && self.shared.is_none() && note.id.starts_with("gpui-note-") {
+            current = self.get_note(&note.id)?;
+        }
+        if current.as_ref() != expected {
+            return Ok(None);
+        }
+        let saved = upsert_note(&tx, note).map_err(|e| e.to_string())?;
+        tx.commit().map_err(|e| e.to_string())?;
+        Ok(Some(saved))
+    }
+
+    /// Save a recovered draft under a new identity. The new note owns its
+    /// images, so deleting the original cannot break the recovered copy.
+    pub fn copy_note_draft(
+        &self,
+        source: &str,
+        copy: &NoteUpsert,
+    ) -> Result<(Note, usize), String> {
+        valid_id(source)?;
+        self.prepare_note_upsert(copy)?;
+        let tx = Transaction::new_unchecked(&self.conn, TransactionBehavior::Immediate)
+            .map_err(|e| e.to_string())?;
+        if source == copy.id
+            || get_content(&tx, &copy.id, "note")
+                .map_err(|e| e.to_string())?
+                .is_some()
+        {
+            return Err("Could not reserve a new note for the copy".into());
+        }
+        static ASSET: std::sync::LazyLock<regex::Regex> = std::sync::LazyLock::new(|| {
+            regex::Regex::new(r"/note-assets/([A-Za-z0-9_-]+)/([A-Za-z0-9_.-]+)").unwrap()
+        });
+        let assets: std::collections::HashSet<_> = ASSET
+            .captures_iter(&copy.body)
+            .filter(|asset| asset.get(1).unwrap().as_str() == source)
+            .map(|asset| asset.get(2).unwrap().as_str())
+            .collect();
+        let existing: std::collections::HashMap<_, _> = assets
+            .iter()
+            .filter_map(|&name| {
+                self.note_image_path(&format!("/note-assets/{source}/{name}"))
+                    .ok()
+                    .map(|path| (name, path))
+            })
+            .collect();
+        let missing = assets.len() - existing.len();
+        let directory = if existing.is_empty() {
+            None
+        } else {
+            let directory = self
+                .data_dir()
+                .ok_or("Note image storage is unavailable")?
+                .join("note-assets")
+                .join(&copy.id);
+            let mut builder = std::fs::DirBuilder::new();
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::DirBuilderExt;
+                builder.mode(0o700);
+            }
+            builder.create(&directory).map_err(|e| e.to_string())?;
+            Some(directory)
+        };
+        let saved = (|| {
+            let mut copy = copy.clone();
+            if let Some(directory) = &directory {
+                for (&name, path) in &existing {
+                    let mut options = std::fs::OpenOptions::new();
+                    options.write(true).create_new(true);
+                    #[cfg(unix)]
+                    {
+                        use std::os::unix::fs::OpenOptionsExt;
+                        options.mode(0o600);
+                    }
+                    let mut output = options
+                        .open(directory.join(name))
+                        .map_err(|e| e.to_string())?;
+                    let mut input = std::fs::File::open(path).map_err(|e| e.to_string())?;
+                    std::io::copy(&mut input, &mut output).map_err(|e| e.to_string())?;
+                    output.sync_all().map_err(|e| e.to_string())?;
+                }
+                for path in [directory.as_path(), directory.parent().expect("asset root")] {
+                    std::fs::File::open(path)
+                        .and_then(|f| f.sync_all())
+                        .map_err(|e| e.to_string())?;
+                }
+                copy.body = ASSET
+                    .replace_all(&copy.body, |asset: &regex::Captures<'_>| {
+                        if &asset[1] == source && existing.contains_key(&asset[2]) {
+                            format!("/note-assets/{}/{}", copy.id, &asset[2])
+                        } else {
+                            asset[0].to_owned()
+                        }
+                    })
+                    .into_owned();
+            }
+            if copy.body.len() > MAX_BODY {
+                return Err("Content is too large".into());
+            }
+            let saved = upsert_note(&tx, &copy).map_err(|e| e.to_string())?;
+            tx.commit().map_err(|e| e.to_string())?;
+            Ok((saved, missing))
+        })();
+        if let (Err(_), Some(directory)) = (&saved, directory) {
+            let _ = std::fs::remove_dir_all(directory);
+        }
+        saved
+    }
+
+    fn prepare_note_upsert(&self, note: &NoteUpsert) -> Result<(), String> {
         valid_id(&note.id)?;
         if note.body.len() > MAX_BODY {
             return Err("Content is too large".into());
@@ -636,8 +761,7 @@ impl Store {
         if self.shared.is_some() {
             self.shared_writable()?;
         }
-        ensure_notes_table(&self.conn).map_err(|e| e.to_string())?;
-        upsert_note(&self.conn, note).map_err(|e| e.to_string())
+        ensure_notes_table(&self.conn).map_err(|e| e.to_string())
     }
 
     /// Update an existing note without changing its artifact subtype or
@@ -681,12 +805,42 @@ impl Store {
     }
 
     pub fn delete_note(&self, id: &str) -> Result<(), String> {
+        self.delete_note_checked(id, None).map(drop)
+    }
+
+    pub fn delete_note_if_current(
+        &self,
+        id: &str,
+        expected: Option<&Note>,
+    ) -> Result<bool, String> {
+        self.delete_note_checked(id, Some(expected))
+    }
+
+    fn delete_note_checked(
+        &self,
+        id: &str,
+        expected: Option<Option<&Note>>,
+    ) -> Result<bool, String> {
         valid_id(id)?;
         if self.shared.is_some() {
             self.shared_writable()?;
         }
         let tx = Transaction::new_unchecked(&self.conn, TransactionBehavior::Immediate)
             .map_err(|e| e.to_string())?;
+        if let Some(expected) = expected {
+            let mut current = if super::shared::has_table(&tx, "notes")? {
+                ensure_notes_table(&tx).map_err(|e| e.to_string())?;
+                get_content(&tx, id, "note").map_err(|e| e.to_string())?
+            } else {
+                None
+            };
+            if current.is_none() && self.shared.is_none() && id.starts_with("gpui-note-") {
+                current = self.get_note(id)?;
+            }
+            if current.as_ref() != expected {
+                return Ok(false);
+            }
+        }
         // Reservations have no note row yet, so the delete trigger alone is
         // insufficient. Keep this mutation in the same transaction as deletion.
         if super::shared::has_table(&tx, "note_recordings")? {
@@ -714,7 +868,7 @@ impl Store {
         if let Some(root) = self.data_dir() {
             let _ = std::fs::remove_dir_all(root.join("note-assets").join(id));
         }
-        Ok(())
+        Ok(true)
     }
 
     pub fn note_source_session(&self, note: &Note) -> Option<i64> {

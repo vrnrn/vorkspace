@@ -48,8 +48,7 @@ impl Shell {
             return Some(view.clone());
         }
         let summary = self.session_summaries.get(&id)?.clone();
-        self.add_loaded(summary, cx);
-        self.sessions.get(&id).cloned()
+        self.add_loaded(summary, cx)
     }
     pub(super) fn trim_session_histories(&mut self, shown: &HashSet<i64>, cx: &mut Context<Self>) {
         const INACTIVE_COUNT: usize = 8;

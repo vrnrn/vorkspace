@@ -12,17 +12,19 @@
 //!   gets two `Conversation`s writing one transcript or running one turn.
 //!
 //! Leases name the window that holds them and are re-validated at every
-//! claim: a lease whose window closed, or which no longer has the session
-//! loaded, is free. Nothing has to remember to release one.
+//! claim: a lease whose window closed is free. A window also releases the lease
+//! when it drops the loaded conversation.
+use super::windows::{WINDOW_STATE_KEY, WindowLayouts, WindowShared};
 use super::*;
 use crate::{
     bots::{MembershipChanged, SharedRoster},
     workspace::{VorkspaceDef, move_bot, reconcile_bots},
 };
-use gpui::{AppContext as _, WeakEntity};
+use gpui::{AppContext as _, EventEmitter, WeakEntity};
 use serde::{Deserialize, Serialize};
 
 const STORE_KEY: &str = "vorkspaces";
+const AUTOMATION_EVENTS_KEY: &str = "native-automation-inbox-retries";
 
 #[derive(Default, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
@@ -32,13 +34,28 @@ struct Saved {
 }
 
 pub(crate) struct AppCore {
-    store: Database,
-    writes: Arc<VorkspaceWrites>,
+    pub(super) store: Database,
+    writes: Arc<SettingsWrites>,
     pub(crate) vorkspaces: Vec<VorkspaceDef>,
     pub(crate) seen_bots: HashSet<String>,
     pub(super) bot_roster: Entity<SharedRoster>,
+    pub(super) layouts: WindowLayouts,
+    next_window_id: u64,
+    pub(super) remote: Arc<vorkspace_core::remote::Connections>,
+    pub(super) remote_refreshes: HashMap<String, Option<std::time::Instant>>,
+    pub(super) quick_shortcut: crate::composer::quick_composer::Shortcut,
     scheduler: Option<WeakEntity<Shell>>,
+    pub(super) automation_cutoff: i64,
+    pub(super) automation_recovered: bool,
+    automation_events: HashMap<String, vorkspace_core::inbox::Item>,
+    dock_badges: HashMap<u64, usize>,
+    idle_protection: HashMap<u64, HashSet<i64>>,
     sessions: HashMap<i64, WeakEntity<Shell>>,
+    session_deletions: HashSet<i64>,
+    pub(super) project_deletions: Arc<Mutex<HashSet<String>>>,
+    metadata_writes: HashMap<i64, WeakEntity<Shell>>,
+    pub(super) catalog_revision: u64,
+    pub(super) session_installs: crate::session_install::Registry,
     /// Windows in the order they joined; the oldest open one is the default
     /// destination for work no window owns.
     windows: Vec<WeakEntity<Shell>>,
@@ -47,25 +64,28 @@ pub(crate) struct AppCore {
 }
 
 #[derive(Default)]
-struct VorkspaceWrites {
-    pending: Mutex<Option<Arc<str>>>,
+struct SettingsWrites {
+    pending: Mutex<HashMap<&'static str, Arc<str>>>,
 }
 
-impl VorkspaceWrites {
+impl SettingsWrites {
     fn flush(&self, store: &Database) -> Result<(), String> {
         // Serialize writes through the store and pick the latest snapshot
         // only after acquiring it, including during app shutdown.
         let store = locked(store)?;
         let snapshot = self.pending.lock().unwrap().clone();
-        if let Some(snapshot) = snapshot {
-            store.save_setting(STORE_KEY, &snapshot)?;
+        if !snapshot.is_empty() {
+            let values: Vec<_> = snapshot
+                .iter()
+                .map(|(&key, value)| (key, value.as_ref()))
+                .collect();
+            store.save_settings(&values)?;
             let mut pending = self.pending.lock().unwrap();
-            if pending
-                .as_ref()
-                .is_some_and(|current| Arc::ptr_eq(current, &snapshot))
-            {
-                *pending = None;
-            }
+            pending.retain(|key, current| {
+                !snapshot
+                    .get(key)
+                    .is_some_and(|saved| Arc::ptr_eq(current, saved))
+            });
         }
         Ok(())
     }
@@ -76,6 +96,23 @@ impl VorkspaceWrites {
 #[derive(Default)]
 struct Installed(HashMap<usize, Entity<AppCore>>);
 impl gpui::Global for Installed {}
+
+pub(crate) fn bot_write_barriers(cx: &mut App) -> Vec<async_channel::Receiver<()>> {
+    let rosters = cx
+        .try_global::<Installed>()
+        .map(|installed| {
+            installed
+                .0
+                .values()
+                .map(|core| core.read(cx).bot_roster.clone())
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+    rosters
+        .into_iter()
+        .filter_map(|roster| roster.update(cx, |roster, cx| roster.write_barrier(cx)))
+        .collect()
+}
 
 fn store_key(store: &Database) -> usize {
     Arc::as_ptr(store) as *const () as usize
@@ -88,21 +125,56 @@ impl AppCore {
         if let Some(core) = cx.try_global::<Installed>().and_then(|i| i.0.get(&key)) {
             return core.clone();
         }
-        let saved: Saved = locked(store)
-            .ok()
-            .and_then(|s| s.setting(STORE_KEY).ok().flatten())
-            .and_then(|json| serde_json::from_str(&json).ok())
+        let (saved, layouts, automation_events, remote_dir) = locked(store)
+            .map(|db| {
+                let saved: Saved = db
+                    .setting(STORE_KEY)
+                    .ok()
+                    .flatten()
+                    .and_then(|json| serde_json::from_str(&json).ok())
+                    .unwrap_or_default();
+                (
+                    saved,
+                    WindowLayouts::load(&db),
+                    db.setting(AUTOMATION_EVENTS_KEY)
+                        .ok()
+                        .flatten()
+                        .and_then(|raw| {
+                            serde_json::from_str::<Vec<vorkspace_core::inbox::Item>>(&raw).ok()
+                        })
+                        .unwrap_or_default()
+                        .into_iter()
+                        .map(|item| (item.key(), item))
+                        .collect(),
+                    db.data_dir().map(std::path::Path::to_path_buf),
+                )
+            })
             .unwrap_or_default();
-        let writes = Arc::new(VorkspaceWrites::default());
+        let next_window_id = layouts
+            .entries
+            .iter()
+            .map(|entry| entry.id)
+            .max()
+            .unwrap_or(0)
+            + 1;
+        let remote_dir = remote_dir.unwrap_or_else(|| {
+            std::env::temp_dir().join(format!("vorkspace-remote-{}", std::process::id()))
+        });
+        let remote = Arc::new(vorkspace_core::remote::Connections::new(remote_dir));
+        vorkspace_core::remote::set_default_connections(remote.clone());
+        let writes = Arc::new(SettingsWrites::default());
         let quit_writes = writes.clone();
         let quit_store = store.clone();
+        let quit_remote = remote.clone();
         cx.on_app_quit(move |cx| {
             let writes = quit_writes.clone();
             let store = quit_store.clone();
+            let remote = quit_remote.clone();
             cx.background_executor().spawn(async move {
                 if let Err(error) = writes.flush(&store) {
-                    eprintln!("Could not save vorkspaces on quit: {error}");
+                    eprintln!("Could not save workspace settings on quit: {error}");
                 }
+                remote.shutdown();
             })
         })
         .detach();
@@ -122,8 +194,23 @@ impl AppCore {
                 vorkspaces: saved.vorkspaces,
                 seen_bots: saved.seen_bots,
                 bot_roster,
+                layouts,
+                next_window_id,
+                remote,
+                remote_refreshes: HashMap::new(),
+                quick_shortcut: Default::default(),
                 scheduler: None,
+                automation_cutoff: vorkspace_core::time::now_ms().min(i64::MAX as u64) as i64,
+                automation_recovered: false,
+                automation_events,
+                dock_badges: HashMap::new(),
+                idle_protection: HashMap::new(),
                 sessions: HashMap::new(),
+                session_deletions: HashSet::new(),
+                project_deletions: Default::default(),
+                metadata_writes: HashMap::new(),
+                catalog_revision: 0,
+                session_installs: Default::default(),
                 windows: Vec::new(),
                 bridge: None,
             }
@@ -210,18 +297,31 @@ impl AppCore {
             seen_bots: self.seen_bots.clone(),
         })
         .expect("vorkspace definitions serialize to JSON");
-        *self.writes.pending.lock().unwrap() = Some(json.into());
+        self.writes
+            .pending
+            .lock()
+            .unwrap()
+            .insert(STORE_KEY, json.into());
+        self.flush_settings(cx);
+        cx.notify();
+    }
+
+    pub(super) fn flush_pending(&self, cx: &App) -> gpui::Task<Result<(), String>> {
         let writes = self.writes.clone();
         let store = self.store.clone();
-        let work = cx
-            .background_executor()
-            .spawn(async move { writes.flush(&store) });
+        cx.background_executor()
+            .spawn(async move { writes.flush(&store) })
+    }
+
+    fn flush_settings(&self, cx: &mut Context<Self>) {
+        let work = self.flush_pending(cx);
         cx.spawn(async move |core, cx| {
             if let Err(error) = work.await {
                 let _ = core.update(cx, |core, cx| {
                     for window in &core.windows {
                         let _ = window.update(cx, |shell, cx| {
-                            shell.error = Some(format!("Could not save vorkspaces: {error}"));
+                            shell.error =
+                                Some(format!("Could not save workspace settings: {error}"));
                             cx.notify();
                         });
                     }
@@ -229,7 +329,101 @@ impl AppCore {
             }
         })
         .detach();
-        cx.notify();
+    }
+
+    pub(super) fn allocate_window(&mut self) -> u64 {
+        let id = self.next_window_id;
+        self.next_window_id += 1;
+        id
+    }
+
+    fn layout_values(layouts: &WindowLayouts) -> (String, String) {
+        let mut legacy: Workspace = layouts
+            .legacy()
+            .and_then(|raw| serde_json::from_str(raw).ok())
+            .unwrap_or_default();
+        if let Some(shared) = &layouts.shared {
+            shared.apply(&mut legacy);
+        }
+        (
+            serde_json::to_string(layouts).expect("serialize windows"),
+            serde_json::to_string(&legacy).expect("serialize the focused workspace"),
+        )
+    }
+
+    fn stage_layouts(&self, cx: &mut Context<Self>) {
+        let (windows, legacy) = Self::layout_values(&self.layouts);
+        let mut pending = self.writes.pending.lock().unwrap();
+        pending.insert(WINDOW_STATE_KEY, windows.into());
+        pending.insert("workspace", legacy.into());
+        drop(pending);
+        self.flush_settings(cx);
+    }
+
+    fn record_layout(
+        &mut self,
+        window: u64,
+        before: Option<&WindowShared>,
+        workspace: &mut Workspace,
+        focused: bool,
+        durable: bool,
+        cx: &mut Context<Self>,
+    ) -> Result<(), String> {
+        let local = WindowShared::from_workspace(workspace);
+        let mut next = self.layouts.clone();
+        let shared = next.shared.get_or_insert_with(|| local.clone());
+        if let Some(before) = before.filter(|before| *before != &local) {
+            shared.apply_edits(before, local);
+        }
+        shared.apply(workspace);
+        let shared_changed = next.shared != self.layouts.shared;
+        let state = serde_json::to_string(workspace).expect("serialize workspace");
+        if !next.record(window, state, focused) && !shared_changed {
+            return Ok(());
+        }
+        if durable {
+            let (windows, legacy) = Self::layout_values(&next);
+            let store = locked(&self.store)?;
+            store.save_settings(&[(WINDOW_STATE_KEY, &windows), ("workspace", &legacy)])?;
+            // The lock also orders this commit after any older queued flush.
+            let mut pending = self.writes.pending.lock().unwrap();
+            pending.remove(WINDOW_STATE_KEY);
+            pending.remove("workspace");
+        }
+        self.layouts = next;
+        if !durable {
+            self.stage_layouts(cx);
+        }
+        if shared_changed {
+            cx.notify();
+        }
+        Ok(())
+    }
+
+    fn close_layout(&mut self, id: u64, cx: &mut Context<Self>) {
+        self.keep_visible_agents(id, HashSet::new());
+        if self.dock_badges.remove(&id).is_some() {
+            crate::notifications::platform::set_dock_badge(self.dock_badges.values().sum());
+        }
+        if self.layouts.close(id) {
+            self.stage_layouts(cx);
+        }
+    }
+
+    pub(super) fn keep_visible_agents(&mut self, window: u64, ids: HashSet<i64>) {
+        let changed = if ids.is_empty() {
+            self.idle_protection.remove(&window).is_some()
+        } else if self.idle_protection.get(&window) != Some(&ids) {
+            self.idle_protection.insert(window, ids);
+            true
+        } else {
+            false
+        };
+        if changed {
+            vorkspace_core::provider::keep_idle_agents(
+                self.idle_protection.values().flatten().copied().collect(),
+            );
+        }
     }
 
     /// Whether `shell` may fire scheduled work now. A vacant or stale lease
@@ -244,21 +438,143 @@ impl AppCore {
         }
     }
 
+    pub(super) fn automation_events(&self) -> Vec<vorkspace_core::inbox::Item> {
+        self.automation_events.values().cloned().collect()
+    }
+
+    pub(super) fn queue_automation_events(
+        &mut self,
+        items: Vec<vorkspace_core::inbox::Item>,
+        cx: &mut Context<Self>,
+    ) {
+        let mut changed = false;
+        for item in items {
+            let key = item.key();
+            let current = self.automation_events.get(&key);
+            if current.is_none_or(|old| old != &item && old.updated_ms() <= item.updated_ms()) {
+                self.automation_events.insert(key, item);
+                changed = true;
+            }
+        }
+        if !changed {
+            return;
+        }
+        if self.automation_events.len() > 500 {
+            let mut items = self.automation_events();
+            items.sort_unstable_by_key(|item| std::cmp::Reverse(item.updated_ms()));
+            self.automation_events = items
+                .into_iter()
+                .take(500)
+                .map(|item| (item.key(), item))
+                .collect();
+        }
+        self.stage_automation_events(cx);
+    }
+
+    pub(super) fn settle_automation_events(
+        &mut self,
+        attempted: Vec<vorkspace_core::inbox::Item>,
+        retry: Vec<vorkspace_core::inbox::Item>,
+        cx: &mut Context<Self>,
+    ) {
+        let mut retry: HashMap<_, _> = retry.into_iter().map(|item| (item.key(), item)).collect();
+        let mut changed = false;
+        for item in attempted {
+            let key = item.key();
+            // A newer connector refresh may have arrived during the claim.
+            if self.automation_events.get(&key) != Some(&item) {
+                continue;
+            }
+            match retry.remove(&key) {
+                Some(pending) if pending != item => {
+                    self.automation_events.insert(key, pending);
+                    changed = true;
+                }
+                Some(_) => {}
+                None => {
+                    self.automation_events.remove(&key);
+                    changed = true;
+                }
+            }
+        }
+        if changed {
+            self.stage_automation_events(cx);
+        }
+    }
+
+    fn stage_automation_events(&self, cx: &mut Context<Self>) {
+        let snapshot =
+            serde_json::to_string(&self.automation_events()).expect("serialize connector retries");
+        self.writes
+            .pending
+            .lock()
+            .unwrap()
+            .insert(AUTOMATION_EVENTS_KEY, snapshot.into());
+        self.flush_settings(cx);
+    }
+
     /// Whether `shell` may load session `id` live. Another window keeps it
     /// only while that window exists and still has the session loaded.
-    fn claim_session(&mut self, id: i64, shell: &WeakEntity<Shell>, cx: &App) -> bool {
-        if let Some(holder) = self.sessions.get(&id)
-            && holder != shell
-            && holder
-                .upgrade()
-                .is_some_and(|other| other.read(cx).sessions.contains_key(&id))
+    fn claim_session(
+        &mut self,
+        id: i64,
+        shell: &WeakEntity<Shell>,
+        install: Option<&crate::session_install::Install>,
+    ) -> bool {
+        if !self.session_installs.permits(id, install)
+            || self.session_deletions.contains(&id)
+            || self
+                .metadata_writes
+                .get(&id)
+                .is_some_and(|owner| owner != shell && owner.upgrade().is_some())
+            || self.other_session_window(id, shell).is_some()
         {
             return false;
         }
         self.sessions.insert(id, shell.clone());
         true
     }
+
+    fn metadata_is_writing(&self, id: i64) -> bool {
+        self.metadata_writes
+            .get(&id)
+            .is_some_and(|owner| owner.upgrade().is_some())
+    }
+
+    fn other_session_window(
+        &self,
+        id: i64,
+        requester: &WeakEntity<Shell>,
+    ) -> Option<Entity<Shell>> {
+        self.sessions
+            .get(&id)
+            .filter(|holder| *holder != requester)
+            .and_then(WeakEntity::upgrade)
+    }
 }
+
+enum SessionCatalogChange {
+    Saved {
+        summary: Box<Session>,
+        worktree: Option<String>,
+        draft: bool,
+    },
+    Deleted(i64),
+}
+
+struct CatalogChanged {
+    source: WeakEntity<Shell>,
+    change: SessionCatalogChange,
+}
+
+impl EventEmitter<CatalogChanged> for AppCore {}
+
+struct GroupsChanged {
+    project: String,
+    groups: vorkspace_core::session_groups::Groups,
+}
+
+impl EventEmitter<GroupsChanged> for AppCore {}
 
 impl AppCore {
     fn register(&mut self, shell: WeakEntity<Shell>) {
@@ -274,9 +590,7 @@ impl AppCore {
     }
 
     pub(super) fn session_owner(&self, session: i64, cx: &App) -> Option<Entity<Shell>> {
-        if let Some(holder) = self.sessions.get(&session).and_then(|w| w.upgrade())
-            && holder.read(cx).sessions.contains_key(&session)
-        {
+        if let Some(holder) = self.sessions.get(&session).and_then(|w| w.upgrade()) {
             return Some(holder);
         }
         self.windows
@@ -327,11 +641,34 @@ impl AppCore {
 }
 
 impl Shell {
+    pub(super) fn project_is_deleting(&self, path: &str, cx: &App) -> bool {
+        self.app_core.as_ref().is_some_and(|core| {
+            core.read(cx)
+                .project_deletions
+                .lock()
+                .unwrap()
+                .iter()
+                .any(|root| super::project_delete::within(path, root))
+        })
+    }
+
+    pub(super) fn allow_project_entry(&mut self, path: &str, cx: &mut Context<Self>) -> bool {
+        let error = if self.project_is_deleting(path, cx) {
+            "This project is being deleted."
+        } else if vorkspace_core::worktree_management::is_being_removed(path) {
+            "This worktree is being removed."
+        } else {
+            return true;
+        };
+        self.error = Some(error.into());
+        cx.notify();
+        false
+    }
+
     /// Joins this window to the application's shared state. The first
     /// window seeds it from its own (possibly migrated) definitions.
-    pub(super) fn adopt_app_core(&mut self, cx: &mut Context<Self>) {
+    pub(super) fn adopt_app_core(&mut self, core: Entity<AppCore>, cx: &mut Context<Self>) {
         let new_projects = std::mem::take(&mut self.workspace.restored_new_projects);
-        let core = AppCore::get(&self.store, cx);
         if core.read(cx).vorkspaces.is_empty() {
             let (defs, seen) = (
                 self.workspace.vorkspaces.clone(),
@@ -369,18 +706,180 @@ impl Shell {
             }
         });
         self.take_shared_vorkspaces(&core, cx);
-        if self.workspace.reconcile_project_scope() {
+        if self.reconcile_project_admission(&core, cx) {
             self.sync_git(cx);
         }
         self.sync_inbox_scope(cx);
         self.observations.push(cx.observe(&core, |this, core, cx| {
-            if this.take_shared_vorkspaces(&core, cx) {
+            let definitions_changed = this.take_shared_vorkspaces(&core, cx);
+            if this.take_shared_window_state(&core, cx) || definitions_changed {
                 this.reconcile_after_shared_change(cx);
             }
         }));
+        self.observations
+            .push(cx.subscribe(&core, |this, _, event: &CatalogChanged, cx| {
+                if cx.weak_entity() == event.source {
+                    return;
+                }
+                match &event.change {
+                    SessionCatalogChange::Saved {
+                        summary,
+                        worktree,
+                        draft,
+                    } => {
+                        let id = summary.id;
+                        if this.sessions.contains_key(&id) {
+                            return;
+                        }
+                        if this
+                            .session_summaries
+                            .insert(id, (**summary).clone())
+                            .is_none()
+                        {
+                            this.order.push(id);
+                        }
+                        this.session_worktrees.insert(id, worktree.clone());
+                        if *draft {
+                            this.draft_sessions.insert(id);
+                        } else {
+                            this.draft_sessions.remove(&id);
+                        }
+                        this.sync_search_session(id, cx);
+                    }
+                    SessionCatalogChange::Deleted(id) => {
+                        this.remove_session_from_catalog(*id, cx);
+                    }
+                }
+                this.invalidate_chrome(cx);
+                cx.notify();
+            }));
+        self.observations
+            .push(cx.subscribe(&core, |this, _, event: &GroupsChanged, cx| {
+                if this.groups.get(&event.project) != Some(&event.groups) {
+                    this.groups
+                        .insert(event.project.clone(), event.groups.clone());
+                    this.invalidate_chrome(cx);
+                    cx.notify();
+                }
+            }));
+        self.observations.push(cx.subscribe(
+            &core,
+            |this, _, event: &super::remote_sessions::RemoteCatalog, cx| {
+                this.apply_remote_catalog(event, cx);
+            },
+        ));
         let me = cx.weak_entity();
         core.update(cx, |core, _| core.register(me));
+        let release = core.downgrade();
+        let window = self.window_layout;
+        cx.on_release(move |_, cx| {
+            let _ = release.update(cx, |core, _| {
+                core.keep_visible_agents(window, HashSet::new())
+            });
+        })
+        .detach();
         self.app_core = Some(core);
+    }
+
+    fn take_shared_window_state(&mut self, core: &Entity<AppCore>, cx: &mut Context<Self>) -> bool {
+        let shared = core.read(cx).layouts.shared.clone();
+        if shared == self.window_shared {
+            return false;
+        }
+        let Some(shared) = shared else {
+            return false;
+        };
+        let preferences = self.workspace.preferences.clone();
+        shared.apply(&mut self.workspace);
+        self.window_shared = Some(shared);
+        if preferences != self.workspace.preferences {
+            self.apply_preferences(cx);
+            self.sync_settings(cx);
+        }
+        true
+    }
+
+    pub(super) fn save_window_state(
+        &mut self,
+        mut next: Option<Workspace>,
+        durable: bool,
+        cx: &mut Context<Self>,
+    ) -> Result<(), String> {
+        if self.window_closing {
+            return Ok(());
+        }
+        let core = self.app_core.clone().expect("registered workspace window");
+        let workspace = next.as_mut().unwrap_or(&mut self.workspace);
+        core.update(cx, |core, cx| {
+            core.record_layout(
+                self.window_layout,
+                self.window_shared.as_ref(),
+                workspace,
+                self.window_active,
+                durable,
+                cx,
+            )
+        })?;
+        self.window_shared = Some(WindowShared::from_workspace(workspace));
+        if let Some(next) = next {
+            self.workspace = next;
+        }
+        Ok(())
+    }
+
+    #[cfg(test)]
+    pub(super) fn latest_window_layout(&self, cx: &App) -> String {
+        self.app_core
+            .as_ref()
+            .unwrap()
+            .read(cx)
+            .layouts
+            .entries
+            .iter()
+            .find(|entry| entry.id == self.window_layout)
+            .expect("persisted window layout")
+            .workspace
+            .clone()
+    }
+
+    pub(super) fn forget_closed_window(&self, cx: &mut Context<Self>) {
+        if let Some(core) = self.app_core.clone() {
+            core.update(cx, |core, cx| core.close_layout(self.window_layout, cx));
+        }
+    }
+
+    pub(super) fn pending_last_window_bot_writes(&self, cx: &App) -> bool {
+        self.app_core.as_ref().is_some_and(|core| {
+            let core = core.read(cx);
+            core.windows
+                .iter()
+                .filter(|window| window.upgrade().is_some())
+                .count()
+                == 1
+                && core.bot_roster.read(cx).has_pending_writes()
+        })
+    }
+
+    pub(super) fn unsaved_window_edits(&self, cx: &mut Context<Self>) -> bool {
+        if self.unsaved_files(cx) || !self.prepare_notes_close(cx) {
+            return true;
+        }
+        let Some(core) = &self.app_core else {
+            return false;
+        };
+        let me = cx.weak_entity();
+        let others: Vec<_> = core
+            .read(cx)
+            .windows
+            .iter()
+            .filter(|shell| *shell != &me)
+            .filter_map(WeakEntity::upgrade)
+            .collect();
+        others.into_iter().any(|shell| {
+            shell.update(cx, |shell, cx| {
+                shell.unsaved_files(cx) || !shell.prepare_notes_close(cx)
+            })
+        })
     }
 
     /// Starts the application's agent bridge if no window has yet.
@@ -420,7 +919,11 @@ impl Shell {
     }
 
     fn reconcile_after_shared_change(&mut self, cx: &mut Context<Self>) {
-        if self.workspace.reconcile_project_scope() {
+        if self
+            .app_core
+            .clone()
+            .is_some_and(|core| self.reconcile_project_admission(&core, cx))
+        {
             self.sync_git(cx);
         }
         self.sync_inbox_scope(cx);
@@ -478,6 +981,16 @@ impl Shell {
         cx.notify();
     }
 
+    fn reconcile_project_admission(&mut self, core: &Entity<AppCore>, cx: &App) -> bool {
+        let blocked = core.read(cx).project_deletions.lock().unwrap();
+        self.workspace.reconcile_project_scope_where(|path| {
+            !blocked
+                .iter()
+                .any(|root| super::project_delete::within(path, root))
+                && !vorkspace_core::worktree_management::is_being_removed(path)
+        })
+    }
+
     /// Hands this window's definitions to the other windows when they changed.
     pub(super) fn share_vorkspaces(&mut self, cx: &mut Context<Self>) {
         let Some(core) = self.app_core.clone() else {
@@ -522,13 +1035,251 @@ impl Shell {
         core.update(cx, |core, _| core.claim_scheduler(&me))
     }
 
+    pub(super) fn scheduler_window(&self, cx: &Context<Self>) -> Option<WeakEntity<Self>> {
+        self.app_core
+            .as_ref()?
+            .read(cx)
+            .scheduler
+            .as_ref()
+            .filter(|owner| **owner != cx.weak_entity())
+            .cloned()
+    }
+
+    pub(super) fn set_window_badge(&self, badge: usize, cx: &mut Context<Self>) {
+        if let Some(core) = &self.app_core {
+            core.update(cx, |core, _| {
+                if badge == 0 {
+                    core.dock_badges.remove(&self.window_layout);
+                } else {
+                    core.dock_badges.insert(self.window_layout, badge);
+                }
+                crate::notifications::platform::set_dock_badge(core.dock_badges.values().sum());
+            });
+        }
+    }
+
     /// Whether this window may load session `id` live.
-    pub(super) fn claim_session(&mut self, id: i64, cx: &mut Context<Self>) -> bool {
+    pub(super) fn claim_session(
+        &mut self,
+        id: i64,
+        install: Option<&crate::session_install::Install>,
+        cx: &mut Context<Self>,
+    ) -> bool {
         let Some(core) = self.app_core.clone() else {
             return true;
         };
         let me = cx.weak_entity();
-        core.update(cx, |core, cx| core.claim_session(id, &me, cx))
+        core.update(cx, |core, _| core.claim_session(id, &me, install))
+    }
+
+    pub(super) fn session_available_here(&self, id: i64, cx: &Context<Self>) -> bool {
+        self.session_available_for_install(id, None, cx)
+    }
+
+    pub(super) fn session_available_for_install(
+        &self,
+        id: i64,
+        install: Option<&crate::session_install::Install>,
+        cx: &Context<Self>,
+    ) -> bool {
+        self.app_core.as_ref().is_none_or(|core| {
+            let core = core.read(cx);
+            !core.session_deletions.contains(&id)
+                && core.session_installs.permits(id, install)
+                && !core.metadata_is_writing(id)
+                && core.other_session_window(id, &cx.weak_entity()).is_none()
+        })
+    }
+
+    pub(super) fn begin_session_metadata(&self, ids: &[i64], cx: &mut Context<Self>) {
+        if let Some(core) = &self.app_core {
+            let owner = cx.weak_entity();
+            core.update(cx, |core, _| {
+                for id in ids {
+                    core.metadata_writes.insert(*id, owner.clone());
+                }
+            });
+        }
+    }
+
+    pub(super) fn finish_session_metadata(&self, ids: &[i64], cx: &mut Context<Self>) {
+        if let Some(core) = &self.app_core {
+            let owner = cx.weak_entity();
+            core.update(cx, |core, _| {
+                for id in ids {
+                    if core.metadata_writes.get(id) == Some(&owner) {
+                        core.metadata_writes.remove(id);
+                    }
+                }
+            });
+        }
+    }
+
+    pub(super) fn publish_groups(&mut self, project: String, cx: &mut Context<Self>) {
+        match locked(&self.store).and_then(|store| store.groups(&project)) {
+            Ok(groups) => {
+                self.groups.insert(project.clone(), groups.clone());
+                if let Some(core) = &self.app_core {
+                    core.update(cx, |core, cx| {
+                        core.catalog_revision = core.catalog_revision.wrapping_add(1);
+                        cx.emit(GroupsChanged { project, groups });
+                    });
+                }
+            }
+            Err(error) => {
+                self.error = Some(format!("Could not refresh the project folders: {error}"))
+            }
+        }
+        let owner = cx.weak_entity();
+        cx.defer(move |cx| {
+            let _ = owner.update(cx, |shell, cx| {
+                shell.invalidate_chrome(cx);
+                cx.notify();
+            });
+        });
+    }
+
+    pub(super) fn session_install(&self, cx: &App) -> crate::session_install::Install {
+        self.app_core
+            .as_ref()
+            .expect("registered workspace window")
+            .read(cx)
+            .session_installs
+            .begin(&self.preparing_sessions)
+    }
+
+    pub(super) fn focus_session_window(&self, id: i64, cx: &mut Context<Self>) -> bool {
+        self.focus_session_window_with(id, move |shell, window, cx| shell.open(id, window, cx), cx)
+    }
+
+    pub(super) fn peer_session_view(
+        &self,
+        id: i64,
+        cx: &Context<Self>,
+    ) -> Option<Entity<Conversation>> {
+        let owner = self
+            .app_core
+            .as_ref()?
+            .read(cx)
+            .other_session_window(id, &cx.weak_entity())?;
+        owner.read(cx).sessions.get(&id).cloned()
+    }
+
+    pub(super) fn focus_session_window_with(
+        &self,
+        id: i64,
+        show: impl Fn(&mut Shell, &mut Window, &mut Context<Shell>) + 'static,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        let Some(owner) = self
+            .app_core
+            .as_ref()
+            .and_then(|core| core.read(cx).other_session_window(id, &cx.weak_entity()))
+            .map(|owner| owner.downgrade())
+        else {
+            return false;
+        };
+        let source = self.native_window;
+        cx.defer(move |cx| {
+            // A peer can reference a view while rendering its rail. Address
+            // the owning window independently of GPUI's render context.
+            let target = owner
+                .upgrade()
+                .and_then(|shell| shell.read(cx).native_window);
+            let shown = target.is_some_and(|target| {
+                target
+                    .update(cx, |shell, window, cx| {
+                        show(shell, window, cx);
+                        vorkspace_ui::traffic_lights::show(window);
+                        window.activate_window();
+                    })
+                    .is_ok()
+            });
+            if !shown
+                && owner.upgrade().is_none()
+                && let Some(source) = source
+            {
+                let _ = source.update(cx, |shell, window, cx| show(shell, window, cx));
+            }
+        });
+        true
+    }
+
+    pub(super) fn release_live_session(&mut self, id: i64, cx: &mut Context<Self>) {
+        self.sessions.remove(&id);
+        if let Some(core) = &self.app_core {
+            let me = cx.weak_entity();
+            core.update(cx, |core, _| {
+                if core.sessions.get(&id) == Some(&me) {
+                    core.sessions.remove(&id);
+                }
+            });
+        }
+    }
+
+    pub(super) fn reserve_session_deletion(&self, id: i64, cx: &mut Context<Self>) -> bool {
+        if !self.session_available_here(id, cx) {
+            return false;
+        }
+        self.app_core
+            .as_ref()
+            .is_none_or(|core| core.update(cx, |core, _| core.session_deletions.insert(id)))
+    }
+
+    pub(super) fn release_session_deletion(&self, id: i64, cx: &mut Context<Self>) {
+        if let Some(core) = &self.app_core {
+            core.update(cx, |core, _| core.session_deletions.remove(&id));
+        }
+    }
+
+    fn emit_catalog_change(&self, change: SessionCatalogChange, cx: &mut Context<Self>) {
+        if let Some(core) = &self.app_core {
+            let source = cx.weak_entity();
+            core.update(cx, |core, cx| {
+                core.catalog_revision = core.catalog_revision.wrapping_add(1);
+                cx.emit(CatalogChanged { source, change });
+            });
+        }
+    }
+
+    pub(super) fn publish_session_summary(&mut self, id: i64, cx: &mut Context<Self>) {
+        let Some(summary) = self.session_summaries.get(&id).cloned() else {
+            return;
+        };
+        let worktree = self.session_worktrees.get(&id).cloned().flatten();
+        self.emit_catalog_change(
+            SessionCatalogChange::Saved {
+                summary: Box::new(summary),
+                worktree,
+                draft: self.draft_sessions.contains(&id),
+            },
+            cx,
+        );
+    }
+
+    pub(super) fn publish_session_deletion(&self, id: i64, cx: &mut Context<Self>) {
+        self.emit_catalog_change(SessionCatalogChange::Deleted(id), cx);
+    }
+
+    pub(super) fn other_window_uses_project(&self, path: &str, cx: &Context<Self>) -> bool {
+        self.any_peer_window(cx, |shell, cx| shell.window_uses_project(path, cx))
+    }
+
+    pub(super) fn other_window_uses_worktree(&self, path: &str, cx: &Context<Self>) -> bool {
+        self.any_peer_window(cx, |shell, cx| shell.window_uses_worktree(path, cx))
+    }
+
+    fn any_peer_window(&self, cx: &Context<Self>, check: impl Fn(&Self, &App) -> bool) -> bool {
+        let Some(core) = &self.app_core else {
+            return false;
+        };
+        let me = cx.weak_entity();
+        core.read(cx)
+            .windows
+            .iter()
+            .filter(|window| *window != &me)
+            .filter_map(WeakEntity::upgrade)
+            .any(|shell| check(shell.read(cx), cx))
     }
 }
 
@@ -807,7 +1558,7 @@ mod tests {
             .unwrap();
         cx.run_until_parked();
         a.update(cx, |shell, _, cx| {
-            assert!(!shell.session_summaries.contains_key(&id));
+            assert!(shell.session_summaries.contains_key(&id));
             assert!(shell.reminders.is_empty());
             assert!(
                 locked(&shell.store).unwrap().reminders().unwrap()[0]
@@ -856,6 +1607,307 @@ mod tests {
         .unwrap();
         a.update(cx, |shell, _, _| assert!(shell.reminders.is_empty()))
             .unwrap();
+    }
+
+    #[gpui::test]
+    fn quick_composer_toggles_one_popup_across_windows(cx: &mut TestAppContext) {
+        let (a, b, _, _dir) = two_windows(cx);
+        for (window, expected) in [(a, 3), (b, 2), (b, 3), (a, 2)] {
+            window
+                .update(cx, |shell, window, cx| {
+                    shell.toggle_quick_composer(window, cx)
+                })
+                .unwrap();
+            cx.run_until_parked();
+            assert_eq!(cx.update(|cx| cx.windows().len()), expected);
+        }
+    }
+
+    #[gpui::test]
+    fn a_session_is_private_during_preparation_and_peers_receive_its_worktree(
+        cx: &mut TestAppContext,
+    ) {
+        let (a, b, _, _dir) = two_windows(cx);
+        let (summary, mut install) = a
+            .update(cx, |shell, window, cx| {
+                let mut install = shell.session_install(cx);
+                let summary = {
+                    let db = locked(&shell.store).unwrap();
+                    let summary = db.create("codex", &shell.workspace.project).unwrap();
+                    install.track(summary.id);
+                    assert!(
+                        !shell
+                            .app_core
+                            .as_ref()
+                            .unwrap()
+                            .read(cx)
+                            .session_installs
+                            .visible_sessions(&db)
+                            .unwrap()
+                            .iter()
+                            .any(|row| row.id == summary.id)
+                    );
+                    summary
+                };
+                assert!(!shell.allow_window_close(window, cx));
+                (summary, install)
+            })
+            .unwrap();
+        let id = summary.id;
+        b.update(cx, |shell, _, cx| {
+            assert!(!shell.session_available_here(id, cx));
+            assert!(shell.add_loaded(summary.clone(), cx).is_none());
+            assert!(!shell.session_summaries.contains_key(&id));
+        })
+        .unwrap();
+        let worktree = format!("{}/checkout", summary.cwd);
+        a.update(cx, |shell, _, cx| {
+            let view = shell.install_prepared(summary, &install, cx).unwrap();
+            view.update(cx, |view, cx| {
+                view.seed_new_settings(
+                    vorkspace_core::agent::Settings {
+                        worktree_cwd: Some(worktree.clone()),
+                        ..Default::default()
+                    },
+                    cx,
+                )
+            });
+            shell.publish_prepared(&view, Some(&mut install), cx);
+        })
+        .unwrap();
+        drop(install);
+        cx.run_until_parked();
+        b.update(cx, |shell, _, cx| {
+            assert!(shell.session_summaries.contains_key(&id));
+            assert_eq!(shell.session_worktrees.get(&id), Some(&Some(worktree)));
+            assert!(shell.ensure_session(id, cx).is_none());
+        })
+        .unwrap();
+    }
+
+    #[gpui::test]
+    fn a_peer_cannot_claim_a_cold_session_until_its_archive_commits(cx: &mut TestAppContext) {
+        let (a, b, _, _dir) = two_windows(cx);
+        let summary = a
+            .update(cx, |shell, _, _| {
+                locked(&shell.store)
+                    .unwrap()
+                    .create("codex", &shell.workspace.project)
+                    .unwrap()
+            })
+            .unwrap();
+        let id = summary.id;
+        cx.update(|cx| {
+            a.update(cx, |shell, _, cx| {
+                shell.session_summaries.insert(id, summary.clone());
+                shell.toggle_archive(id, cx);
+            })
+            .unwrap();
+            b.update(cx, |shell, _, cx| {
+                shell.session_summaries.insert(id, summary);
+                assert!(shell.ensure_session(id, cx).is_none());
+            })
+            .unwrap();
+        });
+        cx.run_until_parked();
+        b.update(cx, |shell, _, _| {
+            assert!(shell.session_summaries[&id].archived)
+        })
+        .unwrap();
+    }
+
+    #[gpui::test]
+    fn scheduler_handoff_keeps_new_connector_retries_and_the_durable_snapshot(
+        cx: &mut TestAppContext,
+    ) {
+        let (a, b, _, _dir) = two_windows(cx);
+        let item = vorkspace_core::inbox::Item {
+            provider: "github".into(),
+            kind: "issue".into(),
+            id: "event".into(),
+            updated_at: "2026-11-09T12:00:00Z".into(),
+            ..Default::default()
+        };
+        let newer = vorkspace_core::inbox::Item {
+            updated_at: "2026-11-09T12:01:00Z".into(),
+            ..item.clone()
+        };
+        cx.update(|cx| {
+            a.update(cx, |shell, _, cx| {
+                assert!(shell.holds_scheduler(cx));
+                shell.app_core.as_ref().unwrap().update(cx, |core, cx| {
+                    core.queue_automation_events(vec![item.clone()], cx);
+                });
+            })
+            .unwrap();
+            b.update(cx, |shell, _, cx| {
+                assert!(!shell.holds_scheduler(cx));
+                shell.app_core.as_ref().unwrap().update(cx, |core, cx| {
+                    core.queue_automation_events(vec![newer.clone()], cx);
+                    core.settle_automation_events(vec![item], Vec::new(), cx);
+                });
+            })
+            .unwrap();
+            a.update(cx, |_, window, _| window.remove_window()).unwrap();
+        });
+        cx.run_until_parked();
+        b.update(cx, |shell, _, cx| {
+            assert!(shell.holds_scheduler(cx));
+            assert_eq!(
+                shell
+                    .app_core
+                    .as_ref()
+                    .unwrap()
+                    .read(cx)
+                    .automation_events(),
+                std::slice::from_ref(&newer)
+            );
+            let raw = locked(&shell.store)
+                .unwrap()
+                .setting(AUTOMATION_EVENTS_KEY)
+                .unwrap()
+                .unwrap();
+            let saved: Vec<vorkspace_core::inbox::Item> = serde_json::from_str(&raw).unwrap();
+            assert_eq!(saved, [newer]);
+        })
+        .unwrap();
+    }
+
+    #[gpui::test]
+    fn a_project_pending_deletion_cannot_be_selected_in_a_peer(cx: &mut TestAppContext) {
+        let (a, b, _, dir) = two_windows(cx);
+        let path = dir.path().join("deleting");
+        std::fs::create_dir(&path).unwrap();
+        let path = path.to_string_lossy().into_owned();
+        let admissions = a
+            .update(cx, |shell, _, cx| {
+                shell
+                    .app_core
+                    .as_ref()
+                    .unwrap()
+                    .read(cx)
+                    .project_deletions
+                    .clone()
+            })
+            .unwrap();
+        let key = vorkspace_core::files::path_key(&path);
+        admissions.lock().unwrap().insert(key.clone());
+        b.update(cx, |shell, window, cx| {
+            let original = shell.workspace.project.clone();
+            shell.select_project(path.clone(), window, cx);
+            assert_eq!(shell.workspace.project, original);
+            assert!(
+                shell
+                    .error
+                    .as_ref()
+                    .is_some_and(|error| error.contains("being deleted"))
+            );
+        })
+        .unwrap();
+        admissions.lock().unwrap().remove(&key);
+        b.update(cx, |shell, window, cx| {
+            shell.select_project(path.clone(), window, cx);
+            assert_eq!(shell.workspace.project, path);
+        })
+        .unwrap();
+    }
+
+    #[gpui::test]
+    fn committed_folder_moves_are_applied_to_the_latest_groups_and_shared(cx: &mut TestAppContext) {
+        let (a, b, first, _dir) = two_windows(cx);
+        let (project, second) = a
+            .update(cx, |shell, _, _| {
+                let db = locked(&shell.store).unwrap();
+                let project = shell.workspace.project.clone();
+                let second = db.create("codex", &project).unwrap().id;
+                (project, second)
+            })
+            .unwrap();
+        cx.update(|cx| {
+            for (window, id, label) in [(a, first, "First"), (b, second, "Second")] {
+                window
+                    .update(cx, |shell, _, cx| {
+                        locked(&shell.store)
+                            .unwrap()
+                            .edit_groups(&project, |groups| {
+                                groups.move_session(id, None, Some(label))
+                            })
+                            .unwrap();
+                        shell.publish_groups(project.clone(), cx);
+                    })
+                    .unwrap();
+            }
+        });
+        for window in [a, b] {
+            window
+                .update(cx, |shell, _, _| {
+                    assert_eq!(
+                        shell.groups[&project].folder_of(first).unwrap().name,
+                        "First"
+                    );
+                    assert_eq!(
+                        shell.groups[&project].folder_of(second).unwrap().name,
+                        "Second"
+                    );
+                })
+                .unwrap();
+        }
+    }
+
+    #[gpui::test]
+    fn a_session_keeps_one_live_owner_and_peers_follow_its_catalog(cx: &mut TestAppContext) {
+        let (a, b, _, _dir) = two_windows(cx);
+        let id = a
+            .update(cx, |shell, window, cx| {
+                let summary = locked(&shell.store)
+                    .unwrap()
+                    .create("codex", &shell.workspace.project)
+                    .unwrap();
+                let id = summary.id;
+                shell.add(summary, cx);
+                shell.open(id, window, cx);
+                id
+            })
+            .unwrap();
+        cx.run_until_parked();
+        b.update(cx, |shell, window, cx| {
+            assert!(shell.session_summaries.contains_key(&id));
+            assert!(!shell.sessions.contains_key(&id));
+            let previous = shell.workspace.active;
+            shell.open(id, window, cx);
+            assert_eq!(shell.workspace.active, previous);
+            shell.delete_session(id, window, cx);
+            assert!(shell.error.as_deref().unwrap().contains("another window"));
+        })
+        .unwrap();
+        cx.run_until_parked();
+        assert_eq!(cx.update(|cx| cx.active_window()), Some(a.into()));
+        a.update(cx, |shell, _, cx| {
+            assert_eq!(shell.workspace.active, Some(id));
+            locked(&shell.store)
+                .unwrap()
+                .title(id, "Shared session")
+                .unwrap();
+            shell.sessions[&id].update(cx, |view, cx| view.rename("Shared session".into(), cx));
+        })
+        .unwrap();
+        cx.run_until_parked();
+        b.update(cx, |shell, _, _| {
+            assert_eq!(shell.session_summaries[&id].title, "Shared session");
+        })
+        .unwrap();
+
+        a.update(cx, |shell, window, cx| {
+            shell.request_close_window(window, cx)
+        })
+        .unwrap();
+        cx.run_until_parked();
+        b.update(cx, |shell, window, cx| {
+            shell.open(id, window, cx);
+            assert!(shell.sessions.contains_key(&id));
+            assert_eq!(shell.workspace.active, Some(id));
+        })
+        .unwrap();
     }
 
     #[gpui::test]
@@ -939,8 +1991,8 @@ mod tests {
             .unwrap();
         // Once the holder lets it go, the other window can take it.
         holder
-            .update(cx, |shell, _, _| {
-                shell.sessions.remove(&id);
+            .update(cx, |shell, _, cx| {
+                shell.release_live_session(id, cx);
             })
             .unwrap();
         assert!(
@@ -954,8 +2006,8 @@ mod tests {
     fn agent_calls_go_to_the_window_with_their_session(cx: &mut TestAppContext) {
         let (a, b, id, _dir) = two_windows(cx);
         // Make sure B is the window holding the session.
-        a.update(cx, |shell, _, _| {
-            shell.sessions.remove(&id);
+        a.update(cx, |shell, _, cx| {
+            shell.release_live_session(id, cx);
         })
         .unwrap();
         assert!(

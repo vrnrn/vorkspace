@@ -2,21 +2,41 @@ use super::*;
 
 impl Shell {
     pub(super) fn configure_quick_composer(&mut self, cx: &mut Context<Self>) {
-        if let Some(receiver) = self.quick.configure(&self.workspace.preferences) {
-            self.quick.task = Some(cx.spawn(async move |this, cx| {
-                while receiver.recv().await.is_ok() {
-                    let _ = this.update_in(cx, |this, window, cx| {
-                        this.toggle_quick_composer(window, cx)
-                    });
+        if let Some(core) = &self.app_core {
+            core.update(cx, |core, cx| {
+                if let Some(receiver) = core.quick_shortcut.configure(&self.workspace.preferences) {
+                    core.quick_shortcut.task = Some(cx.spawn(async move |_, cx| {
+                        while receiver.recv().await.is_ok() {
+                            cx.update(|cx| {
+                                if let Some(target) = workspace_target(cx)
+                                    .and_then(|window| window.downcast::<Shell>())
+                                {
+                                    let _ = target.update(cx, Shell::toggle_quick_composer);
+                                }
+                            });
+                        }
+                    }));
                 }
-            }));
+            });
         }
     }
+
+    pub(super) fn quick_window_active(&self, cx: &App) -> bool {
+        self.quick
+            .window
+            .is_some_and(|handle| cx.windows().contains(&handle.into()))
+    }
+
     pub(super) fn toggle_quick_composer(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if self.management_modal_focus(cx).is_some() {
             return;
         }
-        if let Some(handle) = self.quick.window.take()
+        self.quick.window = None;
+        let existing = cx
+            .windows()
+            .into_iter()
+            .find_map(|handle| handle.downcast::<crate::composer::quick_composer::QuickComposer>());
+        if let Some(handle) = existing
             && handle
                 .update(cx, |_, window, _| window.remove_window())
                 .is_ok()
@@ -48,6 +68,7 @@ impl Shell {
             .unwrap_or(initial);
         choice.access = crate::conversation::default_access(cx);
         let store = self.store.clone();
+        let scale = self.workspace.preferences.interface_scale();
         let bounds = gpui::Bounds::centered(None, gpui::size(px(680.), px(230.)), cx);
         let handle = cx.open_window(
             gpui::WindowOptions {
@@ -63,7 +84,7 @@ impl Shell {
                     crate::composer::quick_composer::QuickComposer::new(projects, choice, store, cx)
                 });
                 view.update(cx, |v, cx| {
-                    v.observe_scale(window, cx);
+                    window.set_ui_scale(scale, cx);
                     v.focus(window, cx);
                 });
                 view
@@ -134,9 +155,11 @@ impl Shell {
         let account = crate::accounts::get(cx)
             .map(|a| a.read(cx).selected(launch.kind, &launch.cwd))
             .unwrap_or_default();
+        let mut install = self.session_install(cx);
         let work = cx.background_executor().spawn(async move {
             let store = locked(&store)?;
             let summary = store.create(choice.kind.id(), &choice.cwd)?;
+            install.track(summary.id);
             let settings = vorkspace_core::agent::Settings {
                 account,
                 model: choice.model,
@@ -145,18 +168,21 @@ impl Shell {
                 ..Default::default()
             };
             store.save_agent_settings(summary.id, &settings)?;
-            Ok::<_, String>((summary, settings))
+            Ok::<_, String>((summary, settings, install))
         });
         cx.spawn(async move |this, cx| {
             let result = work.await;
             let _ = this.update_in(cx, |this, window, cx| {
                 this.finish_project_creation(&key);
                 match result {
-                    Ok((summary, settings)) => {
+                    Ok((summary, settings, mut install)) => {
                         let id = summary.id;
-                        this.add(summary, cx);
-                        this.sessions[&id]
-                            .update(cx, |v, cx| v.quick_submit(launch.prompt, settings, cx));
+                        let Some(view) = this.install_prepared(summary, &install, cx) else {
+                            this.session_install_failed(cx);
+                            return;
+                        };
+                        view.update(cx, |v, cx| v.quick_submit(launch.prompt, settings, cx));
+                        this.publish_prepared(&view, Some(&mut install), cx);
                         this.order.retain(|i| *i != id);
                         this.order.insert(0, id);
                         if launch.foreground
@@ -190,7 +216,7 @@ mod scale_tests {
         let (main, _, _) = crate::shell::tests::window(cx);
         let quick = main
             .update(cx, |shell, window, cx| {
-                shell.observe_scale(window, cx);
+                shell.initialize_scale(window, cx);
                 shell.workspace.preferences.ui_scale = 150;
                 shell.apply_preferences(cx);
                 shell.toggle_quick_composer(window, cx);

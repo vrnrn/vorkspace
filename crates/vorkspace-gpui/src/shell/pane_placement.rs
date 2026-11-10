@@ -221,9 +221,11 @@ impl Shell {
             }
         });
         let worktree_cwd = worktree.as_ref().map(|f| f.path.clone());
+        let mut install = self.session_install(cx);
         let work = cx.background_executor().spawn(async move {
             let store = locked(&store)?;
             let summary = store.create(kind.id(), &cwd)?;
+            install.track(summary.id);
             if worktree_cwd.is_some() {
                 store.save_agent_settings(
                     summary.id,
@@ -233,18 +235,21 @@ impl Shell {
                     },
                 )?;
             }
-            Ok::<_, String>(summary)
+            Ok::<_, String>((summary, install))
         });
         cx.spawn(async move |this, cx| {
             let result = work.await;
             let _ = this.update_in(cx, |this, window, cx| match result {
-                Ok(summary) => this.finish_split_creation(
-                    summary,
-                    worktree.as_ref(),
-                    (target, navigation_revision, dir),
-                    window,
-                    cx,
-                ),
+                Ok((summary, mut install)) => {
+                    let id = summary.id;
+                    let Some(view) = this.install_prepared(summary, &install, cx) else {
+                        this.session_install_failed(cx);
+                        return;
+                    };
+                    this.seed_worktree(id, worktree.as_ref(), cx);
+                    this.publish_prepared(&view, Some(&mut install), cx);
+                    this.finish_split_placement(id, (target, navigation_revision, dir), window, cx);
+                }
                 Err(error) => {
                     this.error = Some(error);
                     cx.notify();
@@ -262,6 +267,7 @@ impl Shell {
         })
     }
 
+    #[cfg(test)]
     pub(super) fn finish_split_creation(
         &mut self,
         summary: Session,
@@ -270,11 +276,24 @@ impl Shell {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let (target, navigation_revision, dir) = request;
         let id = summary.id;
-        let project = summary.cwd.clone();
-        self.add(summary, cx);
-        self.seed_worktree(id, worktree, cx);
+        let mut install = self.session_install(cx);
+        if let Some(view) = self.install_prepared(summary, &install, cx) {
+            self.seed_worktree(id, worktree, cx);
+            self.publish_prepared(&view, Some(&mut install), cx);
+            self.finish_split_placement(id, request, window, cx);
+        }
+    }
+
+    fn finish_split_placement(
+        &mut self,
+        id: i64,
+        request: (Option<i64>, u64, SplitDir),
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let (target, navigation_revision, dir) = request;
+        let project = self.session_summaries[&id].cwd.clone();
         self.order.retain(|s| *s != id);
         self.order.insert(0, id);
         if self.navigation_revision != navigation_revision || self.workspace.active != target {

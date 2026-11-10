@@ -535,28 +535,34 @@ impl Shell {
         self.leave_app_views(cx);
         self.navigation_revision += 1;
         let revision = self.navigation_revision;
+        let mut install = self.session_install(cx);
         let work = cx.background_executor().spawn(async move {
             let store = locked(&store)?;
             let mut summary = store.create(kind.id(), &cwd)?;
+            install.track(summary.id);
             if !note.title.trim().is_empty() {
                 store.title(summary.id, &note.title)?;
                 summary.title = note.title.clone();
             }
             store.save_agent_settings(summary.id, &settings)?;
-            Ok::<_, String>((summary, settings, note))
+            Ok::<_, String>((summary, settings, note, install))
         });
         cx.spawn(async move |this, cx| {
             let result = work.await;
             let _ = this.update_in(cx, |this, window, cx| match result {
-                Ok((summary, settings, note)) => {
+                Ok((summary, settings, note, mut install)) => {
                     let id = summary.id;
-                    this.add(summary, cx);
-                    this.sessions[&id].update(cx, |view, cx| {
+                    let Some(view) = this.install_prepared(summary, &install, cx) else {
+                        this.session_install_failed(cx);
+                        return;
+                    };
+                    view.update(cx, |view, cx| {
                         view.seed_new_settings(settings, cx);
                         view.input.update(cx, |input, cx| {
                             input.set_text(format!("@note/{} ", note.slug), cx)
                         });
                     });
+                    this.publish_prepared(&view, Some(&mut install), cx);
                     if this.navigation_revision == revision {
                         this.activate_session(id, window, cx);
                     }
@@ -608,27 +614,32 @@ impl Shell {
         let store = self.store.clone();
         self.navigation_revision += 1;
         let revision = self.navigation_revision;
+        let mut install = self.session_install(cx);
         let work = cx.background_executor().spawn(async move {
             if !std::path::Path::new(&cwd).is_dir() {
                 return Err("Choose a project folder before starting work on this item".into());
             }
             let store = locked(&store)?;
             let mut summary = store.create(kind.id(), &cwd)?;
+            install.track(summary.id);
             summary.title = format!("{} · {}", item.reference(), item.title);
             summary.work_item = Some(item.work_item());
             store.title(summary.id, &summary.title)?;
             store.set_work_item(summary.id, summary.work_item.as_ref())?;
             store.save_agent_settings(summary.id, &settings)?;
-            Ok::<_, String>((summary, settings, prompt))
+            Ok::<_, String>((summary, settings, prompt, install))
         });
         cx.spawn(async move |this, cx| {
             let result = work.await;
             let _ = this.update_in(cx, |this, window, cx| match result {
-                Ok((summary, settings, prompt)) => {
+                Ok((summary, settings, prompt, mut install)) => {
                     let id = summary.id;
-                    this.add(summary, cx);
-                    this.sessions[&id]
-                        .update(cx, |view, cx| view.quick_submit(prompt, settings, cx));
+                    let Some(view) = this.install_prepared(summary, &install, cx) else {
+                        this.session_install_failed(cx);
+                        return;
+                    };
+                    view.update(cx, |view, cx| view.quick_submit(prompt, settings, cx));
+                    this.publish_prepared(&view, Some(&mut install), cx);
                     if this.navigation_revision == revision {
                         this.activate_session(id, window, cx);
                     }

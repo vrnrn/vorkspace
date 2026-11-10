@@ -569,6 +569,31 @@ impl Bots {
                 .iter()
                 .any(|m| m.habit_sessions.contains(&id))
     }
+    pub(crate) fn has_active_work(&self, cx: &App) -> bool {
+        self.scheduling
+            || self.active_run.is_some()
+            || !self.running.is_empty()
+            || !self.loading_chats.is_empty()
+            || self.chats.values().any(|chat| {
+                let chat = chat.read(cx);
+                chat.busy || chat.external_submission_pending()
+            })
+    }
+
+    pub(crate) fn uses_working_copy(&self, path: &str, cx: &App) -> bool {
+        self.chats
+            .values()
+            .chain(self.running.values().map(|run| &run.view))
+            .any(|view| {
+                let view = view.read(cx);
+                let cwd = view
+                    .settings
+                    .worktree_cwd
+                    .as_deref()
+                    .unwrap_or(&view.summary.cwd);
+                vorkspace_core::files::is_resolved_inside(cwd, path)
+            })
+    }
     pub(crate) fn protected_app_target(&self, id: i64, cx: &App) -> bool {
         // Sidebar visibility is a display choice. Only internal identities
         // (and their active owners) are protected from ordinary app controls.

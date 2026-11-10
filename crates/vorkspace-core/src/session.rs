@@ -1,5 +1,5 @@
 //! Identity shared by every session-owning module, independent of how it is stored.
-#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct Session {
     pub id: i64,
     pub title: String,

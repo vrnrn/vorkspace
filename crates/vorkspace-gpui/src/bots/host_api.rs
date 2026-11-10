@@ -20,6 +20,7 @@ pub(crate) struct BotSession {
 
 pub(crate) struct AppStart {
     pub summary: Session,
+    pub install: Option<crate::session_install::Install>,
     pub settings: Settings,
     pub prompt: String,
     pub draft: bool,
@@ -38,7 +39,7 @@ pub(crate) trait BotsHost {
     fn session_entity(&self, id: i64, cx: &App) -> Option<Entity<Conversation>>;
     fn ensure_session(&self, id: i64, cx: &mut App) -> Option<Entity<Conversation>>;
     fn groups(&self, project: &str, cx: &App) -> Groups;
-    fn apply_groups(&self, project: String, groups: Groups, cx: &mut App);
+    fn apply_groups(&self, project: String, cx: &mut App);
     fn placement(
         &self,
         caller: i64,
@@ -46,6 +47,7 @@ pub(crate) trait BotsHost {
         input: &Value,
         cx: &App,
     ) -> Result<Option<(i64, Edge)>, String>;
+    fn begin_session_install(&self, cx: &App) -> Option<crate::session_install::Install>;
     fn install_start(
         &self,
         caller: i64,

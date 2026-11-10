@@ -89,10 +89,19 @@ impl Shell {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        let landing = self.workspace.vorkspace_landing_where(id, |path| {
+            !self.project_is_deleting(path, cx)
+                && !vorkspace_core::worktree_management::is_being_removed(path)
+        });
+        if landing.is_empty() {
+            let preferred = self.workspace.vorkspace_landing(id);
+            if !preferred.is_empty() && !self.allow_project_entry(&preferred, cx) {
+                return;
+            }
+        }
         if !self.select_vorkspace(id, cx) {
             return;
         }
-        let landing = self.workspace.vorkspace_landing(id);
         self.open_project_from_user(landing, window, cx);
         self.persist(cx);
         cx.notify();
@@ -132,6 +141,9 @@ impl Shell {
         if path.is_empty() {
             return true;
         }
+        if !self.allow_project_entry(path, cx) {
+            return false;
+        }
         let Some(id) = self
             .workspace
             .vorkspace_for_project(path)
@@ -165,6 +177,17 @@ impl Shell {
             .collect();
         items.extend([
             MenuItem::Separator,
+            MenuAction::new("window", "Open in New Window")
+                .submenu(
+                    self.workspace
+                        .vorkspaces
+                        .iter()
+                        .map(|def| {
+                            MenuAction::new(format!("new-window:{}", def.id), def.name.clone())
+                        })
+                        .collect(),
+                )
+                .into(),
             // No icon, so it lines up with the vorkspace names above.
             MenuAction::new("manage", "Manage vorkspaces").into(),
         ]);
@@ -180,6 +203,8 @@ impl Shell {
         if let Some(id) = action.strip_prefix("switch:") {
             let id = id.to_owned();
             self.switch_vorkspace(&id, window, cx);
+        } else if let Some(id) = action.strip_prefix("new-window:") {
+            self.new_window(Some(id), window, cx);
         } else if action == "manage" {
             self.open_vorkspace_dialog(None, window, cx);
         }

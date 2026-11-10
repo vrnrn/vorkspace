@@ -14,6 +14,8 @@ use std::collections::{BTreeMap, HashMap};
 const PROJECTS: &str = "remote-projects.v2";
 const SESSIONS: &str = "remote-sessions.v1";
 
+pub struct ListingBaseline(HashMap<i64, (Option<String>, Option<u64>, u64)>);
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct RemoteProject {
@@ -339,9 +341,43 @@ impl Store {
         project: &RemoteProject,
         live_host_ids: &std::collections::HashSet<String>,
     ) -> Result<(), String> {
+        let baseline = self.remote_listing_baseline(project)?;
+        self.prune_remote_listing(project, live_host_ids, &baseline)
+            .map(drop)
+    }
+
+    pub fn remote_listing_baseline(
+        &self,
+        project: &RemoteProject,
+    ) -> Result<ListingBaseline, String> {
+        Ok(ListingBaseline(
+            self.remote_sessions()?
+                .into_iter()
+                .filter_map(|(id, remote)| {
+                    (remote.project.environment_id == project.environment_id
+                        && remote.project.project_id == project.project_id)
+                        .then_some((
+                            id,
+                            (
+                                remote.session_id,
+                                remote.host_revision,
+                                remote.summary.updated_at,
+                            ),
+                        ))
+                })
+                .collect(),
+        ))
+    }
+
+    pub fn prune_remote_listing(
+        &self,
+        project: &RemoteProject,
+        live_host_ids: &std::collections::HashSet<String>,
+        baseline: &ListingBaseline,
+    ) -> Result<Vec<i64>, String> {
         let mut sessions = self.remote_sessions()?;
         let before: std::collections::HashSet<_> = sessions.keys().copied().collect();
-        sessions.retain(|_, remote| {
+        sessions.retain(|id, remote| {
             remote.project.environment_id != project.environment_id
                 || remote.project.project_id != project.project_id
                 || remote
@@ -350,14 +386,25 @@ impl Store {
                     .is_none_or(|id| live_host_ids.contains(id))
                 || !remote.outbox.is_empty()
                 || !remote.uploads.is_empty()
+                || baseline.0.get(id).is_none_or(|(host, revision, updated)| {
+                    host != &remote.session_id
+                        || *revision != remote.host_revision
+                        || *updated != remote.summary.updated_at
+                })
         });
-        self.hide_legacy_remote_sessions(
-            before.into_iter().filter(|id| !sessions.contains_key(id)),
-        )?;
+        let removed: Vec<_> = before
+            .into_iter()
+            .filter(|id| !sessions.contains_key(id))
+            .collect();
+        if removed.is_empty() {
+            return Ok(removed);
+        }
+        self.hide_legacy_remote_sessions(removed.iter().copied())?;
         self.save_setting(
             SESSIONS,
             &serde_json::to_string(&sessions).map_err(|e| e.to_string())?,
-        )
+        )?;
+        Ok(removed)
     }
 
     pub fn register_remote_summary(

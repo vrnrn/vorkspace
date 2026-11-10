@@ -27,6 +27,15 @@ pub(crate) enum Event {
     OpenTab(String),
     OpenSource(i64),
     AddToChat(Note),
+    Notice(String),
+}
+
+#[derive(Default)]
+struct Editors(HashMap<usize, Vec<gpui::WeakEntity<Notes>>>);
+impl gpui::Global for Editors {}
+
+fn editor_store(store: &Database) -> usize {
+    std::sync::Arc::as_ptr(store) as usize
 }
 
 pub(crate) struct Notes {
@@ -39,6 +48,8 @@ pub(crate) struct Notes {
     /// activates its existing editor instead of opening a second editor.
     open_tabs: HashSet<String>,
     selected: Option<String>,
+    saved_note: Option<Note>,
+    save_conflict: bool,
     query: Entity<Input>,
     focus: FocusHandle,
     title: Entity<Input>,
@@ -93,6 +104,14 @@ impl Notes {
     }
 
     fn with_pinned(store: Database, pinned: Option<String>, cx: &mut Context<Self>) -> Self {
+        let editor = cx.weak_entity();
+        let peers = cx
+            .default_global::<Editors>()
+            .0
+            .entry(editor_store(&store))
+            .or_default();
+        peers.retain(|peer| peer.upgrade().is_some());
+        peers.push(editor);
         let recording = cx.new(|cx| crate::meetings::Page::new(store.clone(), cx));
         let query =
             cx.new(|cx| Input::field("Filter notes", "Filter notes", page::secondary_ink(), cx));
@@ -176,6 +195,8 @@ impl Notes {
             store,
             notes: Vec::new(),
             selected: pinned.clone(),
+            saved_note: None,
+            save_conflict: false,
             pinned,
             open_tabs: HashSet::new(),
             query,
@@ -460,6 +481,10 @@ impl Notes {
                         {
                             this.load_selection(next, cx);
                         } else if let Some(id) = &this.selected {
+                            if !this.dirty && !this.ephemeral.contains(id) {
+                                this.saved_note =
+                                    this.notes.iter().find(|note| &note.id == id).cloned();
+                            }
                             let recording_id = this.recordings.get(id);
                             this.recording.update(cx, |page, cx| {
                                 page.show_note(id, recording_id.map(String::as_str), cx)
@@ -508,6 +533,10 @@ impl Notes {
     fn edited(&mut self, cx: &mut Context<Self>) {
         self.dirty = true;
         self.revision = self.revision.wrapping_add(1);
+        if self.save_conflict {
+            cx.notify();
+            return;
+        }
         self.error = None;
         self.debounce = Some(cx.spawn(async move |this, cx| {
             cx.background_executor()
@@ -539,6 +568,9 @@ impl Notes {
 
     fn persist(&mut self, finalize: bool, cx: &mut Context<Self>) {
         self.debounce = None;
+        if self.save_conflict || self.image_note.is_some() && self.image_note == self.selected {
+            return;
+        }
         let Some(mut draft) = self.draft(cx) else {
             return;
         };
@@ -567,10 +599,11 @@ impl Notes {
                 saved_title
             };
         }
-        let result =
-            locked(&self.store).and_then(|store| store.upsert_note(&draft.upsert(finalize)));
+        let result = locked(&self.store).and_then(|store| {
+            store.upsert_note_if_current(&draft.upsert(finalize), self.saved_note.as_ref())
+        });
         match result {
-            Ok(saved) => {
+            Ok(Some(saved)) => {
                 self.ephemeral.remove(&saved.id);
                 self.revision = self.revision.wrapping_add(1);
                 if finalize {
@@ -578,13 +611,72 @@ impl Notes {
                         .update(cx, |input, cx| input.set_text(saved.title.clone(), cx));
                 }
                 self.notes.retain(|note| note.id != saved.id);
+                self.saved_note = Some(saved.clone());
                 self.notes.push(saved);
                 self.notes
                     .sort_by(|a, b| b.updated_at.cmp(&a.updated_at).then(a.id.cmp(&b.id)));
                 self.dirty = false;
                 self.error = None;
             }
+            Ok(None) => {
+                self.save_conflict = true;
+                self.error = Some("This note changed elsewhere. Your edits are still here.".into());
+            }
             Err(error) => self.error = Some(format!("Could not save note: {error}")),
+        }
+        cx.notify();
+    }
+
+    fn resolve_save_conflict(&mut self, save_copy: bool, cx: &mut Context<Self>) {
+        if !self.save_conflict {
+            return;
+        }
+        if save_copy {
+            self.add_tag(cx);
+        }
+        let Some(draft) = self.draft(cx) else {
+            return;
+        };
+        let result = locked(&self.store).and_then(|store| {
+            let latest = store.get_note(&draft.id)?;
+            let copy = if save_copy {
+                let mut copy = draft.upsert(true);
+                copy.id = format!("note-{}", uuid::Uuid::new_v4().simple());
+                let title = if draft.title.trim().is_empty() {
+                    notes::title(&draft.body)
+                } else {
+                    draft.title.clone()
+                };
+                copy.title = format!("{title} (copy)");
+                Some(store.copy_note_draft(&draft.id, &copy)?)
+            } else {
+                None
+            };
+            Ok((latest, copy))
+        });
+        match result {
+            Ok((latest, copy)) => {
+                self.notes.retain(|note| note.id != draft.id);
+                let selected = if latest.is_some() || self.pinned.is_some() {
+                    Some(draft.id)
+                } else {
+                    None
+                };
+                self.notes.extend(latest);
+                self.load_selection(selected, cx);
+                self.error = None;
+                if let Some((copy, missing)) = copy {
+                    let id = copy.id.clone();
+                    self.notes.insert(0, copy);
+                    cx.emit(Event::OpenTab(id));
+                    if missing > 0 {
+                        cx.emit(Event::Notice(format!(
+                            "Saved a copy. {missing} original image(s) could not be recovered."
+                        )));
+                    }
+                }
+            }
+            Err(error) => self.error = Some(format!("Could not resolve the note edit: {error}")),
         }
         cx.notify();
     }
@@ -623,10 +715,15 @@ impl Notes {
         }
         self.selected = id;
         self.dirty = false;
+        self.save_conflict = false;
         let note = self
             .notes
             .iter()
             .find(|note| Some(&note.id) == self.selected.as_ref())
+            .cloned();
+        self.saved_note = note
+            .as_ref()
+            .filter(|note| !self.ephemeral.contains(&note.id))
             .cloned();
         if let Some(note) = &note {
             let recording_id = self.recordings.get(&note.id).cloned();
@@ -728,22 +825,64 @@ impl Notes {
             cx.notify();
             return;
         }
+        if self.peer_has_unfinished_note(&id, cx) {
+            self.confirm_delete = false;
+            self.error = Some(
+                "This note has unfinished edits in another window. Save them before deleting it."
+                    .into(),
+            );
+            cx.notify();
+            return;
+        }
         if self.recordings.contains_key(&id) {
+            let expected = self.saved_note.clone();
             self.recording
-                .update(cx, |page, cx| page.delete_note_recording(cx));
+                .update(cx, |page, cx| page.delete_note_recording(expected, cx));
         } else {
             self.delete_saved_note(&id, cx);
         }
     }
 
+    fn peer_has_unfinished_note(&self, id: &str, cx: &Context<Self>) -> bool {
+        let current = cx.weak_entity();
+        cx.try_global::<Editors>()
+            .and_then(|editors| editors.0.get(&editor_store(&self.store)))
+            .into_iter()
+            .flatten()
+            .filter(|peer| **peer != current)
+            .filter_map(gpui::WeakEntity::upgrade)
+            .any(|peer| {
+                let peer = peer.read(cx);
+                peer.image_note.as_deref() == Some(id)
+                    || peer.recording.read(cx).has_pending_note_edit(id)
+                    || (peer.selected.as_deref() == Some(id)
+                        && (peer.dirty
+                            || peer.title.read(cx).is_composing()
+                            || peer.body.read(cx).is_composing()
+                            || !peer.tag.read(cx).content.is_empty()))
+            })
+    }
+
     fn delete_saved_note(&mut self, id: &str, cx: &mut Context<Self>) {
         let selected = self.selected.as_deref() == Some(id);
-        if selected {
-            self.debounce = None;
-        }
-        let result = locked(&self.store).and_then(|store| store.delete_note(id));
+        let expected = if selected {
+            self.saved_note.as_ref()
+        } else {
+            self.notes
+                .iter()
+                .find(|note| note.id == id && !self.ephemeral.contains(id))
+        };
+        let result =
+            locked(&self.store).and_then(|store| store.delete_note_if_current(id, expected));
+        self.confirm_delete = false;
         match result {
-            Ok(()) => self.forget_note(id, cx),
+            Ok(true) => self.forget_note(id, cx),
+            Ok(false) => {
+                self.error = Some(
+                    "This note changed in another window. Reload it before deleting it.".into(),
+                );
+                self.save_conflict |= selected && self.dirty;
+            }
             Err(error) => self.error = Some(error),
         }
         cx.notify();
@@ -858,6 +997,7 @@ impl Notes {
         self.image_drag = false;
         let work = cx.background_executor().spawn(async move {
             let store = locked(&store)?;
+            let creates_note = draft.is_some() && store.get_note(&id)?.is_none();
             let mut images = Vec::new();
             let mut failure = None;
             for path in paths {
@@ -871,14 +1011,19 @@ impl Notes {
                     failure.unwrap_or_else(|| "Drop a PNG, JPG, GIF, WebP, or SVG image.".into())
                 );
             }
-            Ok((id, images))
+            let staged = if creates_note {
+                store.get_note(&id)?
+            } else {
+                None
+            };
+            Ok((id, images, staged))
         });
         cx.spawn(async move |this, cx| {
             let result = work.await;
             let _ = this.update_in(cx, |this, window, cx| {
                 this.image_note = None;
                 match result {
-                    Ok((id, images)) => {
+                    Ok((id, images, staged)) => {
                         this.ephemeral.remove(&id);
                         let block = images
                             .iter()
@@ -886,6 +1031,9 @@ impl Notes {
                             .collect::<Vec<_>>()
                             .join("\n\n");
                         if this.selected.as_deref() == Some(&id) {
+                            if staged.is_some() {
+                                this.saved_note = staged;
+                            }
                             let text = this.body.read(cx).content.to_string();
                             let from = range.start.min(text.len());
                             let to = range.end.max(from).min(text.len());
@@ -923,23 +1071,30 @@ impl Notes {
                             }
                         } else if let Some(note) = this.notes.iter_mut().find(|note| note.id == id)
                         {
-                            this.revision = this.revision.wrapping_add(1);
-                            // Finish a drop on its original note after navigation.
-                            note.body = format!(
-                                "{}{}{}",
-                                note.body,
-                                if note.body.is_empty() || note.body.ends_with("\n\n") {
-                                    ""
-                                } else {
-                                    "\n\n"
-                                },
-                                block
-                            );
-                            let update = note.upsert(false);
-                            if let Err(error) =
-                                locked(&this.store).and_then(|store| store.upsert_note(&update))
-                            {
-                                this.error = Some(error);
+                            // Append to the current durable note after navigation.
+                            // The first image of a new draft is already saved.
+                            let result = locked(&this.store).and_then(|store| {
+                                let latest = store.get_note(&id)?.ok_or("Note no longer exists")?;
+                                let mut update = latest.upsert(false);
+                                for image in images.iter().skip(usize::from(staged.is_some())) {
+                                    if !update.body.is_empty() && !update.body.ends_with("\n\n") {
+                                        update.body.push_str("\n\n");
+                                    }
+                                    update.body.push_str(&notes::image_markdown(image));
+                                }
+                                if update.body == latest.body {
+                                    return Ok(latest);
+                                }
+                                store
+                                    .upsert_note_if_current(&update, Some(&latest))?
+                                    .ok_or_else(|| "The note changed while adding images.".into())
+                            });
+                            match result {
+                                Ok(saved) => {
+                                    this.revision = this.revision.wrapping_add(1);
+                                    *note = saved;
+                                }
+                                Err(error) => this.error = Some(error),
                             }
                         }
                     }
@@ -1775,21 +1930,47 @@ impl gpui::Render for Notes {
                         .px_4()
                         .py_2()
                         .flex()
+                        .when(self.save_conflict, |d| d.flex_wrap())
                         .items_center()
                         .gap_2()
                         .text_size(px(12.))
                         .text_color(vorkspace_ui::theme::danger())
                         .child(div().flex_1().child(error))
-                        .child(
-                            div()
-                                .id("retry-note-save")
-                                .role(Role::Button)
-                                .map(vorkspace_ui::theme::tab_reachable)
-                                .aria_label("Retry saving note")
-                                .underline()
-                                .child("Retry")
-                                .on_click(cx.listener(|this, _, _, cx| this.flush(cx))),
-                        ),
+                        .when(!self.save_conflict, |d| {
+                            d.child(
+                                div()
+                                    .id("retry-note-save")
+                                    .role(Role::Button)
+                                    .map(vorkspace_ui::theme::tab_reachable)
+                                    .aria_label("Retry saving note")
+                                    .underline()
+                                    .child("Retry")
+                                    .on_click(cx.listener(|this, _, _, cx| this.flush(cx))),
+                            )
+                        })
+                        .when(self.save_conflict, |d| {
+                            d.child(
+                                page::secondary("note-save-copy", "Save a Copy", false, false)
+                                    .debug_selector(|| "note-save-copy".into())
+                                    .child("Save a Copy")
+                                    .on_click(cx.listener(|this, _, _, cx| {
+                                        this.resolve_save_conflict(true, cx)
+                                    })),
+                            )
+                            .child(
+                                page::secondary(
+                                    "note-reload-latest",
+                                    "Discard and Reload",
+                                    false,
+                                    false,
+                                )
+                                .debug_selector(|| "note-reload-latest".into())
+                                .child("Discard and Reload")
+                                .on_click(cx.listener(
+                                    |this, _, _, cx| this.resolve_save_conflict(false, cx),
+                                )),
+                            )
+                        }),
                 )
             })
             .when(self.project_open, |d| d.child(self.project_picker(cx)))
@@ -1839,6 +2020,150 @@ mod tests {
         let visual = VisualTestContext::from_window(window.into(), cx);
         visual.run_until_parked();
         (window, visual)
+    }
+
+    #[gpui::test]
+    fn deleting_a_note_checks_peer_drafts_and_the_saved_revision(cx: &mut TestAppContext) {
+        let store = store();
+        locked(&store)
+            .unwrap()
+            .upsert_note(&notes::NoteUpsert {
+                id: "shared".into(),
+                title: "Shared note".into(),
+                body: "Original".into(),
+                ..Default::default()
+            })
+            .unwrap();
+        let (first, mut first_visual) = view(cx, &store);
+        let (second, mut second_visual) = view(cx, &store);
+        second
+            .update(&mut second_visual, |notes, _, cx| {
+                notes
+                    .body
+                    .update(cx, |body, cx| body.set_text("Peer draft".into(), cx));
+                notes.edited(cx);
+            })
+            .unwrap();
+        first
+            .update(&mut first_visual, |notes, _, cx| {
+                notes.delete(cx);
+                notes.delete(cx);
+                assert!(
+                    notes
+                        .error
+                        .as_ref()
+                        .is_some_and(|error| error.contains("unfinished edits"))
+                );
+            })
+            .unwrap();
+        second
+            .update(&mut second_visual, |notes, _, cx| notes.flush(cx))
+            .unwrap();
+        first
+            .update(&mut first_visual, |notes, _, cx| {
+                notes.delete(cx);
+                notes.delete(cx);
+                assert!(
+                    notes
+                        .error
+                        .as_ref()
+                        .is_some_and(|error| error.contains("changed in another window"))
+                );
+            })
+            .unwrap();
+        assert_eq!(
+            locked(&store)
+                .unwrap()
+                .get_note("shared")
+                .unwrap()
+                .unwrap()
+                .body,
+            "Peer draft"
+        );
+    }
+
+    #[gpui::test]
+    fn stale_note_edits_are_preserved_without_overwriting_the_other_window(
+        cx: &mut TestAppContext,
+    ) {
+        let store = store();
+        locked(&store)
+            .unwrap()
+            .upsert_note(&notes::NoteUpsert {
+                id: "shared".into(),
+                title: "Shared note".into(),
+                body: "Original body".into(),
+                ..Default::default()
+            })
+            .unwrap();
+        let (first, mut first_visual) = view(cx, &store);
+        let (second, mut second_visual) = view(cx, &store);
+        for (window, visual, text) in [
+            (first, &mut first_visual, "The first editor's body"),
+            (second, &mut second_visual, "The second editor's body"),
+        ] {
+            window
+                .update(visual, |notes, _, cx| {
+                    notes
+                        .body
+                        .update(cx, |body, cx| body.set_text(text.into(), cx));
+                    notes.edited(cx);
+                    notes.flush(cx);
+                })
+                .unwrap();
+        }
+        second_visual.refresh().unwrap();
+        second
+            .update(&mut second_visual, |notes, _, cx| {
+                assert!(notes.save_conflict && notes.dirty);
+                assert!(!notes.prepare_close(cx));
+                assert_eq!(notes.body.read(cx).content, "The second editor's body");
+            })
+            .unwrap();
+        let button = second_visual.debug_bounds("note-save-copy").unwrap();
+        second_visual.simulate_click(button.center(), Default::default());
+        second_visual.run_until_parked();
+
+        {
+            let db = locked(&store).unwrap();
+            let notes = db.list_notes().unwrap();
+            assert_eq!(notes.len(), 2);
+            assert_eq!(
+                db.get_note("shared").unwrap().unwrap().body,
+                "The first editor's body"
+            );
+            let copy = notes.iter().find(|note| note.id != "shared").unwrap();
+            assert_eq!(copy.title, "Shared note (copy)");
+            assert_eq!(copy.body, "The second editor's body");
+            db.delete_note("shared").unwrap();
+        }
+        second
+            .update(&mut second_visual, |notes, _, cx| {
+                notes.body.update(cx, |body, cx| {
+                    body.set_text("Saved note was deleted".into(), cx)
+                });
+                notes.edited(cx);
+                notes.flush(cx);
+                assert!(notes.save_conflict);
+            })
+            .unwrap();
+        assert!(
+            locked(&store)
+                .unwrap()
+                .get_note("shared")
+                .unwrap()
+                .is_none()
+        );
+        second_visual.refresh().unwrap();
+        let button = second_visual.debug_bounds("note-reload-latest").unwrap();
+        second_visual.simulate_click(button.center(), Default::default());
+        second_visual.run_until_parked();
+        second
+            .update(&mut second_visual, |notes, _, _| {
+                assert!(!notes.save_conflict);
+                assert!(!notes.dirty);
+            })
+            .unwrap();
     }
 
     #[gpui::test]

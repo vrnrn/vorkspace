@@ -18,12 +18,6 @@ impl Inbox {
                 && !self.state.hidden_jira_projects.is_empty())
     }
     pub(crate) fn filters_changed(&mut self, refetch: bool, cx: &mut Context<Self>) {
-        if self.state.source == "jira"
-            && let Some(owner) = self.owner.clone()
-        {
-            let hidden = self.state.hidden_jira_projects.clone();
-            let _ = owner.update(cx, |owner, _| owner.state.hidden_jira_projects = hidden);
-        }
         self.save(cx);
         if self.active
             && let Some(item) = self.visible_items(cx).first()

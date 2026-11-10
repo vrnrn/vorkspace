@@ -3,12 +3,12 @@ use super::*;
 use serde_json::{Value, json};
 use std::path::Path;
 use vorkspace_core::bot::{Document, Launch, bridge::Call, files, memory};
-use vorkspace_core::{session_groups::Groups, time::now_ms};
+use vorkspace_core::time::now_ms;
 enum Effect {
     Card(Value),
     None,
     Start(Box<super::host_api::AppStart>),
-    Groups(String, Groups),
+    Groups(String),
 }
 fn text(v: &Value, key: &str, max: usize) -> Result<String, String> {
     v.get(key)
@@ -136,9 +136,7 @@ impl Bots {
                             this.hold_card(call.session, &bot_id, value);
                             this.save(cx);
                         }
-                        Effect::Groups(project, groups) => {
-                            this.owner.apply_groups(project, groups, cx);
-                        }
+                        Effect::Groups(project) => this.owner.apply_groups(project, cx),
                         Effect::Start(_) => unreachable!(),
                     }
                     this.reload_files(&bot_id, cx);
@@ -512,10 +510,12 @@ impl Bots {
                 let settings=source.as_ref().map(|v|v.read(cx).bot_execution_settings()).unwrap_or_default();
                 let mut launch=match bot::launch::Launch::parse(&input,&source_provider,&source_project,&project,settings,false){Ok(launch)=>launch,Err(error)=>{self.finish_call(call,Err(error),cx);return;}};
                 if launch.provider.id()!=source_provider { launch.settings.account=crate::accounts::get(cx).map(|center|center.read(cx).selected(launch.provider,&project)).unwrap_or_default(); }
+                let Some(mut install)=self.owner.begin_session_install(cx) else {self.finish_call(call,Err("Workspace window closed".into()),cx);return;};
                 self.call_work(call,&actor.id,target,move|store|{
                     let mut store=locked(&store)?;
                     let summary=launch.create(&mut store,&project)?;
-                    Ok((json!({"sessionId":summary.id,"accepted":true,"project":project}),Effect::Start(Box::new(super::host_api::AppStart{summary,settings:launch.settings,prompt:launch.prompt,draft:launch.draft,reveal:launch.reveal,placement,cleanup:launch.created_worktree}))))
+                    install.track(summary.id);
+                    Ok((json!({"sessionId":summary.id,"accepted":true,"project":project}),Effect::Start(Box::new(super::host_api::AppStart{summary,install:Some(install),settings:launch.settings,prompt:launch.prompt,draft:launch.draft,reveal:launch.reveal,placement,cleanup:launch.created_worktree}))))
                 },cx);return;
             }
             "worktrees.remove"=>{
@@ -631,10 +631,12 @@ impl Bots {
                 let session=match id(&input,"sessionId"){Ok(id)=>id,Err(e)=>{self.finish_call(call,Err(e),cx);return;}};
                 let allowed=self.owner.ensure_session(session,cx).is_some_and(|v|v.read(cx).summary.cwd==project);
                 if !allowed{self.finish_call(call,Err("Session is outside this project".into()),cx);return;}
-                let mut groups=self.owner.groups(&project,cx);
-                if let Some(name)=input.get("newFolderName").and_then(Value::as_str){if let Some(folder)=groups.create_folder(&[session],bot::new_id()){groups.rename_folder(&folder,name);}}
-                else if let Some(folder)=input.get("folderId").and_then(Value::as_str){if groups.folder(folder).is_none(){self.finish_call(call,Err("Folder not found".into()),cx);return;}groups.add_to_folder(folder,session);}else{groups.remove_sessions(&[session]);}
-                self.call_work(call,&actor.id,target,move|store|{locked(&store)?.save_groups(&project,&groups)?;Ok((json!({"moved":true}),Effect::Groups(project,groups)))},cx);return;
+                self.call_work(call,&actor.id,target,move|store|{
+                    locked(&store)?.edit_groups(&project, |groups| groups.move_session(
+                        session, input["folderId"].as_str(), input["newFolderName"].as_str(),
+                    ))?;
+                    Ok((json!({"moved":true}),Effect::Groups(project)))
+                },cx);return;
             }
             "artifacts.list"=>Ok(json!(bot.documents.iter().filter(|d|input.get("kind").and_then(Value::as_str).is_none_or(|k|k==d.kind)).skip(input.get("offset").and_then(Value::as_u64).unwrap_or(0) as usize).take(input.get("limit").and_then(Value::as_u64).unwrap_or(50).min(200) as usize).collect::<Vec<_>>())),
             "artifacts.read"=>input.get("id").and_then(Value::as_str).and_then(|id|bot.documents.iter().find(|d|d.id==id)).map(|d|json!(d)).ok_or("Document not found".into()),
@@ -718,29 +720,40 @@ if let Some(enabled)=input.get("enabled").and_then(Value::as_bool){h.enabled=ena
             return;
         };
         let project = launch.cwd.clone();
-        let mut groups = self.owner.groups(&project, cx);
-        let folder = groups
-            .folders
-            .iter()
-            .find(|f| f.name == bot.label())
-            .map(|f| f.id.clone())
-            .or_else(|| groups.create_folder(&[session], bot::new_id()));
-        if let Some(folder) = folder {
-            groups.rename_folder(&folder, &bot.label());
-            let color = bot::COLORS_BOT
-                .iter()
-                .position(|c| *c == bot.color)
-                .map(|n| if n == 8 { 6 } else { n + 1 });
-            groups.set_color(&folder, color);
-            groups.add_to_folder(&folder, session);
-        }
-        self.owner.apply_groups(project.clone(), groups.clone(), cx);
         let store = self.store.clone();
-        cx.background_executor()
-            .spawn(async move {
-                let _ = locked(&store).and_then(|db| db.save_groups(&project, &groups));
+        let owner = self.owner.clone();
+        let saved_project = project.clone();
+        let work = cx.background_executor().spawn(async move {
+            locked(&store)?.edit_groups(&saved_project, |groups| {
+                let label = bot.label();
+                let folder = groups
+                    .folders
+                    .iter()
+                    .find(|folder| folder.name == label)
+                    .map(|folder| folder.id.clone())
+                    .or_else(|| groups.create_folder(&[session], bot::new_id()));
+                if let Some(folder) = folder {
+                    groups.rename_folder(&folder, &label);
+                    let color = bot::COLORS_BOT
+                        .iter()
+                        .position(|c| *c == bot.color)
+                        .map(|n| if n == 8 { 6 } else { n + 1 });
+                    groups.set_color(&folder, color);
+                    groups.add_to_folder(&folder, session);
+                }
+                Ok(())
             })
-            .detach();
+        });
+        cx.spawn(async move |this, cx| match work.await {
+            Ok(()) => cx.update(|cx| owner.apply_groups(project, cx)),
+            Err(error) => {
+                let _ = this.update(cx, |bots, cx| {
+                    bots.error = Some(format!("Could not group the Bot session: {error}"));
+                    bots.changed(cx);
+                });
+            }
+        })
+        .detach();
     }
     pub(super) fn check_completions(&mut self, cx: &mut Context<Self>) {
         let views = self.owner.session_views(cx);

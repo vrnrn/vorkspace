@@ -226,7 +226,7 @@ impl Shell {
         else {
             return;
         };
-        if !self.route_project(&project, cx) {
+        if !self.allow_project_entry(&worktree, cx) || !self.route_project(&project, cx) {
             return;
         }
         self.workspace.project = project.clone();
@@ -324,6 +324,10 @@ impl Shell {
                 crate::notes::Event::OpenTab(id) => this.open_note_tab(id.clone(), window, cx),
                 crate::notes::Event::OpenSource(id) => this.open(*id, window, cx),
                 crate::notes::Event::AddToChat(note) => this.note_to_chat(note.clone(), window, cx),
+                crate::notes::Event::Notice(message) => {
+                    this.error = Some(message.clone());
+                    cx.notify();
+                }
             },
         ));
         self.app_view_events.push(cx.observe(view, |this, _, cx| {
@@ -490,6 +494,17 @@ impl Shell {
         let Some(pane) = self.workspace.app_panes.get(&id).cloned() else {
             return;
         };
+        let layout_scope = self
+            .app_layout_scope(id, cx)
+            .map(|(project, worktree)| (project.to_owned(), worktree.to_owned()));
+        if !self.allow_project_entry(&pane.project, cx)
+            || !self.allow_project_entry(&pane.worktree, cx)
+            || layout_scope.is_some_and(|(project, worktree)| {
+                !self.allow_project_entry(&project, cx) || !self.allow_project_entry(&worktree, cx)
+            })
+        {
+            return;
+        }
         if matches!(&pane.content, AppPane::Bot(bot) | AppPane::BotDocument { bot, .. } if self.workspace.bot_hidden_in_vorkspace(bot))
         {
             return;

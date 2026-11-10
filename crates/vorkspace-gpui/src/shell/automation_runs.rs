@@ -10,42 +10,18 @@ pub(super) struct Running {
     generation_before: u64,
 }
 
+#[derive(Default)]
 pub(super) struct State {
     pub service: Option<ServiceHandle>,
     pub open_requested: Option<u64>,
     opening: bool,
     polling: bool,
-    recovered: bool,
-    started_before: i64,
     pending: HashSet<String>,
     running: HashMap<i64, Running>,
     reserved: HashSet<i64>,
     writes: Option<gpui::Task<()>>,
-    event_retries: HashMap<String, vorkspace_core::inbox::Item>,
     events_polling: bool,
-    retry_revision: Arc<AtomicU64>,
     pub session_automations: HashMap<i64, String>,
-}
-
-impl Default for State {
-    fn default() -> Self {
-        Self {
-            service: None,
-            open_requested: None,
-            opening: false,
-            polling: false,
-            recovered: false,
-            started_before: now(),
-            pending: HashSet::new(),
-            running: HashMap::new(),
-            reserved: HashSet::new(),
-            writes: None,
-            event_retries: HashMap::new(),
-            events_polling: false,
-            retry_revision: Arc::new(AtomicU64::new(0)),
-            session_automations: HashMap::new(),
-        }
-    }
 }
 
 fn now() -> i64 {
@@ -59,6 +35,16 @@ fn service_lock(service: &ServiceHandle) -> Result<std::sync::MutexGuard<'_, Ser
 }
 
 impl Shell {
+    pub(super) fn automation_work_in_progress(&self) -> bool {
+        let state = &self.automation_state;
+        state.polling
+            || state.events_polling
+            || !state.running.is_empty()
+            || !state.reserved.is_empty()
+            || !state.pending.is_empty()
+            || state.writes.as_ref().is_some_and(|task| !task.is_ready())
+    }
+
     pub(super) fn initialize_automations(&mut self, cx: &mut Context<Self>) {
         if self.automation_state.opening || self.automation_state.service.is_some() {
             return;
@@ -68,25 +54,18 @@ impl Shell {
         let work = cx.background_executor().spawn(async move {
             let path = locked(&store)?.database_path().to_path_buf();
             let service = Service::open(&path).map(|service| Arc::new(Mutex::new(service)))?;
-            let retries = locked(&store)?
-                .setting("native-automation-inbox-retries")?
-                .and_then(|raw| serde_json::from_str::<Vec<vorkspace_core::inbox::Item>>(&raw).ok())
-                .unwrap_or_default();
             let sessions = locked(&store)?.automation_session_ids()?;
-            Ok::<_, String>((service, retries, sessions))
+            Ok::<_, String>((service, sessions))
         });
         cx.spawn(async move |this, cx| {
             let result = work.await;
             let _ = this.update_in(cx, |this, window, cx| {
                 this.automation_state.opening = false;
                 match result {
-                    Ok((service, retries, sessions)) => {
+                    Ok((service, sessions)) => {
                         this.automation_state.session_automations = sessions;
                         this.automation_state.service = Some(service);
-                        for item in retries {
-                            this.automation_state.event_retries.insert(item.key(), item);
-                        }
-                        if !cfg!(test) {
+                        if !cfg!(test) && this.holds_scheduler(cx) {
                             this.ensure_background_inbox(window, cx);
                         }
                         this.poll_automations(cx);
@@ -118,6 +97,9 @@ impl Shell {
     }
 
     pub(super) fn poll_automations(&mut self, cx: &mut Context<Self>) {
+        if !self.holds_scheduler(cx) {
+            return;
+        }
         // A rejected or deferred submission still needs a terminal receipt.
         let sessions: Vec<_> = self.automation_state.running.keys().copied().collect();
         for id in sessions {
@@ -131,8 +113,9 @@ impl Shell {
             return;
         }
         self.automation_state.polling = true;
-        let recover = !self.automation_state.recovered;
-        let cutoff = self.automation_state.started_before;
+        let core = self.app_core.clone().expect("registered workspace window");
+        let recover = !core.read(cx).automation_recovered;
+        let cutoff = core.read(cx).automation_cutoff;
         let work = cx.background_executor().spawn(async move {
             let mut service = service_lock(&service)?;
             let mut runs = if recover {
@@ -155,13 +138,14 @@ impl Shell {
                 this.automation_state.polling = false;
                 match result {
                     Ok((runs, has_events)) => {
-                        this.automation_state.recovered = true;
+                        core.update(cx, |core, _| core.automation_recovered = true);
                         for run in runs {
                             this.launch_automation(run, false, cx);
                         }
                         if has_events {
                             this.ensure_background_inbox(window, cx);
                         }
+                        this.inbox_automation_events(Vec::new(), cx);
                     }
                     Err(error) => {
                         this.error = Some(format!("Could not evaluate automations: {error}"));
@@ -178,53 +162,38 @@ impl Shell {
         items: Vec<vorkspace_core::inbox::Item>,
         cx: &mut Context<Self>,
     ) {
-        for item in items {
-            self.automation_state.event_retries.insert(item.key(), item);
+        let core = self.app_core.clone().expect("registered workspace window");
+        let incoming = !items.is_empty();
+        if incoming {
+            core.update(cx, |core, cx| core.queue_automation_events(items, cx));
         }
-        if self.automation_state.event_retries.len() > 500 {
-            let mut items = self
-                .automation_state
-                .event_retries
-                .values()
-                .cloned()
-                .collect::<Vec<_>>();
-            items.sort_by_key(|item| std::cmp::Reverse(item.updated_ms()));
-            self.automation_state.event_retries = items
-                .into_iter()
-                .take(500)
-                .map(|item| (item.key(), item))
-                .collect();
+        if !self.holds_scheduler(cx) {
+            if incoming && let Some(owner) = self.scheduler_window(cx) {
+                cx.defer(move |cx| {
+                    let _ = owner.update(cx, |shell, cx| {
+                        shell.inbox_automation_events(Vec::new(), cx)
+                    });
+                });
+            }
+            return;
         }
-        if self.automation_state.events_polling || self.automation_state.event_retries.is_empty() {
+        if self.automation_state.events_polling {
+            return;
+        }
+        let items = core.read(cx).automation_events();
+        if items.is_empty() {
             return;
         }
         let Some(service) = self.automation_state.service.clone() else {
+            self.initialize_automations(cx);
             return;
         };
         self.automation_state.events_polling = true;
-        let items = self
-            .automation_state
-            .event_retries
-            .values()
-            .cloned()
-            .collect::<Vec<_>>();
-        let store = self.store.clone();
         let attempted = items.clone();
-        let revision = self
-            .automation_state
-            .retry_revision
-            .fetch_add(1, Ordering::SeqCst)
-            + 1;
-        let generation = self.automation_state.retry_revision.clone();
+        let flush = core.read(cx).flush_pending(cx);
         let work = cx.background_executor().spawn(async move {
-            // Persist before claiming so a transient failure can retry after a restart.
-            let saved = serde_json::to_string(&items).map_err(|error| error.to_string())?;
-            {
-                let store = locked(&store)?;
-                if generation.load(Ordering::SeqCst) == revision {
-                    store.save_setting("native-automation-inbox-retries", &saved)?;
-                }
-            }
+            // The core owns the pending snapshot through scheduler handoffs.
+            flush.await?;
             let mut service = service_lock(&service)?;
             automations::claim_inbox_events_retry(&mut service, &items, now())
         });
@@ -234,44 +203,12 @@ impl Shell {
                 this.automation_state.events_polling = false;
                 match result {
                     Ok((runs, retry)) => {
-                        for item in attempted {
-                            this.automation_state.event_retries.remove(&item.key());
-                        }
-                        for item in retry {
-                            this.automation_state.event_retries.insert(item.key(), item);
-                        }
+                        core.update(cx, |core, cx| {
+                            core.settle_automation_events(attempted, retry, cx)
+                        });
                         for run in runs {
                             this.launch_automation(run, false, cx);
                         }
-                        let store = this.store.clone();
-                        let pending = this
-                            .automation_state
-                            .event_retries
-                            .values()
-                            .cloned()
-                            .collect::<Vec<_>>();
-                        let revision = this
-                            .automation_state
-                            .retry_revision
-                            .fetch_add(1, Ordering::SeqCst)
-                            + 1;
-                        let generation = this.automation_state.retry_revision.clone();
-                        cx.background_executor()
-                            .spawn(async move {
-                                if let Ok(saved) = serde_json::to_string(&pending) {
-                                    let _ = locked(&store).and_then(|store| {
-                                        if generation.load(Ordering::SeqCst) == revision {
-                                            store.save_setting(
-                                                "native-automation-inbox-retries",
-                                                &saved,
-                                            )
-                                        } else {
-                                            Ok(())
-                                        }
-                                    });
-                                }
-                            })
-                            .detach();
                     }
                     Err(error) => {
                         this.error =
@@ -283,6 +220,7 @@ impl Shell {
         })
         .detach();
     }
+
     pub(super) fn launch_automation(
         &mut self,
         due: DueAutomationRun,
@@ -339,10 +277,11 @@ impl Shell {
                             _ => false,
                         }
                 })
+            })
+            .filter(|id| {
+                self.ensure_session(*id, cx)
+                    .is_some_and(|view| view.read(cx).available_for_managed_run(cx))
             });
-        if let Some(id) = reuse {
-            self.ensure_session(id, cx);
-        }
         let account = crate::accounts::get(cx)
             .map(|accounts| accounts.read(cx).selected(kind, &automation.cwd))
             .unwrap_or_default();
@@ -393,6 +332,7 @@ impl Shell {
         let store = self.store.clone();
         let launch = due.clone();
         let revision = self.navigation_revision;
+        let mut install = self.session_install(cx);
         let work = cx.background_executor().spawn(async move {
             if Kind::parse(&launch.automation.harness).is_none() {
                 return Err("The automation's agent is unavailable".into());
@@ -407,7 +347,7 @@ impl Shell {
             }
             let store = locked(&store)?;
             let mut settings = settings;
-            let mut summary = if let Some(id) = reuse {
+            let summary = if let Some(id) = reuse {
                 if let Some(previous) = store.agent_settings(id)? {
                     settings.turns = previous.turns;
                     settings.revision = previous.revision;
@@ -420,22 +360,18 @@ impl Shell {
             } else {
                 let mut summary =
                     store.create(&launch.automation.harness, &launch.automation.cwd)?;
+                install.track(summary.id);
                 if launch.run.trigger != "event" {
                     summary.title = launch.automation.name.clone();
                     store.title(summary.id, &summary.title)?;
                 }
                 summary
             };
-            store.set_automation_id(summary.id, &launch.automation.id)?;
-            if let Some(item) = automation_work_item(&launch.run) {
-                store.set_work_item(summary.id, Some(&item))?;
-                summary.work_item = Some(item);
-            }
             if reuse.is_none() {
                 store.save_agent_settings(summary.id, &settings)?;
             }
             let persisted = store.persisted_session_id(summary.id)?;
-            Ok::<_, String>((summary, settings, persisted))
+            Ok::<_, String>((summary, settings, persisted, install))
         });
         cx.spawn(async move |this, cx| {
             let result = work.await;
@@ -445,7 +381,7 @@ impl Shell {
                     this.automation_state.reserved.remove(&id);
                 }
                 match result {
-                    Ok((summary, settings, persisted)) => {
+                    Ok((summary, settings, persisted, mut install)) => {
                         let id = summary.id;
                         if reuse.is_some()
                             && this
@@ -458,11 +394,67 @@ impl Shell {
                             this.launch_automation(retry, reveal, cx);
                             return;
                         }
-                        let linked = summary.work_item.clone();
-                        this.add(summary, cx);
+                        let linked = automation_work_item(&due.run);
+                        if let Err(error) =
+                            this.verify_prepared_checkout(id, settings.worktree_cwd.as_deref(), cx)
+                        {
+                            if reuse.is_none() {
+                                let _ = locked(&this.store)
+                                    .and_then(|mut store| install.discard(&mut store, id));
+                            }
+                            this.update_automation_run(
+                                due.run.id.clone(),
+                                "failed",
+                                None,
+                                Some(error.clone()),
+                                cx,
+                            );
+                            if reveal {
+                                this.error = Some(error);
+                                cx.notify();
+                            }
+                            return;
+                        }
+                        // The local lease and composer were both revalidated.
+                        // A run that falls back must not relink the old session.
+                        let linked_result = locked(&this.store).and_then(|store| {
+                            store.set_automation_id(id, &due.automation.id)?;
+                            if let Some(item) = &linked {
+                                store.set_work_item(id, Some(item))?;
+                            }
+                            Ok(())
+                        });
+                        if let Err(error) = linked_result {
+                            this.update_automation_run(
+                                due.run.id.clone(),
+                                "failed",
+                                None,
+                                Some(error.clone()),
+                                cx,
+                            );
+                            if reveal {
+                                this.error = Some(error);
+                                cx.notify();
+                            }
+                            return;
+                        }
+                        let installed = if reuse.is_some() {
+                            this.sessions.get(&id).cloned()
+                        } else {
+                            this.install_prepared(summary, &install, cx)
+                        };
+                        let Some(view) = installed else {
+                            this.update_automation_run(
+                                due.run.id.clone(),
+                                "failed",
+                                None,
+                                Some("Could not install the automation session".into()),
+                                cx,
+                            );
+                            return;
+                        };
                         if let Some(linked) = linked {
-                            this.sessions[&id]
-                                .update(cx, |view, _| view.summary.work_item = Some(linked));
+                            view.update(cx, |view, _| view.summary.work_item = Some(linked));
                         }
                         this.automation_state
                             .session_automations
@@ -472,9 +464,7 @@ impl Shell {
                             Running {
                                 run_id: due.run.id.clone(),
                                 submitting: true,
-                                generation_before: this.sessions[&id]
-                                    .read(cx)
-                                    .submission_generation,
+                                generation_before: view.read(cx).submission_generation,
                             },
                         );
                         this.update_automation_run(
@@ -485,11 +475,12 @@ impl Shell {
                             cx,
                         );
                         if !due.automation.session_folder_id.is_empty() {
-                            this.groups
-                                .entry(due.automation.cwd.clone())
-                                .or_default()
-                                .add_to_folder(&due.automation.session_folder_id, id);
-                            this.persist_automation_folder(&due.automation.cwd, cx);
+                            this.persist_automation_folder(
+                                &due.automation.cwd,
+                                due.automation.session_folder_id.clone(),
+                                id,
+                                cx,
+                            );
                         }
                         // Background runs append a tab without changing the focused project.
                         if !this.workspace.tabs.contains(&id) {
@@ -501,8 +492,8 @@ impl Shell {
                             .prompt
                             .clone()
                             .unwrap_or_else(|| due.automation.prompt.clone());
-                        this.sessions[&id]
-                            .update(cx, |view, cx| view.quick_submit(prompt, settings, cx));
+                        view.update(cx, |view, cx| view.quick_submit(prompt, settings, cx));
+                        this.publish_prepared(&view, Some(&mut install), cx);
                         if let Some(run) = this.automation_state.running.get_mut(&id) {
                             run.submitting = false;
                         }
@@ -601,24 +592,35 @@ impl Shell {
         }));
     }
 
-    fn persist_automation_folder(&mut self, cwd: &str, cx: &mut Context<Self>) {
+    fn persist_automation_folder(
+        &mut self,
+        cwd: &str,
+        folder: String,
+        id: i64,
+        cx: &mut Context<Self>,
+    ) {
         let cwd = cwd.to_string();
-        let groups = self.groups.get(&cwd).cloned().unwrap_or_default();
         let store = self.store.clone();
         let previous = self.group_writes.take();
         self.group_writes = Some(cx.spawn(async move |this, cx| {
             if let Some(previous) = previous {
                 previous.await;
             }
-            let work = cx
-                .background_executor()
-                .spawn(async move { locked(&store)?.save_groups(&cwd, &groups) });
-            if let Err(error) = work.await {
-                let _ = this.update(cx, |this, cx| {
+            let project = cwd.clone();
+            let work = cx.background_executor().spawn(async move {
+                locked(&store)?.edit_groups(&project, |groups| {
+                    groups.add_to_folder(&folder, id);
+                    Ok(())
+                })
+            });
+            let result = work.await;
+            let _ = this.update(cx, |this, cx| match result {
+                Ok(()) => this.publish_groups(cwd, cx),
+                Err(error) => {
                     this.error = Some(error);
                     cx.notify();
-                });
-            }
+                }
+            });
         }));
     }
 }

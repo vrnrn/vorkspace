@@ -120,13 +120,15 @@ impl Shell {
             .as_ref()
             .map(|inbox| inbox.read(cx).connector_preferences())
             .unwrap_or_default();
-        if crate::notifications::inbox::should_chime(
-            &self.workspace.preferences,
-            &connectors,
-            changed,
-            self.notification_state.sounds_enabled_at,
-            vorkspace_core::time::now_ms(),
-        ) {
+        if self.holds_scheduler(cx)
+            && crate::notifications::inbox::should_chime(
+                &self.workspace.preferences,
+                &connectors,
+                changed,
+                self.notification_state.sounds_enabled_at,
+                vorkspace_core::time::now_ms(),
+            )
+        {
             crate::sound::play(crate::sound::Cue::LinkedActivity);
         }
     }
@@ -305,7 +307,7 @@ impl Shell {
     }
 
     pub(super) fn start_native_notifications(&mut self, cx: &mut Context<Self>) {
-        platform::set_dock_badge(0);
+        self.set_window_badge(0, cx);
         if platform::initialize() {
             self.notification_state.permission = Permission::Prompt;
             self.notification_state.permission_probe = Some(platform::permission());
@@ -327,8 +329,10 @@ impl Shell {
                             this.notification_state.permission_probe = None;
                             cx.notify();
                         }
-                        for target in platform::drain_clicks() {
-                            this.open_notice_target(target, cx);
+                        if this.holds_scheduler(cx) {
+                            for target in platform::drain_clicks() {
+                                this.open_notice_target(target, cx);
+                            }
                         }
                         // Known reminders keep one-second precision. The session
                         // clock also discovers schedules saved by other windows.
@@ -416,7 +420,7 @@ impl Shell {
         );
         if badge != self.notification_state.badge {
             self.notification_state.badge = badge;
-            platform::set_dock_badge(badge);
+            self.set_window_badge(badge, cx);
         }
         for (session, input) in self.notification_state.announcements.reconcile(&snapshots) {
             if let Ok(id) = session.session_id.parse()
@@ -1219,6 +1223,7 @@ impl Shell {
                 && previous.is_none_or(|at| card.updated_at > at);
             let occurred = u64::try_from(card.updated_at).unwrap_or(0);
             if newly_changed
+                && self.holds_scheduler(cx)
                 && !card.details_error
                 && self.linked_activity_allowed(&card)
                 && self.workspace.preferences.sounds

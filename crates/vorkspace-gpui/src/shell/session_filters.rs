@@ -241,13 +241,8 @@ mod tests {
                 assert_eq!(shell.workspace.active, Some(b));
                 assert!(shell.sessions[&a].read(cx).busy);
                 assert!(!shell.selected_sessions.contains(&b));
-                let state: Workspace = serde_json::from_str(
-                    &shell
-                        .latest_state
-                        .lock()
-                        .unwrap_or_else(std::sync::PoisonError::into_inner),
-                )
-                .unwrap();
+                let state: Workspace =
+                    serde_json::from_str(&shell.latest_window_layout(cx)).unwrap();
                 assert!(state.session_filters.status.working);
             })
             .unwrap();

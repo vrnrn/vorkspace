@@ -1567,7 +1567,7 @@ fn original_layout_keeps_project_rail_sidebar_and_workspace_independent(cx: &mut
                     shell.sessions[&b].read(cx).input.read(cx).content,
                     "Keep this original-layout draft"
                 );
-                let saved = shell.latest_state.lock().unwrap().clone();
+                let saved = shell.latest_window_layout(cx);
                 let summaries =
                     [a, b].map(|id| (id, shell.session_metadata(id, cx).summary.cwd.clone()));
                 let restored = Workspace::restore(Some(&saved), &summaries, "/work/vorkspace");
@@ -1632,7 +1632,7 @@ fn original_workspace_tabs_open_tools_on_the_left_and_remember_each_project(
             shell.select_classic_sidebar(SidebarTab::Files, window, cx);
             shell.select_project("/work/vorkspace".into(), window, cx);
             assert_eq!(shell.workspace.sidebar_tab(), SidebarTab::Changes);
-            let saved = shell.latest_state.lock().unwrap().clone();
+            let saved = shell.latest_window_layout(cx);
             let mut restored = Workspace::restore(Some(&saved), &[], "/work/vorkspace");
             assert_eq!(restored.sidebar_tab(), SidebarTab::Changes);
             restored.project = "/work/another-project".into();

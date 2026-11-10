@@ -19,6 +19,38 @@ fn schema_version(store: &Store) -> i64 {
 }
 
 #[test]
+fn recovered_note_copy_keeps_its_images_when_the_original_is_deleted() {
+    let root = tempfile::tempdir().unwrap();
+    let store = Store::open(&root.path().join("notes.db")).unwrap();
+    let image = root.path().join("diagram.svg");
+    std::fs::write(&image, "<svg/>").unwrap();
+    let draft = input("original", "Plan", "");
+    let asset = store
+        .save_note_image(&draft.id, &image, Some(&draft))
+        .unwrap();
+    let copy = input(
+        "recovered",
+        "Plan (copy)",
+        &crate::notes::image_markdown(&asset),
+    );
+    let (saved, missing) = store.copy_note_draft(&draft.id, &copy).unwrap();
+    assert_eq!(missing, 0);
+    let path = asset.markdown_path.replace("/original/", "/recovered/");
+    assert!(saved.body.contains(&path));
+    store.delete_note(&draft.id).unwrap();
+    assert!(store.note_image_path(&asset.markdown_path).is_err());
+    assert_eq!(
+        std::fs::read_to_string(store.note_image_path(&path).unwrap()).unwrap(),
+        "<svg/>"
+    );
+    let mut late_copy = copy;
+    late_copy.id = "late-copy".into();
+    let (saved, missing) = store.copy_note_draft(&draft.id, &late_copy).unwrap();
+    assert_eq!(missing, 1);
+    assert_eq!(saved.body, late_copy.body);
+}
+
+#[test]
 fn image_import_materializes_only_new_drafts_and_rejects_failed_or_deleted_notes() {
     let root = tempfile::tempdir().unwrap();
     let path = root.path().join("notes.db");

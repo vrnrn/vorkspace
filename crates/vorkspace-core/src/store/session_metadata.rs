@@ -3,7 +3,7 @@ use super::Store;
 use crate::{agent::AccessMode, orchestration, session_groups};
 use std::collections::{HashMap, HashSet};
 
-#[derive(Default)]
+#[derive(Clone, Default)]
 pub struct SessionSidebarMetadata {
     pub worktrees: HashMap<i64, Option<String>>,
     pub details: HashMap<i64, SessionMetadata>,

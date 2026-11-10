@@ -6,7 +6,7 @@ use vorkspace_core::bot::bridge::Call;
 enum Effect {
     None,
     Start(Box<AppStart>),
-    Groups(String, vorkspace_core::session_groups::Groups),
+    Groups(String),
 }
 impl Shell {
     pub(super) fn app_caller_can_read(&self, caller: i64, project: &str, cx: &App) -> bool {
@@ -93,6 +93,7 @@ impl Shell {
     ) -> Result<i64, String> {
         let AppStart {
             summary,
+            mut install,
             settings,
             prompt,
             draft,
@@ -103,7 +104,10 @@ impl Shell {
         let id = summary.id;
         // Preparation ran in the background. A view opened since then belongs
         // to its newer owner, including any input it has already collected.
-        if self.sessions.contains_key(&id) || self.workspace.tab_of(id).is_some() {
+        if self.sessions.contains_key(&id)
+            || self.workspace.tab_of(id).is_some()
+            || !self.session_available_for_install(id, install.as_ref(), cx)
+        {
             return Err(format!(
                 "New session {id} was already opened; its state and working copy were preserved"
             ));
@@ -112,18 +116,18 @@ impl Shell {
             Err("The caller no longer owns this project's app capability".into())
         } else {
             self.check_app_placement(placement, &summary.cwd, cx)
+                .and_then(|()| {
+                    self.verify_prepared_checkout(id, settings.worktree_cwd.as_deref(), cx)
+                })
         };
         if let Err(error) = valid {
-            return Err(self.rollback_app_start(id, cleanup, error, cx));
+            return Err(self.rollback_app_start(id, install.as_mut(), cleanup, error, cx));
         }
         // Pane, rail and caller links publish only after the fresh view owns a
         // durable draft or queued prompt. No provider starts on a failed write.
         let observations_before = self.observations.len();
-        self.add_loaded(summary.clone(), cx);
         let accepted = self
-            .sessions
-            .get(&id)
-            .cloned()
+            .add_loaded_with_install(summary.clone(), install.as_ref(), cx)
             .ok_or_else(|| "New session view is unavailable".to_owned())
             .and_then(|view| {
                 view.update(cx, |view, cx| {
@@ -142,9 +146,15 @@ impl Shell {
             // Shell owns these subscriptions independently of the discarded
             // view. Nothing else can register one during this synchronous call.
             self.observations.truncate(observations_before);
-            return Err(self.rollback_app_start(id, cleanup, error, cx));
+            return Err(self.rollback_app_start(id, install.as_mut(), cleanup, error, cx));
         }
         self.workspace.restore_project(&summary.cwd);
+        let view = self
+            .sessions
+            .get(&id)
+            .cloned()
+            .expect("accepted session view");
+        self.publish_prepared(&view, install.as_mut(), cx);
         self.started_by.insert(id, caller);
         if let Some((target, edge)) = placement {
             let before = self.active_leaves();
@@ -162,6 +172,7 @@ impl Shell {
     fn rollback_app_start(
         &mut self,
         id: i64,
+        install: Option<&mut crate::session_install::Install>,
         cleanup: Option<vorkspace_core::bot::launch::CreatedWorktree>,
         error: String,
         cx: &mut Context<Self>,
@@ -172,7 +183,10 @@ impl Shell {
         self.forget_session(id, cx);
         self.started_by.remove(&id);
         self.session_worktrees.remove(&id);
-        let removed = locked(&self.store).and_then(|mut store| store.delete(id));
+        let removed = locked(&self.store).and_then(|mut store| match install {
+            Some(install) => install.discard(&mut store, id),
+            None => store.delete(id),
+        });
         let cleanup_error = match removed {
             Ok(()) => cleanup
                 .map(vorkspace_core::bot::launch::CreatedWorktree::rollback)
@@ -224,6 +238,9 @@ impl Shell {
         }
         locked(&self.store)?.check_app_target(caller, id, project)?;
         self.check_live_app_target(id, cx)?;
+        if !self.session_available_here(id, cx) {
+            return Err("The conversation is open in another window".into());
+        }
         if self.archiving.contains(&id) || self.deleting.contains(&id) {
             return Err("Session management is already in progress".into());
         }
@@ -274,6 +291,7 @@ impl Shell {
             self.forget_session(id, cx);
         } else {
             self.refresh_session_mark(id, cx);
+            self.publish_session_summary(id, cx);
         }
         self.invalidate_chrome(cx);
         cx.notify();
@@ -518,10 +536,7 @@ impl Shell {
                         Effect::Start(start) => {
                             this.app_install_start(caller, *start, window, cx)?;
                         }
-                        Effect::Groups(project, groups) => {
-                            this.groups.insert(project, groups);
-                            this.invalidate_chrome(cx);
-                        }
+                        Effect::Groups(project) => this.publish_groups(project, cx),
                     }
                     cx.notify();
                     Ok(result)
@@ -686,10 +701,12 @@ impl Shell {
                 };
                 if launch.provider.id()!=provider { launch.settings.account=crate::accounts::get(cx).map(|center|center.read(cx).selected(launch.provider,&project)).unwrap_or_default(); }
                 let caller=call.session;
+                let mut install=self.session_install(cx);
                 self.app_background(call,move|store|{
                     let mut store=locked(&store)?;
                     let summary=launch.create_started(&mut store,&project,caller)?;
-                    Ok((json!({"sessionId":summary.id,"accepted":true}),Effect::Start(Box::new(AppStart{summary,settings:launch.settings,prompt:launch.prompt,draft:launch.draft,reveal:launch.reveal,placement,cleanup:launch.created_worktree}))))
+                    install.track(summary.id);
+                    Ok((json!({"sessionId":summary.id,"accepted":true}),Effect::Start(Box::new(AppStart{summary,install:Some(install),settings:launch.settings,prompt:launch.prompt,draft:launch.draft,reveal:launch.reveal,placement,cleanup:launch.created_worktree}))))
                 },cx);return;
             }
             "sessions.read" => {
@@ -715,14 +732,12 @@ impl Shell {
             "folders.move" => {
                 let id = match session_id(&input, &self.store) { Ok(id) => id, Err(e) => { self.finish_app_call(call, Err(e)); return; } };
                 if !self.session_summaries.contains_key(&id) || self.session_metadata(id, cx).summary.cwd != project { self.finish_app_call(call, Err("Session is outside this project.".into())); return; }
-                let mut groups = self.groups.get(&project).cloned().unwrap_or_default();
-                if let Some(name) = input.get("newFolderName").and_then(Value::as_str) {
-                    if let Some(folder) = groups.create_folder(&[id], vorkspace_core::bot::new_id()) { groups.rename_folder(&folder, name); }
-                } else if let Some(folder) = input.get("folderId").and_then(Value::as_str) {
-                    if groups.folder(folder).is_none() { self.finish_app_call(call, Err("Folder not found.".into())); return; }
-                    groups.add_to_folder(folder,id);
-                } else { groups.remove_sessions(&[id]); }
-                self.app_background(call, move |store| { locked(&store)?.save_groups(&project, &groups)?; Ok((json!({"moved":true}), Effect::Groups(project, groups))) }, cx); return;
+                self.app_background(call, move |store| {
+                    locked(&store)?.edit_groups(&project, |groups| groups.move_session(
+                        id, input["folderId"].as_str(), input["newFolderName"].as_str(),
+                    ))?;
+                    Ok((json!({"moved":true}), Effect::Groups(project)))
+                }, cx); return;
             }
             "worktrees.list" => {
                 self.app_background(call, move |store| { let value = vorkspace_core::store::describe_worktrees(std::path::Path::new(&project),&store)?; Ok((value, Effect::None)) }, cx); return;

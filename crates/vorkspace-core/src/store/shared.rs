@@ -1925,15 +1925,20 @@ impl Store {
     }
     pub(super) fn shared_detach_worktree(
         &self,
-        path: &str,
+        paths: &[&str],
         main: &str,
     ) -> Result<Vec<(Session, Settings)>, String> {
         let tx = sql(self.conn.unchecked_transaction())?;
+        let within = |cwd: &str| {
+            paths
+                .iter()
+                .any(|path| crate::files::is_equal_or_inside(cwd, path))
+        };
         let mut out = Vec::new();
         for mut session in self.shared_sessions()? {
             let mut settings = self.shared_agent(session.id)?.unwrap_or_default();
             let execution = settings.worktree_cwd.as_deref().unwrap_or(&session.cwd);
-            if !crate::files::is_equal_or_inside(execution, path) {
+            if !within(execution) {
                 continue;
             }
             settings.worktree_cwd = Some(execution.into());
@@ -1941,7 +1946,7 @@ impl Store {
             settings.revision += 1;
             settings.new_worktree = false;
             settings.worktree_base = None;
-            if crate::files::is_equal_or_inside(&session.cwd, path) {
+            if within(&session.cwd) {
                 session.cwd = main.into();
             }
             session.provider_id = None;

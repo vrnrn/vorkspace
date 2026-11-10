@@ -395,7 +395,7 @@ fn failed_install(
             let observations = shell.observations.len();
             locked(&shell.store).unwrap().admit_app_command(caller,"failed-install","sessions.start",&input).unwrap();
             let result = shell.app_install_start(caller,AppStart {
-                summary,settings:launch.settings,prompt:launch.prompt,draft:launch.draft,reveal:true,
+                summary,install:None,settings:launch.settings,prompt:launch.prompt,draft:launch.draft,reveal:true,
                 placement:Some((caller,Edge::Right)),cleanup:launch.created_worktree,
             },window,cx);
             let error = result.unwrap_err();
@@ -761,6 +761,7 @@ fn app_install_keeps_a_child_opened_by_a_newer_owner(cx: &mut TestAppContext) {
                 caller,
                 AppStart {
                     summary,
+                    install: None,
                     settings: launch.settings,
                     prompt: launch.prompt,
                     draft: false,
@@ -1105,6 +1106,7 @@ fn operator_splits_reuse_the_existing_pane_owner_and_reject_stale_targets(cx: &m
                         caller,
                         AppStart {
                             summary,
+                            install: None,
                             settings: Settings::default(),
                             prompt: "Do not send".into(),
                             draft: false,
