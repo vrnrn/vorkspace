@@ -925,7 +925,22 @@ fn concurrent_desktop_changes_are_never_overwritten() {
         store.shared_blocks(id).unwrap(),
         changed.as_array().unwrap().clone()
     );
-    assert!(store.save_follow_ups(id, &Default::default()).is_err());
+    let queue = crate::follow_up::State {
+        revision: 1,
+        paused: true,
+        messages: vec![crate::follow_up::Message {
+            id: "new-queue-entry".into(),
+            text: "Keep this follow-up".into(),
+            ..Default::default()
+        }],
+        ..Default::default()
+    };
+    store.save_follow_ups(id, &queue).unwrap();
+    assert_eq!(store.follow_ups(id).unwrap().messages, queue.messages);
+    assert_eq!(
+        store.shared_blocks(id).unwrap(),
+        changed.as_array().unwrap().clone()
+    );
 }
 
 #[test]

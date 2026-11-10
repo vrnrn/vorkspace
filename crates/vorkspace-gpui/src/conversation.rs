@@ -402,6 +402,10 @@ impl Conversation {
     pub(crate) fn set_stopping_for_test(&mut self) {
         self.turn_state = TurnState::Stopping;
     }
+    #[cfg(test)]
+    pub(crate) fn complete_turn_for_test(&mut self) {
+        self.turn_state = TurnState::Settled(TurnOutcome::Completed);
+    }
     pub(crate) fn new(summary: Session, store: Database, cx: &mut Context<Self>) -> Self {
         #[cfg(test)]
         vorkspace_ui::clock::use_test_clock(cx);

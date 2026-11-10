@@ -434,7 +434,10 @@ fn worktree_setup_keeps_the_unaccepted_draft_and_allows_a_distinct_follow_up(
             assert!(view.responding() && view.preparing_worktree);
             assert_eq!(view.status, "Creating worktree…");
             assert_eq!(view.input.read(cx).content, "Start in a worktree");
-            assert!(!view.settings.plan);
+            assert!(
+                view.settings.plan,
+                "the offered draft keeps its intent until edited or accepted"
+            );
             assert!(view.transcript.read(cx).source_rows().is_empty());
             view.send(cx);
             assert!(view.follow_ups.state.messages.is_empty());
@@ -443,6 +446,7 @@ fn worktree_setup_keeps_the_unaccepted_draft_and_allows_a_distinct_follow_up(
             view.send(cx);
             assert_eq!(view.follow_ups.state.messages[0].text, "Follow up");
             assert_eq!(view.follow_ups.state.messages[0].mode, None);
+            assert!(!view.settings.plan);
             view.input
                 .update(cx, |input, cx| input.set_text("Unsent draft".into(), cx));
         })
@@ -454,6 +458,12 @@ fn worktree_setup_keeps_the_unaccepted_draft_and_allows_a_distinct_follow_up(
             assert_eq!(view.input.read(cx).content, "Unsent draft");
             assert!(view.follow_ups.state.paused);
             assert_eq!(view.follow_ups.state.messages[0].text, "Follow up");
+            let recovered = locked(&view.store)
+                .unwrap()
+                .composer_recoveries(view.summary.id)
+                .unwrap();
+            assert_eq!(recovered.len(), 1);
+            assert_eq!(recovered[0].payload["text"], "Start in a worktree");
             let rows = view.transcript.read(cx).source_rows();
             assert_eq!(rows[0].text, "Start in a worktree");
             assert_eq!(rows.last().unwrap().role, "error");

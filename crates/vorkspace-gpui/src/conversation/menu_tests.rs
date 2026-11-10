@@ -573,22 +573,75 @@ fn mode_menu_edits_the_inline_prefix_and_removal_preserves_the_draft(cx: &mut Te
 fn submitted_modes_clear_for_a_started_turn_and_stay_cleared_after_completion(
     cx: &mut TestAppContext,
 ) {
+    use vorkspace_core::store::SubmissionInput;
+    use vorkspace_runtime::runtime::{TurnTransition, Update};
+
     for mode in ["operator", "orchestrator", "plan"] {
         let window = conversation(cx);
         window
             .update(cx, |view, _, cx| {
-                // An absent directory prevents the supported CLI from starting.
-                view.summary.provider = "codex".into();
-                view.summary.cwd = "/missing/submitted-mode-project".into();
                 view.loaded = true;
                 view.input
                     .update(cx, |i, cx| i.set_text("check the composer".into(), cx));
                 view.toggle_mode(mode, cx);
-                view.send(cx);
+                let origin = view
+                    .prepare_composer_submission(composer_draft::ComposerLane::Turn, cx)
+                    .unwrap();
+                view.begin_turn(cx);
                 assert!(view.responding());
+                assert_eq!(view.selected_turn_mode(), Some(mode));
+                assert!(!view.input.read(cx).content.is_empty());
+                {
+                    let store = locked(&view.store).unwrap();
+                    store
+                        .reserve_local_submission(
+                            view.summary.id,
+                            SubmissionInput {
+                                attempt_id: "mode-admission".into(),
+                                user_turn_id: origin.message_id(),
+                                session_id: String::new(),
+                                payload_json: "{}".into(),
+                                user_turn: None,
+                            },
+                        )
+                        .unwrap();
+                    assert!(
+                        store
+                            .dispatch_composer_submission("mode-admission", &origin)
+                            .unwrap()
+                            .claimed
+                    );
+                    store
+                        .settle_local_submission("mode-admission", "completed", None)
+                        .unwrap();
+                }
+                let mut projection = turn_projection::TurnProjection::new(
+                    view.submission_generation,
+                    view.summary.provider.clone(),
+                    view.settings.account.id.clone(),
+                    None,
+                );
+                projection.composer_origin = Some(origin.clone());
+                projection.apply(
+                    view,
+                    Update {
+                        transition: TurnTransition::AcceptedComposer(origin),
+                        ..Default::default()
+                    },
+                    cx,
+                );
                 assert!(view.input.read(cx).content.is_empty());
                 assert!(
                     !view.settings.plan && !view.settings.operator && !view.settings.orchestrator
+                );
+                projection.apply(
+                    view,
+                    Update {
+                        transition: TurnTransition::settled(TurnOutcome::Completed),
+                        status: "Ready".into(),
+                        ..Default::default()
+                    },
+                    cx,
                 );
             })
             .unwrap();

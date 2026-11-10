@@ -6,7 +6,7 @@ use vorkspace_core::store::Store;
 fn conversation(cx: &mut TestAppContext) -> WindowHandle<Conversation> {
     let store = Store::open(Path::new(":memory:")).unwrap();
     let summary = store.create("codex", "/tmp").unwrap();
-    cx.update(|cx| {
+    let window = cx.update(|cx| {
         input::bind(cx);
         cx.set_global(vorkspace_ui::preferences::Preferences {
             follow_up: "queue".into(),
@@ -20,7 +20,9 @@ fn conversation(cx: &mut TestAppContext) -> WindowHandle<Conversation> {
             })
         })
         .unwrap()
-    })
+    });
+    cx.run_until_parked();
+    window
 }
 
 #[gpui::test]
@@ -214,6 +216,9 @@ fn voice_send_is_durable_before_acceptance_and_never_consumes_drafts(cx: &mut Te
 #[gpui::test]
 fn busy_sends_keep_their_order_attachments_and_edits_until_accepted(cx: &mut TestAppContext) {
     let window = conversation(cx);
+    let directory = tempfile::tempdir().unwrap();
+    let attachment = directory.path().join("fixture.png");
+    std::fs::write(&attachment, b"queue attachment").unwrap();
     let (controls, received) = std::sync::mpsc::channel();
     window
         .update(cx, |view, _, cx| {
@@ -221,8 +226,17 @@ fn busy_sends_keep_their_order_attachments_and_edits_until_accepted(cx: &mut Tes
             view.controls = Some(controls);
             view.input
                 .update(cx, |i, cx| i.set_text("first".into(), cx));
-            view.attachments.push("/tmp/image.png".into());
+            view.attachments.push(attachment.clone());
             view.send(cx);
+            assert_eq!(view.input.read(cx).content, "first");
+            assert!(view.follow_ups.state.messages.is_empty());
+        })
+        .unwrap();
+    cx.run_until_parked();
+    window
+        .update(cx, |view, _, cx| {
+            assert!(view.input.read(cx).content.is_empty());
+            assert!(view.attachments.is_empty());
             view.input
                 .update(cx, |i, cx| i.set_text("second".into(), cx));
             view.send(cx);
@@ -266,10 +280,7 @@ fn busy_sends_keep_their_order_attachments_and_edits_until_accepted(cx: &mut Tes
         panic!("expected steering");
     };
     assert_eq!(message.text, "edited 🙂\nwith detail");
-    assert_eq!(
-        message.attachments,
-        [std::path::PathBuf::from("/tmp/image.png")]
-    );
+    assert_eq!(message.attachments, [attachment]);
     window
         .update(cx, |view, _, cx| {
             assert_eq!(
@@ -427,13 +438,24 @@ fn draft_commands_save_without_starting_an_agent_and_remove_restores_a_blank(
     cx: &mut TestAppContext,
 ) {
     let window = conversation(cx);
+    let directory = tempfile::tempdir().unwrap();
+    let attachment = directory.path().join("note.txt");
+    std::fs::write(&attachment, b"saved draft attachment").unwrap();
     window
         .update(cx, |view, _, cx| {
             view.input.update(cx, |i, cx| {
                 i.set_text(" /DRAFT Explore this later".into(), cx)
             });
-            view.attachments.push("/tmp/note.txt".into());
+            view.attachments.push(attachment.clone());
             view.send(cx);
+            assert!(!view.responding());
+            assert!(view.follow_ups.state.draft.is_none());
+            assert_eq!(view.input.read(cx).content, " /DRAFT Explore this later");
+        })
+        .unwrap();
+    cx.run_until_parked();
+    window
+        .update(cx, |view, _, cx| {
             assert!(!view.responding());
             assert!(view.summary.has_messages);
             assert!(
@@ -454,10 +476,7 @@ fn draft_commands_save_without_starting_an_agent_and_remove_restores_a_blank(
                 .unwrap()
                 .follow_ups(view.summary.id)
                 .unwrap();
-            assert_eq!(
-                saved.draft.unwrap().attachments,
-                [std::path::PathBuf::from("/tmp/note.txt")]
-            );
+            assert_eq!(saved.draft.unwrap().attachments, [attachment]);
             view.input
                 .update(cx, |i, cx| i.set_text("my next message".into(), cx));
             view.draft_action(false, cx);

@@ -298,6 +298,11 @@ impl Conversation {
                                 .unwrap_or_default();
                         }
                         this.model = settings.model.clone();
+                        if this.settings.bot.is_some()
+                            && let Some(mode) = this.selected_turn_mode()
+                        {
+                            turn_flow::apply_turn_mode(&mut settings, Some(mode));
+                        }
                         let bot = this.settings.bot.take();
                         let environment = std::mem::take(&mut this.settings.environment);
                         this.settings = settings;

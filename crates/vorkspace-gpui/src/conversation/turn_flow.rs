@@ -696,7 +696,7 @@ impl Conversation {
     }
 }
 
-fn apply_turn_mode(settings: &mut Settings, mode: Option<&str>) {
+pub(super) fn apply_turn_mode(settings: &mut Settings, mode: Option<&str>) {
     settings.plan = mode == Some("plan");
     settings.operator = mode == Some("operator");
     settings.orchestrator = mode == Some("orchestrator");

@@ -631,11 +631,10 @@ impl Conversation {
         self.composer_draft.restoring = false;
         if self.settings.bot.is_some() && payload["botSubmission"].is_object() {
             let mode = payload["botSubmission"]["mode"].as_str();
-            self.settings.plan = mode == Some("plan");
-            self.settings.operator = mode == Some("operator");
-            self.settings.orchestrator = mode == Some("orchestrator");
+            // Editor hydration can finish before the session's settings load.
+            // Restoring a composer choice must not publish partial settings.
+            turn_flow::apply_turn_mode(&mut self.settings, mode);
             self.bot_ui.queue = payload["botSubmission"]["queue"].as_bool().unwrap_or(false);
-            self.save_settings(cx);
         }
     }
     fn resolve_composer_recovery(&mut self, recovered: bool, cx: &mut Context<Self>) {

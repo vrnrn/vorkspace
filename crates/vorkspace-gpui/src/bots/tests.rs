@@ -533,7 +533,7 @@ fn peer_delivery_is_durable_replies_once_and_accepts_the_next_message(cx: &mut T
         assert_eq!(sent.peer.as_ref().unwrap().hop, 1);
         let recipient = m.chats["peer-beta"].clone();
         recipient.update(cx, |v, cx| {
-            v.set_running_for_test(false);
+            v.complete_turn_for_test();
             v.bot_post("bot-system", sent.text.clone(), cx).unwrap();
             v.bot_post("assistant", "The approach is sound.".into(), cx)
                 .unwrap();
@@ -1415,6 +1415,13 @@ fn send_after_recovery_choice(cx: &mut TestAppContext, recovered: bool) {
     {
         let db = locked(&s.store).unwrap();
         db.configure_agent(s.session, "claude", &settings).unwrap();
+        assert!(
+            db.agent_settings(s.session)
+                .unwrap()
+                .unwrap()
+                .usage_limit
+                .is_some()
+        );
         let mut payload = json!({
             "cwd": s.project, "text": "saved input", "selectionStart": 11, "selectionEnd": 11,
             "attachments": [], "mcpTags": [],
@@ -1498,6 +1505,13 @@ fn send_after_recovery_choice(cx: &mut TestAppContext, recovered: bool) {
     });
     let db = Store::open(&PathBuf::from(&s.project).join("native.sqlite")).unwrap();
     assert!(db.composer_recoveries(s.session).unwrap().is_empty());
+    assert!(
+        db.agent_settings(s.session)
+            .unwrap()
+            .unwrap()
+            .usage_limit
+            .is_some()
+    );
     assert_eq!(db.load(s.session).unwrap().rows, source);
     let roster = Roster::load(&db).unwrap();
     assert_eq!(
