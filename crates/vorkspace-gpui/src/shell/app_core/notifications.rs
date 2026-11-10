@@ -136,23 +136,29 @@ impl AppCore {
     }
 
     fn linked_sessions(&self, cx: &App) -> HashMap<i64, LinkedSession> {
-        let mut windows = self
+        let windows: Vec<_> = self
             .windows
             .iter()
             .filter_map(WeakEntity::upgrade)
-            .peekable();
-        let Some(first) = windows.peek() else {
-            return HashMap::new();
-        };
-        // Regular metadata is propagated through AppCore's catalog events.
-        // Overlay each window's live chats, including hidden Bot conversations.
-        let mut linked: HashMap<_, _> = first
-            .read(cx)
-            .session_summaries
-            .values()
-            .filter_map(LinkedSession::from_summary)
-            .map(|session| (session.id, session))
             .collect();
+        let mut linked: HashMap<i64, LinkedSession> = HashMap::new();
+        // Remote visibility can differ by window scope. Union the catalog
+        // projections before overlaying the owners of live conversations.
+        for window in &windows {
+            for session in window
+                .read(cx)
+                .session_summaries
+                .values()
+                .filter_map(LinkedSession::from_summary)
+            {
+                if linked
+                    .get(&session.id)
+                    .is_none_or(|current| session.updated_at > current.updated_at)
+                {
+                    linked.insert(session.id, session);
+                }
+            }
+        }
         for window in windows {
             for view in window.read(cx).notification_chats(cx) {
                 let summary = &view.read(cx).summary;
