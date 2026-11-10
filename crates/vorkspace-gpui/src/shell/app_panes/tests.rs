@@ -692,7 +692,7 @@ fn switching_focus_keeps_bot_and_terminal_siblings_alive(cx: &mut TestAppContext
                 shell.workspace_bot_context().is_some(),
                 "the Bot's browse panel stays available"
             );
-            assert!(terminal.read(cx).visible);
+            assert!(terminal.read(cx).is_visible());
             assert_eq!(chat.read(cx).input.read(cx).content, "Unsent Bot draft");
             shell.open(terminal_pane, w, cx);
             assert_eq!(

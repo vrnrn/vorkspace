@@ -41,10 +41,20 @@ fn output_bursts_queue_one_repaint_and_preserve_ordered_effects() {
     assert!(events.is_empty());
 
     // Model the consumer's re-arm before reading the latest grid.
-    listener.repaint_pending.store(false, Ordering::Release);
+    listener.repaint.pending.store(false, Ordering::Release);
     listener.clone().send_event(TermEvent::Wakeup);
     listener.send_event(TermEvent::Wakeup);
     assert_eq!(events.len(), 1, "later output still gets a fresh repaint");
+    assert!(matches!(events.try_recv(), Ok(TermEvent::Wakeup)));
+
+    listener.repaint.pending.store(false, Ordering::Release);
+    listener.repaint.visible.store(false, Ordering::Release);
+    for _ in 0..10_000 {
+        listener.send_event(TermEvent::Wakeup);
+    }
+    listener.send_event(TermEvent::ClipboardStore("hidden".into()));
+    assert!(matches!(events.try_recv(), Ok(TermEvent::ClipboardStore(text)) if text == "hidden"));
+    assert!(events.is_empty());
 }
 
 #[gpui::test]
@@ -58,7 +68,7 @@ fn background_terminal_output_keeps_grid_and_effects_without_repaints(
         cx.observe(&terminal, move |_, _| count.set(count.get() + 1))
     });
     terminal.update(cx, |terminal, cx| {
-        terminal.visible = false;
+        terminal.set_visible(false, cx);
         write_note(&terminal.term, "background output");
         terminal.on_event(TermEvent::Wakeup, cx);
         terminal.on_event(TermEvent::ClipboardStore("kept".into()), cx);
@@ -72,8 +82,7 @@ fn background_terminal_output_keeps_grid_and_effects_without_repaints(
     terminal.update(cx, |terminal, cx| {
         let text = terminal.fixture_screen();
         assert!(text.contains("background output"));
-        terminal.visible = true;
-        terminal.on_event(TermEvent::Wakeup, cx);
+        terminal.set_visible(true, cx);
     });
     cx.run_until_parked();
     assert_eq!(notifications.get(), 1);
@@ -228,7 +237,7 @@ fn a_login_shell_runs_and_its_output_reaches_the_grid() {
         columns: 60,
         lines: 10,
     };
-    let spawned = spawn(&dir, size, 1);
+    let spawned = spawn(&dir, size);
     let sender = spawned.sender.expect("the shell started");
     assert!(spawned.shell_pid > 1);
     let _ = sender.send(Msg::Input(Cow::Borrowed(b"printf 'bot%scode\\n' -\r")));

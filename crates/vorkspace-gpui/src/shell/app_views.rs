@@ -30,7 +30,7 @@ impl Shell {
         if let Some(id) = self.active_terminal_tab.take()
             && let Some(terminal) = self.terminal_tabs.get(&id)
         {
-            terminal.update(cx, |terminal, _| terminal.visible = false);
+            terminal.update(cx, |terminal, cx| terminal.set_visible(false, cx));
         }
         self.active_app_view = None;
         self.invalidate_chrome(cx);

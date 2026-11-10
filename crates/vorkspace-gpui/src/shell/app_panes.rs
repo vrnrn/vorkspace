@@ -185,7 +185,7 @@ impl Shell {
         }
         for (id, view) in &self.terminal_tabs {
             let active = self.workspace.app_panes.iter().any(|(pane, state)| shown.contains(pane) && matches!(state.content, AppPane::Terminal { id: terminal, .. } if terminal == *id));
-            view.update(cx, |v, _| v.visible = active);
+            view.update(cx, |terminal, cx| terminal.set_visible(active, cx));
         }
         for (&id, review) in &self.reviews {
             if self

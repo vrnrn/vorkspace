@@ -949,19 +949,13 @@ impl Shell {
         cx: &mut Context<Self>,
     ) -> AnyElement {
         let project = self.workspace.project.clone();
-        // Other projects' docks stop polling for their foreground commands.
-        // A hidden dock keeps polling for the footer's running-terminal chip.
         let workspace_visible = self.settings.is_none() && self.workspace.active_tab().is_some();
-        for (path, live) in &self.terminals {
-            let shown = *path == project && workspace_visible;
-            for terminal in live {
-                terminal.update(cx, |t, _| t.visible = shown);
-            }
-        }
-        let Some(dock) = self.workspace.docks.get(&project).cloned() else {
-            return body;
-        };
-        let progress = match self.dock_slide.as_ref().filter(|(p, _)| *p == project) {
+        let dock = self.workspace.docks.get(&project).cloned();
+        let progress = match self
+            .dock_slide
+            .as_ref()
+            .filter(|(p, _)| dock.is_some() && *p == project)
+        {
             Some((_, slide)) => {
                 let (t, done) = slide.at(vorkspace_ui::clock::Instant::now());
                 if done {
@@ -974,11 +968,25 @@ impl Shell {
             }
             None => None,
         };
-        let shown = (dock.open || progress.is_some()) && workspace_visible;
-        if !shown {
-            return body;
+        let active = dock
+            .as_ref()
+            .filter(|dock| workspace_visible && (dock.open || progress.is_some()))
+            .map(|dock| dock.active);
+        if active.is_some() {
+            self.ensure_terminals(&project, cx);
         }
-        self.ensure_terminals(&project, cx);
+        for (path, live) in &self.terminals {
+            // The active project's hidden grids still feed the running-terminal chip.
+            let monitor = *path == project && workspace_visible;
+            for (index, terminal) in live.iter().enumerate() {
+                terminal.update(cx, |terminal, cx| {
+                    terminal.set_activity(monitor && active == Some(index), monitor, cx)
+                });
+            }
+        }
+        let Some(dock) = dock.filter(|_| active.is_some()) else {
+            return body;
+        };
         let size = dock.size;
         let track = size * progress.unwrap_or(1.);
         let vertical = dock.side.vertical();

@@ -148,10 +148,10 @@ fn command_new_tab_every_click_opens_and_focuses_an_independent_top_tab(cx: &mut
                     for (old_tab, old_terminal) in &opened {
                         assert_ne!(&tab, old_tab);
                         assert_ne!(&terminal, old_terminal);
-                        assert!(!old_terminal.read(cx).visible);
+                        assert!(!old_terminal.read(cx).is_visible());
                     }
                     assert_eq!(terminal.read(cx).cwd, "/work/vorkspace");
-                    assert!(terminal.read(cx).visible);
+                    assert!(terminal.read(cx).is_visible());
                     assert!(terminal.focus_handle(cx).is_focused(w));
                     assert_eq!(shell.terminal_tabs.len(), opened.len() + 1);
                     assert_eq!(
@@ -292,7 +292,7 @@ fn terminal_tabs_retain_output_and_working_copy_across_navigation_and_drag(
         .update(visual, |shell, _, _| shell.render_passes)
         .unwrap();
     terminal.update(visual, |terminal, cx| {
-        assert!(!terminal.visible);
+        assert!(!terminal.is_visible());
         terminal.fixture_output(" while hidden", cx);
     });
     visual.run_until_parked();

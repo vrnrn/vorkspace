@@ -53,7 +53,7 @@ impl Shell {
                 cx.new(|cx| Terminal::new(crate::terminal::usable_cwd(cwd.clone()), cx))
             })
             .clone();
-        terminal.update(cx, |terminal, _| terminal.visible = true);
+        terminal.update(cx, |terminal, cx| terminal.set_visible(true, cx));
         self.active_terminal_tab = Some(id);
         self.admit_app_pane(crate::workspace::AppPane::Terminal { id, cwd });
         self.reveal_active_tab(cx);
