@@ -1,5 +1,8 @@
 //! Committed Bot state and ordered writes for every window on a store.
-use super::Bots;
+use super::{
+    Bots,
+    effects::{MinionEffects, Permit},
+};
 use gpui::{App, AppContext as _, Context, Entity, EventEmitter, Task, WeakEntity};
 use std::{collections::HashMap, path::PathBuf};
 use vorkspace_core::{
@@ -27,6 +30,8 @@ pub(crate) struct SharedRoster {
     // from the snapshot. Keep the deletion revision to distinguish them.
     pub(super) removed: HashMap<String, u64>,
     chat_owners: HashMap<String, WeakEntity<Bots>>,
+    minion_effects: MinionEffects,
+    minions_enabled: bool,
     writes: Option<Task<()>>,
 }
 
@@ -48,6 +53,8 @@ impl SharedRoster {
             revision: 0,
             removed: HashMap::new(),
             chat_owners: HashMap::new(),
+            minion_effects: MinionEffects::default(),
+            minions_enabled: false,
             writes: None,
         });
         let quit = shared.downgrade();
@@ -94,6 +101,37 @@ impl SharedRoster {
         if self.chat_owners.get(id) == Some(owner) {
             self.chat_owners.remove(id);
         }
+    }
+
+    pub(super) fn configure_minions(&mut self, enabled: bool) {
+        if self.minions_enabled != enabled {
+            self.minions_enabled = enabled;
+            if let Ok(roster) = &self.snapshot {
+                self.minion_effects.reconcile(roster, enabled);
+            }
+        }
+    }
+
+    pub(super) fn minion_permit(&self, actor: &str, projects: &[String]) -> Result<Permit, String> {
+        self.minion_effects.permit(actor, projects)
+    }
+
+    pub(super) fn minion_fences(&self, actor: &str) -> Vec<Permit> {
+        self.minion_effects.fences(actor)
+    }
+
+    pub(super) fn retire_minion(
+        &mut self,
+        parent: String,
+        id: String,
+        cx: &mut Context<Self>,
+    ) -> async_channel::Receiver<Result<Option<i64>, String>> {
+        self.write(None, cx, move |db| {
+            let mut roster = Roster::load(db)?;
+            roster.retire_minion(&parent, &id)?;
+            let session = roster.get(&id).and_then(|bot| bot.session_id);
+            Ok((Some(roster.save_snapshot(db)?), Ok(session)))
+        })
     }
 
     fn ids(roster: &Roster) -> Vec<String> {
@@ -215,10 +253,18 @@ impl SharedRoster {
                         let ids = Self::ids(&snapshot);
                         let changed = shared.member_ids().as_ref() != Some(&ids);
                         shared.revision += 1;
+                        let mut retired = Vec::new();
                         if let Ok(previous) = &shared.snapshot {
                             for bot in &previous.bots {
                                 if snapshot.get(&bot.id).is_none() {
                                     shared.removed.insert(bot.id.clone(), shared.revision);
+                                }
+                                if bot.is_minion()
+                                    && previous.is_active(&bot.id)
+                                    && !snapshot.is_active(&bot.id)
+                                    && let Some(owner) = shared.chat_owner(&bot.id)
+                                {
+                                    retired.push((bot.id.clone(), owner.clone()));
                                 }
                             }
                             shared.removed.retain(|id, _| snapshot.get(id).is_none());
@@ -226,7 +272,13 @@ impl SharedRoster {
                                 previous.get(id).is_none() || snapshot.get(id).is_some()
                             });
                         }
+                        shared
+                            .minion_effects
+                            .reconcile(&snapshot, shared.minions_enabled);
                         shared.snapshot = Ok(snapshot);
+                        for (id, owner) in retired {
+                            let _ = owner.update(cx, |bots, cx| bots.stop_retired_chat(&id, cx));
+                        }
                         if changed {
                             cx.emit(MembershipChanged { ids, vorkspace });
                         }

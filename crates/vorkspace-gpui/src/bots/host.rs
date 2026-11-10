@@ -87,7 +87,16 @@ impl Bots {
         cx: &mut Context<Self>,
     ) {
         let permit = if self.roster.get(actor_id).is_some_and(Bot::is_minion) {
-            match self.minion_effects.permit(actor_id) {
+            let projects = self
+                .roster
+                .storage_owner(actor_id)
+                .map(|owner| owner.projects.as_slice())
+                .unwrap_or_default();
+            match self
+                .shared_roster
+                .read(cx)
+                .minion_permit(actor_id, projects)
+            {
                 Ok(permit) => Some(permit),
                 Err(error) => {
                     self.finish_call(call, Err(error), cx);
@@ -210,6 +219,7 @@ impl Bots {
             .and_then(|b| self.roster.effective_bot(&b.id))
             .filter(|b| {
                 self.roster.is_active(&b.id)
+                    && !self.shared_roster.read(cx).removed.contains_key(&b.id)
                     && (!b.is_minion() || (self.prefs.bots && self.prefs.minions))
             })
         else {
@@ -219,6 +229,21 @@ impl Bots {
             return;
         };
         let bot = self.roster.storage_owner(&actor.id).unwrap().clone();
+        let permit = if actor.is_minion() {
+            match self
+                .shared_roster
+                .read(cx)
+                .minion_permit(&actor.id, &bot.projects)
+            {
+                Ok(permit) => Some(permit),
+                Err(error) => {
+                    let _ = call.reply.send(Err(error));
+                    return;
+                }
+            }
+        } else {
+            None
+        };
         if actor.is_minion() && !bot::api::minion_allowed(&call.action) {
             let _ = call
                 .reply
@@ -442,10 +467,14 @@ impl Bots {
             app.defer(move |cx| {
                 let result = handle
                     .update(cx, |_, window, cx| {
-                        owner.workspace_action(call.session, &project, &action, &input, window, cx)
+                        if let Some(permit) = permit {
+                            permit.check()?;
+                        }
+                        owner
+                            .workspace_action(call.session, &project, &action, &input, window, cx)
+                            .map_err(|error| error.to_string())?
                     })
                     .map_err(|error| error.to_string())
-                    .and_then(|result| result.map_err(|error| error.to_string()))
                     .and_then(|result| result);
                 let _ = manager.update(cx, |manager, cx| manager.finish_call(call, result, cx));
             });
@@ -460,10 +489,14 @@ impl Bots {
             app.defer(move |cx| {
                 let result = handle
                     .update(cx, |_, window, cx| {
-                        owner.notes_action(call.session, &projects, &action, &input, window, cx)
+                        if let Some(permit) = permit {
+                            permit.check()?;
+                        }
+                        owner
+                            .notes_action(call.session, &projects, &action, &input, window, cx)
+                            .map_err(|error| error.to_string())?
                     })
                     .map_err(|error| error.to_string())
-                    .and_then(|result| result.map_err(|error| error.to_string()))
                     .and_then(|result| result);
                 let _ = manager.update(cx, |manager, cx| manager.finish_call(call, result, cx));
             });
@@ -530,27 +563,8 @@ impl Bots {
             "minions.fire"=>{
                 let query=match text(&input,"minion",160){Ok(v)=>v,Err(e)=>{self.finish_call(call,Err(e),cx);return;}};
                 let member=match self.roster.resolve_peer(&actor.id,&query,true){Ok(b)=>b.id.clone(),Err(e)=>{self.finish_call(call,Err(e),cx);return;}};
-                let fences=self.minion_effects.fences(&member);
-                match self.roster.retire_minion(&actor.id,&member) {
-                    Err(e)=>Err(e),
-                    Ok(())=>{
-                        if let Some(view)=self.chats.get(&member){view.update(cx,|v,cx|{v.bot_stop(cx);let _=v.app_stop(cx);});}
-                        let sessions=self.minion_sessions(&member);
-                        let value=self.minion_value(self.roster.get(&member).unwrap(),cx);
-                        self.save(cx);
-                        self.call_work(call,&actor.id,target,move|store|{
-                            for fence in fences {fence.wait()?;}
-                            let store=locked(&store)?;
-                            for session in sessions {
-                                let mut queue=store.follow_ups(session)?;
-                                queue.paused=true;
-                                queue.revision+=1;
-                                store.accept_follow_ups(session,&queue)?;
-                            }
-                            Ok((value,Effect::None))
-                        },cx);return;
-                    }
-                }
+                self.fire_minion(call, actor.id, member, cx);
+                return;
             }
             "minions.retry"|"minions.discard"=>{
                 let query=match text(&input,"minion",160){Ok(v)=>v,Err(e)=>{self.finish_call(call,Err(e),cx);return;}};
@@ -823,10 +837,61 @@ impl Bots {
         }
         if working { "working" } else { "idle" }
     }
-    fn minion_sessions(&self, id: &str) -> HashSet<i64> {
-        let mut sessions = HashSet::new();
-        sessions.extend(self.roster.get(id).and_then(|b| b.session_id));
-        sessions
+    fn fire_minion(&self, call: Call, parent: String, member: String, cx: &mut Context<Self>) {
+        let shared = self.shared_roster.clone();
+        let target = member.clone();
+        let saved = shared.update(cx, |shared, cx| shared.retire_minion(parent, target, cx));
+        let store = self.store.clone();
+        cx.spawn(async move |this, cx| {
+            let result = saved
+                .recv()
+                .await
+                .unwrap_or_else(|_| Err("Minion retirement was interrupted".into()));
+            let result = match result {
+                Err(error) => Err(error),
+                Ok(session) => {
+                    // Publication has already revoked the permit and stopped
+                    // the chat in whichever window owns it.
+                    let fences = shared.update(cx, |shared, _| shared.minion_fences(&member));
+                    cx.background_executor()
+                        .spawn(async move {
+                            for fence in fences {
+                                fence.wait()?;
+                            }
+                            if let Some(session) = session {
+                                let store = locked(&store)?;
+                                let mut queue = store.follow_ups(session)?;
+                                queue.paused = true;
+                                queue.revision += 1;
+                                store.accept_follow_ups(session, &queue)?;
+                            }
+                            Ok(())
+                        })
+                        .await
+                }
+            };
+            let _ = this.update(cx, |this, cx| {
+                let result = result.and_then(|()| {
+                    let bot = this
+                        .shared_roster
+                        .read(cx)
+                        .committed()
+                        .and_then(|roster| roster.get(&member))
+                        .ok_or("The retired Minion no longer exists")?;
+                    Ok(this.minion_value(bot, cx))
+                });
+                this.finish_call(call, result, cx);
+            });
+        })
+        .detach();
+    }
+    pub(super) fn stop_retired_chat(&self, id: &str, cx: &mut Context<Self>) {
+        if let Some(view) = self.chats.get(id) {
+            view.update(cx, |view, cx| {
+                view.bot_stop(cx);
+                let _ = view.app_stop(cx);
+            });
+        }
     }
     pub(crate) fn minion_value(&self, member: &Bot, cx: &App) -> Value {
         let metadata = member.minion.as_ref().unwrap();
@@ -847,9 +912,10 @@ impl Bots {
     }
     /// Kept as the Shell's shared attachment registry for source compatibility.
     /// Persistent members now receive Bot context through their own executor.
-    pub(crate) fn sync_minions(&mut self) {
-        self.minion_effects
-            .reconcile(&self.roster, self.prefs.bots && self.prefs.minions);
+    pub(super) fn sync_minions(&mut self, cx: &mut Context<Self>) {
+        self.shared_roster.update(cx, |shared, _| {
+            shared.configure_minions(self.prefs.bots && self.prefs.minions);
+        });
         self.minion_registry.borrow_mut().clear();
     }
 }
