@@ -2,7 +2,7 @@
 //! runs for visible lines. Scroll position is independent of the caret.
 use super::*;
 use gpui::{AnyElement, Task};
-use std::{cell::Cell, sync::Arc};
+use std::{cell::Cell, rc::Rc, sync::Arc};
 use vorkspace_editor::editor_analysis::Analysis;
 use vorkspace_ui::editor_scrollbar::{Metrics, WIDTH};
 use vorkspace_ui::radius;
@@ -23,7 +23,6 @@ pub(super) struct Code {
     can_stage: bool,
     suppress_completion: bool,
     document_bytes: Option<usize>,
-    diff: bool,
     deleted_rows: Vec<(
         f32,
         f32,
@@ -36,9 +35,8 @@ pub(super) struct Code {
     completion_index: usize,
     completion_task: Option<Task<()>>,
     completion_source: Option<(SharedString, usize)>,
-    folded: Vec<vorkspace_editor::editor_analysis::Fold>,
-    search_matches: Vec<Range<usize>>,
-    offsets: Vec<usize>,
+    geometry: Geometry,
+    search_matches: Rc<Vec<Range<usize>>>,
     visible: Vec<(usize, WrappedLine)>,
     reveal: bool,
     max_width: Pixels,
@@ -46,7 +44,6 @@ pub(super) struct Code {
     redo: Vec<(SharedString, Range<usize>)>,
     wrap: bool,
     layout_width: Option<Pixels>,
-    tops: Vec<f32>,
     analysis: Arc<Analysis>,
     /// The buffer as of the last change, which `analysis` offsets follow.
     text: SharedString,
@@ -64,16 +61,14 @@ impl Code {
             can_stage: false,
             suppress_completion: false,
             document_bytes: None,
-            diff: false,
             deleted_rows: Vec::new(),
             path: String::new(),
             completions: Vec::new(),
             completion_index: 0,
             completion_task: None,
             completion_source: None,
-            folded: Vec::new(),
-            search_matches: Vec::new(),
-            offsets: vec![0],
+            geometry: Geometry::new(),
+            search_matches: Rc::default(),
             visible: Vec::new(),
             reveal: true,
             max_width: px(0.),
@@ -81,7 +76,6 @@ impl Code {
             redo: Vec::new(),
             wrap: true,
             layout_width: None,
-            tops: vec![TOP_PADDING, TOP_PADDING + 20.],
             analysis: Arc::new(Analysis::default()),
             text: SharedString::default(),
             rail: None,
@@ -92,6 +86,28 @@ impl Code {
             affinity: Cell::new(None),
         }
     }
+}
+
+// Painting borrows these immutable arrays through one frame. Layout changes
+// publish new arrays, so the painter never needs a duplicate line index.
+#[derive(Clone)]
+struct Geometry {
+    offsets: Rc<Vec<usize>>,
+    tops: Rc<Vec<f32>>,
+    folded: Rc<Vec<vorkspace_editor::editor_analysis::Fold>>,
+    diff: bool,
+}
+
+impl Geometry {
+    fn new() -> Self {
+        Self {
+            offsets: Rc::new(vec![0]),
+            tops: Rc::new(vec![TOP_PADDING, TOP_PADDING + 20.]),
+            folded: Rc::default(),
+            diff: false,
+        }
+    }
+
     fn row(&self, offset: usize) -> usize {
         self.offsets
             .partition_point(|start| *start <= offset)
@@ -139,7 +155,7 @@ impl Code {
         self.offsets.get(row + 1).map_or(len, |s| s - 1)
     }
     fn gutter(&self) -> f32 {
-        let digits = self.offsets.len().to_string().len() as f32;
+        let digits = (self.offsets.len().ilog10() + 1) as f32;
         if self.diff {
             4. + 12. + digits * 7.5 + 5. + 16. + 1. + 6.
         } else {
@@ -199,9 +215,9 @@ impl Input {
             code.can_stage = can_stage;
         }
         if let Some(code) = &mut self.code
-            && code.diff != diff
+            && code.geometry.diff != diff
         {
-            code.diff = diff;
+            code.geometry.diff = diff;
             code.layout_width = None;
         }
     }
@@ -237,12 +253,12 @@ impl Input {
     }
     pub(super) fn unfold_range(&mut self, range: &Range<usize>) {
         if let Some(code) = &mut self.code {
-            let before = code.folded.len();
-            code.folded.retain(|f| {
+            let before = code.geometry.folded.len();
+            Rc::make_mut(&mut code.geometry.folded).retain(|f| {
                 !(range.start > f.from && range.start < f.to
                     || range.end > f.from && range.end < f.to)
             });
-            if code.folded.len() != before {
+            if code.geometry.folded.len() != before {
                 code.layout_width = None;
             }
         }
@@ -253,7 +269,7 @@ impl Input {
         cx: &mut Context<Self>,
     ) {
         if let Some(code) = &mut self.code {
-            code.search_matches = matches;
+            code.search_matches = Rc::new(matches);
         }
         cx.notify();
     }
@@ -423,7 +439,7 @@ impl Input {
             return None;
         }
         let p = self.code_position(self.cursor());
-        let gutter = code.gutter();
+        let gutter = code.geometry.gutter();
         let height = (code.completions.len().min(10) as f32 * 22.).min(240.);
         let viewport = self.bounds.map_or(400., |b| b.size.height.as_f32());
         let y = (p.y - self.scroll_y).as_f32();
@@ -511,19 +527,24 @@ impl Input {
         let Some(code) = &mut self.code else {
             return;
         };
-        if let Some(n) = code.folded.iter().position(|f| code.row(f.from) == row) {
-            code.folded.remove(n);
+        if let Some(n) = code
+            .geometry
+            .folded
+            .iter()
+            .position(|f| code.geometry.row(f.from) == row)
+        {
+            Rc::make_mut(&mut code.geometry.folded).remove(n);
         } else if let Some(fold) = code
             .analysis
             .folds
             .iter()
-            .find(|f| code.row(f.from) == row)
+            .find(|f| code.geometry.row(f.from) == row)
             .cloned()
         {
             if self.selection.end > fold.from && self.selection.start < fold.to {
                 self.selection = fold.from..fold.from;
             }
-            code.folded.push(fold);
+            Rc::make_mut(&mut code.geometry.folded).push(fold);
         }
         code.layout_width = None;
         cx.notify();
@@ -533,8 +554,13 @@ impl Input {
             cx.propagate();
             return;
         };
-        let row = code.row(self.cursor());
-        if !code.folded.iter().any(|f| code.row(f.from) == row) {
+        let row = code.geometry.row(self.cursor());
+        if !code
+            .geometry
+            .folded
+            .iter()
+            .any(|f| code.geometry.row(f.from) == row)
+        {
             self.toggle_fold_row(row, cx);
         }
     }
@@ -543,8 +569,8 @@ impl Input {
             cx.propagate();
             return;
         };
-        let row = code.display_row(self.cursor());
-        if code.fold_at(row).is_some() {
+        let row = code.geometry.display_row(self.cursor());
+        if code.geometry.fold_at(row).is_some() {
             self.toggle_fold_row(row, cx);
         }
     }
@@ -553,10 +579,10 @@ impl Input {
             cx.propagate();
             return;
         };
-        code.folded = code.analysis.folds.clone();
-        code.folded.sort_by_key(|f| f.from);
+        let mut folded = code.analysis.folds.clone();
+        folded.sort_by_key(|f| f.from);
         let mut end = 0;
-        code.folded.retain(|f| {
+        folded.retain(|f| {
             if f.from < end {
                 false
             } else {
@@ -564,13 +590,14 @@ impl Input {
                 true
             }
         });
+        code.geometry.folded = Rc::new(folded);
         code.layout_width = None;
         self.selection = 0..0;
         cx.notify();
     }
     pub(super) fn unfold_all(&mut self, _: &UnfoldAll, _: &mut Window, cx: &mut Context<Self>) {
         if let Some(code) = &mut self.code {
-            code.folded.clear();
+            Rc::make_mut(&mut code.geometry.folded).clear();
             code.layout_width = None;
             cx.notify();
         }
@@ -586,7 +613,9 @@ impl Input {
         {
             return false;
         }
-        let row = code.row_at_y((e.position.y - bounds.top() + self.scroll_y).as_f32());
+        let row = code
+            .geometry
+            .row_at_y((e.position.y - bounds.top() + self.scroll_y).as_f32());
         self.toggle_fold_row(row, cx);
         true
     }
@@ -611,7 +640,7 @@ impl Input {
     }
     pub(crate) fn set_editor_analysis(&mut self, analysis: Analysis, cx: &mut Context<Self>) {
         if let Some(code) = &mut self.code {
-            code.folded.retain(|fold| analysis.folds.contains(fold));
+            Rc::make_mut(&mut code.geometry.folded).retain(|fold| analysis.folds.contains(fold));
             code.analysis = Arc::new(analysis);
             code.layout_width = None;
             cx.notify();
@@ -619,12 +648,14 @@ impl Input {
     }
     pub(crate) fn cursor_location(&self) -> (usize, usize) {
         let at = self.cursor();
-        let row = self.code.as_ref().map_or(0, |c| c.row(at));
-        let start = self.code.as_ref().map_or(0, |c| c.offsets[row]);
+        let row = self.code.as_ref().map_or(0, |c| c.geometry.row(at));
+        let start = self.code.as_ref().map_or(0, |c| c.geometry.offsets[row]);
         (row + 1, self.content[start..at].chars().count() + 1)
     }
     pub(crate) fn editor_line_count(&self) -> usize {
-        self.code.as_ref().map_or(1, |code| code.offsets.len())
+        self.code
+            .as_ref()
+            .map_or(1, |code| code.geometry.offsets.len())
     }
     pub(crate) fn reload_file(
         &mut self,
@@ -697,7 +728,7 @@ impl Input {
     }
     pub(super) fn map_code_folds(&mut self, range: &Range<usize>, inserted: usize) {
         if let Some(code) = &mut self.code {
-            code.folded.retain_mut(|f| {
+            Rc::make_mut(&mut code.geometry.folded).retain_mut(|f| {
                 if range.end <= f.from {
                     f.from = f.from + inserted - range.len();
                     f.to = f.to + inserted - range.len();
@@ -710,12 +741,12 @@ impl Input {
     }
     pub(super) fn clear_folds(&mut self) {
         if let Some(code) = &mut self.code {
-            code.folded.clear();
+            Rc::make_mut(&mut code.geometry.folded).clear();
             code.layout_width = None;
         }
     }
     pub(super) fn folded_boundary(&self, at: usize, backwards: bool) -> Option<usize> {
-        self.code.as_ref()?.folded.iter().find_map(|f| {
+        self.code.as_ref()?.geometry.folded.iter().find_map(|f| {
             if backwards && at == f.to {
                 Some(f.from)
             } else if !backwards && at == f.from {
@@ -732,16 +763,20 @@ impl Input {
             code.completion_source = None;
             code.deleted_rows.clear();
             code.hovered_change = None;
-            code.offsets = std::iter::once(0)
-                .chain(self.content.match_indices('\n').map(|(at, _)| at + 1))
-                .collect();
+            code.geometry.offsets = Rc::new(
+                std::iter::once(0)
+                    .chain(self.content.match_indices('\n').map(|(at, _)| at + 1))
+                    .collect(),
+            );
             code.visible.clear();
             code.reveal = true;
             code.max_width = px(0.);
             code.layout_width = None;
-            code.tops = (0..=code.offsets.len())
-                .map(|row| TOP_PADDING + row as f32 * self.line_height)
-                .collect();
+            code.geometry.tops = Rc::new(
+                (0..=code.geometry.offsets.len())
+                    .map(|row| TOP_PADDING + row as f32 * self.line_height)
+                    .collect(),
+            );
             // Carry the last results through the edit until fresh analysis
             // lands; clearing them would flash the whole buffer uncoloured.
             let previous = std::mem::replace(&mut code.text, self.content.clone());
@@ -876,7 +911,7 @@ impl Input {
     }
     pub(super) fn code_position(&self, at: usize) -> Point<Pixels> {
         let code = self.code.as_ref().unwrap();
-        let row = code.display_row(at);
+        let row = code.geometry.display_row(at);
         let p = code
             .visible
             .iter()
@@ -884,37 +919,37 @@ impl Input {
             .map(|(_, line)| {
                 line_position(
                     line,
-                    code.display_offset(row, at),
+                    code.geometry.display_offset(row, at),
                     self.line_height(),
                     code.affinity.get() == Some((at, true)),
                 )
             })
             .unwrap_or_default();
-        p + point(px(0.), px(code.top(row, self.line_height)))
+        p + point(px(0.), px(code.geometry.top(row, self.line_height)))
     }
     pub(super) fn code_index(&self, p: Point<Pixels>) -> usize {
         let code = self.code.as_ref().unwrap();
-        let row = code.row_at_y(p.y.as_f32());
-        let start = code.offsets[row];
+        let row = code.geometry.row_at_y(p.y.as_f32());
+        let start = code.geometry.offsets[row];
         let at = code
             .visible
             .iter()
             .find(|(ix, _)| *ix == row)
             .map_or(start, |(_, line)| {
-                code.source_offset(
+                code.geometry.source_offset(
                     row,
                     line.closest_index_for_position(
-                        point(p.x, p.y - px(code.top(row, self.line_height))),
+                        point(p.x, p.y - px(code.geometry.top(row, self.line_height))),
                         self.line_height(),
                     )
                     .unwrap_or_else(|ix| ix),
                 )
             });
         if let Some((_, line)) = code.visible.iter().find(|(ix, _)| *ix == row) {
-            let local_y = (p.y.as_f32() - code.top(row, self.line_height)).max(0.);
+            let local_y = (p.y.as_f32() - code.geometry.top(row, self.line_height)).max(0.);
             let downstream = line_position(
                 line,
-                code.display_offset(row, at),
+                code.geometry.display_offset(row, at),
                 self.line_height(),
                 false,
             );
@@ -935,24 +970,25 @@ impl Input {
                 (p.y + self.line_height() * if down { 1. } else { -1. }).max(px(0.)),
             ));
         }
-        let row = code.row(self.cursor());
-        let col = self.content[code.offsets[row]..self.cursor()]
+        let row = code.geometry.row(self.cursor());
+        let col = self.content[code.geometry.offsets[row]..self.cursor()]
             .graphemes(true)
             .count();
         let mut row = if down {
-            (row + 1).min(code.offsets.len() - 1)
+            (row + 1).min(code.geometry.offsets.len() - 1)
         } else {
             row.saturating_sub(1)
         };
-        while code.hidden(row) && row > 0 && row + 1 < code.offsets.len() {
+        while code.geometry.hidden(row) && row > 0 && row + 1 < code.geometry.offsets.len() {
             if down {
                 row += 1;
             } else {
                 row -= 1;
             }
         }
-        let start = code.offsets[row];
+        let start = code.geometry.offsets[row];
         let end = code
+            .geometry
             .offsets
             .get(row + 1)
             .map_or(self.content.len(), |s| s - 1);
@@ -973,7 +1009,7 @@ impl Input {
             let height = self.bounds.map_or(px(0.), |b| b.size.height);
             self.scroll_y = (self.scroll_y - delta.y)
                 .max(px(0.))
-                .min((px(code.total()) - height).max(px(0.)));
+                .min((px(code.geometry.total()) - height).max(px(0.)));
             self.scroll_x = (self.scroll_x - delta.x).max(px(0.)).min(code.max_width);
             code.reveal = false;
             cx.stop_propagation();
@@ -1004,15 +1040,16 @@ impl Input {
                 self.move_to(marker.pos, cx);
             }
             let code = self.code.as_mut().unwrap();
-            let row = code.row(marker.pos);
-            self.scroll_y =
-                px((code.top(row, self.line_height) - rail.size.height.as_f32() / 2.).max(0.));
+            let row = code.geometry.row(marker.pos);
+            self.scroll_y = px((code.geometry.top(row, self.line_height)
+                - rail.size.height.as_f32() / 2.)
+                .max(0.));
             code.reveal = false;
             w.focus(&self.focus, cx);
         } else {
             let metrics = Metrics::new(
                 self.scroll_y.as_f32(),
-                code.total(),
+                code.geometry.total(),
                 rail.size.height.as_f32(),
                 rail.size.height.as_f32(),
             );
@@ -1067,7 +1104,7 @@ impl Input {
             }
             let metrics = Metrics::new(
                 self.scroll_y.as_f32(),
-                code.total(),
+                code.geometry.total(),
                 rail.size.height.as_f32(),
                 rail.size.height.as_f32(),
             );
@@ -1088,12 +1125,12 @@ impl Input {
         let (Some(code), Some(bounds)) = (&mut self.code, self.bounds) else {
             return;
         };
-        if !code.diff {
+        if !code.geometry.diff {
             return;
         }
         let y = (e.position.y - bounds.top() + self.scroll_y).as_f32();
-        let row = code.row_at_y(y);
-        let hovered = if e.position.x >= bounds.left() - px(code.gutter())
+        let row = code.geometry.row_at_y(y);
+        let hovered = if e.position.x >= bounds.left() - px(code.geometry.gutter())
             && e.position.x <= bounds.right()
             && e.position.y >= bounds.top()
             && e.position.y <= bounds.bottom()
@@ -1101,7 +1138,7 @@ impl Input {
             code.analysis
                 .changes
                 .iter()
-                .position(|c| code.row(c.from) <= row && code.row(c.to) >= row)
+                .position(|c| code.geometry.row(c.from) <= row && code.geometry.row(c.to) >= row)
         } else {
             None
         };
@@ -1114,13 +1151,13 @@ impl Input {
         let code = self.code.as_ref()?;
         let index = code.hovered_change?;
         let change = code.analysis.changes.get(index)?;
-        let row = code.row(change.from);
-        let top = (code.top(row, self.line_height) - self.scroll_y.as_f32()).max(0.);
+        let row = code.geometry.row(change.from);
+        let top = (code.geometry.top(row, self.line_height) - self.scroll_y.as_f32()).max(0.);
         Some(
             div()
                 .id("editor-hunk-actions")
                 .absolute()
-                .left(px(code.gutter() - 18.))
+                .left(px(code.geometry.gutter() - 18.))
                 .top(px(top))
                 .w(px(18.))
                 .flex()
@@ -1201,7 +1238,7 @@ fn paint_rail(
 ) -> Vec<MarkerHit> {
     let code = i.code.as_ref().unwrap();
     let height = rail.size.height.as_f32();
-    let total = code.total().max(1.);
+    let total = code.geometry.total().max(1.);
     let metrics = Metrics::new(scroll.as_f32(), total, height, height);
     let mut markers = Vec::new();
     w.with_content_mask(Some(ContentMask { bounds: rail }), |w| {
@@ -1228,7 +1265,7 @@ fn paint_rail(
         // Exactly one diagnostic per logical line, strongest severity wins.
         let mut diagnostics = std::collections::BTreeMap::new();
         for diagnostic in &code.analysis.diagnostics {
-            let row = code.row(diagnostic.from);
+            let row = code.geometry.row(diagnostic.from);
             let current = diagnostics.entry(row).or_insert(diagnostic);
             if diagnostic.priority() > current.priority() {
                 *current = diagnostic;
@@ -1239,7 +1276,7 @@ fn paint_rail(
                 rail.origin
                     + point(
                         px(3.),
-                        px(row as f32 / code.offsets.len().max(1) as f32 * height),
+                        px(row as f32 / code.geometry.offsets.len().max(1) as f32 * height),
                     ),
                 size(px(WIDTH - 5.), px(3.)),
             );
@@ -1262,7 +1299,9 @@ fn paint_rail(
                 message: diagnostic.message.clone(),
             });
         }
-        let cursor_y = code.row(i.cursor()) as f32 / code.offsets.len().max(1) as f32 * height;
+        let cursor_y = code.geometry.row(i.cursor()) as f32
+            / code.geometry.offsets.len().max(1) as f32
+            * height;
         let mut cursor_color = vorkspace_ui::theme::accent_color();
         cursor_color.a *= if i.focus.is_focused(w) { 1. } else { 0.6 };
         w.paint_quad(fill(
@@ -1275,12 +1314,15 @@ fn paint_rail(
         let (add, del) = vorkspace_ui::editor_scrollbar::diff_colors(cx);
         // Git's layer is above the cursor/diagnostic layer in editorGit.ts.
         for change in &code.analysis.changes {
-            let row = code.row(change.from);
-            let top = code.top(row, i.line_height);
+            let row = code.geometry.row(change.from);
+            let top = code.geometry.top(row, i.line_height);
             let bottom = if change.kind == "del" {
                 top + change.deleted.max(1) as f32 * i.line_height
             } else {
-                code.top(code.row(change.to.saturating_sub(1)) + 1, i.line_height)
+                code.geometry.top(
+                    code.geometry.row(change.to.saturating_sub(1)) + 1,
+                    i.line_height,
+                )
             };
             // A slim lane at the rail's outer edge: in a short file a change
             // spans most of the rail, and a full-width band reads as a slab.
@@ -1412,9 +1454,9 @@ fn token_line(
 }
 fn shape(i: &Input, row: usize, width: Option<Pixels>, w: &mut Window) -> WrappedLine {
     let code = i.code.as_ref().unwrap();
-    let start = code.offsets[row];
-    let end = code.source_end(row, i.content.len());
-    let text: SharedString = if let Some(fold) = code.fold_at(row) {
+    let start = code.geometry.offsets[row];
+    let end = code.geometry.source_end(row, i.content.len());
+    let text: SharedString = if let Some(fold) = code.geometry.fold_at(row) {
         format!(
             "{}…{}",
             &i.content[start..fold.from],
@@ -1440,14 +1482,14 @@ fn shape(i: &Input, row: usize, width: Option<Pixels>, w: &mut Window) -> Wrappe
         let from = token.from.max(start);
         let to = token.to.min(end);
         let color = vorkspace_ui::theme::syntax_color(&token.kind);
-        if let Some(fold) = code.fold_at(row) {
+        if let Some(fold) = code.geometry.fold_at(row) {
             if from < fold.from {
                 spans.push((from - start, to.min(fold.from) - start, color));
             }
             if to > fold.to {
                 spans.push((
-                    code.display_offset(row, from.max(fold.to)),
-                    code.display_offset(row, to),
+                    code.geometry.display_offset(row, from.max(fold.to)),
+                    code.geometry.display_offset(row, to),
                     color,
                 ));
             }
@@ -1455,7 +1497,7 @@ fn shape(i: &Input, row: usize, width: Option<Pixels>, w: &mut Window) -> Wrappe
             spans.push((from - start, to - start, color));
         }
     }
-    if let Some(fold) = code.fold_at(row) {
+    if let Some(fold) = code.geometry.fold_at(row) {
         spans.push((
             fold.from - start,
             fold.from - start + "…".len(),
@@ -1528,7 +1570,7 @@ fn shape(i: &Input, row: usize, width: Option<Pixels>, w: &mut Window) -> Wrappe
         .analysis
         .diagnostics
         .iter()
-        .filter(|_| code.fold_at(row).is_none())
+        .filter(|_| code.geometry.fold_at(row).is_none())
     {
         let range = diagnostic.range();
         if range.end <= start || range.start >= end {
@@ -1609,10 +1651,10 @@ impl Element for CodeElement {
         // offscreen lines do not retain glyph runs.
         self.input.update(cx, |i, _| {
             let code = i.code.as_ref().unwrap();
-            let gutter = px(code.gutter());
+            let gutter = px(code.geometry.gutter());
             let width = (bounds.size.width - gutter - px(WIDTH + 12.)).max(px(1.));
             if code.layout_width != Some(width) {
-                let mut tops = Vec::with_capacity(code.offsets.len() + 1);
+                let mut tops = Vec::with_capacity(code.geometry.offsets.len() + 1);
                 let mut y = TOP_PADDING;
                 let mut deleted_rows = Vec::new();
                 let mut deletion_changes = code
@@ -1634,17 +1676,17 @@ impl Element for CodeElement {
                     }],
                     None,
                 );
-                for row in 0..code.offsets.len() {
+                for row in 0..code.geometry.offsets.len() {
                     while deletion_changes
                         .peek()
-                        .is_some_and(|c| code.row(c.from) < row)
+                        .is_some_and(|c| code.geometry.row(c.from) < row)
                     {
                         deletion_changes.next();
                     }
-                    if !code.hidden(row) && code.diff {
+                    if !code.geometry.hidden(row) && code.geometry.diff {
                         while deletion_changes
                             .peek()
-                            .is_some_and(|c| code.row(c.from) == row)
+                            .is_some_and(|c| code.geometry.row(c.from) == row)
                         {
                             let change = deletion_changes.next().unwrap();
                             let mut offset = 0;
@@ -1686,11 +1728,15 @@ impl Element for CodeElement {
                         }
                     }
                     tops.push(y);
-                    if code.hidden(row) {
+                    if code.geometry.hidden(row) {
                         continue;
                     }
-                    let start = code.offsets[row];
-                    let end = code.offsets.get(row + 1).map_or(i.content.len(), |n| n - 1);
+                    let start = code.geometry.offsets[row];
+                    let end = code
+                        .geometry
+                        .offsets
+                        .get(row + 1)
+                        .map_or(i.content.len(), |n| n - 1);
                     let text = &i.content[start..end];
                     let short = !text.contains('\t') && sample.width * text.len() <= width;
                     y += if !code.wrap || short {
@@ -1704,14 +1750,14 @@ impl Element for CodeElement {
                 }
                 tops.push(y);
                 let code = i.code.as_mut().unwrap();
-                code.tops = tops;
+                code.geometry.tops = Rc::new(tops);
                 code.deleted_rows = deleted_rows;
                 code.layout_width = Some(width);
             }
         });
         let i = self.input.read(cx);
         let code = i.code.as_ref().unwrap();
-        let gutter = px(code.gutter());
+        let gutter = px(code.geometry.gutter());
         let text_bounds = Bounds::new(
             bounds.origin + point(gutter, px(0.)),
             size(
@@ -1722,15 +1768,15 @@ impl Element for CodeElement {
         let wrap = code.wrap.then_some(text_bounds.size.width);
         let mut scroll = point(i.scroll_x, i.scroll_y);
         if code.reveal {
-            let row = code.display_row(i.cursor());
+            let row = code.geometry.display_row(i.cursor());
             let caret_line = shape(i, row, wrap, w);
             let p = line_position(
                 &caret_line,
-                code.display_offset(row, i.cursor()),
+                code.geometry.display_offset(row, i.cursor()),
                 i.line_height(),
                 code.affinity.get() == Some((i.cursor(), true)),
             );
-            let y = px(code.top(row, i.line_height)) + p.y;
+            let y = px(code.geometry.top(row, i.line_height)) + p.y;
             if y < scroll.y {
                 scroll.y = y;
             }
@@ -1750,12 +1796,15 @@ impl Element for CodeElement {
         scroll.y = scroll
             .y
             .max(px(0.))
-            .min((px(code.total()) - bounds.size.height).max(px(0.)));
-        let start = code.row_at_y(scroll.y.as_f32());
-        let end =
-            (code.row_at_y((scroll.y + bounds.size.height).as_f32()) + 2).min(code.offsets.len());
+            .min((px(code.geometry.total()) - bounds.size.height).max(px(0.)));
+        let start = code.geometry.row_at_y(scroll.y.as_f32());
+        let end = (code
+            .geometry
+            .row_at_y((scroll.y + bounds.size.height).as_f32())
+            + 2)
+        .min(code.geometry.offsets.len());
         let lines = (start..end)
-            .filter(|row| !code.hidden(*row))
+            .filter(|row| !code.geometry.hidden(*row))
             .map(|row| (row, shape(i, row, wrap, w)))
             .collect();
         let deleted = code
@@ -1804,37 +1853,22 @@ impl Element for CodeElement {
         let focused = i.focus.is_focused(w);
         let line_height = i.line_height;
         let code_affinity = code.affinity.get();
-        let starts: Vec<_> = state
-            .lines
-            .iter()
-            .map(|(row, _)| code.offsets[*row])
-            .collect();
-        let tops: Vec<_> = state
-            .lines
-            .iter()
-            .map(|(row, _)| code.top(*row, line_height))
-            .collect();
         let rail = Bounds::new(
             point(bounds.right() - px(WIDTH), bounds.top()),
             size(px(WIDTH), bounds.size.height),
         );
         let markers = paint_rail(i, rail, state.scroll.y, w, cx);
         let content_len = i.content.len();
-        let mut snapshot = Code::new();
-        snapshot.offsets = code.offsets.clone();
-        snapshot.tops = code.tops.clone();
-        snapshot.folded = code.folded.clone();
-        snapshot.analysis = code.analysis.clone();
-        snapshot.search_matches = code.search_matches.clone();
-        snapshot.diff = code.diff;
-        let code = &snapshot;
+        let geometry = code.geometry.clone();
+        let analysis = code.analysis.clone();
+        let search_matches = code.search_matches.clone();
         w.handle_input(
             &i.focus,
             ElementInputHandler::new(state.text_bounds, self.input.clone()),
             cx,
         );
         w.with_content_mask(Some(ContentMask { bounds }), |w| {
-            if code.diff {
+            if geometry.diff {
                 for (top, line, number) in &state.deleted {
                     let y = bounds.top() + px(*top) - state.scroll.y;
                     w.paint_quad(fill(
@@ -1847,7 +1881,7 @@ impl Element for CodeElement {
                     w.paint_quad(fill(
                         Bounds::new(
                             point(bounds.left(), y),
-                            size(px(code.gutter() - 22.), line.size(lh).height),
+                            size(px(geometry.gutter() - 22.), line.size(lh).height),
                         ),
                         vorkspace_ui::theme::diff_background(false, true),
                     ));
@@ -1882,15 +1916,14 @@ impl Element for CodeElement {
                         cx,
                     );
                 }
-                for ((row, line), top) in state.lines.iter().zip(&tops) {
-                    let start = code.offsets[*row];
-                    if code
-                        .analysis
+                for (row, line) in &state.lines {
+                    let start = geometry.offsets[*row];
+                    if analysis
                         .changes
                         .iter()
                         .any(|c| c.kind != "del" && start >= c.from && start <= c.to)
                     {
-                        let y = bounds.top() + px(*top) - state.scroll.y;
+                        let y = bounds.top() + px(geometry.top(*row, line_height)) - state.scroll.y;
                         w.paint_quad(fill(
                             Bounds::new(
                                 point(bounds.left(), y),
@@ -1916,9 +1949,10 @@ impl Element for CodeElement {
                     }
                 }
             }
-            for ((row, shaped), top) in state.lines.iter().zip(&tops) {
-                if code.analysis.folds.iter().any(|f| code.row(f.from) == *row) {
-                    let arrow: SharedString = if code.fold_at(*row).is_some() {
+            for (row, _) in &state.lines {
+                let top = geometry.top(*row, line_height);
+                if analysis.folds.iter().any(|f| geometry.row(f.from) == *row) {
+                    let arrow: SharedString = if geometry.fold_at(*row).is_some() {
                         "›"
                     } else {
                         "⌄"
@@ -1928,7 +1962,7 @@ impl Element for CodeElement {
                         arrow,
                         px(12.),
                         &[TextRun {
-                            len: if code.fold_at(*row).is_some() {
+                            len: if geometry.fold_at(*row).is_some() {
                                 "›".len()
                             } else {
                                 "⌄".len()
@@ -1944,7 +1978,7 @@ impl Element for CodeElement {
                     let _ = arrow_line.paint(
                         point(
                             state.text_bounds.left() - px(12.),
-                            bounds.top() + px(*top) - state.scroll.y,
+                            bounds.top() + px(top) - state.scroll.y,
                         ),
                         lh,
                         TextAlign::Left,
@@ -1953,7 +1987,6 @@ impl Element for CodeElement {
                         cx,
                     );
                 }
-                let _ = shaped;
                 let number: SharedString = (row + 1).to_string().into();
                 let len = number.len();
                 let line = w.text_system().shape_line(
@@ -1972,7 +2005,7 @@ impl Element for CodeElement {
                 let _ = line.paint(
                     point(
                         state.text_bounds.left() - px(26.) - line.width,
-                        bounds.top() + px(*top) - state.scroll.y,
+                        bounds.top() + px(top) - state.scroll.y,
                     ),
                     lh,
                     TextAlign::Left,
@@ -2000,10 +2033,12 @@ impl Element for CodeElement {
                         cx,
                     );
                 }
-                for (((row, line), &start), top) in state.lines.iter().zip(&starts).zip(&tops) {
-                    let y = bounds.top() + px(*top) - state.scroll.y;
+                for (row, line) in &state.lines {
+                    let start = geometry.offsets[*row];
+                    let top = geometry.top(*row, line_height);
+                    let y = bounds.top() + px(top) - state.scroll.y;
                     let x = state.text_bounds.left() - state.scroll.x;
-                    if cursor >= start && cursor <= code.source_end(*row, content_len) {
+                    if cursor >= start && cursor <= geometry.source_end(*row, content_len) {
                         w.paint_quad(fill(
                             Bounds::new(
                                 point(state.text_bounds.left(), y),
@@ -2012,9 +2047,9 @@ impl Element for CodeElement {
                             vorkspace_ui::theme::content(0.1),
                         ));
                     }
-                    for range in &code.search_matches {
-                        let a = code.display_offset(*row, range.start).min(line.len());
-                        let b = code.display_offset(*row, range.end).min(line.len());
+                    for range in search_matches.iter() {
+                        let a = geometry.display_offset(*row, range.start).min(line.len());
+                        let b = geometry.display_offset(*row, range.end).min(line.len());
                         if a < b {
                             let a = line_position(line, a, lh, false);
                             let b = line.position_for_index(b, lh).unwrap_or_default();
@@ -2029,8 +2064,10 @@ impl Element for CodeElement {
                             }
                         }
                     }
-                    let a = code.display_offset(*row, selected.start).min(line.len());
-                    let b = code.display_offset(*row, selected.end).min(line.len());
+                    let a = geometry
+                        .display_offset(*row, selected.start)
+                        .min(line.len());
+                    let b = geometry.display_offset(*row, selected.end).min(line.len());
                     if a < b
                         || (selected.start <= start + line.len()
                             && selected.end > start + line.len())
@@ -2059,11 +2096,11 @@ impl Element for CodeElement {
                     if focused
                         && selected.is_empty()
                         && cursor >= start
-                        && cursor <= code.source_end(*row, content_len)
+                        && cursor <= geometry.source_end(*row, content_len)
                     {
                         let p = line_position(
                             line,
-                            code.display_offset(*row, cursor),
+                            geometry.display_offset(*row, cursor),
                             lh,
                             code_affinity == Some((cursor, true)),
                         );
@@ -2136,9 +2173,11 @@ mod feature_tests {
         window
             .update(cx, |i, _, cx| {
                 let code = i.code.as_ref().unwrap();
-                let fold = code.folded[0].clone();
+                let fold = code.geometry.folded[0].clone();
                 assert_eq!(i.content.as_ref(), source);
-                assert!(code.hidden(1) && code.hidden(2) && code.hidden(3));
+                assert!(
+                    code.geometry.hidden(1) && code.geometry.hidden(2) && code.geometry.hidden(3)
+                );
                 assert_eq!(i.next(fold.from), fold.to);
                 let p = i.code_position(fold.to);
                 assert_eq!(i.code_index(p), fold.to);
@@ -2149,13 +2188,13 @@ mod feature_tests {
         window
             .update(cx, |i, _, cx| {
                 assert_eq!(
-                    i.code.as_ref().unwrap().folded.len(),
+                    i.code.as_ref().unwrap().geometry.folded.len(),
                     1,
                     "editing before a fold keeps it collapsed"
                 );
                 let at = i.content.find("emoji").unwrap();
                 i.select_range(at..at + 5, cx);
-                assert!(i.code.as_ref().unwrap().folded.is_empty());
+                assert!(i.code.as_ref().unwrap().geometry.folded.is_empty());
             })
             .unwrap();
     }
@@ -2201,7 +2240,7 @@ mod feature_tests {
                 let code = i.code.as_ref().unwrap();
                 assert_eq!(code.deleted_rows.len(), 1);
                 assert_eq!(code.deleted_rows[0].2, "const value = 1;");
-                assert_eq!(code.tops[0], TOP_PADDING + i.line_height);
+                assert_eq!(code.geometry.tops[0], TOP_PADDING + i.line_height);
                 assert_eq!(i.content.as_ref(), "const value = 2;\n");
             })
             .unwrap();
