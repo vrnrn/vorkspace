@@ -1,5 +1,4 @@
 //! Shared provider accounts, identities and per-account subscription snapshots.
-mod masked;
 pub(crate) mod resets;
 mod signin;
 pub(crate) mod ui;
@@ -466,9 +465,11 @@ impl Accounts {
                     .copied()
                     .unwrap_or_default()
                     != generation
-                    || !this.book.exists(key.0, &key.1)
                 {
-                    this.identity_loading.remove(&key);
+                    return;
+                }
+                this.identity_loading.remove(&key);
+                if !this.book.exists(key.0, &key.1) {
                     return;
                 }
                 if let Some(identity) = identity {
@@ -479,7 +480,7 @@ impl Accounts {
         })
         .detach();
     }
-    fn persist(&mut self, book: Book, cx: &mut Context<Self>) {
+    fn persist(&mut self, book: Book, after_commit: Option<AccountEvent>, cx: &mut Context<Self>) {
         self.working = true;
         if let Some(editor) = &self.editor {
             editor
@@ -514,6 +515,9 @@ impl Accounts {
                         for account in added {
                             this.invalidate(Kind::from_id(&account.provider), &account.id, cx);
                         }
+                        if let Some(event) = after_commit {
+                            cx.emit(event);
+                        }
                         cx.emit(AccountEvent::Updated);
                     }
                     Err(error) => this.error = Some(error),
@@ -540,13 +544,16 @@ impl Accounts {
             self.error = Some(error);
             return;
         }
-        self.persist(book, cx);
-        cx.emit(AccountEvent::Select {
-            kind,
-            id,
-            project,
-            session,
-        });
+        self.persist(
+            book,
+            Some(AccountEvent::Select {
+                kind,
+                id,
+                project,
+                session,
+            }),
+            cx,
+        );
     }
     pub(crate) fn start_edit(
         &mut self,
@@ -614,7 +621,7 @@ impl Accounts {
         let mut book = self.book.clone();
         if let Some(id) = id {
             match book.rename(kind, &id, &label) {
-                Ok(()) => self.persist(book, cx),
+                Ok(()) => self.persist(book, None, cx),
                 Err(error) => {
                     self.error = Some(error);
                     cx.notify();
@@ -747,10 +754,15 @@ impl Accounts {
                         if let Some(account) = adding {
                             let mut book = this.book.clone();
                             book.accounts.push(account);
-                            this.persist(book, cx);
+                            this.persist(book, Some(AccountEvent::Authenticated(kind, id)), cx);
+                        } else {
+                            this.invalidate(kind, &id, cx);
+                            if action == AuthAction::SignIn {
+                                cx.emit(AccountEvent::Authenticated(kind, id));
+                            } else {
+                                cx.emit(AccountEvent::Updated);
+                            }
                         }
-                        this.invalidate(kind, &id, cx);
-                        cx.emit(AccountEvent::Authenticated(kind, id));
                     }
                 }
                 cx.notify();
@@ -789,6 +801,9 @@ impl Accounts {
                 return;
             }
             let _ = this.update(cx, |this, cx| {
+                if this.working {
+                    return;
+                }
                 let kind = Kind::from_id(&account.provider);
                 let profile = this.profile(&account.id);
                 let mut book = this.book.clone();
@@ -817,7 +832,10 @@ impl Accounts {
                                 this.reset_actions.retain(|key, _| {
                                     key.kind != kind || key.profile.id != account.id
                                 });
-                                this.identities.remove(&(kind, account.id));
+                                let key = (kind, account.id);
+                                this.identities.remove(&key);
+                                this.identity_loading.remove(&key);
+                                this.identity_generation.remove(&key);
                                 cx.emit(AccountEvent::Updated);
                             }
                             Err(error) => this.error = Some(error),
