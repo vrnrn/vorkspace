@@ -124,11 +124,11 @@ fn presentation_metadata(source: &Value) -> Value {
         })
         .collect()
 }
-fn project_content(block: &Value) -> Result<Vec<Row>, String> {
+fn project_content(block: &Value, remote: bool) -> Result<Vec<Row>, String> {
     if block["draft"] == true || (block["internal"] == true && block["role"] != "user") {
         return Ok(Vec::new());
     }
-    if block["nativeRemotePlan"] == true && block["role"] == "plan" {
+    if (remote || block["nativeRemotePlan"] == true) && block["role"] == "plan" {
         return Ok(vec![metadata_row(
             "remote-plan",
             &json!({
@@ -191,20 +191,34 @@ fn metadata_row(role: &str, value: &Value) -> Row {
     }
 }
 fn project_block(block: &Value) -> Result<Vec<Row>, String> {
+    project_block_in(block, None)
+}
+
+pub(in crate::store) fn project_remote_block(
+    block: &Value,
+    environment: &str,
+    session: &str,
+) -> Result<Vec<Row>, String> {
+    project_block_in(block, Some((environment, session)))
+}
+
+fn project_block_in(block: &Value, remote: Option<(&str, &str)>) -> Result<Vec<Row>, String> {
     if block["draft"] == true || (block["internal"] == true && block["role"] != "user") {
         return Ok(Vec::new());
     }
-    let mut rows = project_content(block)?;
-    if block["role"] == "user"
-        && (block["nativeRemoteAttachments"] == true
-            || block["attachments"]
-                .as_array()
-                .is_some_and(|files| !files.is_empty()))
-    {
-        rows.push(metadata_row(
-            crate::transcript::attachments::ROLE,
-            &block["attachments"],
-        ));
+    let mut rows = project_content(block, remote.is_some())?;
+    if block["role"] == "user" {
+        let files = &block["attachments"];
+        let role = crate::transcript::attachments::ROLE;
+        if let Some((environment, session)) = remote {
+            let qualified =
+                crate::remote::attachments::qualified_references(files, environment, session);
+            rows.push(metadata_row(role, &qualified));
+        } else if block["nativeRemoteAttachments"] == true
+            || files.as_array().is_some_and(|files| !files.is_empty())
+        {
+            rows.push(metadata_row(role, files));
+        }
     }
     for card in crate::bot::work::document_cards(block) {
         rows.push(metadata_row("bot-document", &card));
@@ -248,7 +262,7 @@ fn update(old: Option<&Value>, rows: &[Row]) -> Result<Value, String> {
     // Reuse the complete original object for unchanged display rows. In
     // particular, bounded tool previews must not truncate the stored output.
     if let Some(old) = old {
-        if project_content(old)? == rows {
+        if project_content(old, false)? == rows {
             return Ok(old.clone());
         }
     }

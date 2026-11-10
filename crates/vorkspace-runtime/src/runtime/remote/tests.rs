@@ -240,6 +240,29 @@ fn unchanged_versioned_snapshots_skip_publication_and_empty_history_has_an_end()
 }
 
 #[test]
+fn remote_settlement_replays_the_whole_transcript_after_live_deltas() {
+    let first = snapshot("running", 1);
+    let mut live = snapshot("running", 2);
+    live["session"]["blocks"]
+        .as_array_mut()
+        .unwrap()
+        .push(json!({"id":"answer","role":"assistant","text":"Accepted while stopping"}));
+    let mut settled = live.clone();
+    settled["revision"] = json!(3);
+    settled["status"] = json!("idle");
+    let updates = observe_snapshots(vec![first, live, settled]);
+    assert!(matches!(
+        &updates[1].transcript,
+        TranscriptPatch::Snapshot { start: 2, rows } if rows[0].text == "Accepted while stopping"
+    ));
+    assert!(matches!(
+        &updates[2].transcript,
+        TranscriptPatch::Snapshot { start: 0, rows }
+        if rows[0].text == "Original message" && rows[2].text == "Accepted while stopping"
+    ));
+}
+
+#[test]
 fn unversioned_snapshots_project_initial_and_changed_rows_then_remove_a_stale_tail() {
     let mut first = snapshot("running", 1);
     first.as_object_mut().unwrap().remove("revision");

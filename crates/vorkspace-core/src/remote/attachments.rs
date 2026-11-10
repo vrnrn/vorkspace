@@ -51,51 +51,43 @@ pub fn attachment_source_size(value: &str) -> Option<usize> {
     parse_source(value).map(|source| source.size)
 }
 
-/// Apply to a projection clone, retaining the host's original sync snapshot.
-/// Invalid attachment references lose their host path as well.
-pub fn qualify_snapshot(snapshot: &mut Value, environment: &str, session_id: &str) {
-    if let Some(blocks) = snapshot["session"]["blocks"].as_array_mut() {
-        for block in blocks {
-            if block["role"] == "user" {
-                block["nativeRemoteAttachments"] = Value::Bool(true);
-                if !block["attachments"].is_array() {
-                    block["attachments"] = json!([]);
-                }
-            }
-            if let Some(files) = block["attachments"].as_array_mut() {
-                for file in files {
-                    if file["data"].as_str().is_some_and(is_attachment_source) {
-                        // Only this desktop creates transport source URIs.
-                        // Embedded host data remains ordinary base64 content.
-                        if let Some(object) = file.as_object_mut() {
-                            object.remove("data");
-                        }
-                    }
-                    let source = file["id"]
-                        .as_str()
-                        .filter(|id| !id.is_empty())
-                        .zip(
-                            file["size"]
-                                .as_u64()
-                                .filter(|size| *size <= MAX_ATTACHMENT_BYTES as u64),
-                        )
-                        .filter(|_| !environment.is_empty() && !session_id.is_empty())
-                        .map(|(id, size)| {
-                            format!(
-                                "{PREFIX}{}/{}/{}?size={size}",
-                                encode(environment),
-                                encode(session_id),
-                                encode(id)
-                            )
-                        });
-                    file["path"] = source.map(Value::String).unwrap_or(Value::Null);
-                    if let Some(object) = file.as_object_mut() {
-                        object.remove("previewUrl");
-                    }
-                }
-            }
+/// Project host references into the desktop's session-scoped attachment namespace.
+pub(crate) fn qualified_references(files: &Value, environment: &str, session: &str) -> Value {
+    let files = files.as_array().into_iter().flatten().filter_map(|file| {
+        let mut file = file.as_object()?.clone();
+        if file
+            .get("data")
+            .and_then(Value::as_str)
+            .is_some_and(is_attachment_source)
+        {
+            file.remove("data");
         }
-    }
+        let source = file
+            .get("id")
+            .and_then(Value::as_str)
+            .filter(|id| !id.is_empty())
+            .zip(
+                file.get("size")
+                    .and_then(Value::as_u64)
+                    .filter(|size| *size <= MAX_ATTACHMENT_BYTES as u64),
+            )
+            .filter(|_| !environment.is_empty() && !session.is_empty())
+            .map(|(id, size)| {
+                format!(
+                    "{PREFIX}{}/{}/{}?size={size}",
+                    encode(environment),
+                    encode(session),
+                    encode(id)
+                )
+            });
+        file.insert(
+            "path".into(),
+            source.map(Value::String).unwrap_or(Value::Null),
+        );
+        file.remove("previewUrl");
+        Some(Value::Object(file))
+    });
+    Value::Array(files.collect())
 }
 
 pub fn read_attachment_source(value: &str) -> Result<Vec<u8>, String> {
@@ -151,12 +143,16 @@ mod tests {
     use super::*;
     #[test]
     fn projection_never_treats_host_paths_as_local_desktop_images() {
-        let mut snapshot = json!({"session":{"blocks":[{"role":"user","text":"image","attachments":[
+        let snapshot = json!({"session":{"blocks":[{"role":"user","text":"image","attachments":[
             {"id":"image/id","size":3,"kind":"image","path":"/Users/me/secret.png","previewUrl":"file:///Users/me/secret.png"},
             {"id":"broken","path":"/Users/me/secret.png"}
         ]}]}});
-        qualify_snapshot(&mut snapshot, "host/id", "session/id");
-        let file = &snapshot["session"]["blocks"][0]["attachments"][0];
+        let files = qualified_references(
+            &snapshot["session"]["blocks"][0]["attachments"],
+            "host/id",
+            "session/id",
+        );
+        let file = &files[0];
         assert!(!file["path"].as_str().unwrap().contains("/Users/"));
         assert!(file.get("previewUrl").is_none());
         let source = parse_source(file["path"].as_str().unwrap()).unwrap();
@@ -164,14 +160,14 @@ mod tests {
             (source.environment, source.session, source.id, source.size),
             ("host/id".into(), "session/id".into(), "image/id".into(), 3)
         );
-        assert!(snapshot["session"]["blocks"][0]["attachments"][1]["path"].is_null());
+        assert!(files[1]["path"].is_null());
     }
 
     #[test]
     fn remote_user_links_cannot_trigger_legacy_local_attachment_previews() {
-        let mut snapshot = json!({"session":{"blocks":[{"role":"user","text":"A host message\n\n[secret.png](</Users/me/secret.png>)"}]}});
-        qualify_snapshot(&mut snapshot, "host", "session");
-        let (history, _) = crate::store::Store::project_remote_history(&snapshot).unwrap();
+        let snapshot = json!({"session":{"blocks":[{"role":"user","text":"A host message\n\n[secret.png](</Users/me/secret.png>)"}]}});
+        let (history, _) =
+            crate::store::Store::project_remote_history(&snapshot, "host", "session").unwrap();
         assert_eq!(history.rows.len(), 2);
         assert_eq!(history.rows[1].role, crate::transcript::attachments::ROLE);
         assert_eq!(history.rows[1].text, "[]");
@@ -179,14 +175,14 @@ mod tests {
 
     #[test]
     fn remote_plan_projection_keeps_its_card_between_the_source_messages() {
-        let mut snapshot = json!({"session":{"blocks":[
+        let snapshot = json!({"session":{"blocks":[
             {"id":"user","role":"user","text":"Plan it"},
             {"id":"approved","role":"plan","text":"# Exact plan\n\n- Step","streaming":false,"plan":{"status":"ready","future":"preserved"}},
             {"id":"answer","role":"assistant","text":"Ready for review"}
         ]}});
-        qualify_snapshot(&mut snapshot, "host", "session");
         let before = snapshot.clone();
-        let (history, _) = crate::store::Store::project_remote_history(&snapshot).unwrap();
+        let (history, _) =
+            crate::store::Store::project_remote_history(&snapshot, "host", "session").unwrap();
         assert_eq!(snapshot, before);
         assert_eq!(history.rows[2].role, "remote-plan");
         let plan: Value = serde_json::from_str(&history.rows[2].text).unwrap();

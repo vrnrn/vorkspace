@@ -8,7 +8,8 @@ use std::{
 };
 use vorkspace_core::{
     agent::{Approval, Decision, Question, QuestionItem, QuestionOption},
-    store::{RemoteSession, RemoteUpload},
+    remote::protocol::SessionObservation,
+    store::{RemoteHistory, RemoteSession, RemoteUpload},
 };
 fn require_ticket_context(descriptor: &Value) -> Result<(), String> {
     if descriptor["capabilities"]
@@ -503,7 +504,6 @@ pub fn run_with_client(
     cancel: Arc<AtomicBool>,
     tx: async_channel::Sender<Update>,
 ) {
-    let mut latest_rows = Vec::new();
     let result = (|| -> Result<(), String> {
         if tx.is_closed() {
             return Ok(());
@@ -682,7 +682,8 @@ pub fn run_with_client(
             .session_id
             .clone()
             .ok_or("No remote session has been started")?;
-        let mut known = None;
+        let mut observation = SessionObservation::default();
+        let mut history = RemoteHistory::default();
         let mut activity = super::activity::ToolActivity::default();
         let mut seen_approvals = HashSet::new();
         let mut seen_questions = HashSet::new();
@@ -695,11 +696,14 @@ pub fn run_with_client(
             if tx.is_closed() {
                 return Ok(());
             }
-            if let Some(snapshot) = client.poll_session(&machine.id, &id, known.as_ref())? {
+            if let Some(first) = client.poll_session(&machine.id, &id, &mut observation)? {
+                let snapshot = observation
+                    .snapshot()
+                    .ok_or("Host did not return a session snapshot")?;
                 let revision = snapshot["revision"].as_u64();
                 let running = snapshot["status"] == "running";
-                let current_approvals = approvals(&snapshot);
-                current_question = question(&snapshot);
+                let current_approvals = approvals(snapshot);
+                current_question = question(snapshot);
                 let mut next = if running {
                     update("Working…", None)
                 } else if snapshot["status"] == "interrupted" {
@@ -712,33 +716,25 @@ pub fn run_with_client(
                 } else {
                     update("Ready", Some(TurnOutcome::Completed))
                 };
-                if snapshot_changed(known.as_ref(), &snapshot) {
-                    let mut projected = snapshot.clone();
-                    vorkspace_core::remote::attachments::qualify_snapshot(
-                        &mut projected,
-                        &binding.project.environment_id,
-                        &id,
-                    );
-                    let (history, _) =
-                        vorkspace_core::store::Store::project_remote_history(&projected)?;
-                    let prefix = latest_rows
-                        .iter()
-                        .zip(&history.rows)
-                        .take_while(|(known, next)| known == next)
-                        .count();
-                    next.transcript = TranscriptPatch::Snapshot {
-                        start: prefix,
-                        rows: history.rows[prefix..].to_vec(),
-                    };
-                    activity.snapshot(&history.rows, prefix, &binding.project.cwd);
-                    latest_rows = history.rows;
-                }
+                let (start, rows) =
+                    history.update(snapshot, first, &binding.project.environment_id, &id)?;
+                activity.snapshot(history.rows(), start, &binding.project.cwd);
+                next.transcript = if running {
+                    TranscriptPatch::Snapshot { start, rows }
+                } else {
+                    // Stop can skip queued live patches. Settlement cannot depend
+                    // on the view having applied any of them.
+                    TranscriptPatch::Snapshot {
+                        start: 0,
+                        rows: std::mem::take(&mut history).into_rows(),
+                    }
+                };
                 next.activity = activity.label();
                 next.provider_id = snapshot["session"]["providerSessionId"]
                     .as_str()
                     .map(str::to_owned);
                 next.model = snapshot["session"]["model"].as_str().map(str::to_owned);
-                (next.context, next.metrics) = accounting(&snapshot);
+                (next.context, next.metrics) = accounting(snapshot);
                 let current_ids: HashSet<_> =
                     current_approvals.iter().map(|a| a.id.clone()).collect();
                 next.approvals_resolved =
@@ -776,10 +772,9 @@ pub fn run_with_client(
                 if !running {
                     break;
                 }
-                known = Some(snapshot);
             }
-            let snapshot = known
-                .as_ref()
+            let snapshot = observation
+                .snapshot()
                 .ok_or("Host did not return a session snapshot")?;
             if cancel.load(Ordering::Relaxed) && stopping_run.is_none() {
                 let run_id = snapshot["runId"]

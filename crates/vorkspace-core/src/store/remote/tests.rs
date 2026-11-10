@@ -274,3 +274,35 @@ fn windows_project_keys_normalize_trailing_separators_and_find_legacy_unc_keys()
         .create("codex", "remote://env//server/share/repo")
         .is_ok());
 }
+#[test]
+fn remote_projection_matches_full_history_through_reorders_and_truncation() {
+    use crate::remote::protocol::SessionObservation;
+
+    let mut observation = SessionObservation::default();
+    let mut projection = RemoteHistory::default();
+    let mut rendered = Vec::new();
+    for update in [
+        json!({"kind":"snapshot","value":{"revision":1,"session":{"id":"s","blocks":[
+            {"id":"u","role":"user","text":"Keep the attachment","attachments":[{"id":"pic","size":3,"path":"/host/image.png"}]},
+            {"id":"p","role":"plan","text":"Review the change"},
+            {"id":"d","role":"user","text":"Draft","draft":true}
+        ]}}}),
+        json!({"kind":"delta","base":1,"value":{"revision":2,"session":{"id":"s"}},
+            "blockIds":["u","p","d","a"],"blocks":[{"id":"a","role":"assistant","text":"Start"}]}),
+        json!({"kind":"delta","base":2,"value":{"revision":3,"session":{"id":"s"}},
+            "blockIds":["u","a","p"],"blocks":[{"id":"a","role":"assistant","text":"Finished"}]}),
+        json!({"kind":"delta","base":3,"value":{"revision":4,"session":{"id":"s"}},
+            "blockIds":["u"],"blocks":[]}),
+        json!({"kind":"delta","base":4,"value":{"revision":5,"session":{"id":"s"}},
+            "blockIds":[],"blocks":[]}),
+    ] {
+        let first = observation.apply(update).unwrap().unwrap();
+        let snapshot = observation.snapshot().unwrap();
+        let (start, rows) = projection.update(snapshot, first, "env", "s").unwrap();
+        rendered.truncate(start);
+        rendered.extend(rows);
+        let (full, _) = Store::project_remote_history(snapshot, "env", "s").unwrap();
+        assert_eq!(rendered, full.rows);
+        assert_eq!(projection.rows(), rendered);
+    }
+}

@@ -64,65 +64,145 @@ pub const MAX_SESSION_SYNC_UNITS: usize = 256 * 1024 * 1024;
 const MAX_SESSION_SYNC_BYTES: usize = 512 * 1024 * 1024;
 const MAX_SESSION_SYNC_CHUNKS: usize = 4096;
 
-/// Applies a delta only to its exact base revision. Callers can recover by loading
-/// a snapshot when a revision or block is missing.
-pub fn apply_session_sync(known: Option<&Value>, sync: &Value) -> Result<Value, String> {
-    match sync.get("kind").and_then(Value::as_str) {
-        Some("snapshot") => sync
-            .get("value")
-            .filter(|value| value.is_object())
-            .cloned()
-            .ok_or_else(|| "Invalid session snapshot".into()),
-        Some("unchanged" | "delta") => {
-            let known = known.ok_or("Session sync base does not match")?;
-            let delta = sync["kind"] == "delta";
-            let base = sync
-                .get(if delta { "base" } else { "revision" })
-                .and_then(Value::as_u64);
-            if base.is_none() || known.get("revision").and_then(Value::as_u64) != base {
-                return Err("Session sync base does not match".into());
-            }
-            if !delta {
-                return Ok(known.clone());
-            }
-            let previous = known
-                .pointer("/session/blocks")
-                .and_then(Value::as_array)
-                .ok_or("Session sync is missing its blocks")?;
-            let changed = sync
-                .get("blocks")
-                .and_then(Value::as_array)
-                .ok_or("Session sync is missing its blocks")?;
-            let mut blocks = HashMap::new();
-            for block in previous.iter().chain(changed) {
-                let id = block
-                    .get("id")
-                    .and_then(Value::as_str)
-                    .ok_or("Session sync has an invalid block")?;
-                blocks.insert(id, block);
-            }
-            let ids = sync
-                .get("blockIds")
-                .and_then(Value::as_array)
-                .ok_or("Session sync is missing its block order")?;
-            let mut ordered = Vec::with_capacity(ids.len());
-            for id in ids {
-                let id = id.as_str().ok_or("Session sync has an invalid block ID")?;
-                ordered.push((*blocks.get(id).ok_or("Session sync is missing a block")?).clone());
-            }
-            let mut next = sync
-                .get("value")
-                .filter(|value| value.is_object())
-                .cloned()
-                .ok_or("Session sync is missing its session")?;
-            next.get_mut("session")
-                .and_then(Value::as_object_mut)
-                .ok_or("Session sync is missing its session")?
-                .insert("blocks".into(), Value::Array(ordered));
-            Ok(next)
-        }
-        _ => Err("Invalid session sync response".into()),
+/// One owned wire snapshot. A changed poll returns the first block position
+/// whose projection may differ, including a deletion at the end.
+#[derive(Default)]
+pub struct SessionObservation {
+    snapshot: Option<Value>,
+}
+
+impl SessionObservation {
+    pub fn snapshot(&self) -> Option<&Value> {
+        self.snapshot.as_ref()
     }
+
+    fn revision(&self) -> Option<u64> {
+        self.snapshot.as_ref()?.get("revision")?.as_u64()
+    }
+
+    pub fn apply(&mut self, mut sync: Value) -> Result<Option<usize>, String> {
+        match sync["kind"].as_str() {
+            Some("unchanged")
+                if self.revision().is_some() && self.revision() == sync["revision"].as_u64() =>
+            {
+                Ok(None)
+            }
+            Some("snapshot") => {
+                let next = sync["value"].take();
+                let blocks = session_blocks(&next)?;
+                if self.revision().is_some_and(|before| {
+                    next["revision"]
+                        .as_u64()
+                        .is_none_or(|revision| revision < before)
+                }) {
+                    return Err("Host returned an older session snapshot".into());
+                }
+                let first = self
+                    .snapshot
+                    .as_ref()
+                    .and_then(|before| session_blocks(before).ok())
+                    .map_or(0, |before| {
+                        before
+                            .iter()
+                            .zip(blocks)
+                            .take_while(|(a, b)| a == b)
+                            .count()
+                    });
+                self.snapshot = Some(next);
+                Ok(Some(first))
+            }
+            Some("delta")
+                if self.revision().is_some() && self.revision() == sync["base"].as_u64() =>
+            {
+                self.apply_delta(sync).map(Some)
+            }
+            _ => Err("Invalid session sync response or revision".into()),
+        }
+    }
+
+    fn apply_delta(&mut self, mut sync: Value) -> Result<usize, String> {
+        let mut next = sync["value"].take();
+        if next["revision"].as_u64() <= self.revision() {
+            return Err("Session delta did not advance its revision".into());
+        }
+        let session = next
+            .get_mut("session")
+            .and_then(Value::as_object_mut)
+            .ok_or("Session sync is missing its session")?;
+        let mut changed = take_array(&mut sync["blocks"])?;
+        let ids = sync["blockIds"]
+            .as_array()
+            .ok_or("Session sync is missing its block order")?;
+        let known = self.snapshot.as_mut().expect("delta has an exact base");
+        let previous = known
+            .pointer_mut("/session/blocks")
+            .and_then(Value::as_array_mut)
+            .ok_or("Session sync is missing its blocks")?;
+
+        // Validate the complete order before moving anything from the base.
+        // A rejected delta leaves the original available for a full retry.
+        let mut positions = HashMap::with_capacity(previous.len() + changed.len());
+        for (index, block) in previous.iter().enumerate() {
+            positions.insert(block_id(block)?, BlockSource::Previous(index));
+        }
+        for (index, block) in changed.iter().enumerate() {
+            positions.insert(block_id(block)?, BlockSource::Changed(index));
+        }
+        let order = ids
+            .iter()
+            .map(|id| {
+                let id = id.as_str().ok_or("Session sync has an invalid block ID")?;
+                positions
+                    .remove(id)
+                    .ok_or("Session sync has a missing or duplicate block")
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        drop(positions);
+
+        let first = order
+            .iter()
+            .enumerate()
+            .take_while(|(at, entry)| **entry == BlockSource::Previous(*at))
+            .count();
+        let blocks = order
+            .into_iter()
+            .map(|source| match source {
+                BlockSource::Previous(index) => previous[index].take(),
+                BlockSource::Changed(index) => changed[index].take(),
+            })
+            .collect();
+        session.insert("blocks".into(), Value::Array(blocks));
+        self.snapshot = Some(next);
+        Ok(first)
+    }
+}
+
+#[derive(PartialEq, Eq)]
+enum BlockSource {
+    Previous(usize),
+    Changed(usize),
+}
+
+fn session_blocks(snapshot: &Value) -> Result<&[Value], String> {
+    snapshot
+        .pointer("/session/blocks")
+        .and_then(Value::as_array)
+        .map(Vec::as_slice)
+        .ok_or_else(|| "Session sync is missing its blocks".into())
+}
+
+fn take_array(value: &mut Value) -> Result<Vec<Value>, String> {
+    match value.take() {
+        Value::Array(values) => Ok(values),
+        _ => Err("Session sync is missing its blocks".into()),
+    }
+}
+
+fn block_id(block: &Value) -> Result<&str, String> {
+    block["id"]
+        .as_str()
+        .filter(|id| !id.is_empty())
+        .ok_or_else(|| "Session sync has an invalid block".into())
 }
 
 /// Fetches one immutable sync transfer. Offsets and the reported length count
@@ -190,34 +270,40 @@ impl Connections {
         session_id: &str,
         known: Option<&Value>,
     ) -> Result<Value, String> {
-        self.poll_session(machine_id, session_id, known)?
-            .or_else(|| known.cloned())
+        let mut observation = SessionObservation {
+            snapshot: known.cloned(),
+        };
+        self.poll_session(machine_id, session_id, &mut observation)?;
+        observation
+            .snapshot
             .ok_or_else(|| "Session sync is missing its snapshot".into())
     }
 
-    /// Returns no snapshot when the host confirms the caller's exact revision.
+    /// An unchanged revision keeps the same snapshot and projection. A
+    /// rejected delta retries with a full snapshot against the retained base.
     pub fn poll_session(
         &self,
         machine_id: &str,
         session_id: &str,
-        known: Option<&Value>,
-    ) -> Result<Option<Value>, String> {
+        observation: &mut SessionObservation,
+    ) -> Result<Option<usize>, String> {
         let sync = |revision| {
             read_session_sync(session_id, revision, |method, params| {
                 self.request(machine_id, method, params)
             })
         };
-        let revision = known.and_then(|value| value["revision"].as_u64());
-        let update = sync(revision)?;
-        if update["kind"] == "unchanged"
-            && revision.is_some()
-            && update["revision"].as_u64() == revision
-        {
-            return Ok(None);
-        }
-        match apply_session_sync(known, &update) {
-            Ok(value) => Ok(Some(value)),
-            Err(_) => apply_session_sync(None, &sync(None)?).map(Some),
+        let apply = |observation: &mut SessionObservation, response: Value| {
+            if matches!(response["kind"].as_str(), Some("snapshot" | "delta"))
+                && response["value"]["session"]["id"].as_str() != Some(session_id)
+            {
+                return Err("Host returned a snapshot for another session".into());
+            }
+            observation.apply(response)
+        };
+        let response = sync(observation.revision())?;
+        match apply(observation, response) {
+            Ok(changed) => Ok(changed),
+            Err(_) => apply(observation, sync(None)?),
         }
     }
 }
@@ -244,7 +330,11 @@ mod tests {
             "blocks": [ { "id": "reply", "role": "assistant", "text": "Work done" },
                 { "id": "done", "role": "system", "text": "Finished" } ]
         });
-        let next = apply_session_sync(Some(&known), &sync).unwrap();
+        let mut observation = SessionObservation {
+            snapshot: Some(known.clone()),
+        };
+        assert_eq!(observation.apply(sync).unwrap(), Some(1));
+        let next = observation.snapshot().unwrap();
         assert_eq!(next["revision"], 6);
         assert_eq!(next["session"]["busy"], false);
         assert_eq!(next["session"]["blocks"][0], known["session"]["blocks"][0]);
@@ -255,25 +345,72 @@ mod tests {
     #[test]
     fn incompatible_deltas_and_unchanged_revisions_require_snapshot() {
         let known = known();
+        let mut observation = SessionObservation::default();
+        assert!(observation
+            .apply(json!({ "kind": "unchanged", "revision": 4 }))
+            .is_err());
         assert_eq!(
-            apply_session_sync(Some(&known), &json!({ "kind": "unchanged", "revision": 4 }))
+            observation
+                .apply(json!({ "kind": "snapshot", "value": known }))
                 .unwrap(),
-            known
+            Some(0)
         );
-        assert!(
-            apply_session_sync(Some(&known), &json!({ "kind": "unchanged", "revision": 3 }))
-                .is_err()
-        );
-        assert!(apply_session_sync(None, &json!({ "kind": "unchanged", "revision": 4 })).is_err());
-        assert!(apply_session_sync(
-            Some(&known),
-            &json!({ "kind": "delta", "base": 4,
-            "value": { "revision": 5, "session": {} }, "blockIds": ["unknown"], "blocks": [] })
-        )
-        .is_err());
         assert_eq!(
-            apply_session_sync(None, &json!({ "kind": "snapshot", "value": known })).unwrap(),
-            known
+            observation
+                .apply(json!({ "kind": "unchanged", "revision": 4 }))
+                .unwrap(),
+            None
+        );
+        assert!(observation
+            .apply(json!({ "kind": "unchanged", "revision": 3 }))
+            .is_err());
+        for order in [json!(["unknown"]), json!(["user", "user"])] {
+            assert!(observation
+                .apply(json!({ "kind": "delta", "base": 4,
+                "value": { "revision": 5, "session": {} }, "blockIds": order, "blocks": [] }))
+                .is_err());
+        }
+        assert_eq!(observation.snapshot(), Some(&known));
+    }
+
+    #[test]
+    fn delta_moves_existing_blocks_and_reports_deletions_and_reorders() {
+        let mut observation = SessionObservation {
+            snapshot: Some(known()),
+        };
+        let text = observation.snapshot().unwrap()["session"]["blocks"][1]["text"]
+            .as_str()
+            .unwrap()
+            .as_ptr();
+        assert_eq!(
+            observation
+                .apply(json!({ "kind": "delta", "base": 4,
+                "value": { "revision": 5, "session": { "id": "session" } },
+                "blockIds": ["reply", "user"], "blocks": [] }))
+                .unwrap(),
+            Some(0)
+        );
+        assert_eq!(
+            observation.snapshot().unwrap()["session"]["blocks"][0]["text"]
+                .as_str()
+                .unwrap()
+                .as_ptr(),
+            text
+        );
+        assert_eq!(
+            observation
+                .apply(json!({ "kind": "delta", "base": 5,
+                "value": { "revision": 6, "session": { "id": "session" } },
+                "blockIds": ["reply"], "blocks": [] }))
+                .unwrap(),
+            Some(1)
+        );
+        assert_eq!(
+            observation.snapshot().unwrap()["session"]["blocks"]
+                .as_array()
+                .unwrap()
+                .len(),
+            1
         );
     }
 

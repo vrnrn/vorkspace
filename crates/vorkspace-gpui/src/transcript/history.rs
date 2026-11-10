@@ -261,11 +261,15 @@ impl TranscriptView {
     pub(crate) fn patch_bot_turn_snapshot(
         &mut self,
         turn_start: usize,
-        mut rows: Vec<Row>,
+        rows: Vec<Row>,
         cx: &mut Context<Self>,
     ) {
-        let source_len = rows.len();
         self.live_start = turn_start;
+        self.patch_full_snapshot(rows, cx);
+    }
+
+    pub(crate) fn patch_full_snapshot(&mut self, mut rows: Vec<Row>, cx: &mut Context<Self>) {
+        let source_len = rows.len();
         let common = self
             .source
             .iter()

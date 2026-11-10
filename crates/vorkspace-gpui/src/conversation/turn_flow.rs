@@ -517,8 +517,12 @@ impl Conversation {
                                         view.patch(start, rows, cx)
                                     }
                                     TranscriptPatch::Snapshot { start, rows } => {
-                                        let end = start + rows.len();
-                                        view.patch_snapshot(start, rows, end, cx);
+                                        if start == 0 {
+                                            view.patch_full_snapshot(rows, cx);
+                                        } else {
+                                            let end = start + rows.len();
+                                            view.patch_snapshot(start, rows, end, cx);
+                                        }
                                     }
                                     TranscriptPatch::BotSnapshot { turn_start, rows } => {
                                         view.patch_bot_turn_snapshot(turn_start, rows, cx);

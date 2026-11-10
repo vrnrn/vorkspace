@@ -132,20 +132,16 @@ impl Conversation {
                     None => known.is_some(),
                 };
             let history = if changed {
-                let qualified = snapshot.as_ref().map(|snapshot| {
-                    let mut snapshot = snapshot.clone();
-                    if let Some(id) = remote.session_id.as_deref() {
-                        vorkspace_core::remote::attachments::qualify_snapshot(
-                            &mut snapshot,
+                let (history, turns) = snapshot
+                    .as_ref()
+                    .zip(remote.session_id.as_deref())
+                    .map(|(snapshot, id)| {
+                        vorkspace_core::store::Store::project_remote_history(
+                            snapshot,
                             &remote.project.environment_id,
                             id,
-                        );
-                    }
-                    snapshot
-                });
-                let (history, turns) = qualified
-                    .as_ref()
-                    .map(vorkspace_core::store::Store::project_remote_history)
+                        )
+                    })
                     .transpose()?
                     .unwrap_or_default();
                 Some((

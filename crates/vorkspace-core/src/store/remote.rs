@@ -5,7 +5,7 @@ use super::{shared, Session, Store};
 use crate::{
     agent::{Settings, TurnInfo},
     remote::{Connections, Machine},
-    transcript::Transcript,
+    transcript::{Row, Transcript},
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
@@ -139,6 +139,72 @@ fn adopt_host_configuration(settings: &mut Settings, host: Settings) {
     settings.thinking = host.thinking;
     settings.worktree_cwd = host.worktree_cwd;
     settings.revision = settings.revision.saturating_add(1);
+}
+
+/// The desktop projection of an ordered Host transcript. The observer supplies
+/// the earliest changed block in the next snapshot. Unchanged rows keep their
+/// existing allocation and never pass through attachment or tool decoding.
+#[derive(Default)]
+pub struct RemoteHistory {
+    rows: Vec<Row>,
+    block_ends: Vec<usize>,
+}
+
+impl RemoteHistory {
+    pub fn update(
+        &mut self,
+        snapshot: &Value,
+        first: usize,
+        environment: &str,
+        session: &str,
+    ) -> Result<(usize, Vec<Row>), String> {
+        let blocks = remote_blocks(snapshot)?;
+        let start = if first == 0 {
+            0
+        } else {
+            *self
+                .block_ends
+                .get(first - 1)
+                .ok_or("Remote history base changed")?
+        };
+        let affected = blocks.get(first..).ok_or("Invalid remote history range")?;
+        let mut tail = Vec::new();
+        let mut ends = Vec::with_capacity(affected.len());
+        for block in affected {
+            tail.extend(shared::blocks::project_remote_block(
+                block,
+                environment,
+                session,
+            )?);
+            ends.push(start + tail.len());
+        }
+        let retained = self.rows[start..]
+            .iter()
+            .zip(&tail)
+            .take_while(|(a, b)| a == b)
+            .count();
+        let patch = tail[retained..].to_vec();
+        self.block_ends.truncate(first);
+        self.block_ends.extend(ends);
+        self.rows.truncate(start + retained);
+        self.rows.extend(tail.into_iter().skip(retained));
+        Ok((start + retained, patch))
+    }
+
+    pub fn rows(&self) -> &[Row] {
+        &self.rows
+    }
+
+    pub fn into_rows(self) -> Vec<Row> {
+        self.rows
+    }
+}
+
+fn remote_blocks(snapshot: &Value) -> Result<&[Value], String> {
+    snapshot["session"]["blocks"]
+        .as_array()
+        .map(Vec::as_slice)
+        .ok_or_else(|| "Host transcript is missing".into())
 }
 
 impl Store {
@@ -370,26 +436,17 @@ impl Store {
     }
     pub fn project_remote_history(
         snapshot: &Value,
+        environment: &str,
+        session: &str,
     ) -> Result<(Transcript, HashMap<usize, TurnInfo>), String> {
-        let blocks = snapshot["session"]["blocks"]
-            .as_array()
-            .ok_or("Host transcript is missing")?;
-        let blocks: Vec<_> = blocks
-            .iter()
-            .cloned()
-            .map(|mut block| {
-                if block["role"] == "plan" {
-                    block["nativeRemotePlan"] = Value::Bool(true);
-                }
-                block
-            })
-            .collect();
-        Ok((
-            Transcript {
-                rows: shared::blocks::project(&blocks)?,
-            },
-            shared::project_turns(&blocks)?,
-        ))
+        let mut history = Transcript::default();
+        let mut turns = HashMap::new();
+        for block in remote_blocks(snapshot)? {
+            let rows = shared::blocks::project_remote_block(block, environment, session)?;
+            shared::record_projected_turn(block, &rows, history.rows.len(), &mut turns);
+            history.rows.extend(rows);
+        }
+        Ok((history, turns))
     }
     pub fn patch_remote_session(&self, id: i64, patch: Value) -> Result<(), String> {
         let mut remote = self

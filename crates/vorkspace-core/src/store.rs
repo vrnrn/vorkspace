@@ -24,7 +24,7 @@ mod peer_history;
 mod remote;
 mod remote_legacy;
 mod vorkspace_import;
-pub use remote::{RemoteListing, RemoteProject, RemoteSession, RemoteUpload};
+pub use remote::{RemoteHistory, RemoteListing, RemoteProject, RemoteSession, RemoteUpload};
 pub(crate) use shared::handle as desktop_session_handle;
 mod session_metadata;
 pub use session_metadata::{SessionMetadata, SessionSidebarMetadata};
@@ -899,13 +899,9 @@ impl Store {
             };
             let client = crate::remote::default_connections()?;
             let machine = remote.machine(&client)?;
-            let mut snapshot = client.load_session(&machine.id, id, None)?;
-            crate::remote::attachments::qualify_snapshot(
-                &mut snapshot,
-                &remote.project.environment_id,
-                id,
-            );
-            return Self::project_remote_history(&snapshot).map(|(history, _)| history);
+            let snapshot = client.load_session(&machine.id, id, None)?;
+            return Self::project_remote_history(&snapshot, &remote.project.environment_id, id)
+                .map(|(history, _)| history);
         }
         if self.shared.is_some() {
             return self.shared_load(session);

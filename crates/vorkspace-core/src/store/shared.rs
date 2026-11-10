@@ -273,6 +273,16 @@ fn project_turn(
     turns: &mut HashMap<usize, crate::agent::TurnInfo>,
 ) -> Result<usize, String> {
     let rows = blocks::project(std::slice::from_ref(block))?;
+    record_projected_turn(block, &rows, offset, turns);
+    Ok(rows.len())
+}
+
+pub(super) fn record_projected_turn(
+    block: &Value,
+    rows: &[Row],
+    offset: usize,
+    turns: &mut HashMap<usize, crate::agent::TurnInfo>,
+) {
     if let Some(prompt) = rows.iter().rposition(Row::is_prompt) {
         let model = &block["turnModel"];
         let duration = block["durationMs"].as_u64();
@@ -303,7 +313,6 @@ fn project_turn(
             );
         }
     }
-    Ok(rows.len())
 }
 
 impl Store {
