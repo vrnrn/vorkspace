@@ -4,6 +4,10 @@ The desktop app window is drawn by GPUI. Rust keeps track of conversations, file
 
 The app reads the saved workspace and Bot list once as it opens. Windows share that list and keep their own tabs and selected conversation.
 
+All open windows share the same reminders and linked GitHub updates. Dismissing an update in one window clears it everywhere. Opening or snoozing an old reminder leaves any newer reminder you scheduled in place.
+
+Stopping an orchestration also stops its prepared workers from opening new conversations. Workers that already started keep the conversation and work they saved.
+
 A Bot's face and name stay at the top of its chat as messages scroll. Its face shows whether it is idle, working or needs you, without following the mouse. The app draws a Bot's body picture once and then moves only its eyes, so blinking and looking around are cheap drawing rather than a fresh picture every frame. Idle faces now and then glance around or blink, all at the same moments, then hold still, so a quiet chat redraws the window only a few times every few seconds instead of thirty times a second. Each window’s sidebar faces and its settings preview follow the mouse when it moves; working and attention faces keep animating. Old face pictures stay in graphics memory while a window still uses them and are removed afterward. On Mac, messages fade gently around the face to reveal the chat's own background colors and picture. You can still select, click and scroll the chat there, and the fade stays above the typing box. Hidden or covered faces stop animating, and an empty chat shows help instead of a second face.
 
 Picking a project from the top of the sidebar always takes you to that project's sessions, even if you were looking at one of its Bots. The full sidebar starts with your [vorkspace](vorkspaces.md) and lists that vorkspace's sessions, running ones first. In the narrow icon sidebar, the Working card appears above Subscriptions when a session is running, needs approval, or has finished while you were looking elsewhere. It covers sessions across projects; click one to open it. The list starts with four sessions; More opens a scrollable list and Show less returns to four. Each session shows its name, what tool it last used (when known), its project and elapsed time. The card disappears when nothing qualifies, and it still appears for just one session. In a short window, scroll the upper sidebar to reach navigation; the card and bottom controls stay available. You can turn off Working agents in General settings.
@@ -25,6 +29,8 @@ Notes, Automations, connector pages, Todos and Search share [one compact design]
 The [repository map](repository.md) shows where each part lives. Embedded helper code has its own folder; the scripts folder contains developer tools.
 
 The app reads saved messages and details about their replies together. Switching back to a window refreshes the chats you can see. Hidden chats with drafts or running work keep the history they need. An oversized hidden chat can free its memory while smaller chats stay ready to reopen. Repeated terminal redraw requests are combined. Cleaning up one idle agent leaves the shared lock available to other agents.
+
+The app groups quick bursts of command output and keeps a readable tail. An idle agent can stay ready for the next message while the saved transcript stays in the conversation's storage.
 
 The app keeps word-fade animation data while new text is arriving, then releases it. When you scroll a long chat, the prompt rail uses your position to find nearby prompts.
 
