@@ -92,7 +92,7 @@ vm.runInContext(
   formatter,
 );
 if (
-  JSON.parse(await formatter.vorkspaceFormat("a.json", '{"a":1}', 0))
+  JSON.parse(await formatter.vorkspaceFormat("a.json", '{"a":1}', 0, "json"))
     .formatted !== '{ "a": 1 }\n'
 )
   throw new Error("Format smoke check failed");

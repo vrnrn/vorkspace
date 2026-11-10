@@ -44,6 +44,18 @@ fn prettier_and_emmet_keep_cursor_bytes_and_the_frontend_defaults() {
     }
     assert!(format("a.json", "{bad", 0).unwrap().is_none());
     assert!(format("a.rs", "fn main(){}", 0).unwrap().is_none());
+    for extension in ["js", "jsx", "mjs", "cjs", "ts", "tsx", "mts", "cts"] {
+        let path = format!("a.{}", extension.to_uppercase());
+        assert!(format(&path, "const a=1", 0).unwrap().is_some(), "{path}");
+    }
+    for extension in ["html", "htm", "md", "markdown", "mdx"] {
+        let path = format!("a.{extension}");
+        assert!(format(&path, "hello", 0).unwrap().is_some(), "{path}");
+    }
+    // The admission limit counts JavaScript's UTF-16 units, including pairs.
+    let at_limit = "🙂".repeat(256 * 1024);
+    assert!(format("a.md", &at_limit, 0).unwrap().is_some());
+    assert!(format("a.md", &(at_limit + "a"), 0).unwrap().is_none());
     let result = emmet("a.tsx", ".container>span", 15).unwrap().unwrap();
     assert!(result.formatted.contains("className=\"container\""));
     assert!(result.formatted[result.cursor..].starts_with("</span>"));

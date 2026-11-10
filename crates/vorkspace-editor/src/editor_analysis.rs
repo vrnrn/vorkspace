@@ -179,41 +179,48 @@ pub fn chunk_action(
     serde_json::from_str(&json).map_err(|e| e.to_string())
 }
 pub fn format(path: &str, source: &str, at: usize) -> Result<Option<Formatted>, String> {
-    transform(
-        "vorkspaceFormat",
-        path,
-        source,
-        at,
-        include_str!("../assets/native-format.js"),
-    )
-}
-pub fn emmet(path: &str, source: &str, at: usize) -> Result<Option<Formatted>, String> {
-    transform(
-        "vorkspaceEmmet",
-        path,
-        source,
-        at,
-        include_str!("../assets/native-editor.js"),
-    )
-}
-fn transform(
-    name: &str,
-    path: &str,
-    source: &str,
-    at: usize,
-    bundle: &str,
-) -> Result<Option<Formatted>, String> {
+    let extension = path.rsplit('.').next().unwrap_or(path).to_lowercase();
+    let parser = match extension.as_str() {
+        "js" | "jsx" | "mjs" | "cjs" => "babel",
+        "ts" | "tsx" | "mts" | "cts" => "typescript",
+        "json" => "json",
+        "css" => "css",
+        "html" | "htm" => "html",
+        "md" | "markdown" => "markdown",
+        "mdx" => "mdx",
+        _ => return Ok(None),
+    };
+    const MAX_UNITS: usize = 512 * 1024;
+    if source.encode_utf16().take(MAX_UNITS + 1).count() > MAX_UNITS {
+        return Ok(None);
+    }
     let (_runtime, context) = runtime()?;
     let json = context
         .with(|ctx| -> rquickjs::Result<String> {
-            ctx.eval::<(), _>(bundle)?;
-            let function: Function = ctx.globals().get(name)?;
+            ctx.eval::<(), _>(include_str!("../assets/native-format.js"))?;
+            let function: Function = ctx.globals().get("vorkspaceFormat")?;
+            function
+                .call::<_, Promise>((path, source, utf16(source, at), parser))?
+                .finish()
+        })
+        .map_err(|e| e.to_string())?;
+    formatted_result(&json)
+}
+pub fn emmet(path: &str, source: &str, at: usize) -> Result<Option<Formatted>, String> {
+    let (_runtime, context) = runtime()?;
+    let json = context
+        .with(|ctx| -> rquickjs::Result<String> {
+            ctx.eval::<(), _>(include_str!("../assets/native-editor.js"))?;
+            let function: Function = ctx.globals().get("vorkspaceEmmet")?;
             function
                 .call::<_, Promise>((path, source, utf16(source, at)))?
                 .finish()
         })
         .map_err(|e| e.to_string())?;
-    let mut result: Option<Formatted> = serde_json::from_str(&json).map_err(|e| e.to_string())?;
+    formatted_result(&json)
+}
+fn formatted_result(json: &str) -> Result<Option<Formatted>, String> {
+    let mut result: Option<Formatted> = serde_json::from_str(json).map_err(|e| e.to_string())?;
     if let Some(result) = &mut result {
         result.cursor = byte(&result.formatted, result.cursor);
     }

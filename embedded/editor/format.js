@@ -6,25 +6,7 @@ import * as typescript from "prettier/plugins/typescript";
 import * as postcss from "prettier/plugins/postcss";
 import * as html from "prettier/plugins/html";
 import * as markdown from "prettier/plugins/markdown";
-globalThis.vorkspaceFormat = async (path, source, cursorOffset) => {
-  if (source.length > 512 * 1024) return "null";
-  const ext = path.toLowerCase().split(".").pop();
-  const parser = ["js", "jsx", "mjs", "cjs"].includes(ext)
-    ? "babel"
-    : ["ts", "tsx", "mts", "cts"].includes(ext)
-      ? "typescript"
-      : ext === "json"
-        ? "json"
-        : ext === "css"
-          ? "css"
-          : ext === "html" || ext === "htm"
-            ? "html"
-            : ext === "md" || ext === "markdown"
-              ? "markdown"
-              : ext === "mdx"
-                ? "mdx"
-                : null;
-  if (!parser) return "null";
+globalThis.vorkspaceFormat = async (path, source, cursorOffset, parser) => {
   try {
     return JSON.stringify(
       await formatWithCursor(source, {
