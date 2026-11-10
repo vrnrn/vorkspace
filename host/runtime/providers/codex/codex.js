@@ -31,6 +31,7 @@ import {
 } from "./codexProtocol.js";
 import { JsonRpcClient } from "../../protocol/jsonRpc.js";
 import {
+  acceptGeneratedImage,
   deleteGeneratedImages,
   saveGeneratedImage,
 } from "../../platform/fs.js";
@@ -522,7 +523,6 @@ async function ensureLive(input) {
     }
     const model = nativeModelId(input.model);
     const serviceTier = input.modelSettings?.serviceTier;
-    const effort = input.modelSettings?.reasoningEffort;
     let threadId;
     let didResume = false;
     if (canResume && resume) {
@@ -580,8 +580,6 @@ async function ensureLive(input) {
       threadId = opened.thread?.id?.trim();
     }
     if (!threadId) throw new Error("Codex did not return a thread id");
-    // Suppress unused warning for effort until first turn applies it.
-    void effort;
     const live = {
       rpc,
       threadId,

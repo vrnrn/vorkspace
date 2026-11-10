@@ -3,7 +3,6 @@ import {
   killChild,
   resolveClaudeBinary,
   spawnChild,
-  unwatchChild,
   watchChild,
   writeChild,
 } from "../../protocol/child.js";
@@ -32,7 +31,6 @@ const TEXT_CHILD_ID = "vorkspace-claude-text";
 const INIT_TIMEOUT_MS = 8000;
 const REQUEST_TIMEOUT_MS = 45000;
 const TEXT_MODEL = "claude-haiku-4-5";
-let live = null;
 let turns = Promise.resolve();
 function textSettings(model, modelSettings, intent) {
   const effort = modelSettings?.effort?.trim() || undefined;
@@ -45,7 +43,6 @@ function textSettings(model, modelSettings, intent) {
   if (fast) settings.fastMode = true;
   if (isClaudeUltracodeEffort(effort)) settings.ultracode = true;
   return {
-    key: JSON.stringify({ effort, context, thinking, fast, readOnly }),
     launchModel: resolveClaudeApiModelId(model, context),
     effort: normalizeClaudeCliEffort(effort, model),
     promptEffort: effort,
@@ -63,116 +60,21 @@ function pickTextModel(requested) {
   return haiku?.nativeId ?? TEXT_MODEL;
 }
 export async function runClaudeTextPrompt(input) {
-  const run = turns.catch(() => undefined).then(() => promptOnLive(input));
+  const run = turns.then(() => runPrompt(input));
   turns = run.then(
     () => undefined,
     () => undefined,
   );
   return run;
 }
-async function promptOnLive(input) {
+async function runPrompt(input) {
   input.signal?.throwIfAborted();
   const model = pickTextModel(input.model);
   const settings = textSettings(model, input.modelSettings, input.intent);
-  const session = await ensureLive(
-    input.cwd,
-    input.providerAccountId,
-    model,
-    settings,
-  );
-  input.signal?.throwIfAborted();
-  session.output = "";
-  session.collecting = true;
-  session.onEvent = input.onEvent;
-  session.toolsByIndex = new Map();
-  session.toolsById = new Map();
-  const timeoutMs = input.timeoutMs ?? REQUEST_TIMEOUT_MS;
-  let abortHandler;
-  const abortPromise = input.signal
-    ? new Promise((_, reject) => {
-        const cancel = () => {
-          session.turnFailed?.(new Error("By-the-way request cancelled"));
-          reject(new Error("By-the-way request cancelled"));
-        };
-        abortHandler = cancel;
-        input.signal.addEventListener("abort", cancel, { once: true });
-        if (input.signal.aborted) cancel();
-      })
-    : null;
-  try {
-    const turnPromise = new Promise((resolve, reject) => {
-      session.turnDone = resolve;
-      session.turnFailed = reject;
-    });
-    await writeChild(
-      TEXT_CHILD_ID,
-      JSON.stringify(
-        buildClaudeUserMessage({
-          text: input.prompt,
-          effort: settings.promptEffort,
-        }),
-      ),
-    );
-    await Promise.race([
-      turnPromise,
-      new Promise((_, reject) => {
-        setTimeout(
-          () => reject(new Error("Claude text generation timed out")),
-          timeoutMs,
-        );
-      }),
-      ...(abortPromise ? [abortPromise] : []),
-    ]);
-    const output = session.output.trim();
-    if (!output) throw new Error("Claude returned empty output.");
-    return output;
-  } catch (error) {
-    if (session.closed) await dropLive();
-    throw error;
-  } finally {
-    if (abortHandler && input.signal) {
-      input.signal.removeEventListener("abort", abortHandler);
-    }
-    session.collecting = false;
-    session.turnDone = null;
-    session.turnFailed = null;
-    await dropLive();
-  }
-}
-async function ensureLive(
-  cwd,
-  providerAccountId,
-  requestedModel,
-  requestedSettings,
-) {
-  const model = pickTextModel(requestedModel);
-  const settings = requestedSettings ?? textSettings(model);
-  if (
-    live &&
-    !live.closed &&
-    live.cwd === cwd &&
-    live.providerAccountId === providerAccountId &&
-    live.model === model &&
-    live.settingsKey === settings.key
-  ) {
-    return live;
-  }
-  await dropLive();
-  return startLive(cwd, providerAccountId, model, settings);
-}
-async function startLive(
-  cwd,
-  providerAccountId,
-  model = pickTextModel(),
-  settings = textSettings(model),
-) {
   const { path } = await resolveClaudeBinary();
+  input.signal?.throwIfAborted();
   const session = {
-    cwd,
-    providerAccountId,
-    model,
-    settingsKey: settings.key,
-    collecting: false,
+    onEvent: input.onEvent,
     output: "",
     closed: false,
     ready: false,
@@ -180,14 +82,12 @@ async function startLive(
     turnFailed: null,
     readyDone: null,
     toolsByIndex: new Map(),
-    toolsById: new Map(),
   };
   watchChild(
     TEXT_CHILD_ID,
     (line) => handleLine(session, line),
     () => {
       session.closed = true;
-      if (live === session) live = null;
       session.turnFailed?.(new Error("Claude text generator exited"));
       session.readyDone?.();
       session.turnDone = null;
@@ -195,6 +95,11 @@ async function startLive(
       session.readyDone = null;
     },
   );
+  let timeout;
+  let failRequest;
+  const abort = () => {
+    failRequest?.(new Error("By-the-way request cancelled"));
+  };
   try {
     await spawnChild(
       TEXT_CHILD_ID,
@@ -207,33 +112,44 @@ async function startLive(
         permissionMode: settings.permissionMode,
         maxTurns: settings.maxTurns,
       }),
-      cwd,
-      { provider: "claude", id: providerAccountId ?? "default" },
+      input.cwd,
+      { provider: "claude", id: input.providerAccountId ?? "default" },
       "claude",
     );
-    live = session;
     await waitForReady(session, INIT_TIMEOUT_MS);
-    return session;
-  } catch (error) {
-    session.closed = true;
-    unwatchChild(TEXT_CHILD_ID);
+    input.signal?.throwIfAborted();
+    const message = buildClaudeUserMessage({
+      text: input.prompt,
+      effort: settings.promptEffort,
+    });
+    const completion = new Promise((resolve, reject) => {
+      session.turnDone = resolve;
+      session.turnFailed = reject;
+    });
+    const deadline = new Promise((_, reject) => {
+      failRequest = reject;
+      timeout = setTimeout(
+        () => reject(new Error("Claude text generation timed out")),
+        input.timeoutMs ?? REQUEST_TIMEOUT_MS,
+      );
+    });
+    input.signal?.addEventListener("abort", abort, { once: true });
+    await Promise.race([
+      // The child can finish or exit before its stdin write is acknowledged.
+      Promise.all([
+        completion,
+        Promise.resolve().then(() => writeChild(TEXT_CHILD_ID, JSON.stringify(message))),
+      ]),
+      deadline,
+    ]);
+    const output = session.output.trim();
+    if (!output) throw new Error("Claude returned empty output.");
+    return output;
+  } finally {
+    clearTimeout(timeout);
+    input.signal?.removeEventListener("abort", abort);
     await killChild(TEXT_CHILD_ID).catch(() => undefined);
-    throw error;
   }
-}
-async function dropLive() {
-  const current = live;
-  live = null;
-  if (current) {
-    current.closed = true;
-    current.readyDone?.();
-    current.turnFailed?.(new Error("Claude text generator stopped"));
-    current.turnDone = null;
-    current.turnFailed = null;
-    current.readyDone = null;
-  }
-  unwatchChild(TEXT_CHILD_ID);
-  await killChild(TEXT_CHILD_ID).catch(() => undefined);
 }
 function handleLine(session, line) {
   const rec = parseJsonLine(line);
@@ -248,7 +164,7 @@ function handleLine(session, line) {
     session.readyDone?.();
     session.readyDone = null;
   }
-  if (!session.collecting) return;
+  if (!session.turnDone) return;
   if (type === "assistant") {
     const snapshot = assistantTextBlocks(rec).join("");
     if (snapshot) session.output = mergeStream(session.output, snapshot);
@@ -290,7 +206,6 @@ function handleStreamEvent(session, rec) {
       title: toolTitle(started.name, started.input),
     };
     if (started.index >= 0) session.toolsByIndex.set(started.index, tool);
-    session.toolsById.set(started.id, tool);
     session.onEvent?.({
       type: "tool.started",
       callId: tool.id,
@@ -327,6 +242,7 @@ function handleStreamEvent(session, rec) {
   });
 }
 function waitForReady(session, timeoutMs) {
+  if (session.closed) return Promise.reject(new Error("Claude text generator exited"));
   if (session.ready) return Promise.resolve();
   return new Promise((resolve, reject) => {
     const timer = setTimeout(() => {

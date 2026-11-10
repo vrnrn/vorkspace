@@ -14,6 +14,11 @@ import { HostEngine } from "./engine.js";
 import { hostProviders } from "./providers.js";
 import { discoverCodexModels } from "./runtime/providers/codex/codexCatalog.js";
 import { discoverClaudeModels } from "./runtime/providers/claude/claudeCatalog.js";
+import { runClaudeTextPrompt } from "./runtime/providers/claude/claudeText.js";
+import {
+  configureHostFiles,
+  deleteGeneratedImages,
+} from "./runtime/platform/fs.js";
 import {
   discoverPiModels,
   discoverOmpModels,
@@ -36,6 +41,7 @@ const send = value => process.stdout.write(JSON.stringify(value) + '\\n');
 // applied between turns reach the provider.
 const record = value => require('node:fs').appendFileSync(require('node:path').join(__dirname, 'calls.log'), JSON.stringify(value) + '\\n');
 if (!process.argv.includes('app-server')) record({claudeArgs: process.argv.slice(2)});
+if (process.argv.includes('--no-session-persistence')) send({type: 'system', subtype: 'init', session_id: 'fixture-claude'});
 readline.createInterface({input: process.stdin}).on('line', line => {
   const request = JSON.parse(line);
   record({wire: request});
@@ -61,6 +67,9 @@ readline.createInterface({input: process.stdin}).on('line', line => {
     record({codexEffort: request.params.effort ?? null});
     send({id: request.id, result: {turn: {id: 'fixture-turn'}}});
     setTimeout(() => {
+      if (request.params.input.some(part => part.text === 'make fixture image')) {
+        send({method: 'item/completed', params: {threadId: 'fixture-thread', turnId: 'fixture-turn', item: {type: 'imageGeneration', id: 'fixture-image', result: 'iVBORw0KGgoBAgM='}}});
+      }
       send({method: 'item/agentMessage/delta', params: {threadId: 'fixture-thread', turnId: 'fixture-turn', itemId: 'message', delta: 'Headless Codex completed'}});
       send({method: 'turn/completed', params: {threadId: 'fixture-thread', turn: {id: 'fixture-turn', status: 'completed'}}});
     }, 30);
@@ -70,7 +79,7 @@ readline.createInterface({input: process.stdin}).on('line', line => {
     send({type: 'control_response', response: {subtype: 'success', request_id: request.request_id}});
   }
   if (request.type === 'control_request' && request.request.subtype === 'list_models') send({type: 'control_response', response: {subtype: 'success', request_id: request.request_id, response: {models: [{value: 'claude-fixture-model', resolvedModel: 'claude-fixture-model', displayName: 'Fixture Claude'}]}}});
-  if (request.type === 'user') setTimeout(() => {
+  if (request.type === 'user' && !request.message.content.some(part => part.text === 'hold fixture prompt')) setTimeout(() => {
     send({type: 'assistant', session_id: 'fixture-claude', message: {content: [{type: 'text', text: 'Headless Claude completed'}]}});
     send({type: 'result', subtype: 'success', session_id: 'fixture-claude'});
   }, 30);
@@ -97,6 +106,7 @@ describe("existing providers over headless process I/O", () => {
       mkdtempSync(join(tmpdir(), "vorkspace-provider-test-")),
     );
     fixtureHome.path = directory;
+    configureHostFiles(directory);
     vi.stubEnv("COPILOT_GITHUB_TOKEN", "");
     vi.stubEnv("GH_TOKEN", "");
     vi.stubEnv("GITHUB_TOKEN", "");
@@ -123,6 +133,47 @@ describe("existing providers over headless process I/O", () => {
     if (directory) rmSync(directory, { recursive: true, force: true });
     vi.unstubAllEnvs();
     fixtureHome.path = "";
+  });
+  it("clears an isolated Claude prompt after abort and serves the next prompt", async () => {
+    const controller = new AbortController();
+    const pending = runClaudeTextPrompt({
+      cwd: directory,
+      prompt: "hold fixture prompt",
+      signal: controller.signal,
+      timeoutMs: 4_000,
+    });
+    const rejected = expect(pending).rejects.toThrow("request cancelled");
+    await vi.waitFor(() => {
+      expect(readFileSync(join(directory, "calls.log"), "utf8")).toContain(
+        "hold fixture prompt",
+      );
+    });
+    controller.abort();
+    await rejected;
+    await expect(
+      runClaudeTextPrompt({ cwd: directory, prompt: "next fixture prompt" }),
+    ).resolves.toBe("Headless Claude completed");
+  });
+  it("accepts a published Codex image and settles the turn without an error", async () => {
+    const project = await engine.openProject(directory);
+    const { sessionId } = engine.command({
+      type: "create", commandId: "fixture-image-create", projectId: project.id,
+      harness: "codex", model: "codex:test", runtimeMode: "supervised",
+    });
+    engine.command({
+      type: "send", commandId: "fixture-image-send", sessionId,
+      text: "make fixture image",
+    });
+    await vi.waitFor(
+      () => expect(store.session(sessionId).status).toBe("idle"),
+      { timeout: 4_000 },
+    );
+    const state = store.session(sessionId).session;
+    const image = state.blocks.find((block) => block.image)?.image;
+    expect(image?.path).toBeTruthy();
+    expect(readFileSync(image.path).toString("base64")).toBe("iVBORw0KGgoBAgM=");
+    await expect(deleteGeneratedImages([image.path])).rejects.toThrow("Invalid");
+    expect(state.blocks.at(-1)?.text).toBe("Headless Codex completed");
   });
   it("discovers host models in parallel without probe process collisions", async () => {
     const [codexA, codexB, claudeA, claudeB, piA, piB, ompA, ompB] =
