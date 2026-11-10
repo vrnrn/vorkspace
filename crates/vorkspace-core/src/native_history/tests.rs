@@ -331,6 +331,43 @@ fn native_history_waits_for_complete_records_and_commits_cursor_with_rows() {
 }
 
 #[test]
+fn unchanged_native_reads_have_no_cursor_to_publish_and_same_size_rewrites_are_seen() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path();
+    let (store, session, source, _) = fixture(root, true, "codex");
+    append(&source, &[meta()]);
+    append(&source, &turn("outside", "Question", "First"));
+    let request = store
+        .native_history_request(session.id, &root.join("bots"))
+        .unwrap()
+        .unwrap();
+    let initial = read(&request.binding, None)
+        .unwrap()
+        .unwrap()
+        .update
+        .unwrap();
+    let unchanged = read(&request.binding, Some(&initial.cursor))
+        .unwrap()
+        .unwrap();
+    assert!(unchanged.update.is_none());
+    let time = std::fs::metadata(&source).unwrap().modified().unwrap();
+    let raw = std::fs::read_to_string(&source).unwrap();
+    let edited = raw.replace("First", "Other");
+    assert_eq!(raw.len(), edited.len());
+    std::fs::write(&source, edited).unwrap();
+    File::open(&source)
+        .unwrap()
+        .set_times(std::fs::FileTimes::new().set_modified(time))
+        .unwrap();
+    let rewritten = read(&request.binding, Some(&initial.cursor))
+        .unwrap()
+        .unwrap()
+        .update
+        .unwrap();
+    assert_eq!(rewritten.turns[0].messages.last().unwrap().text, "Other");
+}
+
+#[test]
 fn native_history_recovery_commits_saved_text_with_confirmation_and_keeps_codex_suffix() {
     for shared in [false, true] {
         let dir = tempfile::tempdir().unwrap();

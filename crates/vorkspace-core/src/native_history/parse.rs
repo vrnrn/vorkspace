@@ -125,17 +125,7 @@ pub(super) fn codex(
                         claude_uuid: None,
                         codex_receipt: None,
                     };
-                    if turn
-                        .event_messages
-                        .iter()
-                        .map(|m| m.text.len())
-                        .sum::<usize>()
-                        .saturating_add(message.text.len())
-                        > TEXT_LIMIT
-                    {
-                        return Err("Native turn exceeds the transcript text limit".into());
-                    }
-                    turn.event_messages.push(message);
+                    turn.push_event(message)?;
                 }
             }
             Some("task_complete" | "task_completed" | "turn_aborted") => {
@@ -184,6 +174,7 @@ pub(super) fn finish_codex(mut turn: Turn, at: Option<u64>) -> Turn {
         );
     }
     turn.event_messages.clear();
+    turn.budget = None;
     turn.item_ids.clear();
     turn.completed_at = at;
     turn.complete = true;

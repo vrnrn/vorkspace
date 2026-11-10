@@ -75,6 +75,8 @@ struct Stamp {
     inode: u64,
     len: u64,
     modified: (i64, i64),
+    #[serde(default)]
+    changed: Option<(i64, i64)>,
 }
 fn stamp(path: &Path) -> Result<Stamp, String> {
     let m = path.symlink_metadata().map_err(|e| e.to_string())?;
@@ -86,6 +88,7 @@ fn stamp(path: &Path) -> Result<Stamp, String> {
         inode: m.ino(),
         len: m.len(),
         modified: (m.mtime(), m.mtime_nsec()),
+        changed: Some((m.ctime(), m.ctime_nsec())),
     })
 }
 
@@ -178,7 +181,16 @@ pub struct Turn {
     event_messages: Vec<Message>,
     #[serde(default)]
     complete: bool,
+    #[serde(skip)]
+    budget: Option<TextBudget>,
 }
+
+#[derive(Clone, Copy, Debug)]
+struct TextBudget {
+    messages: usize,
+    events: usize,
+}
+
 impl Turn {
     pub(crate) fn assign_codex_message_receipts(&mut self) {
         // A legacy event and a completed item can project the same message.
@@ -198,6 +210,17 @@ impl Turn {
         }
     }
 
+    fn text_budget(&mut self) -> &mut TextBudget {
+        self.budget.get_or_insert_with(|| TextBudget {
+            messages: self.messages.iter().map(|message| message.text.len()).sum(),
+            events: self
+                .event_messages
+                .iter()
+                .map(|message| message.text.len())
+                .sum(),
+        })
+    }
+
     fn push(
         &mut self,
         role: &str,
@@ -205,18 +228,15 @@ impl Turn {
         at: Option<u64>,
         claude_uuid: Option<&str>,
     ) -> Result<(), String> {
-        let bytes: usize = self
-            .messages
-            .iter()
-            .chain(&self.event_messages)
-            .map(|m| m.text.len())
-            .sum();
-        if bytes.saturating_add(text.len()) > TEXT_LIMIT {
+        let budget = self.text_budget();
+        let next = budget.messages.saturating_add(text.len());
+        if next.saturating_add(budget.events) > TEXT_LIMIT {
             return Err(
                 "Native turn exceeds the transcript text limit; its source is preserved.".into(),
             );
         }
         if !text.is_empty() {
+            budget.messages = next;
             self.messages.push(Message {
                 role: role.into(),
                 text,
@@ -225,6 +245,17 @@ impl Turn {
                 codex_receipt: None,
             });
         }
+        Ok(())
+    }
+
+    fn push_event(&mut self, message: Message) -> Result<(), String> {
+        let budget = self.text_budget();
+        let next = budget.events.saturating_add(message.text.len());
+        if next > TEXT_LIMIT {
+            return Err("Native turn exceeds the transcript text limit".into());
+        }
+        budget.events = next;
+        self.event_messages.push(message);
         Ok(())
     }
     pub fn transcript(&self) -> Transcript {
@@ -239,11 +270,14 @@ impl Turn {
 }
 
 pub struct Batch {
+    pub update: Option<BatchUpdate>,
+    pub active: bool,
+}
+
+pub struct BatchUpdate {
     pub cursor: Cursor,
     pub turns: Vec<Turn>,
-    pub changed: bool,
     pub more: bool,
-    pub active: bool,
 }
 
 /// Incremental, bounded reads. No provider process, credentials, or API calls.
@@ -251,6 +285,9 @@ pub struct Batch {
 /// an incomplete last line waits for the next append.
 pub fn read(binding: &Binding, previous: Option<&Cursor>) -> Result<Option<Batch>, String> {
     let kind = Kind::from_id(&binding.provider);
+    if !matches!(kind, Kind::Codex | Kind::Claude) {
+        return Ok(None);
+    }
     let mut path = match previous.map(|c| &c.path).filter(|p| p.is_file()) {
         Some(path) => path.clone(),
         None => match crate::accounts::find_native_thread(&binding.home, kind, &binding.thread)? {
@@ -293,20 +330,14 @@ pub fn read(binding: &Binding, previous: Option<&Cursor>) -> Result<Option<Batch
                 .zip(&stamps)
                 .all(|(a, b)| a.device == b.device && a.inode == b.inode && b.len >= a.len)
     });
-    let mut cursor = if same_file {
-        previous.cloned().unwrap()
-    } else {
-        Cursor::default()
-    };
-    if cursor.caught_up && cursor.path == path && cursor.stamps == stamps {
+    let prior = previous.filter(|_| same_file);
+    if let Some(cursor) = prior.filter(|cursor| cursor.caught_up && cursor.stamps == stamps) {
         return Ok(Some(Batch {
             active: cursor.pending.as_ref().is_some_and(|t| !t.complete),
-            cursor,
-            turns: vec![],
-            changed: false,
-            more: false,
+            update: None,
         }));
     }
+    let mut cursor = prior.cloned().unwrap_or_default();
     let mut source: Box<dyn Read> = if compressed {
         let decoder =
             zstd::stream::read::Decoder::new(File::open(&path).map_err(|e| e.to_string())?)
@@ -361,12 +392,13 @@ pub fn read(binding: &Binding, previous: Option<&Cursor>) -> Result<Option<Batch
     let start = cursor.offset;
     let mut turns = Vec::new();
     let mut more = false;
+    let mut line = Vec::new();
     loop {
         if cursor.offset - start >= BATCH_LIMIT {
             more = !reader.fill_buf().map_err(|e| e.to_string())?.is_empty();
             break;
         }
-        let mut line = Vec::new();
+        line.clear();
         let n = reader
             .by_ref()
             .take(LINE_LIMIT + 1)
@@ -391,7 +423,10 @@ pub fn read(binding: &Binding, previous: Option<&Cursor>) -> Result<Option<Batch
             _ => unreachable!(),
         }
         cursor.offset += n as u64;
-        cursor.anchor = line[line.len().saturating_sub(256)..].to_vec();
+        cursor.anchor.clear();
+        cursor
+            .anchor
+            .extend_from_slice(&line[line.len().saturating_sub(256)..]);
     }
     // Claude has no task-complete record in its transcript. end_turn is the
     // native completion marker; keep its text blocks together until this read.
@@ -403,6 +438,7 @@ pub fn read(binding: &Binding, previous: Option<&Cursor>) -> Result<Option<Batch
         && !more
     {
         let pending = cursor.pending.as_mut().unwrap();
+        pending.budget = None;
         turns.push(Turn {
             id: pending.id.clone(),
             started_at: pending.started_at,
@@ -425,10 +461,11 @@ pub fn read(binding: &Binding, previous: Option<&Cursor>) -> Result<Option<Batch
     cursor.claude_message_receipts = kind == Kind::Claude;
     let active = cursor.pending.as_ref().is_some_and(|t| !t.complete);
     Ok(Some(Batch {
-        cursor,
-        turns,
-        changed: true,
-        more,
+        update: Some(BatchUpdate {
+            cursor,
+            turns,
+            more,
+        }),
         active,
     }))
 }

@@ -24,7 +24,9 @@ fn sync_checked(
     // wait for process teardown; the provider owner retires it asynchronously.
     let mut owner = locked(store)?;
     let mut result = match batch {
-        Some(batch) if batch.changed => owner.import_native_history(&mut request, batch)?,
+        Some(batch) if batch.update.is_some() => {
+            owner.import_native_history(&mut request, batch)?
+        }
         batch => NativeHistoryResult {
             active: batch.is_some_and(|batch| batch.active),
             superseded: !owner.native_history_current(&request)?,

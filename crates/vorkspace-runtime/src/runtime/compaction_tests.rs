@@ -419,7 +419,7 @@ for line in sys.stdin:
                 vorkspace_core::native_history::read(&request.binding, request.cursor.as_ref())
                     .unwrap()
                     .unwrap();
-            assert!(batch.changed);
+            assert!(batch.update.is_some());
             let receipt = vorkspace_core::store::SubmissionInput {
                 attempt_id: "other-turn".into(),
                 user_turn_id: "other-turn".into(),

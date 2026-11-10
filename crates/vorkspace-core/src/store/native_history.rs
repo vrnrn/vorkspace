@@ -2,7 +2,7 @@
 //! together. No composer, queue, attachment or provider-identity replacement.
 use super::*;
 use crate::agent::Settings;
-use crate::native_history::{Batch, Binding, Cursor, Turn};
+use crate::native_history::{Batch, BatchUpdate, Binding, Cursor, Turn};
 use rusqlite::{OptionalExtension, TransactionBehavior};
 use std::collections::HashSet;
 
@@ -228,6 +228,18 @@ impl Store {
         request: &mut NativeHistoryRequest,
         batch: Batch,
     ) -> Result<NativeHistoryResult, String> {
+        let Batch { active, update } = batch;
+        let Some(BatchUpdate {
+            cursor,
+            turns,
+            more,
+        }) = update
+        else {
+            return Ok(NativeHistoryResult {
+                active,
+                ..Default::default()
+            });
+        };
         let id = request.session.id;
         if self.shared.is_some() {
             self.shared_history_schema()?;
@@ -240,15 +252,15 @@ impl Store {
                 ..Default::default()
             });
         };
-        let publication = self.stage_native_turns(request, settings, batch.turns, false)?;
+        let publication = self.stage_native_turns(request, settings, turns, false)?;
         let reload_provider = publication.reload_provider
-            || (batch.cursor.compaction.is_some()
-                && batch.cursor.compaction
+            || (cursor.compaction.is_some()
+                && cursor.compaction.as_ref()
                     != request
                         .cursor
                         .as_ref()
-                        .and_then(|cursor| cursor.compaction.clone()));
-        if let Some(context) = batch.cursor.context {
+                        .and_then(|prior| prior.compaction.as_ref()));
+        if let Some(context) = cursor.context {
             // This transaction already validated the exact native binding and
             // excluded a managed writer. Never preserve usage from before an
             // externally recorded compaction.
@@ -258,21 +270,21 @@ impl Store {
             }
             self.save_context_usage(id, &context)?;
         }
-        let published_cursor = serde_json::to_string(&batch.cursor).map_err(|e| e.to_string())?;
+        let published_cursor = serde_json::to_string(&cursor).map_err(|e| e.to_string())?;
         self.conn.execute("INSERT INTO provider_history_cursors(session_id,binding,cursor_json) VALUES(?1,?2,?3) ON CONFLICT(session_id,binding) DO UPDATE SET cursor_json=excluded.cursor_json",
             params![self.persisted_session_id(id)?,request.binding.key(),published_cursor]).map_err(|e|e.to_string())?;
         tx.commit().map_err(|e| e.to_string())?;
         // Admission must check this commit, even when a separate connection
         // publishes another cursor before the caller reserves its operation.
         request.expected = Some(published_cursor);
-        request.cursor = Some(batch.cursor);
+        request.cursor = Some(cursor);
         let imported = publication.imported;
         publication.committed(self, id);
         Ok(NativeHistoryResult {
             imported,
             reload_provider,
-            active: batch.active,
-            more: batch.more,
+            active,
+            more,
             superseded: false,
             recovery: None,
         })
