@@ -1,6 +1,6 @@
 //! Branch and worktree RPCs shared with the original remote project pickers.
 use super::{Branch, Snapshot, Worktree};
-use crate::remote::{default_connections, parse_remote_path, remote_path, Connections};
+use crate::remote::{default_connections, parse_remote_path, remote_path, Connections, RemotePath};
 use serde::Deserialize;
 use serde_json::{json, Value};
 use std::{path::Path, sync::Arc};
@@ -25,10 +25,16 @@ struct RemoteBranch {
     name: String,
     remote: String,
 }
+#[derive(Deserialize)]
+struct Checkout {
+    #[serde(flatten)]
+    branches: Branches,
+    linked: bool,
+    worktrees: Vec<Worktree>,
+}
 
 struct Context {
     connections: Arc<Connections>,
-    machine: String,
     project: String,
     environment: String,
     cwd: String,
@@ -37,18 +43,11 @@ impl Context {
     fn request(&self, method: &str, mut params: Value) -> Result<Value, String> {
         params["projectId"] = json!(self.project);
         params["cwd"] = json!(self.cwd);
-        self.connections.request(&self.machine, method, params)
+        self.connections
+            .request_for_environment(&self.environment, method, params)
     }
-    fn trees(&self) -> Result<Vec<Worktree>, String> {
-        let listed: Trees = decode(self.request("git.worktrees", json!({}))?)?;
-        Ok(listed
-            .worktrees
-            .into_iter()
-            .map(|mut tree| {
-                tree.path = remote_path(&self.environment, &tree.path);
-                tree
-            })
-            .collect())
+    fn trees(&self) -> Result<Trees, String> {
+        decode(self.request("git.worktrees", json!({}))?)
     }
 }
 fn decode<T: serde::de::DeserializeOwned>(value: Value) -> Result<T, String> {
@@ -56,12 +55,14 @@ fn decode<T: serde::de::DeserializeOwned>(value: Value) -> Result<T, String> {
 }
 fn context(cwd: &Path) -> Result<Context, String> {
     let remote = parse_remote_path(&cwd.to_string_lossy()).ok_or("Invalid remote working copy")?;
-    let connections = default_connections()?;
-    let machine = connections
-        .machine_for_environment(&remote.environment_id)?
-        .id;
-    let projects: Vec<Project> =
-        decode(connections.request(&machine, "projects.list", json!({}))?)?;
+    resolve_project(default_connections()?, remote)
+}
+fn resolve_project(connections: Arc<Connections>, remote: RemotePath) -> Result<Context, String> {
+    let projects: Vec<Project> = decode(connections.request_for_environment(
+        &remote.environment_id,
+        "projects.list",
+        json!({}),
+    )?)?;
     let mut project = projects
         .iter()
         .find(|project| key(&project.cwd) == key(&remote.host_path))
@@ -69,8 +70,11 @@ fn context(cwd: &Path) -> Result<Context, String> {
     // Worktrees commonly live beside, rather than under, their main checkout.
     if project.is_none() {
         for candidate in &projects {
-            let listed =
-                connections.request(&machine, "git.worktrees", json!({"projectId":candidate.id}));
+            let listed = connections.request_for_environment(
+                &remote.environment_id,
+                "git.worktrees",
+                json!({"projectId":candidate.id}),
+            );
             if let Ok(listed) = listed.and_then(decode::<Trees>) {
                 if listed
                     .worktrees
@@ -85,7 +89,6 @@ fn context(cwd: &Path) -> Result<Context, String> {
     }
     Ok(Context {
         connections,
-        machine,
         project: project.ok_or("Choose an available worktree of this project")?,
         environment: remote.environment_id,
         cwd: remote.host_path,
@@ -96,29 +99,67 @@ fn key(path: &str) -> String {
 }
 
 pub(super) fn snapshot(cwd: &Path) -> Result<Snapshot, String> {
-    let context = context(cwd)?;
-    let branches: Branches = decode(context.request("git.branches", json!({}))?)?;
-    let trees = context.trees()?;
+    let remote = parse_remote_path(&cwd.to_string_lossy()).ok_or("Invalid remote working copy")?;
+    read_checkout(default_connections()?, remote)
+}
+
+fn read_checkout(connections: Arc<Connections>, remote: RemotePath) -> Result<Snapshot, String> {
+    let checkout: Checkout = match connections.request_for_environment(
+        &remote.environment_id,
+        "git.snapshot",
+        json!({"cwd":remote.host_path}),
+    ) {
+        Ok(value) => decode(value)?,
+        Err(error) if error == "Host rejected request: Unsupported host method" => {
+            let context = resolve_project(connections, remote.clone())?;
+            let branches = decode(context.request("git.branches", json!({}))?)?;
+            let Trees { worktrees } = context.trees()?;
+            let cwd = key(&remote.host_path);
+            let linked = worktrees
+                .iter()
+                .any(|tree| !tree.main && key(&tree.path) == cwd);
+            Checkout {
+                branches,
+                linked,
+                worktrees,
+            }
+        }
+        Err(error) => return Err(error),
+    };
+    let Branches {
+        current,
+        branches,
+        remotes,
+    } = checkout.branches;
     Ok(Snapshot {
-        detached: branches.current.is_none(),
-        current: branches.current,
-        linked: trees
-            .iter()
-            .any(|tree| !tree.main && key(&tree.path) == key(&cwd.to_string_lossy())),
+        detached: current.is_none(),
+        current,
+        linked: checkout.linked,
         branches: branches
-            .branches
             .into_iter()
             .map(|name| Branch { name, remote: None })
-            .chain(branches.remotes.into_iter().map(|branch| Branch {
+            .chain(remotes.into_iter().map(|branch| Branch {
                 name: branch.name,
                 remote: Some(branch.remote),
             }))
             .collect(),
-        worktrees: trees.into(),
+        worktrees: scoped_trees(checkout.worktrees, &remote.environment_id).into(),
     })
 }
+
+fn scoped_trees(mut worktrees: Vec<Worktree>, environment: &str) -> Vec<Worktree> {
+    for tree in &mut worktrees {
+        tree.path = remote_path(environment, &tree.path);
+    }
+    worktrees
+}
+
 pub(super) fn worktrees(cwd: &Path) -> Result<Vec<Worktree>, String> {
-    context(cwd)?.trees()
+    let context = context(cwd)?;
+    Ok(scoped_trees(
+        context.trees()?.worktrees,
+        &context.environment,
+    ))
 }
 pub(super) fn checkout(cwd: &Path, branch: &Branch) -> Result<(), String> {
     context(cwd)?.request(

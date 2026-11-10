@@ -333,6 +333,22 @@ describe("remote host API", () => {
       }),
     );
     expect(tree.branch).toBe("feature");
+    const mainSnapshot = await s.call("git.snapshot", { cwd: s.project.cwd });
+    const linkedSnapshot = await s.call("git.snapshot", { cwd: tree.path });
+    expect(mainSnapshot.value.result).toMatchObject({
+      current: "main",
+      linked: false,
+      branches: ["feature", "main"],
+    });
+    expect(linkedSnapshot.value.result).toMatchObject({
+      current: "feature",
+      linked: true,
+      branches: ["feature", "main"],
+      worktrees: mainSnapshot.value.result.worktrees,
+    });
+    expect(
+      (await s.call("git.snapshot", { cwd: join(s.project.cwd, ".git") })).status,
+    ).toBe(400);
     expect(
       (
         await s.call("workspace.run", {

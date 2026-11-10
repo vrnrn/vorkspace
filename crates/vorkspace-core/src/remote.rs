@@ -46,11 +46,6 @@ impl Connections {
         self.data_dir.join("remote-machines.json")
     }
 
-    pub fn machine_for_environment(&self, environment_id: &str) -> Result<Machine, String> {
-        self.stored_machine(|machine| machine.environment_id == environment_id)
-            .map(|machine| machine.public())
-    }
-
     fn stored_machine(
         &self,
         matches: impl FnMut(&StoredMachine) -> bool,
@@ -68,7 +63,7 @@ impl Connections {
     pub fn model_catalog(&self, project: &RemoteProject) -> Result<Arc<RemoteCatalog>, String> {
         let machine =
             self.stored_machine(|machine| machine.environment_id == project.environment_id)?;
-        let connection = machine.catalog_stamp();
+        let connection = machine.connection_stamp();
         let result =
             self.model_catalogs
                 .load(&machine.id, &project.project_id, &connection, || {
@@ -81,7 +76,7 @@ impl Connections {
                 });
         // A concurrent pairing can replace the credentials while discovery runs.
         let current = self.stored_machine(|current| current.id == machine.id)?;
-        if current.catalog_stamp() != connection {
+        if current.connection_stamp() != connection {
             return Err(
                 "Machine connection changed while loading models. Reopen the model list.".into(),
             );
@@ -191,7 +186,7 @@ impl StoredMachine {
         }
     }
 
-    fn catalog_stamp(&self) -> ConnectionStamp {
+    fn connection_stamp(&self) -> ConnectionStamp {
         ConnectionStamp {
             environment_id: self.environment_id.clone(),
             endpoint: self.endpoint.clone(),
@@ -422,9 +417,28 @@ impl Connections {
         Ok(())
     }
 
-    pub fn request(
+    pub fn request(&self, machine_id: &str, method: &str, params: Value) -> Result<Value, String> {
+        self.request_matching(|machine| machine.id == machine_id, method, params)
+    }
+
+    /// Workspace paths name the Host environment, independently of the saved
+    /// machine entry used to reach it.
+    pub fn request_for_environment(
         &self,
-        machine_id: &str,
+        environment: &str,
+        method: &str,
+        params: Value,
+    ) -> Result<Value, String> {
+        self.request_matching(
+            |machine| machine.environment_id == environment,
+            method,
+            params,
+        )
+    }
+
+    fn request_matching(
+        &self,
+        matches: impl FnMut(&StoredMachine) -> bool,
         method: &str,
         mut params: Value,
     ) -> Result<Value, String> {
@@ -439,7 +453,7 @@ impl Connections {
         if !supported_remote_method(method) {
             return Err("Unsupported remote operation".into());
         }
-        let machine = self.stored_machine(|machine| machine.id == machine_id)?;
+        let machine = self.stored_machine(matches)?;
         self.request_on(&machine, method, params)
     }
 
@@ -505,6 +519,7 @@ fn supported_remote_method(method: &str) -> bool {
             | "devices.revokeSelf"
             | "git.diff"
             | "git.branches"
+            | "git.snapshot"
             | "git.switch"
             | "git.createBranch"
             | "git.worktrees"

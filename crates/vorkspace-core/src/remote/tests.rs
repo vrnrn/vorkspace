@@ -127,7 +127,7 @@ fn existing_store_remains_compatible_and_credentials_are_private() {
     let path = dir.path().join("remote-machines.json");
     std::fs::write(&path, r#"[{"id":"old","name":"server","endpoint":"https://host.example","environmentId":"env","token":"private"}]"#).unwrap();
     let connections = Connections::new(dir.path());
-    let machine = connections.machine_for_environment("env").unwrap();
+    let machine = connections.list().unwrap().pop().unwrap();
     assert_eq!(machine.id, "old");
     assert_eq!(machine.ssh, None);
     assert!(!serde_json::to_string(&machine).unwrap().contains("private"));
@@ -167,7 +167,7 @@ fn connecting_same_host_keeps_identity_and_scopes_authenticated_requests() {
     assert_eq!(connections.list().unwrap().len(), 1);
     assert_eq!(
         connections
-            .request(&first.id, "projects.list", json!({}))
+            .request_for_environment("env", "projects.list", json!({}))
             .unwrap(),
         json!({ "projects": [] })
     );

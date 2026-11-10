@@ -17,8 +17,7 @@ pub fn is_remote(path: &Path) -> bool {
 pub fn run_remote_command(command: &str, args: Value) -> Result<Value, String> {
     run_with(command, args, |environment, params| {
         let connections = crate::remote::default_connections()?;
-        let machine = connections.machine_for_environment(environment)?;
-        connections.request(&machine.id, "workspace.run", params)
+        connections.request_for_environment(environment, "workspace.run", params)
     })
 }
 

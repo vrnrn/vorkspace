@@ -1,7 +1,7 @@
 import { execFile, execFileSync } from "node:child_process";
 import { existsSync, realpathSync, statSync } from "node:fs";
 import { mkdir } from "node:fs/promises";
-import { basename, dirname, join } from "node:path";
+import { basename, dirname, isAbsolute, join } from "node:path";
 import { promisify } from "node:util";
 const exec = promisify(execFile);
 const options = (cwd) => ({
@@ -95,11 +95,10 @@ export async function hostWorktrees(cwd) {
     ["worktree", "list", "--porcelain", "-z"],
     options(cwd),
   );
-  const worktrees = parse(stdout).map((tree) => ({
-    ...tree,
-    path: available(tree.path) ? realpathSync.native(tree.path) : tree.path,
-    missing: !available(tree.path),
-  }));
+  const worktrees = parse(stdout).map((tree) => {
+    const actual = canonicalDirectory(tree.path);
+    return { ...tree, path: actual ?? tree.path, missing: actual == null };
+  });
   const main = worktrees[0];
   if (!main) throw new Error("No working copies found");
   return {
@@ -107,6 +106,55 @@ export async function hostWorktrees(cwd) {
     defaultRoot: join(dirname(main.path), `${basename(main.path)}-worktrees`),
   };
 }
+
+function canonicalDirectory(path) {
+  try {
+    const actual = realpathSync.native(path);
+    return statSync(actual).isDirectory() ? actual : null;
+  } catch {
+    return null;
+  }
+}
+
+// Resolve a read by path using the Host's project and working-copy registrations.
+export async function hostCheckout(projects, requested) {
+  if (
+    typeof requested !== "string" ||
+    requested.length > 4096 ||
+    requested.includes("\0") ||
+    !isAbsolute(requested)
+  )
+    throw new Error("Invalid working copy");
+  const cwd = canonicalDirectory(requested);
+  const unavailable = "Choose an available worktree of this project";
+  if (cwd == null) throw new Error(unavailable);
+  const direct = projects.find((project) => project.cwd === cwd);
+  if (direct) {
+    const { worktrees } = await hostWorktrees(cwd);
+    const tree = worktrees.find((row) => row.path === cwd && !row.missing);
+    return {
+      cwd,
+      current: tree?.head ? tree.branch : undefined,
+      linked: tree?.isMain === false,
+      worktrees,
+    };
+  }
+  // Linked copies usually sit beside their registered project.
+  for (const project of projects) {
+    const result = await hostWorktrees(project.cwd).catch(() => null);
+    const tree = result?.worktrees.find((row) => row.path === cwd && !row.missing);
+    if (tree) {
+      return {
+        cwd,
+        current: tree.branch,
+        linked: !tree.isMain,
+        worktrees: result.worktrees,
+      };
+    }
+  }
+  throw new Error(unavailable);
+}
+
 export async function createHostWorktree(
   cwd,
   branch,

@@ -7,38 +7,39 @@ const options = (cwd) => ({
   timeout: 10_000,
   maxBuffer: 1024 * 1024,
 });
-export async function hostBranches(cwd) {
-  const [{ stdout: names }, { stdout: remoteNames }, current] =
-    await Promise.all([
-      exec(
-        "git",
-        ["for-each-ref", "--format=%(refname:lstrip=2)", "refs/heads"],
-        options(cwd),
-      ),
-      exec(
-        "git",
-        [
-          "for-each-ref",
-          "--format=%(refname:lstrip=2)%00%(symref)",
-          "refs/remotes",
-        ],
-        options(cwd),
-      ),
-      exec("git", ["symbolic-ref", "--quiet", "HEAD"], options(cwd))
-        .then(({ stdout }) => stdout.trim().replace(/^refs\/heads\//, ""))
-        .catch(() => null),
-    ]);
-  const remotes = remoteNames
-    .split("\n")
-    .filter(Boolean)
-    .flatMap((line) => {
-      const [ref, symref] = line.split("\0");
-      const slash = ref.indexOf("/");
-      return slash > 0 && !symref
-        ? [{ remote: ref.slice(0, slash), name: ref.slice(slash + 1) }]
-        : [];
-    });
-  return { current, branches: names.split("\n").filter(Boolean), remotes };
+function currentBranch(cwd) {
+  return exec("git", ["symbolic-ref", "--quiet", "HEAD"], options(cwd))
+    .then(({ stdout }) => stdout.trim().replace(/^refs\/heads\//, ""))
+    .catch(() => null);
+}
+export async function hostBranches(cwd, branch = currentBranch(cwd)) {
+  const [{ stdout }, current] = await Promise.all([
+    exec(
+      "git",
+      [
+        "for-each-ref",
+        "--format=%(refname)%00%(symref)",
+        "refs/heads",
+        "refs/remotes",
+      ],
+      { ...options(cwd), maxBuffer: 2 * 1024 * 1024 },
+    ),
+    branch,
+  ]);
+  const branches = [];
+  const remotes = [];
+  for (const line of stdout.split("\n")) {
+    const [ref, symref] = line.split("\0");
+    if (ref.startsWith("refs/heads/")) {
+      branches.push(ref.slice("refs/heads/".length));
+    } else if (ref.startsWith("refs/remotes/") && !symref) {
+      const name = ref.slice("refs/remotes/".length);
+      const slash = name.indexOf("/");
+      if (slash > 0)
+        remotes.push({ remote: name.slice(0, slash), name: name.slice(slash + 1) });
+    }
+  }
+  return { current, branches, remotes };
 }
 export async function switchHostBranch(cwd, branch, remote) {
   if (

@@ -93,14 +93,20 @@ pub(crate) fn qualified_references(files: &Value, environment: &str, session: &s
 pub fn read_attachment_source(value: &str) -> Result<Vec<u8>, String> {
     let source = parse_source(value).ok_or("Invalid remote image attachment")?;
     let connections = super::default_connections()?;
-    let machine = connections.machine_for_environment(&source.environment)?;
-    download(source.size, |offset| {
-        connections.request(
-            &machine.id,
+    let machine =
+        connections.stored_machine(|machine| machine.environment_id == source.environment)?;
+    let bytes = download(source.size, |offset| {
+        connections.request_on(
+            &machine,
             "attachments.read",
             json!({"sessionId":source.session,"id":source.id,"offset":offset}),
         )
-    })
+    })?;
+    let current = connections.stored_machine(|current| current.id == machine.id)?;
+    if current.connection_stamp() != machine.connection_stamp() {
+        return Err("Machine connection changed while loading the image. Open it again.".into());
+    }
+    Ok(bytes)
 }
 
 fn download(

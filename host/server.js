@@ -19,6 +19,7 @@ import {
 } from "./git-branches.js";
 import {
   createHostWorktree,
+  hostCheckout,
   hostWorktrees,
   resolveHostWorktreeAsync,
 } from "./git-worktrees.js";
@@ -236,6 +237,7 @@ export function createHostServer(engine, providers, lifecycle) {
                 "questions",
                 "diff",
                 "git.branches",
+                "git.snapshot",
                 "git.switch",
                 "git.createBranch",
                 "git.worktrees",
@@ -445,6 +447,15 @@ export function createHostServer(engine, providers, lifecycle) {
             result = await hostBranches(
               await resolveHostWorktreeAsync(project.cwd, params.cwd),
             );
+            break;
+          }
+          case "git.snapshot": {
+            const checkout = await hostCheckout(engine.store.projects(), params.cwd);
+            result = {
+              ...(await hostBranches(checkout.cwd, checkout.current)),
+              linked: checkout.linked,
+              worktrees: checkout.worktrees,
+            };
             break;
           }
           case "git.switch": {

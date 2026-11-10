@@ -332,9 +332,8 @@ impl app_core::AppCore {
                 let baseline = db.remote_listing_baseline(&project)?;
                 (project, baseline)
             };
-            let machine = client.machine_for_environment(&project.environment_id)?;
-            let response = client.request(
-                &machine.id,
+            let response = client.request_for_environment(
+                &project.environment_id,
                 "sessions.list",
                 json!({"projectId": project.project_id, "includeGit": false}),
             )?;
