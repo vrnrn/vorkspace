@@ -1,4 +1,5 @@
 //! UI invariants around the host-owned conversation and the next local draft.
+use super::observation::{Projection, Refresh, Snapshot};
 use super::*;
 use gpui::TestAppContext;
 use serde_json::json;
@@ -117,7 +118,7 @@ fn late_idle_snapshot_cannot_replace_a_new_turn_or_release_a_newer_refresh(
 ) {
     let view = conversation(cx);
     view.update(cx, |view, cx| {
-        let response = |mut summary: vorkspace_core::store::Session| {
+        let response = |mut summary: vorkspace_core::store::Session, revision: Option<u64>| {
             summary.title = "Older host snapshot".into();
             let remote = vorkspace_core::store::RemoteSession {
                 summary,
@@ -146,17 +147,27 @@ fn late_idle_snapshot_cannot_replace_a_new_turn_or_release_a_newer_refresh(
                 }],
                 false,
             );
-            Ok((
-                remote,
-                Settings::default(),
-                Some(
-                    json!({"revision": 1, "status": "idle", "session": {"blocks": [
+            let mut observation = SessionObservation::default();
+            observation
+                .apply(json!({"kind": "snapshot", "value": {
+                    "revision": revision, "status": "idle", "session": {"blocks": [
                         {"id": "old-draft", "role": "user", "draft": true, "text": "Older draft"}
-                    ]}}),
-                ),
-                Some((history, Default::default())),
-                None,
-            ))
+                    ]}}
+                }))
+                .unwrap();
+            Refresh {
+                observation,
+                binding: Some(remote),
+                result: Ok(Snapshot {
+                    settings: Settings::default(),
+                    descriptor: None,
+                    history: Some(Projection {
+                        history,
+                        turns: Default::default(),
+                    }),
+                    metadata_changed: true,
+                }),
+            }
         };
         let idle_submission = view.submission_generation;
         view.remote_state.refresh_generation = 1;
@@ -172,7 +183,7 @@ fn late_idle_snapshot_cannot_replace_a_new_turn_or_release_a_newer_refresh(
             1,
             idle_submission,
             false,
-            response(view.summary.clone()),
+            response(view.summary.clone(), Some(1)),
             cx,
         );
         assert!(!view.remote_state.refreshing);
@@ -192,14 +203,14 @@ fn late_idle_snapshot_cannot_replace_a_new_turn_or_release_a_newer_refresh(
             1,
             idle_submission,
             false,
-            response(view.summary.clone()),
+            response(view.summary.clone(), Some(1)),
             cx,
         );
         assert!(view.remote_state.refreshing);
         assert_eq!(view.transcript.read(cx).source_rows(), current_rows);
-        let mut stale = response(view.summary.clone()).unwrap();
-        stale.0.host_revision = Some(2);
-        view.finish_remote_snapshot(2, view.submission_generation, false, Ok(stale), cx);
+        let mut stale = response(view.summary.clone(), Some(1));
+        stale.binding.as_mut().unwrap().host_revision = Some(2);
+        view.finish_remote_snapshot(2, view.submission_generation, false, stale, cx);
         assert!(!view.remote_state.refreshing);
         assert_eq!(
             view.transcript.read(cx).source_rows(),
@@ -207,15 +218,8 @@ fn late_idle_snapshot_cannot_replace_a_new_turn_or_release_a_newer_refresh(
             "older host revisions cannot publish over newer durable metadata"
         );
         view.remote_state.refreshing = true;
-        let mut unknown = response(view.summary.clone()).unwrap();
-        unknown
-            .2
-            .as_mut()
-            .unwrap()
-            .as_object_mut()
-            .unwrap()
-            .remove("revision");
-        view.finish_remote_snapshot(2, view.submission_generation, false, Ok(unknown), cx);
+        let unknown = response(view.summary.clone(), None);
+        view.finish_remote_snapshot(2, view.submission_generation, false, unknown, cx);
         assert!(!view.remote_state.refreshing);
         assert_eq!(
             view.transcript.read(cx).source_rows(),
@@ -227,7 +231,7 @@ fn late_idle_snapshot_cannot_replace_a_new_turn_or_release_a_newer_refresh(
             2,
             view.submission_generation,
             false,
-            response(view.summary.clone()),
+            response(view.summary.clone(), Some(1)),
             cx,
         );
         assert!(!view.remote_state.refreshing);
@@ -248,9 +252,9 @@ fn late_idle_snapshot_cannot_replace_a_new_turn_or_release_a_newer_refresh(
         view.history_unloaded = true;
         view.remote_state.refresh_generation = 3;
         view.remote_state.refreshing = true;
-        let mut stale = response(view.summary.clone()).unwrap();
-        stale.0.host_revision = Some(2);
-        view.finish_remote_snapshot(3, view.submission_generation, true, Ok(stale), cx);
+        let mut stale = response(view.summary.clone(), Some(1));
+        stale.binding.as_mut().unwrap().host_revision = Some(2);
+        view.finish_remote_snapshot(3, view.submission_generation, true, stale, cx);
         assert!(!view.loading);
         assert!(!view.remote_state.refreshing);
         assert!(!view.loaded);
@@ -354,7 +358,11 @@ impl HostFixture {
                             snapshot["runId"] = serde_json::Value::Null;
                             snapshot["revision"] = json!(2);
                         }
-                        json!({"kind": "snapshot", "value": snapshot})
+                        if request["params"]["revision"] == snapshot["revision"] {
+                            json!({"kind": "unchanged", "revision": snapshot["revision"]})
+                        } else {
+                            json!({"kind": "snapshot", "value": snapshot})
+                        }
                     }
                     "commands.dispatch" => {
                         let command = &request["params"];
@@ -400,12 +408,19 @@ impl HostFixture {
         })
     }
     fn wait(&self, view: &Entity<Conversation>, cx: &mut TestAppContext, settled: bool) {
+        self.wait_for(view, cx, |view| {
+            view.loaded && (!settled || (!view.busy && !view.remote_state.refreshing))
+        });
+    }
+    fn wait_for(
+        &self,
+        view: &Entity<Conversation>,
+        cx: &mut TestAppContext,
+        predicate: impl Fn(&Conversation) -> bool,
+    ) {
         for _ in 0..1000 {
             cx.run_until_parked();
-            if cx.update(|cx| {
-                let view = view.read(cx);
-                view.loaded && (!settled || (!view.busy && !view.remote_state.refreshing))
-            }) {
+            if cx.update(|cx| predicate(view.read(cx))) {
                 return;
             }
             std::thread::sleep(std::time::Duration::from_millis(1));
@@ -429,6 +444,77 @@ impl Drop for HostFixture {
         }
         let _ = std::fs::remove_dir_all(&self.directory);
     }
+}
+
+#[gpui::test]
+fn offline_reopen_can_restore_locally_rejected_text_and_attachments(cx: &mut TestAppContext) {
+    let host = HostFixture::new(false, false);
+    let machine = host.client.list().unwrap().pop().unwrap();
+    host.client.disconnect(&machine.id).unwrap();
+    {
+        let store = host.store.lock().unwrap();
+        let mut binding = store.remote_session(host.summary.id).unwrap().unwrap();
+        binding.rejected = Some(json!({
+            "error": "Host rejected request: permission denied",
+            "commands": [{"type": "send", "commandId": "original", "text": "Recover this message"}],
+            "uploads": [{"commandId": "original", "path": "/original/attachment.png"}]
+        }));
+        store.save_remote_session(&binding).unwrap();
+    }
+    let view = host.conversation(cx);
+    host.wait_for(&view, cx, |view| !view.remote_state.refreshing);
+    view.update(cx, |view, cx| {
+        assert!(!view.loaded);
+        assert!(!view.remote_state.online);
+        assert!(view.remote_notice(cx).is_some());
+        view.restore_remote_message(cx);
+        assert_eq!(view.input.read(cx).content, "Keep this next message");
+        view.input
+            .update(cx, |input, cx| input.set_text(String::new(), cx));
+        view.restore_remote_message(cx);
+        assert_eq!(view.input.read(cx).content, "Recover this message");
+        assert_eq!(
+            view.attachments,
+            [PathBuf::from("/original/attachment.png")]
+        );
+    });
+    assert!(
+        !host
+            .requests
+            .lock()
+            .unwrap()
+            .iter()
+            .any(|r| r["method"] == "commands.dispatch")
+    );
+}
+
+#[gpui::test]
+fn unchanged_idle_poll_keeps_the_projection_and_composer_status(cx: &mut TestAppContext) {
+    let host = HostFixture::new(false, true);
+    let view = host.conversation(cx);
+    host.wait(&view, cx, true);
+    let rows = view.update(cx, |view, cx| {
+        view.status = "Keep the current composer status".into();
+        view.refresh_remote_snapshot(cx);
+        view.transcript.read(cx).source_rows().to_vec()
+    });
+    host.wait(&view, cx, true);
+    view.update(cx, |view, cx| {
+        assert_eq!(view.status, "Keep the current composer status");
+        assert_eq!(view.transcript.read(cx).source_rows(), rows);
+        assert_eq!(
+            view.follow_ups.state.draft.as_ref().unwrap().text,
+            "Saved host draft"
+        );
+        assert_eq!(view.remote_state.observation.revision(), Some(1));
+    });
+    assert!(
+        host.requests
+            .lock()
+            .unwrap()
+            .iter()
+            .any(|r| { r["method"] == "sessions.sync" && r["params"]["revision"] == 1 })
+    );
 }
 
 #[gpui::test]
@@ -466,7 +552,7 @@ fn opening_running_host_reattaches_without_dispatching_another_turn(cx: &mut Tes
         assert!(view.remote_state.online);
         assert_eq!(view.input.read(cx).content, "Keep this next message");
         assert_eq!(
-            view.remote_state.snapshot.as_ref().unwrap()["status"],
+            view.remote_state.observation.snapshot().unwrap()["status"],
             "idle"
         );
         assert!(!view.cancel.load(Ordering::Relaxed));

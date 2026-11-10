@@ -1,7 +1,10 @@
-//! RemoteSession.tsx's host observation and composer restrictions.
+//! Composer policy and recovery for Host-owned conversations.
 use super::*;
 use serde_json::{Value, json};
+use vorkspace_core::remote::protocol::SessionObservation;
 use vorkspace_ui::radius;
+
+mod observation;
 
 #[derive(Default)]
 pub(super) struct State {
@@ -14,7 +17,7 @@ pub(super) struct State {
     pub(super) online: bool,
     error: Option<String>,
     rejected: Option<Value>,
-    snapshot: Option<Value>,
+    observation: SessionObservation,
     pub(super) capabilities: std::collections::HashSet<String>,
 }
 impl State {
@@ -23,16 +26,6 @@ impl State {
             .map(|rejected| rejected["error"].as_str().unwrap_or("Older pending requests could not be linked to one conversation. Open the original desktop to recover them."))
     }
 }
-type Snapshot = (
-    vorkspace_core::store::RemoteSession,
-    vorkspace_core::agent::Settings,
-    Option<Value>,
-    Option<(
-        crate::transcript::PreparedHistory,
-        std::collections::HashMap<usize, vorkspace_core::agent::TurnInfo>,
-    )>,
-    Option<Value>,
-);
 
 impl Conversation {
     #[cfg(test)]
@@ -77,203 +70,6 @@ impl Conversation {
             self.refresh_remote_snapshot(cx);
         }
     }
-    pub(super) fn refresh_remote_snapshot(&mut self, cx: &mut Context<Self>) {
-        if self.remote_state.refreshing || self.busy || self.stopping {
-            return;
-        }
-        self.remote_state.refreshing = true;
-        self.remote_state.refresh_generation = self.remote_state.refresh_generation.wrapping_add(1);
-        let refresh = self.remote_state.refresh_generation;
-        let submission = self.submission_generation;
-        let initial = !self.loaded || self.history_unloaded;
-        self.loading = initial;
-        let store = self.store.clone();
-        let id = self.summary.id;
-        let known = self.remote_state.snapshot.clone();
-        if self.remote_state.client.is_none() {
-            self.remote_state.client = vorkspace_core::remote::default_connections().ok();
-        }
-        let client = self.remote_state.client.clone();
-        let work = cx.background_executor().spawn(async move {
-            let (mut remote, mut settings) = {
-                let store = locked(&store)?;
-                (
-                    store
-                        .remote_session(id)?
-                        .ok_or("Remote session no longer exists")?,
-                    store.agent_settings(id)?.unwrap_or_default(),
-                )
-            };
-            let client = client.ok_or("Remote connections are unavailable")?;
-            let machine = remote.machine(&client)?;
-            let descriptor = if initial {
-                Some(client.request(&machine.id, "environment.describe", json!({}))?)
-            } else {
-                None
-            };
-            let snapshot = remote
-                .session_id
-                .as_deref()
-                .map(|session| client.load_session(&machine.id, session, known.as_ref()))
-                .transpose()?;
-            if let Some(snapshot) = snapshot.as_ref() {
-                let store = locked(&store)?;
-                let summary = store.register_remote_summary(&remote.project, snapshot)?;
-                remote = store
-                    .remote_session(summary.id)?
-                    .ok_or("Remote session identity is missing")?;
-                settings = store.agent_settings(summary.id)?.unwrap_or_default();
-            }
-            let changed = initial
-                || match snapshot.as_ref() {
-                    Some(snapshot) => vorkspace_runtime::runtime::remote::snapshot_changed(
-                        known.as_ref(),
-                        snapshot,
-                    ),
-                    None => known.is_some(),
-                };
-            let history = if changed {
-                let (history, turns) = snapshot
-                    .as_ref()
-                    .zip(remote.session_id.as_deref())
-                    .map(|(snapshot, id)| {
-                        vorkspace_core::store::Store::project_remote_history(
-                            snapshot,
-                            &remote.project.environment_id,
-                            id,
-                        )
-                    })
-                    .transpose()?
-                    .unwrap_or_default();
-                Some((
-                    crate::transcript::PreparedHistory::new(history.rows, false),
-                    turns,
-                ))
-            } else {
-                None
-            };
-            Ok::<_, String>((remote, settings, snapshot, history, descriptor))
-        });
-        cx.spawn(async move |this, cx| {
-            let result = work.await;
-            let _ = this.update(cx, |this, cx| {
-                this.finish_remote_snapshot(refresh, submission, initial, result, cx);
-            });
-        })
-        .detach();
-    }
-    fn finish_remote_snapshot(
-        &mut self,
-        refresh: u64,
-        submission: u64,
-        initial: bool,
-        result: Result<Snapshot, String>,
-        cx: &mut Context<Self>,
-    ) {
-        // A completed turn can already own a newer refresh. An older read
-        // must not clear its admission flag or replace its visible state.
-        if self.remote_state.refresh_generation != refresh {
-            return;
-        }
-        self.remote_state.refreshing = false;
-        if self.submission_generation != submission || self.busy || self.stopping {
-            return;
-        }
-        if result.as_ref().is_ok_and(|(remote, _, snapshot, _, _)| {
-            remote.host_revision.is_some_and(|latest| {
-                snapshot
-                    .as_ref()
-                    .and_then(|snapshot| snapshot["revision"].as_u64())
-                    .is_none_or(|received| received < latest)
-            })
-        }) {
-            // Another observation already committed a newer host revision.
-            // Its metadata cannot be paired with this older transcript.
-            if initial {
-                self.loading = false;
-                let error = "The host returned an older conversation snapshot. Retry to load the latest version.".to_owned();
-                self.status = error.clone();
-                self.remote_state.error = Some(error);
-                cx.notify();
-            }
-            return;
-        }
-        self.loading = false;
-        self.remote_state.awaiting_successor = false;
-        match result {
-            Ok((remote, settings, snapshot, history, descriptor)) => {
-                self.remote_state.online = true;
-                self.remote_state.error = remote
-                    .rejected
-                    .as_ref()
-                    .and_then(|rejected| rejected["error"].as_str().map(str::to_owned));
-                self.remote_state.rejected = remote.rejected;
-                self.remote_state.pending = !remote.outbox.is_empty()
-                    || self.remote_state.legacy_recovery_error().is_some();
-                self.summary = remote.summary;
-                if let Some(descriptor) = descriptor {
-                    self.remote_state.capabilities = descriptor["capabilities"]
-                        .as_array()
-                        .into_iter()
-                        .flatten()
-                        .filter_map(|v| v.as_str().map(str::to_owned))
-                        .collect();
-                }
-                if settings.revision > self.settings.revision
-                    || (initial && settings.revision >= self.settings.revision)
-                {
-                    self.settings = settings;
-                    self.model = self.settings.model.clone();
-                }
-                if let Some((history, turns)) = history {
-                    self.settings.turns = turns.clone();
-                    self.transcript.update(cx, |view, cx| {
-                        view.turns = turns;
-                        view.install_prepared_history(history, cx);
-                    });
-                }
-                self.loaded = true;
-                self.history_unloaded = false;
-                self.status = "Ready".into();
-                let running = snapshot.as_ref().filter(|s| s["status"] == "running");
-                let run = running.map(|s| s["runId"].clone());
-                if let Some(snapshot) = &snapshot {
-                    self.context = snapshot["session"]
-                        .get("context")
-                        .cloned()
-                        .and_then(|context| serde_json::from_value(context).ok());
-                    if let Some(title) = snapshot["session"]["title"].as_str() {
-                        self.summary.title = title.into();
-                    }
-                    self.summary.provider_id = snapshot["session"]["providerSessionId"]
-                        .as_str()
-                        .map(str::to_owned);
-                    self.summary.has_messages = snapshot["session"]["blocks"]
-                        .as_array()
-                        .is_some_and(|b| !b.is_empty());
-                    self.install_remote_draft(snapshot, cx);
-                    self.install_remote_plans(snapshot, cx);
-                }
-                self.remote_state.snapshot = snapshot;
-                if initial {
-                    self.refresh_catalog(cx);
-                    self.refresh_git(cx);
-                }
-                if let Some((row, query)) = self.pending_search.take() {
-                    self.reveal_search(row, query, cx);
-                }
-                if let Some(run) = run.filter(|_| !self.busy && !self.stopping) {
-                    self.settings.remote_action = Some(json!({"type":"attach", "runId":run}));
-                    self.launch_prompt(String::new(), cx);
-                } else {
-                    self.run_history_actions(cx);
-                }
-            }
-            Err(error) => self.remote_connection_error(&error, cx),
-        }
-        cx.emit(SessionChanged::Loaded);
-        cx.notify();
-    }
     fn install_remote_draft(&mut self, snapshot: &Value, cx: &mut Context<Self>) {
         let draft = snapshot["session"]["blocks"]
             .as_array()
@@ -289,7 +85,7 @@ impl Conversation {
             .update(cx, |view, cx| view.set_remote_saved_draft(draft, cx));
     }
     pub(super) fn remote_send_guard(&mut self, cx: &mut Context<Self>) -> bool {
-        let error = if !self.loaded {
+        let error = if !self.loaded && self.remote_state.error.is_none() {
             Some("Wait for this remote conversation to load.")
         } else if !self.remote_state.online {
             Some("The machine is offline. Reconnect in Settings → Connections, then Retry.")
@@ -410,19 +206,57 @@ impl Conversation {
         self.launch_prompt(prompt, cx);
     }
     pub(super) fn remote_notice(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
-        if !self.is_remote()
-            || self.busy
-            || (self.remote_state.error.is_none() && !self.remote_state.pending)
-        {
+        if !self.is_remote() || self.busy {
             return None;
         }
         let legacy = self.remote_state.legacy_recovery_error();
-        Some(div().mx_2().my_2().p_3().rounded(px(radius::CONTAINER)).bg(content(0.04)).flex().items_center().gap_2()
-            .child(div().flex_1().text_size(px(12.)).child(if let Some(error) = legacy {error.to_owned()} else if self.remote_state.pending {"A remote command needs confirmation. Retry uses its original command ID.".to_owned()} else {self.remote_state.error.clone().unwrap_or_default()}))
-            .when(legacy.is_none(), |d| d
-            .child(crate::controls::secondary_button("remote-retry",if self.remote_state.rejected.is_some() {"Restore message"} else {"Retry"},true,false).debug_selector(|| "remote-retry".into()).child(if self.remote_state.rejected.is_some() {"Restore message"} else {"Retry"}).on_click(cx.listener(|this,_,_,cx| {
-                if this.remote_state.rejected.is_some() { this.restore_remote_message(cx); } else {this.retry_remote(cx);}
-            })))).into_any_element())
+        let restore = legacy.is_none() && self.remote_state.rejected.is_some();
+        let retry = legacy.is_none()
+            && (self.remote_state.pending || !self.remote_state.online || !restore);
+        let message = if let Some(error) = legacy {
+            error
+        } else if self.remote_state.pending {
+            "A remote command needs confirmation. Retry uses its original command ID."
+        } else if let Some(error) = self.remote_state.error.as_deref() {
+            error
+        } else if restore {
+            "Your previous message can be restored to the composer."
+        } else {
+            return None;
+        };
+        Some(
+            div()
+                .mx_2()
+                .my_2()
+                .p_3()
+                .rounded(px(radius::CONTAINER))
+                .bg(content(0.04))
+                .flex()
+                .items_center()
+                .gap_2()
+                .child(div().flex_1().text_size(px(12.)).child(message.to_owned()))
+                .when(restore, |notice| {
+                    notice.child(
+                        crate::controls::secondary_button(
+                            "remote-restore",
+                            "Restore message",
+                            true,
+                            false,
+                        )
+                        .child("Restore message")
+                        .on_click(cx.listener(|this, _, _, cx| this.restore_remote_message(cx))),
+                    )
+                })
+                .when(retry, |notice| {
+                    notice.child(
+                        crate::controls::secondary_button("remote-retry", "Retry", true, false)
+                            .debug_selector(|| "remote-retry".into())
+                            .child("Retry")
+                            .on_click(cx.listener(|this, _, _, cx| this.retry_remote(cx))),
+                    )
+                })
+                .into_any_element(),
+        )
     }
     fn retry_remote(&mut self, cx: &mut Context<Self>) {
         if self.reject_user_entry(cx) {
@@ -443,9 +277,6 @@ impl Conversation {
         } else {
             self.refresh_remote_snapshot(cx);
         }
-    }
-    pub(super) fn release_remote_snapshot(&mut self) {
-        self.remote_state.snapshot = None;
     }
     fn restore_remote_message(&mut self, cx: &mut Context<Self>) {
         if self.reject_user_entry(cx) {

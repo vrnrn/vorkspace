@@ -899,7 +899,7 @@ impl Store {
             };
             let client = crate::remote::default_connections()?;
             let machine = remote.machine(&client)?;
-            let snapshot = client.load_session(&machine.id, id, None)?;
+            let snapshot = client.load_session(&machine.id, id)?;
             return Self::project_remote_history(&snapshot, &remote.project.environment_id, id)
                 .map(|(history, _)| history);
         }

@@ -69,6 +69,7 @@ const MAX_SESSION_SYNC_CHUNKS: usize = 4096;
 #[derive(Default)]
 pub struct SessionObservation {
     snapshot: Option<Value>,
+    machine_id: Option<String>,
 }
 
 impl SessionObservation {
@@ -76,7 +77,7 @@ impl SessionObservation {
         self.snapshot.as_ref()
     }
 
-    fn revision(&self) -> Option<u64> {
+    pub fn revision(&self) -> Option<u64> {
         self.snapshot.as_ref()?.get("revision")?.as_u64()
     }
 
@@ -264,15 +265,8 @@ pub fn read_session_sync(
 }
 
 impl Connections {
-    pub fn load_session(
-        &self,
-        machine_id: &str,
-        session_id: &str,
-        known: Option<&Value>,
-    ) -> Result<Value, String> {
-        let mut observation = SessionObservation {
-            snapshot: known.cloned(),
-        };
+    pub fn load_session(&self, machine_id: &str, session_id: &str) -> Result<Value, String> {
+        let mut observation = SessionObservation::default();
         self.poll_session(machine_id, session_id, &mut observation)?;
         observation
             .snapshot
@@ -287,6 +281,12 @@ impl Connections {
         session_id: &str,
         observation: &mut SessionObservation,
     ) -> Result<Option<usize>, String> {
+        if observation.snapshot().is_some_and(|snapshot| {
+            observation.machine_id.as_deref() != Some(machine_id)
+                || snapshot["session"]["id"].as_str() != Some(session_id)
+        }) {
+            *observation = SessionObservation::default();
+        }
         let sync = |revision| {
             read_session_sync(session_id, revision, |method, params| {
                 self.request(machine_id, method, params)
@@ -301,10 +301,14 @@ impl Connections {
             observation.apply(response)
         };
         let response = sync(observation.revision())?;
-        match apply(observation, response) {
+        let changed = match apply(observation, response) {
             Ok(changed) => Ok(changed),
             Err(_) => apply(observation, sync(None)?),
+        }?;
+        if observation.machine_id.is_none() {
+            observation.machine_id = Some(machine_id.into());
         }
+        Ok(changed)
     }
 }
 
@@ -332,6 +336,7 @@ mod tests {
         });
         let mut observation = SessionObservation {
             snapshot: Some(known.clone()),
+            ..Default::default()
         };
         assert_eq!(observation.apply(sync).unwrap(), Some(1));
         let next = observation.snapshot().unwrap();
@@ -377,6 +382,7 @@ mod tests {
     fn delta_moves_existing_blocks_and_reports_deletions_and_reorders() {
         let mut observation = SessionObservation {
             snapshot: Some(known()),
+            ..Default::default()
         };
         let text = observation.snapshot().unwrap()["session"]["blocks"][1]["text"]
             .as_str()

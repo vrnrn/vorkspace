@@ -896,7 +896,7 @@ require('node:readline').createInterface({input:process.stdin}).on('line', line 
         .unwrap();
     assert!(binding.outbox.is_empty() && binding.uploads.is_empty());
     let session_id = binding.session_id.as_deref().unwrap();
-    let snapshot = client.load_session(&machine.id, session_id, None).unwrap();
+    let snapshot = client.load_session(&machine.id, session_id).unwrap();
     assert_eq!(
         snapshot["session"]["modelSettings"]["reasoningEffort"],
         "high"
@@ -917,7 +917,7 @@ require('node:readline').createInterface({input:process.stdin}).on('line', line 
         ..Default::default()
     };
     run_action(draft, "Keep this draft");
-    let snapshot = client.load_session(&machine.id, session_id, None).unwrap();
+    let snapshot = client.load_session(&machine.id, session_id).unwrap();
     let draft = snapshot["session"]["blocks"]
         .as_array()
         .unwrap()
@@ -930,7 +930,7 @@ require('node:readline').createInterface({input:process.stdin}).on('line', line 
         ..Default::default()
     };
     run_action(remove, "");
-    let snapshot = client.load_session(&machine.id, session_id, None).unwrap();
+    let snapshot = client.load_session(&machine.id, session_id).unwrap();
     assert!(
         !snapshot["session"]["blocks"]
             .as_array()

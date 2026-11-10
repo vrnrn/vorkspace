@@ -109,6 +109,8 @@ Each active turn owns its provider, pending event batch, shutdown and settlement
 
 When a live poll confirms the same revision, the desktop keeps its existing projection and continues processing controls. A delta moves the retained blocks into their new order and projects rows from the first affected block. The final update carries all settled rows so a desktop that skipped queued updates while stopping can still restore the complete transcript.
 
+An idle poll borrows the last observation for that machine and session without duplicating its transcript. A matching revision leaves the projected transcript in place. The local command journal stays available even if the desktop cannot connect to the Host. **Restore message** recovers text and attachments from a rejected request into an empty composer, and **Retry** checks the connection or resends a pending request with its original command ID.
+
 Send and compaction receipts from current hosts identify the accepted run. An older receipt can be associated with a live run through its accepted prompt block. Stop, approvals, and answers target the run the desktop attached to. If another desktop has already started the next turn, the view refreshes and attaches to that turn separately. Controlling a running turn leaves unrelated commands awaiting their own Retry.
 
 Stream batches can reuse block identities from their exact committed revision. When block order stays stable, the store checks that revision and writes changed or appended blocks without rereading the previous block index. Edits that remove or reorder blocks still reconcile against the durable index.

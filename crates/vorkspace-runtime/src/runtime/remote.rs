@@ -33,17 +33,6 @@ fn update(status: impl Into<String>, outcome: Option<TurnOutcome>) -> Update {
         ..Default::default()
     }
 }
-/// Only matching, present host revisions prove that projection is unchanged.
-/// Older hosts without revisions can change their blocks on every observation.
-pub fn snapshot_changed(known: Option<&Value>, snapshot: &Value) -> bool {
-    match (
-        known.and_then(|s| s["revision"].as_u64()),
-        snapshot["revision"].as_u64(),
-    ) {
-        (Some(before), Some(after)) => before != after,
-        _ => true,
-    }
-}
 fn command(kind: &str, session_id: Option<&str>) -> Value {
     let mut value = json!({"type":kind,"commandId":vorkspace_core::bot::new_id()});
     if let Some(id) = session_id {
@@ -111,8 +100,7 @@ pub fn configure_saved(store: Database, id: i64) -> Result<(), String> {
     };
     let client = vorkspace_core::remote::default_connections()?;
     let machine = binding.machine(&client)?;
-    let snapshot =
-        client.load_session(&machine.id, binding.session_id.as_deref().unwrap(), None)?;
+    let snapshot = client.load_session(&machine.id, binding.session_id.as_deref().unwrap())?;
     if snapshot["status"] == "running" {
         return Ok(());
     }
@@ -397,7 +385,7 @@ fn prepare_for_session(
             if source.environment != environment {
                 return Err("Attachment belongs to another machine".into());
             }
-            let snapshot = client.load_session(machine, &source.session, None)?;
+            let snapshot = client.load_session(machine, &source.session)?;
             let file = snapshot["session"]["blocks"]
                 .as_array()
                 .into_iter()
