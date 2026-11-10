@@ -42,7 +42,7 @@ const readline = require('node:readline');
 const send = value => process.stdout.write(JSON.stringify(value) + '\\n');
 // Records what each turn actually received, so tests can prove that settings
 // applied between turns reach the provider.
-const record = value => require('node:fs').appendFileSync(require('node:path').join(__dirname, 'calls.log'), JSON.stringify(value) + '\\n');
+const record = value => require('node:fs').appendFileSync(require('node:path').join(__dirname, 'calls.log'), JSON.stringify({pid: process.pid, ...value}) + '\\n');
 if (!process.argv.includes('app-server')) record({claudeArgs: process.argv.slice(2)});
 if (process.argv.includes('--no-session-persistence')) send({type: 'system', subtype: 'init', session_id: 'fixture-claude'});
 readline.createInterface({input: process.stdin}).on('line', line => {
@@ -358,11 +358,12 @@ describe("existing providers over headless process I/O", () => {
             runtimeMode: "supervised",
           });
         writeFileSync(log, "");
+        const text = `effort fixture ${harness} ${turn}`;
         engine.command({
           type: "send",
           commandId: `effort-${harness}-${turn}`,
           sessionId,
-          text: "hello",
+          text,
         });
         await vi.waitFor(
           () => expect(store.session(sessionId).status).toBe("idle"),
@@ -375,8 +376,19 @@ describe("existing providers over headless process I/O", () => {
         if (harness === "codex")
           efforts.push(calls.find((call) => "codexEffort" in call).codexEffort);
         else {
-          const args = calls.find((call) => call.claudeArgs).claudeArgs;
-          efforts.push(args[args.indexOf("--effort") + 1] ?? null);
+          const request = calls.find(
+            ({ wire }) =>
+              wire?.type === "user" &&
+              wire.message.content.some((part) => part.text === text),
+          );
+          expect(request).toBeDefined();
+          const launch = calls.find(
+            (call) => call.pid === request.pid && call.claudeArgs,
+          );
+          expect(launch).toBeDefined();
+          const flag = launch.claudeArgs.indexOf("--effort");
+          expect(flag).toBeGreaterThanOrEqual(0);
+          efforts.push(launch.claudeArgs[flag + 1]);
         }
       }
       expect(efforts).toEqual(["low", "high"]);

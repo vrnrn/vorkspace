@@ -59,7 +59,11 @@ impl RecordedReview {
         if !self.includes(&relative) {
             return Err("This file did not change during the recorded turn".into());
         }
-        let change = changes(&self.root, &self.turn, &relative)?
+        self.read_file(&relative)
+    }
+
+    fn read_file(&self, relative: &str) -> Result<crate::scm::FileDiff, String> {
+        let change = changes(&self.root, &self.turn, relative)?
             .into_iter()
             .find(|change| change.relative == relative)
             .ok_or("This file did not change during the recorded turn")?;
@@ -74,8 +78,8 @@ impl RecordedReview {
             (state_text(original), state_text(current))
         };
         Ok(crate::scm::FileDiff {
-            path: path_to_js(&self.root.join(&relative)),
-            relative,
+            path: path_to_js(&self.root.join(relative)),
+            relative: relative.to_owned(),
             status: change.status,
             original,
             current,
@@ -196,14 +200,17 @@ impl Store {
         )
     }
 
+    /// Reads the complete saved tree pair. Review surfaces use the attributed
+    /// paths exposed by `RecordedReview`.
     pub fn file_diff(
         &self,
         session_id: &str,
         cwd: &str,
         relative: &str,
     ) -> Result<crate::scm::FileDiff, String> {
+        let relative = resolve_turn_path(relative)?;
         self.open_recorded_review(session_id, cwd, None)?
-            .file(relative)
+            .read_file(&relative)
     }
 
     pub fn open_recorded_review(

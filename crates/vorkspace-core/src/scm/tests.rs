@@ -153,7 +153,7 @@ fn review_versions_invalidate_only_changed_file_sides() {
     assert!(git(root, &["add", "a.txt"]));
     let staged = DiffSnapshot::read(root).unwrap().versions.unwrap();
     assert_ne!(edited["staged:a.txt"], staged["staged:a.txt"]);
-    assert_ne!(edited["unstaged:a.txt"], staged["unstaged:a.txt"]);
+    assert!(!staged.contains_key("unstaged:a.txt"));
     assert_eq!(edited["unstaged:b.txt"], staged["unstaged:b.txt"]);
 }
 

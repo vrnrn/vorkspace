@@ -258,6 +258,11 @@ fn shared_turns_only_review_files_with_their_own_successful_edit_events() {
     assert_eq!(status.files[0].relative, "a.txt");
     assert!(!status.files[0].undoable);
     // The complete workspace recording is retained separately from attribution.
+    let reader = reopened
+        .open_recorded_review("reader", f.cwd(), None)
+        .unwrap();
+    assert!(reader.files().unwrap().is_empty());
+    assert!(reader.file("a.txt").is_err());
     assert_eq!(
         reopened
             .file_diff("reader", f.cwd(), "a.txt")
