@@ -73,14 +73,17 @@ fn replace_is_one_undo_and_autosave_formats_with_original_encoding(cx: &mut Test
             e.replace_open = true;
             e.search.update(cx, |i, cx| i.set_text("hello".into(), cx));
             e.replacement
-                .update(cx, |i, cx| i.set_text("world".into(), cx));
+                .update(cx, |i, cx| i.set_text("planet".into(), cx));
         })
         .unwrap();
     cx.run_until_parked();
     window
         .update(cx, |e, _, cx| {
-            assert_eq!(e.matches.len(), 2);
+            assert_eq!(e.find_state.count(), 2);
             e.replace_matches(true, cx);
+            let replaced = e.input.read(cx).content.clone();
+            e.replace_matches(true, cx);
+            assert_eq!(e.input.read(cx).content, replaced);
         })
         .unwrap();
     cx.run_until_parked();
@@ -96,14 +99,15 @@ fn replace_is_one_undo_and_autosave_formats_with_original_encoding(cx: &mut Test
     window
         .update(cx, |e, w, cx| {
             assert!(!e.dirty);
+            e.input.update(cx, |i, cx| i.select_range(0..0, cx));
             e.open_search(w, cx);
-            e.find_matches(cx);
+            assert!(matches!(e.find_state, FindState::Searching { .. }));
         })
         .unwrap();
     cx.run_until_parked();
     window
         .update(cx, |e, _, cx| {
-            assert_eq!(e.matches.len(), 2);
+            assert_eq!(e.find_state.count(), 2);
             e.replace_matches(true, cx);
         })
         .unwrap();
@@ -119,7 +123,7 @@ fn replace_is_one_undo_and_autosave_formats_with_original_encoding(cx: &mut Test
     cx.run_until_parked();
     assert_eq!(
         std::fs::read_to_string(&path).unwrap(),
-        "\u{feff}{ \"word\": \"world\", \"other\": \"world\" }\r\n"
+        "\u{feff}{ \"word\": \"planet\", \"other\": \"planet\" }\r\n"
     );
     window
         .update(cx, |e, _, _| assert!(!e.dirty && !e.saving))

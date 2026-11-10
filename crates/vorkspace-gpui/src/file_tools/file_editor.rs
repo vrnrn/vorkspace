@@ -28,6 +28,7 @@ mod media;
 #[path = "file_editor/tests.rs"]
 mod parity_tests;
 mod search;
+use search::{FindIntent, FindState, SearchOption};
 mod selection;
 
 actions!(
@@ -103,19 +104,16 @@ pub(crate) struct FileEditor {
     selection: selection::Selection,
     search: Entity<Input>,
     search_open: bool,
+    find_state: FindState,
     replacement: Entity<Input>,
     replace_open: bool,
     match_case: bool,
     whole_word: bool,
     regex: bool,
-    search_invalid: bool,
-    search_task: Option<Task<()>>,
-    matches: Vec<vorkspace_editor::editor_analysis::SearchMatch>,
     autosave: Option<Task<()>>,
     autosave_enabled: bool,
     formatting: Option<Task<()>>,
     change_index: usize,
-    match_index: usize,
     document: Option<TextDocument>,
     image: Option<Arc<Image>>,
     media: Option<Entity<media::MediaPreview>>,
@@ -192,13 +190,13 @@ impl FileEditor {
                 cx.notify();
             }),
             cx.subscribe(&search, |this, _, _: &input::Changed, cx| {
-                this.find_matches(cx)
+                this.find_matches(FindIntent::SelectMatch, cx)
             }),
             cx.subscribe(&search, |this, _, _: &input::Submitted, cx| {
                 this.step_match(false, cx)
             }),
             cx.subscribe(&replacement, |this, _, _: &input::Changed, cx| {
-                this.find_matches(cx)
+                this.find_matches(FindIntent::PreserveSelection, cx)
             }),
             cx.subscribe(&replacement, |this, _, _: &input::Submitted, cx| {
                 this.replace_matches(false, cx)
@@ -268,19 +266,16 @@ impl FileEditor {
             selection: selection::Selection::default(),
             search,
             search_open: false,
+            find_state: FindState::default(),
             replacement,
             replace_open: false,
             match_case: false,
             whole_word: false,
             regex: false,
-            search_invalid: false,
-            search_task: None,
             autosave: None,
             autosave_enabled,
             formatting: None,
             change_index: 0,
-            matches: Vec::new(),
-            match_index: 0,
             document: None,
             image: None,
             media: None,
@@ -394,9 +389,7 @@ impl FileEditor {
             self.input
                 .update(cx, |input, cx| input.schedule_completion(false, cx));
         }
-        if self.search_open {
-            self.find_matches(cx);
-        }
+        self.find_matches(FindIntent::PreserveSelection, cx);
         cx.notify();
     }
     fn refresh_git(&mut self, cx: &mut Context<Self>) {
@@ -564,109 +557,6 @@ impl FileEditor {
         window.focus(&self.focus_handle(cx), cx);
         cx.notify();
     }
-    fn open_search(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if self.document.is_none() {
-            return;
-        }
-        self.preview = false;
-        if !self.search_open {
-            let input = self.input.read(cx);
-            let selected = input.content[input.selection_range()].to_owned();
-            if !selected.is_empty() && !selected.contains('\n') {
-                self.search.update(cx, |i, cx| i.set_text(selected, cx));
-            }
-        }
-        self.search_open = true;
-        window.focus(&self.search.focus_handle(cx), cx);
-        cx.notify();
-    }
-    fn find_matches(&mut self, cx: &mut Context<Self>) {
-        let source = self.input.read(cx).content.clone();
-        let query = self.search.read(cx).content.clone();
-        let replacement = self.replacement.read(cx).content.clone();
-        let (case, word, regex) = (self.match_case, self.whole_word, self.regex);
-        let previous = self
-            .matches
-            .get(self.match_index)
-            .map(|m| m.from)
-            .unwrap_or(0);
-        self.matches.clear();
-        self.search_task = Some(cx.spawn(async move |this, cx| {
-            let text = source.clone();
-            let result = cx
-                .background_executor()
-                .spawn(async move {
-                    vorkspace_editor::editor_analysis::search(
-                        &text,
-                        &query,
-                        &replacement,
-                        case,
-                        word,
-                        regex,
-                    )
-                })
-                .await;
-            let _ = this.update(cx, |this, cx| {
-                if this.input.read(cx).content != source {
-                    return;
-                }
-                match result {
-                    Ok(result) => {
-                        this.matches = result.matches;
-                        this.search_invalid = result.invalid;
-                    }
-                    Err(_) => {
-                        this.matches.clear();
-                        this.search_invalid = true;
-                    }
-                }
-                this.match_index = this
-                    .matches
-                    .iter()
-                    .position(|m| m.from >= previous)
-                    .unwrap_or(0);
-                let ranges = this.matches.iter().map(|m| m.from..m.to).collect();
-                this.input
-                    .update(cx, |i, cx| i.set_search_matches(ranges, cx));
-                if let Some(m) = this.matches.get(this.match_index) {
-                    this.input
-                        .update(cx, |i, cx| i.select_range(m.from..m.to, cx));
-                }
-                cx.notify();
-            });
-        }));
-        cx.notify();
-    }
-    fn step_match(&mut self, backwards: bool, cx: &mut Context<Self>) {
-        if self.matches.is_empty() {
-            return;
-        }
-        self.match_index = (self.match_index as isize + if backwards { -1 } else { 1 })
-            .rem_euclid(self.matches.len() as isize) as usize;
-        let m = &self.matches[self.match_index];
-        self.input
-            .update(cx, |i, cx| i.select_range(m.from..m.to, cx));
-        cx.notify();
-    }
-    fn replace_matches(&mut self, all: bool, cx: &mut Context<Self>) {
-        if self.input.read(cx).is_composing() || self.matches.is_empty() {
-            return;
-        }
-        let mut text = self.input.read(cx).content.to_string();
-        let cursor = if all {
-            for m in self.matches.iter().rev() {
-                text.replace_range(m.from..m.to, &m.insert);
-            }
-            0
-        } else {
-            let m = &self.matches[self.match_index];
-            text.replace_range(m.from..m.to, &m.insert);
-            m.from + m.insert.len()
-        };
-        self.input.update(cx, |i, cx| {
-            i.replace_bytes(0..i.content.len(), &text, cursor, cx)
-        });
-    }
     fn step_change(&mut self, backwards: bool, cx: &mut Context<Self>) {
         let changes = &self.input.read(cx).editor_analysis().changes;
         if changes.is_empty() {
@@ -684,18 +574,6 @@ impl FileEditor {
     }
     fn revert_change(&mut self, cx: &mut Context<Self>) {
         self.apply_change(false, cx);
-    }
-    fn dismiss_search(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if self.search_open {
-            self.search_open = false;
-            self.search_task = None;
-            self.input
-                .update(cx, |i, cx| i.set_search_matches(Vec::new(), cx));
-            window.focus(&self.input.focus_handle(cx), cx);
-            cx.notify();
-        } else {
-            cx.propagate();
-        }
     }
 }
 impl gpui::Render for FileEditor {
@@ -906,28 +784,13 @@ impl gpui::Render for FileEditor {
             }))
             .on_action(cx.listener(|this, _: &Format, _, cx| this.format_document(cx)))
             .on_action(cx.listener(|this, _: &MatchCase, _, cx| {
-                if this.search_open {
-                    this.match_case = !this.match_case;
-                    this.find_matches(cx);
-                } else {
-                    cx.propagate();
-                }
+                this.toggle_search_option(SearchOption::Case, cx)
             }))
             .on_action(cx.listener(|this, _: &WholeWord, _, cx| {
-                if this.search_open {
-                    this.whole_word = !this.whole_word;
-                    this.find_matches(cx);
-                } else {
-                    cx.propagate();
-                }
+                this.toggle_search_option(SearchOption::Word, cx)
             }))
             .on_action(cx.listener(|this, _: &Regex, _, cx| {
-                if this.search_open {
-                    this.regex = !this.regex;
-                    this.find_matches(cx);
-                } else {
-                    cx.propagate();
-                }
+                this.toggle_search_option(SearchOption::Regex, cx)
             }))
             .on_action(cx.listener(|this, _: &PreviousChange, _, cx| this.step_change(true, cx)))
             .on_action(cx.listener(|this, _: &NextChange, _, cx| this.step_change(false, cx)))
@@ -1208,12 +1071,17 @@ mod tests {
         cx.run_until_parked();
         window
             .update(cx, |e, w, cx| {
-                assert_eq!(e.matches.len(), 2);
+                assert_eq!(e.find_state.count(), 2);
                 e.step_match(false, cx);
-                assert_eq!(e.match_index, 1);
+                let input = e.input.read(cx);
+                let last = input.content.rfind("hello").unwrap();
+                assert_eq!(input.selection_range(), last..last + "hello".len());
                 e.dismiss_search(w, cx);
                 e.input
                     .update(cx, |i, cx| i.replace_text_in_range(None, "world", w, cx));
+                let edited = e.input.read(cx).selection_range();
+                e.step_match(false, cx);
+                assert_eq!(e.input.read(cx).selection_range(), edited);
             })
             .unwrap();
         cx.run_until_parked();
