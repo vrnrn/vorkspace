@@ -2,7 +2,7 @@
 
 Codebase Memory is an optional local code index for a project and its Git working copies. It is off by default. Open **Manage vorkspaces…**, pick the project's tab under its vorkspace, and turn on **Codebase Memory** to add **Codebase** to the sidebar. Remote projects are not supported. Opening Codebase starts or resumes that working copy's index in the background; each working copy has its own tab and index identity. The normal workspace tiling limits apply.
 
-The native page searches symbols, shows bounded source excerpts, and lists direct callers and callees. Its relationship diagram supports the existing expand and zoom controls. At narrow pane widths the symbol list and detail become separate views with a Back button. Search initially shows up to 100 matches; refine the query for more specific results. Source excerpts show up to 200 lines, relationship lists up to 50 entries, and the diagram up to 12 relationships. These are navigation previews, not a complete account of every call.
+The native page searches symbols, shows bounded source excerpts, and lists direct callers and callees. Source appears as soon as it is available while the selected symbol's relationships load. The relationship diagram supports expand and zoom. At narrow pane widths the symbol list and detail become separate views with a Back button. Search initially shows up to 100 matches; refine the query for more specific results. Source excerpts show up to 200 lines, relationship lists up to 50 entries, and the diagram up to 12 relationships. These are navigation previews, not a complete account of every call.
 
 ## Engine and storage
 
