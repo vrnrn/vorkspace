@@ -750,6 +750,7 @@ impl Bots {
             .chats
             .keys()
             .chain(self.running.values().map(|run| &run.bot))
+            .chain(self.roster.bots.iter().map(|bot| &bot.id))
             .filter(|id| shared.removed.contains_key(*id))
             .cloned()
             .collect();
@@ -776,6 +777,11 @@ impl Bots {
         }
         let shared = self.shared_roster.read(cx);
         let committed = shared.committed().expect("published Bot roster");
+        // Deletion is an explicit committed operation on the latest Bot. A
+        // failed save from a former owner cannot keep a deleted local editor.
+        self.roster
+            .bots
+            .retain(|bot| !shared.removed.contains_key(&bot.id));
         let changed = match self.roster.rebase_onto(committed) {
             Ok(changed) => changed,
             Err(error) => {
