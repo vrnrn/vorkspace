@@ -98,32 +98,18 @@ impl SettingsView {
                 .and_then(|(_, p)| p.as_ref());
             let selected = p.default_provider.as_deref() == Some(kind.id());
             let visible = !p.hidden_providers.iter().any(|id| id == kind.id());
-            // Open conversations know their account's catalog best; otherwise
-            // use the one loaded here, so providers without a session still list.
             let models = self
-                .ctx
-                .catalogs
-                .get(kind.id())
-                .cloned()
-                .or_else(|| {
-                    self.discovered_models(kind, cx).map(|models| {
-                        models
-                            .iter()
-                            .map(|model| {
-                                (
-                                    model.id.clone(),
-                                    crate::pickers::model_display_name(
-                                        kind,
-                                        &model.id,
-                                        &model.name,
-                                    )
-                                    .to_string(),
-                                )
-                            })
-                            .collect()
-                    })
+                .discovered_models(kind, cx)
+                .unwrap_or_default()
+                .iter()
+                .map(|model| {
+                    (
+                        model.id.clone(),
+                        crate::pickers::model_display_name(kind, &model.id, &model.name)
+                            .to_string(),
+                    )
                 })
-                .unwrap_or_default();
+                .collect::<Vec<_>>();
             let selected_model = p
                 .default_models
                 .get(kind.id())

@@ -230,9 +230,11 @@ fn models_menu_hides_and_restores_individual_models(cx: &mut TestAppContext) {
     window
         .update(cx, |view, _, cx| {
             view.discovery.binaries = vec![(Kind::Claude, Some("/bin/claude".into()))];
-            view.ctx.catalogs.insert(
-                "claude".into(),
-                vec![("a".into(), "Alpha".into()), ("b".into(), "Beta".into())],
+            let profile = view.catalog_profile(Kind::Claude, cx);
+            let generation = vorkspace_core::catalog::generation(Kind::Claude, &profile);
+            view.discovered_catalogs.insert(
+                (Kind::Claude, profile, generation),
+                vec![catalog_model("a", "Alpha"), catalog_model("b", "Beta")].into(),
             );
             cx.notify();
         })
@@ -275,10 +277,12 @@ fn models_menu_scrolls_to_lower_rows(cx: &mut TestAppContext) {
     window
         .update(cx, |view, _, cx| {
             view.discovery.binaries = vec![(Kind::Claude, Some("/bin/claude".into()))];
-            view.ctx.catalogs.insert(
-                "claude".into(),
+            let profile = view.catalog_profile(Kind::Claude, cx);
+            let generation = vorkspace_core::catalog::generation(Kind::Claude, &profile);
+            view.discovered_catalogs.insert(
+                (Kind::Claude, profile, generation),
                 (0..30)
-                    .map(|n| (format!("model-{n}"), format!("Model {n}")))
+                    .map(|n| catalog_model(&format!("model-{n}"), &format!("Model {n}")))
                     .collect(),
             );
             cx.notify();

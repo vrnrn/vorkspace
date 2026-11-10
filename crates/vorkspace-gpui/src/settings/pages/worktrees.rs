@@ -87,9 +87,9 @@ impl SettingsView {
                         let path = std::path::PathBuf::from(&t.path);
                         let count = self
                             .ctx
-                            .sessions
+                            .session_checkouts
                             .iter()
-                            .filter(|(_, p, _)| {
+                            .filter(|p| {
                                 vorkspace_core::files::is_equal_or_inside(p, &t.path)
                             })
                             .count();

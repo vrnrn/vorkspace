@@ -14,65 +14,22 @@ pub(crate) enum Removal {
 pub(crate) type RemovalDone = Box<dyn FnOnce(&mut Shell, Result<(), String>, &mut Context<Shell>)>;
 
 impl Shell {
-    fn settings_context(&self, cx: &App) -> SettingsContext {
-        let mut archived: Vec<_> = self
-            .order
-            .iter()
-            .map(|&id| self.session_metadata(id, cx).summary)
-            .filter(|s| s.archived && s.cwd == self.workspace.project)
-            .map(|s| ArchivedSession {
-                id: s.id,
-                title: s.title.clone(),
-                provider: s.provider.clone(),
-                updated_at: s.updated_at,
-            })
-            .collect();
-        archived.sort_by_key(|s| std::cmp::Reverse(s.updated_at));
-        let mut catalogs = HashMap::new();
-        let active = self
-            .bots
-            .as_ref()
-            .filter(|_| self.bot_active(cx))
-            .and_then(|m| m.read(cx).chat())
-            .or_else(|| {
-                self.workspace
-                    .active
-                    .and_then(|id| self.workspace.session_for_pane(id))
-                    .and_then(|id| self.sessions.get(&id))
-                    .cloned()
-            });
-        let mut profiles: HashMap<_, _> = Kind::ALL
-            .into_iter()
-            .map(|kind| {
-                (
-                    kind,
-                    crate::accounts::get(cx)
-                        .map(|center| center.read(cx).selected(kind, &self.workspace.project).id)
-                        .unwrap_or_else(|| vorkspace_core::accounts::DEFAULT.into()),
-                )
-            })
-            .collect();
-        if let Some(active) = &active {
-            let v = active.read(cx);
-            profiles.insert(
-                Kind::from_id(&v.summary.provider),
-                v.settings.account.id.clone(),
-            );
-        }
-        for session in active.iter().chain(self.sessions.values()) {
-            let session = session.read(cx);
-            if profiles.get(&Kind::from_id(&session.summary.provider))
-                != Some(&session.settings.account.id)
-            {
-                continue;
-            }
-            if catalogs.contains_key(&session.summary.provider) {
-                continue;
-            }
-            let models = session.settings_models();
-            if !models.is_empty() {
-                catalogs.insert(session.summary.provider.clone(), models);
-            }
+    fn settings_context(&self, section: Section, cx: &App) -> SettingsContext {
+        let mut archived = Vec::new();
+        if section == Section::Archive {
+            archived = self
+                .order
+                .iter()
+                .filter_map(|&id| self.session_summary(id, cx))
+                .filter(|s| s.archived && s.cwd == self.workspace.project)
+                .map(|s| ArchivedSession {
+                    id: s.id,
+                    title: s.title.clone(),
+                    provider: s.provider.clone(),
+                    updated_at: s.updated_at,
+                })
+                .collect();
+            archived.sort_by_key(|s| std::cmp::Reverse(s.updated_at));
         }
         SettingsContext {
             vox_error: crate::vox::shortcut_error(cx),
@@ -140,17 +97,15 @@ impl Shell {
                 .as_ref()
                 .map(|inbox| inbox.read(cx).hidden_jira_projects())
                 .unwrap_or_default(),
-            sessions: self
-                .order
-                .iter()
-                .map(|&id| {
-                    (
-                        id,
-                        self.session_working_copy(id, cx).to_owned(),
-                        self.session_metadata(id, cx).busy,
-                    )
-                })
-                .collect(),
+            session_checkouts: if section == Section::Worktrees {
+                self.order
+                    .iter()
+                    .filter_map(|&id| self.saved_session_scope(id, cx))
+                    .map(|(_, checkout)| checkout.to_owned())
+                    .collect()
+            } else {
+                Vec::new()
+            },
             bots: self
                 .bots
                 .as_ref()
@@ -172,11 +127,10 @@ impl Shell {
                         .collect()
                 })
                 .unwrap_or_default(),
-            catalogs,
             cwd: self.workspace.project.clone(),
             project_label: self.project_label(&self.workspace.project),
             archived,
-            archived_projects: {
+            archived_projects: if section == Section::Archive {
                 let mut paths: Vec<_> = self
                     .workspace
                     .project_archive
@@ -186,6 +140,8 @@ impl Shell {
                     .collect();
                 paths.sort();
                 paths
+            } else {
+                Vec::new()
             },
             projects: self
                 .workspace
@@ -215,7 +171,7 @@ impl Shell {
         for notes in self.note_tabs.values() {
             notes.update(cx, |notes, cx| notes.set_active(false, cx));
         }
-        let context = self.settings_context(cx);
+        let context = self.settings_context(section, cx);
         let prefs = self.workspace.preferences.clone();
         let view = cx.new(|cx| SettingsView::new(section, prefs, context, cx));
         self.settings_events = Some(cx.subscribe_in(
@@ -435,12 +391,13 @@ impl Shell {
     pub(super) fn select_settings(&mut self, section: Section, cx: &mut Context<Self>) {
         if let Some(view) = &self.settings {
             view.update(cx, |v, cx| v.select_section(section, cx));
+            self.sync_settings(cx);
         }
         this_update(self, cx);
     }
     pub(super) fn sync_settings(&mut self, cx: &mut Context<Self>) {
         if let Some(view) = self.settings.clone() {
-            let context = self.settings_context(cx);
+            let context = self.settings_context(view.read(cx).section(), cx);
             let prefs = self.workspace.preferences.clone();
             view.update(cx, |v, cx| {
                 v.set_context(context, cx);
@@ -649,8 +606,11 @@ impl Shell {
                     .read(cx)
                     .rows
                     .keys()
-                    .filter(|id| is_resolved_inside(this.session_working_copy(**id, cx), &path))
                     .copied()
+                    .filter(|id| {
+                        this.saved_session_scope(*id, cx)
+                            .is_some_and(|(_, checkout)| is_resolved_inside(checkout, &path))
+                    })
                     .collect::<Vec<_>>();
                 if ids.iter().any(|id| {
                     this.sessions

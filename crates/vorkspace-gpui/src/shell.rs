@@ -1991,16 +1991,17 @@ impl Shell {
         let Some(tab) = self.workspace.active_tab() else {
             return;
         };
-        let cwd = &self.session_metadata(id, cx).summary.cwd;
-        let working_copy = vorkspace_core::files::path_key(self.session_working_copy(id, cx));
+        let Some((cwd, checkout)) = self.saved_session_scope(id, cx) else {
+            return;
+        };
+        let working_copy = vorkspace_core::files::path_key(checkout);
         let blank = |pane: i64| {
             if self.workspace.review_owners.contains_key(&pane) || !self.has_session(pane, cx) {
                 return false;
             }
             let s = self.session_metadata(pane, cx);
-            &s.summary.cwd == cwd
-                && vorkspace_core::files::path_key(self.session_working_copy(pane, cx))
-                    == working_copy
+            s.summary.cwd == cwd
+                && vorkspace_core::files::path_key(self.pane_working_copy(pane, cx)) == working_copy
                 && !s.summary.has_messages
                 && !s.busy
                 && !s.has_saved_draft()
@@ -2281,12 +2282,14 @@ impl Shell {
         {
             return;
         }
+        let checkout = vorkspace_core::files::path_key(self.working_copy());
         if let Some(id) = self.order.iter().copied().find(|id| {
             let s = self.session_metadata(*id, cx);
             self.session_available_here(*id, cx)
                 && s.summary.cwd == self.workspace.project
-                && vorkspace_core::files::path_key(self.session_working_copy(*id, cx))
-                    == vorkspace_core::files::path_key(self.working_copy())
+                && self
+                    .saved_session_scope(*id, cx)
+                    .is_some_and(|(_, path)| vorkspace_core::files::path_key(path) == checkout)
                 && !s.summary.archived
                 && !s.summary.has_messages
                 && !s.busy

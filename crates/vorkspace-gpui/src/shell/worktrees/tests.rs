@@ -57,7 +57,7 @@ fn splitting_reopened_notes_uses_the_selected_project_working_copy(cx: &mut Test
                     .as_deref(),
                 Some(checkout)
             );
-            assert_eq!(shell.session_working_copy(id, cx), checkout);
+            assert_eq!(shell.pane_working_copy(id, cx), checkout);
             assert_eq!(shell.workspace.layout(notes).leaf_ids(), [notes, id]);
             assert_eq!(shell.workspace.tab_workspaces[&notes], checkout);
         })
@@ -132,7 +132,7 @@ fn terminal_split_keeps_its_launch_scope_and_rejects_a_foreign_layout(cx: &mut T
             );
             assert_eq!(shell.workspace.project, project);
             assert_eq!(shell.working_copy(), checkout);
-            assert_eq!(shell.session_working_copy(id, cx), checkout);
+            assert_eq!(shell.pane_working_copy(id, cx), checkout);
             assert_eq!(shell.workspace.layout(terminal).leaf_ids(), [terminal, id]);
         })
         .unwrap();

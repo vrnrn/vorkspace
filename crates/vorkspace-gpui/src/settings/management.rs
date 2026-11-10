@@ -595,11 +595,9 @@ impl SettingsView {
             Target::DeleteTree(tree) => {
                 let count = self
                     .ctx
-                    .sessions
+                    .session_checkouts
                     .iter()
-                    .filter(|(_, p, _)| {
-                        vorkspace_core::files::is_equal_or_inside(p, &tree.tree.path)
-                    })
+                    .filter(|p| vorkspace_core::files::is_equal_or_inside(p, &tree.tree.path))
                     .count();
                 rows.push(note(
                     "This permanently deletes the working copy and everything inside it.",

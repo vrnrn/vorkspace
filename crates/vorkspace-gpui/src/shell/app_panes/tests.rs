@@ -373,7 +373,7 @@ fn reopening_a_mixed_app_layout_restores_scope_and_cli_rejects_foreign_siblings(
             assert_eq!(shell.workspace.active, Some(notes));
             assert_eq!(shell.workspace.project, project);
             assert_eq!(shell.working_copy(), worktree);
-            assert_eq!(shell.session_working_copy(notes, cx), worktree);
+            assert_eq!(shell.pane_working_copy(notes, cx), worktree);
             shell.record_worktree_session(notes, cx);
             assert_eq!(shell.workspace.tab_workspaces[&session], worktree);
             assert!(

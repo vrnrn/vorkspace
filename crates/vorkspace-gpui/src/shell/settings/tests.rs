@@ -3,6 +3,54 @@ use crate::shell::tests::window;
 use gpui::TestAppContext;
 
 #[gpui::test]
+fn settings_projects_only_the_visible_page_and_reads_saved_checkout_identity(
+    cx: &mut TestAppContext,
+) {
+    let (window, other, saved) = window(cx);
+    window
+        .update(cx, |shell, _, cx| {
+            let project = shell.session_summary(saved, cx).unwrap().cwd.clone();
+            shell.workspace.project = project.clone();
+            let checkout = "/work/archived-checkout";
+            shell.edit_session_record(saved, cx, |row| {
+                row.checkout = Some(Some(checkout.into()));
+                row.summary.archived = true;
+            });
+            // A detached pane can have a different owner from a saved session
+            // lookup. Projection and removal resolve the session directly.
+            shell.workspace.review_owners.insert(saved, other);
+            assert_eq!(
+                shell.saved_session_scope(saved, cx),
+                Some((project.as_str(), checkout))
+            );
+            assert_ne!(shell.pane_working_copy(saved, cx), checkout);
+            shell.workspace.review_owners.remove(&saved);
+
+            let general = shell.settings_context(Section::General, cx);
+            assert!(general.archived.is_empty() && general.session_checkouts.is_empty());
+            let archive = shell.settings_context(Section::Archive, cx);
+            assert_eq!(
+                archive
+                    .archived
+                    .iter()
+                    .map(|session| session.id)
+                    .collect::<Vec<_>>(),
+                [saved]
+            );
+            assert!(archive.session_checkouts.is_empty());
+            let worktrees = shell.settings_context(Section::Worktrees, cx);
+            assert!(worktrees.archived.is_empty());
+            assert!(
+                worktrees
+                    .session_checkouts
+                    .iter()
+                    .any(|path| path == checkout)
+            );
+        })
+        .unwrap();
+}
+
+#[gpui::test]
 fn project_archive_leaves_the_selected_project_and_refuses_running_work(cx: &mut TestAppContext) {
     let (window, a, _) = window(cx);
     window

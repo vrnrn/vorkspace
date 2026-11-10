@@ -277,9 +277,11 @@ impl SettingsView {
         // Keep model capabilities with the account-scoped catalog that supplied
         // the names. Never invent effort levels for an unknown/custom model.
         let models = kind.and_then(|kind| self.discovered_models(kind, cx));
-        let info = models.and_then(|models| models.iter().find(|item| item.id == model));
+        let info = models
+            .as_deref()
+            .and_then(|models| models.iter().find(|item| item.id == model));
         let mut choices = vec![(String::new(), "Choose a model".into(), None)];
-        if let (Some(kind), Some(models)) = (kind, models) {
+        if let (Some(kind), Some(models)) = (kind, models.as_deref()) {
             choices.extend(models.iter().map(|model| {
                 (
                     model.id.clone(),
@@ -287,12 +289,6 @@ impl SettingsView {
                     None,
                 )
             }));
-        } else if let Some(models) = self.ctx.catalogs.get(&selected) {
-            choices.extend(
-                models
-                    .iter()
-                    .map(|(id, name)| (id.clone(), name.clone().into(), None)),
-            );
         }
         if !model.is_empty() && !choices.iter().any(|(id, _, _)| *id == model) {
             choices.push((model.clone(), model.clone().into(), None));

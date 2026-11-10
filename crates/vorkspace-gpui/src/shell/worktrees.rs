@@ -10,9 +10,28 @@ impl Shell {
             .get(&self.workspace.project)
             .map_or(&self.workspace.project, |focus| &focus.path)
     }
-    pub(super) fn session_working_copy<'a>(&'a self, id: i64, cx: &'a App) -> &'a str {
+    pub(super) fn pane_working_copy<'a>(&'a self, id: i64, cx: &'a App) -> &'a str {
         self.pane_execution_scope(id, cx)
             .map_or_else(|| self.working_copy(), |(_, worktree)| worktree)
+    }
+
+    /// Resolve a saved session directly. A pane can point at another session
+    /// (such as detached review) and is never an authority for saved checkout membership.
+    pub(super) fn saved_session_scope<'a>(
+        &'a self,
+        id: i64,
+        cx: &'a App,
+    ) -> Option<(&'a str, &'a str)> {
+        let record = self.session_record(id, cx);
+        let live = self.sessions.get(&id).map(|view| view.read(cx));
+        let project = live
+            .map(|view| view.summary.cwd.as_str())
+            .or_else(|| record.map(|row| row.summary.cwd.as_str()))?;
+        let checkout = record
+            .and_then(SessionRecord::worktree)
+            .or_else(|| live.and_then(|view| view.settings.worktree_cwd.as_deref()))
+            .unwrap_or(project);
+        Some((project, checkout))
     }
 
     /// A bound leaf supplies the project's identity when restoring a layout.
@@ -22,18 +41,7 @@ impl Shell {
         cx: &'a App,
     ) -> Option<(&'a str, &'a str)> {
         if let Some(id) = self.workspace.session_for_pane(pane) {
-            self.session_summary(id, cx)?;
-            let project = self.session_metadata(id, cx).summary.cwd.as_str();
-            let worktree = self
-                .session_record(id, cx)
-                .and_then(SessionRecord::worktree)
-                .or_else(|| {
-                    self.sessions
-                        .get(&id)
-                        .and_then(|view| view.read(cx).settings.worktree_cwd.as_deref())
-                })
-                .unwrap_or(project);
-            return Some((project, worktree));
+            return self.saved_session_scope(id, cx);
         }
         self.workspace
             .app_panes
@@ -65,7 +73,7 @@ impl Shell {
             .workspace
             .tab_of(id)
             .and_then(|tab| self.workspace.tab_workspaces.get(&tab))
-            .map_or_else(|| self.session_working_copy(id, cx), String::as_str);
+            .map_or_else(|| self.pane_working_copy(id, cx), String::as_str);
         path_key(scope) == path_key(self.working_copy())
     }
     pub(super) fn record_worktree_session(&mut self, id: i64, cx: &App) {
@@ -117,7 +125,7 @@ impl Shell {
                         (session.summary.cwd == project).then(|| TabSession {
                             id,
                             tab: *tab,
-                            cwd: self.session_working_copy(id, cx).to_owned(),
+                            cwd: self.pane_working_copy(id, cx).to_owned(),
                             workspace: self.workspace.tab_workspaces.get(tab).cloned(),
                             busy: session.busy,
                         })

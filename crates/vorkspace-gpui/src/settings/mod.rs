@@ -56,9 +56,8 @@ pub(crate) struct SettingsContext {
     pub archived_projects: Vec<String>,
     /// Projects the Worktrees, Providers and Inbox pages offer.
     pub projects: Vec<(String, String)>,
-    pub sessions: Vec<(i64, String, bool)>,
+    pub session_checkouts: Vec<String>,
     pub quick_error: Option<String>,
-    pub catalogs: HashMap<String, Vec<(String, String)>>,
     pub inbox_connections: HashMap<String, (bool, String)>,
     pub inbox_connection_revision: u64,
     pub inbox_connectors: vorkspace_core::inbox::Connectors,
@@ -83,9 +82,8 @@ impl PartialEq for SettingsContext {
             && self.archived == other.archived
             && self.archived_projects == other.archived_projects
             && self.projects == other.projects
-            && self.sessions == other.sessions
+            && self.session_checkouts == other.session_checkouts
             && self.quick_error == other.quick_error
-            && self.catalogs == other.catalogs
             && self.inbox_connections == other.inbox_connections
             && self.inbox_connection_revision == other.inbox_connection_revision
             && self.inbox_connectors == other.inbox_connectors
@@ -230,8 +228,8 @@ pub(crate) struct SettingsView {
     select_scroll: ScrollHandle,
     select_focus: FocusHandle,
     select_anchors: RefCell<HashMap<&'static str, AnchorSlot>>,
-    /// Provider catalogs loaded for this page, so a provider without an open
-    /// conversation still lists its models.
+    /// The current account's last displayed rows, including catalogs too large
+    /// for the shared cache.
     discovered_catalogs: HashMap<
         (
             vorkspace_core::provider::Kind,
@@ -574,12 +572,15 @@ impl SettingsView {
         &self,
         kind: vorkspace_core::provider::Kind,
         cx: &App,
-    ) -> Option<&[vorkspace_core::catalog::Model]> {
+    ) -> Option<vorkspace_core::catalog::ModelRows> {
+        use vorkspace_core::catalog;
         let profile = self.catalog_profile(kind, cx);
-        let generation = vorkspace_core::catalog::generation(kind, &profile);
-        self.discovered_catalogs
-            .get(&(kind, profile, generation))
-            .map(AsRef::as_ref)
+        let generation = catalog::generation(kind, &profile);
+        catalog::cached_models_for(kind, &profile).or_else(|| {
+            self.discovered_catalogs
+                .get(&(kind, profile, generation))
+                .cloned()
+        })
     }
     /// Load every installed provider's model list off the render path.
     fn load_catalogs(&mut self, force: bool, cx: &mut Context<Self>) {
@@ -587,14 +588,14 @@ impl SettingsView {
             let profile = self.catalog_profile(kind, cx);
             let generation = vorkspace_core::catalog::generation(kind, &profile);
             let key = (kind, profile.clone(), generation);
+            self.discovered_catalogs
+                .retain(|old, _| old.0 != kind || old == &key);
             if path.is_none()
                 || self.catalogs_loading.contains(&key)
                 || (!force && self.discovered_catalogs.contains_key(&key))
             {
                 continue;
             }
-            self.discovered_catalogs
-                .retain(|(k, p, g), _| *k != kind || *p != profile || *g == generation);
             self.catalogs_loading.push(key.clone());
             let work = cx
                 .background_executor()
@@ -604,6 +605,7 @@ impl SettingsView {
                 let _ = this.update(cx, |this, cx| {
                     this.catalogs_loading.retain(|loading| *loading != key);
                     if let Ok(models) = result
+                        && this.catalog_profile(key.0, cx) == key.1
                         && vorkspace_core::catalog::generation(key.0, &key.1) == key.2
                     {
                         this.discovered_catalogs.insert(key, models);
@@ -616,6 +618,10 @@ impl SettingsView {
     }
     pub(crate) fn set_context(&mut self, ctx: SettingsContext, cx: &mut Context<Self>) {
         if self.ctx != ctx {
+            let navigation_changed = ["github", "gitlab", "jira"].into_iter().any(|provider| {
+                self.ctx.inbox_connectors.enabled(provider)
+                    != ctx.inbox_connectors.enabled(provider)
+            });
             if self.ctx.inbox_connection_revision != ctx.inbox_connection_revision
                 || self.ctx.inbox_connectors != ctx.inbox_connectors
             {
@@ -627,8 +633,10 @@ impl SettingsView {
                 _ => true,
             };
             self.ctx = ctx;
-            self.select_section(self.section, cx);
-            self.search_active = 0;
+            if navigation_changed {
+                self.select_section(self.section, cx);
+                self.search_active = 0;
+            }
             if remote_changed {
                 self.leave_connections(cx);
                 self.watch_connections(cx);
@@ -638,6 +646,8 @@ impl SettingsView {
     }
     pub(crate) fn set_preferences(&mut self, prefs: &Preferences, cx: &mut Context<Self>) {
         if &self.prefs != prefs {
+            let navigation_changed =
+                self.prefs.notes != prefs.notes || self.prefs.todos != prefs.todos;
             if self.dictation_words_input.read(cx).content.as_ref() == self.prefs.dictation_words
                 && self.prefs.dictation_words != prefs.dictation_words
             {
@@ -646,8 +656,10 @@ impl SettingsView {
                 });
             }
             self.prefs = prefs.clone();
-            self.select_section(self.section, cx);
-            self.search_active = 0;
+            if navigation_changed {
+                self.select_section(self.section, cx);
+                self.search_active = 0;
+            }
             self.notification_deadline(cx);
             cx.notify();
         }
@@ -674,6 +686,10 @@ impl SettingsView {
             .filter(|result| self.section_available(result.section))
             .collect()
     }
+    pub(crate) fn section(&self) -> Section {
+        self.section
+    }
+
     pub(crate) fn select_section(&mut self, section: Section, cx: &mut Context<Self>) {
         let section = if self.section_available(section) {
             section
