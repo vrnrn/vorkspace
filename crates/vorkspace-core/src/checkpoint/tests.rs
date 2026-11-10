@@ -42,6 +42,24 @@ impl Drop for Fixture {
 }
 
 #[test]
+fn captures_structured_edits_only_for_the_expected_active_turn() {
+    let f = Fixture::new();
+    f.store.begin_turn("session", f.cwd(), "first").unwrap();
+    f.store.finish_turn("session", f.cwd(), "first").unwrap();
+    f.store.begin_turn("session", f.cwd(), "second").unwrap();
+    f.store
+        .capture_current("session", f.cwd(), "first", &["delete.txt".into()])
+        .unwrap();
+    f.store
+        .capture_current("session", f.cwd(), "second", &["a.txt".into()])
+        .unwrap();
+    let path = f.store.session_dir("session");
+    let active = read_review(&path).unwrap().unwrap().active.unwrap();
+    assert_eq!(active.edited, BTreeSet::from(["a.txt".into()]));
+    assert_eq!(file_mode(&path.join("turn-review.json")), Some(0o600));
+}
+
+#[test]
 fn records_shell_changes_and_preserves_the_index_head_and_saved_result() {
     let f = Fixture::new();
     f.write("a.txt", "user change\n");

@@ -40,6 +40,8 @@ The app prepares a few attachment thumbnails at a time across all windows. Openi
 
 The Changes panel and title bar read from the same Git snapshot. On your Mac, the app listens for file changes in an active checkout and still does a periodic check. Remote checkouts and folders the Mac cannot watch use periodic checks. Two windows on the same checkout share a commit graph, and each window keeps its own search and selection. If you switch checkouts while writing a commit message, each checkout keeps its own draft while Changes is open. A confirmation belongs to the checkout and branch where you opened it.
 
+When you open a file from a saved turn, Review shows that file as it was before and after the turn. Later edits stay separate.
+
 Open **View → Running Work** to see the app’s local agents. A Stop click is tied to the reply shown in the list, even from another window. The app waits for a reply's final save before starting another reply in the same conversation.
 
 When a Bot receives a message, the app sends that message's attachments and options with its own reply. Your composer and chat settings stay ready for your next message.

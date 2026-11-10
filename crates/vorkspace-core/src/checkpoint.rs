@@ -85,13 +85,23 @@ impl Store {
         self.root.join(session_id)
     }
 
-    /// Successful structured edits by this session's running turn.
+    /// Recover edit evidence for an interrupted turn before admitting its successor.
     pub fn capture(&self, session_id: &str, cwd: &str, paths: &[String]) -> Result<(), String> {
         validate_id(session_id, "session")?;
-        if paths.is_empty() {
-            return Ok(());
-        }
-        self.capture_turn_paths(session_id, cwd, paths).map(|_| ())
+        self.capture_turn_paths(session_id, cwd, None, paths)
+    }
+
+    /// Attach successful structured edits to their admitted turn.
+    pub fn capture_current(
+        &self,
+        session_id: &str,
+        cwd: &str,
+        id: &str,
+        paths: &[String],
+    ) -> Result<(), String> {
+        validate_id(session_id, "session")?;
+        validate_id(id, "turn")?;
+        self.capture_turn_paths(session_id, cwd, Some(id), paths)
     }
 
     pub fn status(&self, session_id: &str, cwd: &str) -> Result<CheckpointStatus, String> {
@@ -305,14 +315,21 @@ impl Store {
         &self,
         session_id: &str,
         cwd: &str,
+        expected: Option<&str>,
         paths: &[String],
-    ) -> Result<bool, String> {
+    ) -> Result<(), String> {
+        if paths.is_empty() {
+            return Ok(());
+        }
         let Some(mut review) = self.matching_turn_review(session_id, cwd)? else {
-            return Ok(false);
+            return Ok(());
         };
-        let Some(active) = review.active.as_mut() else {
-            // Late tool events must not change the last completed turn.
-            return Ok(true);
+        let Some(active) = review
+            .active
+            .as_mut()
+            .filter(|turn| expected.is_none_or(|id| turn.id == id))
+        else {
+            return Ok(());
         };
         let workspace = project_root(cwd)?;
         let mut dirty = false;
@@ -324,7 +341,7 @@ impl Store {
         if dirty {
             write_review(&self.session_dir(session_id), &review)?;
         }
-        Ok(true)
+        Ok(())
     }
 
     /// Repair the interrupted-turn state left by versions that replaced its
@@ -346,7 +363,7 @@ impl Store {
         }
         let turn = completed_turn(&review)?;
         let root = Path::new(&review.cwd);
-        if !turn.edited.is_empty() || !changes(root, turn)?.is_empty() {
+        if !turn.edited.is_empty() || !changes(root, turn, ".")?.is_empty() {
             return Ok(());
         }
         let workspace = project_root(cwd)?;
@@ -397,7 +414,7 @@ impl Store {
             // remains available, but recovery must never make Undo available.
             recovered.head = None;
             recovered.shared = true;
-            if !changes(root, &recovered)?
+            if !changes(root, &recovered, ".")?
                 .iter()
                 .any(|change| edited.contains(&change.relative))
             {
@@ -475,7 +492,7 @@ impl Store {
         let head = run_git(&root, &["rev-parse", "--verify", "HEAD"])
             .ok()
             .map(|bytes| String::from_utf8_lossy(&bytes).trim().to_string());
-        let recorded = changes(&root, turn)?;
+        let mut recorded = changes(&root, turn, ".")?;
         let resolved = resolved_turn_paths(&root, turn, &recorded, head.as_deref())?;
         if !resolved.is_empty() {
             // Dismiss accepted work durably so later edits cannot resurrect
@@ -486,12 +503,16 @@ impl Store {
             }
         }
         let turn = completed_turn(&review)?;
-        let can_restore =
-            !turn.shared && head == turn.head && self.active_turns(&root, session_id)?.is_empty();
+        recorded.retain(|change| {
+            !turn.dismissed.contains(&change.relative)
+                && (!turn.shared || turn.edited.contains(&change.relative))
+        });
+        let can_restore = !recorded.is_empty()
+            && !turn.shared
+            && head == turn.head
+            && self.active_turns(&root, session_id)?.is_empty();
         let files = recorded
             .into_iter()
-            .filter(|change| !turn.dismissed.contains(&change.relative))
-            .filter(|change| !turn.shared || turn.edited.contains(&change.relative))
             .map(|change| {
                 let undoable = can_restore && restorable(&root, &change);
                 CheckpointFile {
@@ -520,7 +541,7 @@ impl Store {
         let turn = completed_turn(&review)?;
         let root = Path::new(&review.cwd);
         let relative = resolve_turn_path(relative)?;
-        let change = changes(root, turn)?
+        let change = changes(root, turn, &relative)?
             .into_iter()
             .find(|change| change.relative == relative)
             .ok_or("This file did not change during the recorded turn")?;
@@ -558,7 +579,7 @@ impl Store {
         let root = Path::new(&review.cwd);
         let dismissed = match relative {
             Some(relative) => vec![resolve_turn_path(relative)?],
-            None => changes(root, recorded)?
+            None => changes(root, recorded, ".")?
                 .into_iter()
                 .map(|change| change.relative)
                 .collect(),
@@ -594,7 +615,7 @@ impl Store {
         }
         let turn = completed_turn(&review)?;
         let selected: HashSet<_> = selected.iter().map(|file| file.relative.as_str()).collect();
-        let changes: Vec<_> = changes(root, turn)?
+        let changes: Vec<_> = changes(root, turn, ".")?
             .into_iter()
             .filter(|change| selected.contains(change.relative.as_str()))
             .collect();
@@ -795,14 +816,6 @@ fn run_git(root: &Path, args: &[&str]) -> Result<Vec<u8>, String> {
     checked_output(&mut git_command(root, args))
 }
 
-struct PrivateIndex(PathBuf);
-impl Drop for PrivateIndex {
-    fn drop(&mut self) {
-        let _ = std::fs::remove_file(&self.0);
-        let _ = std::fs::remove_file(self.0.with_extension("lock"));
-    }
-}
-
 fn capture_workspace(root: &Path, reference: &str) -> Result<String, String> {
     if run_git(root, &["config", "--bool", "core.sparseCheckout"])
         .ok()
@@ -810,12 +823,15 @@ fn capture_workspace(root: &Path, reference: &str) -> Result<String, String> {
     {
         return Err("Workspace checkpoints are unavailable for sparse checkouts".into());
     }
-    let index =
-        PrivateIndex(std::env::temp_dir().join(format!("vorkspace-checkpoint-{}", unique_id())));
+    let index_dir = tempfile::Builder::new()
+        .prefix("vorkspace-checkpoint-")
+        .tempdir()
+        .map_err(|error| error.to_string())?;
+    let index = index_dir.path().join("index");
     let run = |args: &[&str]| {
         checked_output(
             git_command(root, args)
-                .env("GIT_INDEX_FILE", &index.0)
+                .env("GIT_INDEX_FILE", &index)
                 .env("GIT_AUTHOR_NAME", "vorkspace")
                 .env("GIT_AUTHOR_EMAIL", "checkpoint@vorkspace.local")
                 .env("GIT_COMMITTER_NAME", "vorkspace")
@@ -855,7 +871,7 @@ fn capture_workspace(root: &Path, reference: &str) -> Result<String, String> {
     Ok(commit.trim().to_string())
 }
 
-fn changes(root: &Path, turn: &RecordedTurn) -> Result<Vec<Change>, String> {
+fn changes(root: &Path, turn: &RecordedTurn, pathspec: &str) -> Result<Vec<Change>, String> {
     let before = turn.before.as_deref().ok_or("Missing turn baseline")?;
     let after = turn.after.as_deref().ok_or("Missing turn result")?;
     let args = [
@@ -869,11 +885,15 @@ fn changes(root: &Path, turn: &RecordedTurn) -> Result<Vec<Change>, String> {
     ];
     let raw = run_git(
         root,
-        &[args.as_slice(), &["--raw", before, after, "--", "."]].concat(),
+        &[args.as_slice(), &["--raw", before, after, "--", pathspec]].concat(),
     )?;
     let numstat = run_git(
         root,
-        &[args.as_slice(), &["--numstat", before, after, "--", "."]].concat(),
+        &[
+            args.as_slice(),
+            &["--numstat", before, after, "--", pathspec],
+        ]
+        .concat(),
     )?;
     let mut stats = BTreeMap::new();
     for row in numstat
@@ -1064,13 +1084,11 @@ fn write_review(dir: &Path, review: &TurnReview) -> Result<(), String> {
 fn write_json(path: &Path, value: &impl Serialize) -> Result<(), String> {
     let parent = path.parent().ok_or("Invalid checkpoint metadata path")?;
     std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
-    let tmp = path.with_extension("json.tmp");
-    let mut file = std::fs::File::create(&tmp).map_err(|e| e.to_string())?;
+    let mut file = tempfile::NamedTempFile::new_in(parent).map_err(|e| e.to_string())?;
     file.write_all(&serde_json::to_vec(value).map_err(|e| e.to_string())?)
         .map_err(|e| e.to_string())?;
-    file.sync_all().map_err(|e| e.to_string())?;
-    drop(file);
-    std::fs::rename(tmp, path).map_err(|e| e.to_string())?;
+    file.as_file().sync_all().map_err(|e| e.to_string())?;
+    file.persist(path).map_err(|e| e.to_string())?;
     std::fs::File::open(parent)
         .and_then(|dir| dir.sync_all())
         .map_err(|e| e.to_string())?;

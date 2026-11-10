@@ -1020,7 +1020,12 @@ fn run_turn_using(
         // The provider has exited, so this snapshot is the turn's settled result.
         let session = summary.id.to_string();
         let _ = store.exclusive(|store| {
-            store.capture(&session, cwd, &edited_paths(&transcript.rows[turn_start..]))?;
+            store.capture_current(
+                &session,
+                cwd,
+                id,
+                &edited_paths(&transcript.rows[turn_start..]),
+            )?;
             store.finish_turn(&session, cwd, id)
         });
     }
