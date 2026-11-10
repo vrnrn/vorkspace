@@ -2,7 +2,6 @@
 //! sessionWorkItem.ts's URL parsing, without their storage.
 use chrono::{Datelike, Duration, NaiveDateTime, NaiveTime};
 use serde::{Deserialize, Serialize};
-use std::collections::HashSet;
 
 /// sessionFolders.ts's `SessionFolder`.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -137,114 +136,12 @@ impl Groups {
             }
         }
     }
-    /// Ungroup: the folder goes and its sessions return to the list.
-    pub fn dissolve(&mut self, folder: &str) {
-        self.folders.retain(|f| f.id != folder);
-    }
-    pub fn toggle_folder(&mut self, folder: &str) {
-        if let Some(f) = self.folder_mut(folder) {
-            f.collapsed = !f.collapsed;
-        }
-    }
     pub fn set_color(&mut self, folder: &str, color_index: Option<usize>) {
         if let Some(f) = self.folder_mut(folder) {
             f.color_index = color_index.filter(|&ix| ix > 0);
             f.custom_color = None;
         }
     }
-}
-
-/// The sidebar's entries, top to bottom: pinned, reminders, folders, then
-/// loose sessions. `visible` is already in the list's order.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub enum Entry {
-    Reminders {
-        collapsed: bool,
-        sessions: Vec<i64>,
-    },
-    Folder {
-        id: String,
-        sessions: Vec<i64>,
-    },
-    /// Loose pinned sessions, shown as ordinary cards under a Pinned label.
-    Pinned {
-        sessions: Vec<i64>,
-    },
-    Session(i64),
-}
-
-/// buildSessionList: pins lead, followed by reminders, folders and loose
-/// sessions. Reminder membership only changes this view.
-pub fn build_list(
-    visible: &[i64],
-    pinned: impl Fn(i64) -> bool,
-    groups: &Groups,
-    reminders: &[(i64, u64)],
-) -> Vec<Entry> {
-    let mut entries = Vec::new();
-    let visible_members: HashSet<_> = visible.iter().copied().collect();
-    let mut due: Vec<_> = reminders
-        .iter()
-        .filter(|(id, _)| visible_members.contains(id))
-        .copied()
-        .collect();
-    due.sort_by_key(|&(id, at)| (at, id));
-    let reminded: Vec<i64> = due.into_iter().map(|(id, _)| id).collect();
-    let reminded_members: HashSet<_> = reminded.iter().copied().collect();
-    if !reminded.is_empty() {
-        entries.push(Entry::Reminders {
-            collapsed: groups.reminders_collapsed,
-            sessions: reminded.clone(),
-        });
-    }
-    let mut foldered = HashSet::new();
-    for folder in &groups.folders {
-        foldered.extend(folder.session_ids.iter().copied());
-        let members: HashSet<_> = folder.session_ids.iter().copied().collect();
-        let members: Vec<i64> = visible
-            .iter()
-            .copied()
-            .filter(|id| members.contains(id) && !reminded_members.contains(id))
-            .collect();
-        if !members.is_empty() {
-            entries.push(Entry::Folder {
-                id: folder.id.clone(),
-                sessions: members,
-            });
-        }
-    }
-    let loose: Vec<i64> = visible
-        .iter()
-        .copied()
-        .filter(|id| !foldered.contains(id) && !reminded_members.contains(id))
-        .collect();
-    let (pins, loose): (Vec<_>, Vec<_>) = loose.into_iter().partition(|&id| pinned(id));
-    if !pins.is_empty() {
-        entries.insert(0, Entry::Pinned { sessions: pins });
-    }
-    entries.extend(loose.into_iter().map(Entry::Session));
-    entries
-}
-
-/// sessionListNavigationIds: the sessions as shown, folded groups skipped
-/// unless a search has opened them.
-pub fn navigation_ids(entries: &[Entry], expand_collapsed: bool) -> Vec<i64> {
-    let mut ids = Vec::new();
-    for entry in entries {
-        match entry {
-            Entry::Session(id) => ids.push(*id),
-            Entry::Reminders {
-                collapsed,
-                sessions,
-            } => {
-                if !collapsed || expand_collapsed {
-                    ids.extend(sessions);
-                }
-            }
-            Entry::Folder { sessions, .. } | Entry::Pinned { sessions } => ids.extend(sessions),
-        }
-    }
-    ids
 }
 
 pub const REMINDER_PRESETS: [&str; 5] = [
@@ -389,7 +286,7 @@ mod tests {
         let b = groups.create_folder(&[2], "b".into()).unwrap();
         assert_eq!(groups.folders[0].name, "New folder 2");
         assert_eq!(groups.folder(&a).unwrap().session_ids, vec![1]);
-        groups.toggle_folder(&a);
+        groups.folders[0].collapsed = true;
         groups.add_to_folder(&a, 2);
         assert!(groups.folder(&b).is_none(), "its last session left");
         let folder = groups.folder(&a).unwrap();
@@ -400,39 +297,6 @@ mod tests {
         assert_eq!(groups.folder(&a).unwrap().name, "Work");
         groups.remove_sessions(&[1, 2]);
         assert!(groups.folders.is_empty());
-    }
-
-    #[test]
-    fn list_leads_with_pins_then_reminders_folders_and_loose_sessions() {
-        let mut groups = Groups::default();
-        groups.create_folder(&[2, 3], "f".into());
-        let visible = [1, 2, 3, 4, 5, 6];
-        let list = build_list(
-            &visible,
-            |id| id == 5 || id == 3,
-            &groups,
-            &[(6, 20), (3, 10)],
-        );
-        assert_eq!(
-            list,
-            vec![
-                Entry::Pinned { sessions: vec![5] },
-                Entry::Reminders {
-                    collapsed: false,
-                    sessions: vec![3, 6]
-                },
-                Entry::Folder {
-                    id: "f".into(),
-                    sessions: vec![2]
-                },
-                Entry::Session(1),
-                Entry::Session(4),
-            ]
-        );
-        groups.reminders_collapsed = true;
-        let list = build_list(&visible, |id| id == 5, &groups, &[(3, 10)]);
-        assert_eq!(navigation_ids(&list, false), vec![5, 2, 1, 4, 6]);
-        assert_eq!(navigation_ids(&list, true), vec![5, 3, 2, 1, 4, 6]);
     }
 
     #[test]
