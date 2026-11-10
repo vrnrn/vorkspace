@@ -6,7 +6,7 @@ use vorkspace_ui::radius;
 use crate::{panel_kit::spinner, popover::AnchorSlot};
 use gpui::{
     AnyElement, Context, Entity, EventEmitter, FocusHandle, FontWeight, Role, ScrollHandle,
-    SharedString, Task, Window, div, prelude::*, px,
+    SharedString, Subscription, Task, Window, div, prelude::*, px,
 };
 use std::{
     collections::{HashMap, HashSet},
@@ -30,6 +30,7 @@ pub(crate) struct StopSession(pub(crate) i64);
 
 pub(crate) struct ResourceMonitor {
     pressure: Entity<MachinePressure>,
+    _pressure_observation: Subscription,
     open: bool,
     classic: bool,
     compact: bool,
@@ -50,9 +51,10 @@ impl EventEmitter<StopSession> for ResourceMonitor {}
 impl ResourceMonitor {
     pub(crate) fn new(cx: &mut Context<Self>) -> Self {
         let pressure = MachinePressure::get(cx);
-        cx.observe(&pressure, |_, _, cx| cx.notify()).detach();
+        let pressure_observation = cx.observe(&pressure, |_, _, cx| cx.notify());
         Self {
             pressure,
+            _pressure_observation: pressure_observation,
             open: false,
             classic: false,
             compact: false,
@@ -77,6 +79,10 @@ impl ResourceMonitor {
     }
     #[cfg(test)]
     pub(crate) fn saturate(&mut self, cx: &mut Context<Self>) {
+        self.saturate_at(Instant::now(), cx);
+    }
+    #[cfg(test)]
+    pub(crate) fn saturate_at(&mut self, start: Instant, cx: &mut Context<Self>) {
         let high = Sample {
             usage: resources::Usage {
                 cpu_percent: Some(97.),
@@ -84,14 +90,12 @@ impl ResourceMonitor {
             },
             stall_share: 0.,
         };
-        let start = Instant::now();
         for s in 0..3 {
             self.observe(high, start + Duration::from_secs(s * 3), cx);
         }
     }
     #[cfg(test)]
-    pub(crate) fn recover(&mut self, cx: &mut Context<Self>) {
-        let start = Instant::now();
+    pub(crate) fn recover_at(&mut self, start: Instant, cx: &mut Context<Self>) {
         for s in 0..6 {
             self.observe(
                 Sample {
@@ -813,9 +817,11 @@ mod tests {
 
     #[gpui::test]
     fn chip_opens_running_work_and_escape_restores_focus(cx: &mut gpui::TestAppContext) {
-        let window = cx.update(|cx| {
-            cx.open_window(Default::default(), |_, cx| cx.new(ResourceMonitor::new))
-                .unwrap()
+        let [other, window] = cx.update(|cx| {
+            [(); 2].map(|()| {
+                cx.open_window(Default::default(), |_, cx| cx.new(ResourceMonitor::new))
+                    .unwrap()
+            })
         });
         window
             .update(cx, |monitor, w, cx| {
@@ -838,6 +844,12 @@ mod tests {
         cx.run_until_parked();
         cx.simulate_keystrokes(window.into(), "enter");
         cx.run_until_parked();
+        other
+            .update(cx, |monitor, _, cx| {
+                assert!(monitor.chip_shown(cx));
+                assert!(!monitor.is_open());
+            })
+            .unwrap();
         window
             .update(cx, |monitor, w, cx| {
                 assert!(monitor.is_open());

@@ -246,8 +246,8 @@ impl Changes {
             cx.subscribe(&message, |_, _, _: &input::Changed, cx| cx.notify()),
         ];
         let mut this = Self {
+            cwd: git.read(cx).project().to_owned(),
             git,
-            cwd: String::new(),
             enabled: false,
             text_provider: Kind::Claude,
             message,
@@ -303,11 +303,13 @@ impl Changes {
         if project != self.cwd {
             let previous = std::mem::replace(&mut self.cwd, project);
             let text = self.message.read(cx).content.to_string();
-            if !previous.is_empty() && !text.is_empty() && self.amend.is_none() {
+            if !previous.is_empty() && !text.is_empty() {
                 self.commit_drafts.insert(previous, text);
             }
             self.cancel_generate();
             self.amend = None;
+            self.status = None;
+            self.status_clear = None;
             self.pr = None;
             self.pr_branch = None;
             self.pr_request += 1;
@@ -322,8 +324,6 @@ impl Changes {
                 || index.as_ref().map(|i| &i.head) != Some(head))
         {
             self.amend = None;
-            self.message
-                .update(cx, |m, cx| m.set_text(String::new(), cx));
         }
         let branch = index.as_ref().and_then(|i| i.branch.clone());
         if self.enabled && branch != self.pr_branch {
@@ -700,6 +700,7 @@ impl Changes {
         self.generate_cancel = Some(cancel.clone());
         self.busy = Some("generate".into());
         cx.notify();
+        let draft = self.message.read(cx).content.clone();
         let cwd = PathBuf::from(&self.cwd);
         let flag = cancel.clone();
         let work = cx
@@ -713,9 +714,11 @@ impl Changes {
                 }
                 this.generate_cancel = None;
                 this.busy = None;
-                match result {
-                    Ok(message) => this.message.update(cx, |m, cx| m.set_text(message, cx)),
-                    Err(error) => Self::fail(error, window, cx),
+                if this.message.read(cx).content == draft {
+                    match result {
+                        Ok(message) => this.message.update(cx, |m, cx| m.set_text(message, cx)),
+                        Err(error) => Self::fail(error, window, cx),
+                    }
                 }
                 cx.notify();
             });
@@ -723,6 +726,9 @@ impl Changes {
         .detach();
     }
     fn toggle_amend(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.busy.is_some() {
+            return;
+        }
         if self.amend.take().is_some() {
             cx.notify();
             return;
@@ -814,8 +820,13 @@ impl Changes {
             if create_pr { "pr" } else { "commit" }.into(),
             move |path| {
                 scm::commit(&path, &message, amend)?;
-                if push || create_pr {
-                    scm::push(&path)?;
+                if (push || create_pr)
+                    && let Err(error) = scm::push(&path)
+                {
+                    // A failed push leaves the local commit in place.
+                    return Ok(Some(Err(format!(
+                        "Commit created. Push failed.\n\n{error}"
+                    ))));
                 }
                 Ok(pr.map(|harness| create_pr_blocking(harness, &path)))
             },
@@ -830,14 +841,14 @@ impl Changes {
                     this.commit_drafts.remove(&scope.cwd);
                 }
                 if let Some(result) = result {
-                    this.finish_pr(result, scope, window, cx);
+                    this.finish_publish(result, scope, window, cx);
                 }
             },
             window,
             cx,
         );
     }
-    fn finish_pr(
+    fn finish_publish(
         &mut self,
         result: Result<String, String>,
         scope: &CheckoutScope,
@@ -889,7 +900,7 @@ impl Changes {
                         }
                         Ok(create_pr_blocking(harness, &path))
                     },
-                    Self::finish_pr,
+                    Self::finish_publish,
                     window,
                     cx,
                 );
@@ -932,6 +943,9 @@ impl Changes {
                     MenuItem::Separator,
                     MenuAction::new("amend", "Amend last commit")
                         .checked(self.amend.is_some())
+                        .disabled(
+                            self.busy.is_some() || index.as_ref().is_none_or(|i| i.head.is_none()),
+                        )
                         .into(),
                 ]
             }
@@ -2051,7 +2065,7 @@ mod tests {
             })
             .unwrap()
         });
-        window
+        let previous = window
             .update(cx, |changes, _, cx| {
                 changes
                     .message
@@ -2060,13 +2074,20 @@ mod tests {
                 changes
                     .git
                     .update(cx, |git, cx| git.set_project(second, cx));
-                changes.index_changed(cx);
+                previous
+            })
+            .unwrap();
+        window
+            .update(cx, |changes, _, cx| {
                 assert!(changes.message.read(cx).content.is_empty());
                 changes
                     .message
                     .update(cx, |input, cx| input.set_text("Second draft".into(), cx));
                 changes.git.update(cx, |git, cx| git.set_project(first, cx));
-                changes.index_changed(cx);
+            })
+            .unwrap();
+        window
+            .update(cx, |changes, _, cx| {
                 assert_eq!(changes.message.read(cx).content.to_string(), "First draft");
                 assert!(!changes.on_checkout(&previous, cx));
                 assert!(previous != changes.checkout_scope(cx));
