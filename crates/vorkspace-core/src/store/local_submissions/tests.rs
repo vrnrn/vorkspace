@@ -126,7 +126,7 @@ fn reopen_marks_both_crash_boundaries_uncertain_and_preserves_live_owners() {
     drop(conn);
     let conn = Connection::open(&path).unwrap();
     ensure_table(&conn).unwrap();
-    recover_unresolved(&conn).unwrap();
+    recover_unresolved(&conn, None).unwrap();
     for id in ["before", "after"] {
         assert_eq!(get(&conn, id).unwrap().unwrap().phase, "uncertain");
         assert!(!dispatch(&conn, id).unwrap().claimed);
@@ -328,6 +328,48 @@ fn a_finished_worker_recovers_in_the_same_process_after_transient_settlement_fai
     assert!(
         !store
             .dispatch_local_submission("transient")
+            .unwrap()
+            .claimed
+    );
+}
+
+#[test]
+fn conversation_recovery_only_settles_its_own_released_attempt() {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("sessions.db");
+    let store = Store::open_vorkspace(&path).unwrap();
+    let first = store.create("codex", "/project").unwrap().id;
+    let other = store.create("codex", "/project").unwrap().id;
+    let owner = store.local_submission_owner();
+
+    for (session, attempt) in [(first, "first-send"), (other, "other-send")] {
+        store
+            .reserve_local_submission(session, input(attempt))
+            .unwrap();
+        assert!(store.dispatch_local_submission(attempt).unwrap().claimed);
+        owner.release(attempt);
+    }
+
+    let receipt = store.session_submission_recovery(first).unwrap().unwrap();
+    assert_eq!(receipt.attempt_id, "first-send");
+    assert_eq!(receipt.user_turn.unwrap()["text"], "hello");
+    assert_eq!(
+        store.local_submissions(other).unwrap()[0].phase,
+        "dispatching"
+    );
+
+    store.recover_local_submissions().unwrap();
+    let receipt = store.session_submission_recovery(other).unwrap().unwrap();
+    assert_eq!(receipt.attempt_id, "other-send");
+    assert!(
+        !store
+            .dispatch_local_submission("first-send")
+            .unwrap()
+            .claimed
+    );
+    assert!(
+        !store
+            .dispatch_local_submission("other-send")
             .unwrap()
             .claimed
     );

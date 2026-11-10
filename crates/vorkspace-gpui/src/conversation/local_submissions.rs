@@ -8,11 +8,9 @@ impl Conversation {
         let epoch = self.submission_recovery_epoch;
         let store = self.store.clone();
         let id = self.summary.id;
-        let work = cx.background_executor().spawn(async move {
-            let store = locked(&store)?;
-            store.recover_local_submissions()?;
-            store.latest_unconfirmed_submission(id)
-        });
+        let work = cx
+            .background_executor()
+            .spawn(async move { locked(&store)?.session_submission_recovery(id) });
         cx.spawn(async move |this, cx| {
             let result = work.await;
             let _ = this.update(cx, |this, cx| {

@@ -17,6 +17,8 @@ pub use edit::{EditAdmissionError, EditBarrier, EditClaim};
 
 const MAX_PAYLOAD_BYTES: usize = 64 << 20;
 const MAX_USER_TURN_BYTES: usize = 8 << 20;
+const RECOVERY_INDEX: &str = "CREATE INDEX IF NOT EXISTS local_submissions_unfinished_idx
+       ON local_submissions(session_id) WHERE phase IN ('reserved','dispatching');";
 
 #[derive(Clone, Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -73,7 +75,8 @@ pub(crate) fn ensure_table(conn: &Connection) -> rusqlite::Result<()> {
          CREATE TABLE IF NOT EXISTS local_submission_deleted_sessions (session_id TEXT PRIMARY KEY);
          CREATE INDEX IF NOT EXISTS local_submissions_session_idx
            ON local_submissions(session_id, created_at);",
-    )
+    )?;
+    conn.execute_batch(RECOVERY_INDEX)
 }
 
 fn instance() -> &'static str {
@@ -101,8 +104,7 @@ pub(crate) fn pid_alive(pid: u32) -> bool {
     }
 }
 
-/// Called on disk open, never on ordinary reads or a second window. Live
-/// owners (including this process) retain their reservations untouched.
+/// Attempts whose workers relinquished ownership before SQLite could settle them.
 fn closed_attempts() -> &'static Mutex<HashSet<(String, String)>> {
     static CLOSED: OnceLock<Mutex<HashSet<(String, String)>>> = OnceLock::new();
     CLOSED.get_or_init(Mutex::default)
@@ -132,10 +134,17 @@ impl SubmissionOwner {
             .contains(&(self.0.clone(), attempt.to_owned()))
     }
 }
-pub(crate) fn recover_unresolved(conn: &Connection) -> rusqlite::Result<()> {
-    let mut statement = conn.prepare("SELECT attempt_id,owner_pid,owner_instance FROM local_submissions WHERE phase IN ('reserved','dispatching')")?;
+fn recover_unresolved(conn: &Connection, source: Option<&str>) -> rusqlite::Result<()> {
+    let sql = if source.is_some() {
+        "SELECT attempt_id,owner_pid,owner_instance FROM local_submissions
+         WHERE phase IN ('reserved','dispatching') AND session_id=?1"
+    } else {
+        "SELECT attempt_id,owner_pid,owner_instance FROM local_submissions
+         WHERE phase IN ('reserved','dispatching')"
+    };
+    let mut statement = conn.prepare_cached(sql)?;
     let owners = statement
-        .query_map([], |row| {
+        .query_map(rusqlite::params_from_iter(source), |row| {
             Ok((
                 row.get::<_, String>(0)?,
                 row.get::<_, u32>(1)?,
@@ -413,23 +422,34 @@ fn settle(
 }
 
 impl Store {
-    /// Recover only a previous process's unfinished attempts. Reading a store
-    /// and validation probes do not create tables or mutate recovery state.
     pub fn local_submission_owner(&self) -> SubmissionOwner {
         SubmissionOwner(connection_identity(&self.conn))
     }
-    pub fn release_local_submission(&self, attempt: &str) {
-        closed_attempts()
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .insert((connection_identity(&self.conn), attempt.to_owned()));
-    }
+    /// Recover the workspace when opening it for normal desktop use.
+    /// A validation-only open does not call this.
     pub fn recover_local_submissions(&self) -> Result<(), String> {
         if super::shared::has_table(&self.conn, "local_submissions")? {
-            recover_unresolved(&self.conn).map_err(|e| e.to_string())?;
+            self.conn
+                .execute_batch(RECOVERY_INDEX)
+                .map_err(|error| error.to_string())?;
+            recover_unresolved(&self.conn, None).map_err(|error| error.to_string())?;
         }
         Ok(())
     }
+
+    /// Refresh just this conversation after loading its history or closing a worker.
+    pub fn session_submission_recovery(
+        &self,
+        session: i64,
+    ) -> Result<Option<SubmissionReceipt>, String> {
+        if !super::shared::has_table(&self.conn, "local_submissions")? {
+            return Ok(None);
+        }
+        let source = self.submission_source_id(session)?;
+        recover_unresolved(&self.conn, Some(&source)).map_err(|error| error.to_string())?;
+        self.latest_unconfirmed_for_source(&source)
+    }
+
     pub fn reserve_local_submission(
         &self,
         session: i64,
@@ -539,6 +559,13 @@ impl Store {
             return Ok(None);
         }
         let source = self.submission_source_id(session)?;
+        self.latest_unconfirmed_for_source(&source)
+    }
+
+    fn latest_unconfirmed_for_source(
+        &self,
+        source: &str,
+    ) -> Result<Option<SubmissionReceipt>, String> {
         self.conn.query_row("SELECT attempt_id,user_turn_id,session_id,signature,phase,outcome,error,user_turn_json FROM local_submissions WHERE session_id=?1 AND phase='uncertain' AND attempt_id NOT GLOB ?2 AND COALESCE(outcome,'') != 'reviewed' ORDER BY updated_at DESC,attempt_id LIMIT 1",params![source,edit::ATTEMPT_PATTERN],receipt_row).optional().map_err(|e|e.to_string())
     }
     /// Dismissing a notice records review, never proof of external completion.

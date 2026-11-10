@@ -227,10 +227,8 @@ impl Conversation {
                     }
                 }),
                 locked(&store).and_then(|s| s.follow_ups(id)),
-                locked(&store).and_then(|s| {
-                    s.recover_local_submissions()?;
-                    Ok((s.latest_unconfirmed_submission(id)?, s.edit_barrier(id)?))
-                }),
+                locked(&store)
+                    .and_then(|s| Ok((s.session_submission_recovery(id)?, s.edit_barrier(id)?))),
                 revision,
             )
         });
