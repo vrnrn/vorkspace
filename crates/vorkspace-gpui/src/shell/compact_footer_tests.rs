@@ -414,7 +414,6 @@ fn native_compact_footer_capture() {
                         window.set_ui_scale(scale as f32 / 100., cx);
                         let resources = cx.new(|cx| {
                             let mut monitor = ResourceMonitor::new(cx);
-                            monitor.set_classic(true, cx);
                             monitor.set_compact(true, cx);
                             if shown {
                                 monitor.saturate_at(sample_time, cx);
