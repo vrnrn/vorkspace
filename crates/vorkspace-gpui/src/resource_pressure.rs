@@ -1,19 +1,22 @@
+mod sample;
+use sample::MachinePressure;
 use vorkspace_ui::radius;
 // A sidebar warning while the machine is under pressure, opening the running
 // work vorkspace owns so it can be stopped.
 use crate::{panel_kit::spinner, popover::AnchorSlot};
 use gpui::{
-    AnyElement, Context, EventEmitter, FocusHandle, FontWeight, Role, ScrollHandle, SharedString,
-    Task, Window, div, prelude::*, px,
+    AnyElement, Context, Entity, EventEmitter, FocusHandle, FontWeight, Role, ScrollHandle,
+    SharedString, Task, Window, div, prelude::*, px,
 };
 use std::{
     collections::{HashMap, HashSet},
-    time::{Duration, Instant},
+    time::Duration,
 };
-use vorkspace_core::resources::{self, OwnedProcess, Pressure, Sample};
+use vorkspace_core::resources::{self, OwnedProcess};
 use vorkspace_ui::theme::*;
+#[cfg(test)]
+use {std::time::Instant, vorkspace_core::resources::Sample};
 
-const TICK: Duration = Duration::from_millis(500);
 const POLL: Duration = Duration::from_secs(3);
 
 /// What the dialog shows for a session that owns running work.
@@ -26,7 +29,7 @@ pub(crate) struct SessionInfo {
 pub(crate) struct StopSession(pub(crate) i64);
 
 pub(crate) struct ResourceMonitor {
-    pressure: Pressure,
+    pressure: Entity<MachinePressure>,
     open: bool,
     classic: bool,
     compact: bool,
@@ -41,61 +44,15 @@ pub(crate) struct ResourceMonitor {
     previous_focus: Option<FocusHandle>,
     bounds: AnchorSlot,
     scroll: ScrollHandle,
-    _sampler: Option<Task<()>>,
     refresh: Option<Task<()>>,
 }
 impl EventEmitter<StopSession> for ResourceMonitor {}
 impl ResourceMonitor {
     pub(crate) fn new(cx: &mut Context<Self>) -> Self {
-        // Tests drive `observe` directly rather than the machine's load.
-        let sampler = (!cfg!(test)).then(|| {
-            cx.spawn(async move |this, cx| {
-                let mut last_tick = Instant::now();
-                let mut last_poll = last_tick;
-                let mut stalls = Duration::ZERO;
-                loop {
-                    cx.background_executor().timer(TICK).await;
-                    let now = Instant::now();
-                    let late = now
-                        .saturating_duration_since(last_tick)
-                        .saturating_sub(TICK);
-                    last_tick = now;
-                    // A hidden app's timers are throttled; that is not a stall.
-                    if cx.update(|cx| cx.active_window().is_none()) {
-                        stalls = Duration::ZERO;
-                        last_poll = now;
-                        if this.update(cx, |this, _| this.pressure.pause()).is_err() {
-                            break;
-                        }
-                        continue;
-                    }
-                    if late > Duration::from_millis(100) {
-                        stalls += late;
-                    }
-                    let elapsed = now.duration_since(last_poll);
-                    if elapsed < POLL {
-                        continue;
-                    }
-                    let stall_share = (stalls.as_secs_f64() / elapsed.as_secs_f64()).min(1.);
-                    stalls = Duration::ZERO;
-                    last_poll = now;
-                    let usage = cx
-                        .background_executor()
-                        .spawn(async { resources::usage() })
-                        .await;
-                    last_tick = Instant::now();
-                    let sample = Sample { usage, stall_share };
-                    if this
-                        .update(cx, |this, cx| this.observe(sample, now, cx))
-                        .is_err()
-                    {
-                        break;
-                    }
-                }
-            })
-        });
+        let pressure = MachinePressure::get(cx);
+        cx.observe(&pressure, |_, _, cx| cx.notify()).detach();
         Self {
-            pressure: Pressure::default(),
+            pressure,
             open: false,
             classic: false,
             compact: false,
@@ -110,16 +67,13 @@ impl ResourceMonitor {
             previous_focus: None,
             bounds: AnchorSlot::default(),
             scroll: ScrollHandle::new(),
-            _sampler: sampler,
             refresh: None,
         }
     }
+    #[cfg(test)]
     fn observe(&mut self, sample: Sample, now: Instant, cx: &mut Context<Self>) {
-        let before = (self.pressure.active, self.pressure.reasons.clone());
-        self.pressure.sample(sample, now);
-        if before != (self.pressure.active, self.pressure.reasons.clone()) {
-            cx.notify();
-        }
+        self.pressure
+            .update(cx, |sampler, cx| sampler.observe(sample, now, cx));
     }
     #[cfg(test)]
     pub(crate) fn saturate(&mut self, cx: &mut Context<Self>) {
@@ -163,8 +117,8 @@ impl ResourceMonitor {
     }
     /// The chip shows only under pressure; the dialog stays until closed.
     #[cfg(test)]
-    pub(crate) fn chip_shown(&self) -> bool {
-        self.pressure.active
+    fn chip_shown(&self, cx: &gpui::App) -> bool {
+        self.pressure.read(cx).pressure.active
     }
     pub(crate) fn is_open(&self) -> bool {
         self.open
@@ -172,8 +126,10 @@ impl ResourceMonitor {
     pub(crate) fn measured_height(&self) -> Option<f32> {
         self.bounds.get().map(|b| b.size.height.as_f32())
     }
-    fn reasons(&self) -> String {
+    fn reasons(&self, cx: &gpui::App) -> String {
         self.pressure
+            .read(cx)
+            .pressure
             .reasons
             .iter()
             .map(|r| r.label())
@@ -202,7 +158,7 @@ impl ResourceMonitor {
         self.processes.clear();
         self.expanded.clear();
         let focus = self.previous_focus.take();
-        if self.pressure.active {
+        if self.pressure.read(cx).pressure.active {
             window.focus(focus.as_ref().unwrap_or(&self.trigger), cx);
         } else if let Some(focus) = focus {
             window.focus(&focus, cx);
@@ -274,8 +230,8 @@ impl ResourceMonitor {
         window: &Window,
         cx: &mut Context<Self>,
     ) -> AnyElement {
-        let active = self.pressure.active;
-        let reasons = self.reasons();
+        let active = self.pressure.read(cx).pressure.active;
+        let reasons = self.reasons(cx);
         let mut groups: Vec<(i64, Vec<&OwnedProcess>)> = Vec::new();
         for process in &self.processes {
             match groups.iter_mut().find(|(id, _)| *id == process.session) {
@@ -711,7 +667,7 @@ impl ResourceMonitor {
 
 impl Render for ResourceMonitor {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let shown = self.pressure.active;
+        let shown = self.pressure.read(cx).pressure.active;
         let classic = self.classic;
         let open = self.open;
         div()
@@ -724,7 +680,7 @@ impl Render for ResourceMonitor {
                         .role(Role::Button)
                         .map(vorkspace_ui::theme::tab_reachable)
                         .aria_label("High resource usage")
-                        .aria_description(format!("{} · Review running work", self.reasons()))
+                        .aria_description(format!("{} · Review running work", self.reasons(cx)))
                         .aria_expanded(open)
                         .track_focus(&self.trigger)
                         .tab_index(0)
@@ -874,8 +830,8 @@ mod tests {
                 for s in 0..3 {
                     monitor.observe(high, start + Duration::from_secs(s * 3), cx);
                 }
-                assert!(monitor.chip_shown());
-                assert_eq!(monitor.reasons(), "High CPU usage · Low available memory");
+                assert!(monitor.chip_shown(cx));
+                assert_eq!(monitor.reasons(cx), "High CPU usage · Low available memory");
                 w.focus(&monitor.trigger, cx);
             })
             .unwrap();

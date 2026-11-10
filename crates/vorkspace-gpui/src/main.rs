@@ -436,6 +436,7 @@ fn main() {
         eprintln!("Cannot read workspace settings: {e}");
         None
     });
+    let mut sessions = db.sessions().expect("read native sessions");
     let existing_project = if use_vorkspace {
         saved
             .as_deref()
@@ -452,11 +453,7 @@ fn main() {
                     })
                     .map(str::to_owned)
             })
-            .or_else(|| {
-                db.sessions()
-                    .ok()
-                    .and_then(|sessions| sessions.into_iter().find(|s| !s.archived).map(|s| s.cwd))
-            })
+            .or_else(|| sessions.iter().find(|s| !s.archived).map(|s| s.cwd.clone()))
     } else {
         None
     };
@@ -467,9 +464,10 @@ fn main() {
     } else if explicit_cwd || std::path::Path::new(&cwd).parent().is_some() {
         cwd
     } else {
-        db.sessions()
-            .ok()
-            .and_then(|sessions| sessions.into_iter().map(|s| s.cwd).find(|c| c != &cwd))
+        sessions
+            .iter()
+            .find(|session| session.cwd != cwd)
+            .map(|session| session.cwd.clone())
             .unwrap_or_else(|| std::env::var("HOME").unwrap_or(cwd))
     };
     if fixture {
@@ -495,7 +493,9 @@ fn main() {
             .unwrap();
         db.write_rows(s.id, 0, &fixtures::visuals().rows).unwrap();
     }
-    let mut sessions = db.sessions().expect("read native sessions");
+    if fixture || chat_fixture || visual_fixture {
+        sessions = db.sessions().expect("read seeded sessions");
+    }
     if sessions.is_empty() {
         sessions.push(db.create("codex", &cwd).expect("create initial session"));
     }

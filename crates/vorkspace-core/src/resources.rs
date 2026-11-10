@@ -126,11 +126,8 @@ pub fn usage() -> Usage {
         {
             let mut previous = CPU.lock().unwrap_or_else(|error| error.into_inner());
             if let Some(before) = *previous {
-                let delta: Vec<u64> = ticks
-                    .iter()
-                    .zip(before)
-                    .map(|(now, old)| now.wrapping_sub(old) as u64)
-                    .collect();
+                let delta: [u64; 4] =
+                    std::array::from_fn(|i| u64::from(ticks[i].wrapping_sub(before[i])));
                 let total: u64 = delta.iter().sum();
                 if total > 0 {
                     cpu_percent = Some(100.0 * (total - delta[2]) as f64 / total as f64);

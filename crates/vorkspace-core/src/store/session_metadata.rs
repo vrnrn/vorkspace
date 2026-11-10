@@ -33,7 +33,7 @@ impl Store {
         let shared = self.shared.is_some();
         let query = if shared {
             format!(
-                "SELECT id,harness,substr(model,1,512),substr({},1,512),substr({},1,4096),coalesce({},0),coalesce({},'supervised') FROM sessions",
+                "SELECT id,harness,substr(model,1,512),substr({},1,512),{},coalesce({},0),coalesce({},'supervised') FROM sessions",
                 self.shared_field("branch", "NULL"),
                 self.shared_field("worktree_cwd", "NULL"),
                 self.shared_field("worktree_removed", "0"),
@@ -43,7 +43,9 @@ impl Store {
             "SELECT cast(n.id AS TEXT),n.provider,
              CASE WHEN json_valid(s.value) THEN substr(json_extract(s.value,'$.model'),1,512) END,
              NULL,
-             CASE WHEN json_valid(s.value) THEN substr(json_extract(s.value,'$.worktree_cwd'),1,4096) END,
+             CASE WHEN json_valid(s.value) THEN
+               CASE WHEN json_type(s.value,'$.worktree_cwd')='text' THEN json_extract(s.value,'$.worktree_cwd') END
+             END,
              CASE WHEN json_valid(s.value) THEN coalesce(json_extract(s.value,'$.worktree_removed'),0) ELSE 0 END,
              CASE WHEN json_valid(s.value) THEN coalesce(json_extract(s.value,'$.access'),'supervised') ELSE 'supervised' END
              FROM native_sessions n LEFT JOIN native_settings s ON s.key='agent:'||n.id".into()
@@ -90,9 +92,17 @@ impl Store {
     /// Reads no transcript bodies or full agent settings. Call this on a loader
     /// thread, before handing the snapshot to the interactive shell.
     pub fn session_sidebar_metadata(&self, projects: &[String]) -> SessionSidebarMetadata {
+        let details = self.session_metadata();
+        let worktrees = match &details {
+            Ok(details) => details
+                .iter()
+                .map(|(&id, metadata)| (id, metadata.worktree_cwd.clone()))
+                .collect(),
+            Err(_) => self.session_worktrees().unwrap_or_default(),
+        };
         SessionSidebarMetadata {
-            worktrees: self.session_worktrees().unwrap_or_default(),
-            details: self.session_metadata().unwrap_or_default(),
+            worktrees,
+            details: details.unwrap_or_default(),
             drafts: self.draft_sessions().unwrap_or_default(),
             sidebar_hidden: if self.shared.is_some() {
                 self.shared_sidebar_hidden().unwrap_or_default()

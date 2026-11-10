@@ -1,4 +1,4 @@
-//! Hosts the same notification stack as App.tsx, and routes native clicks.
+//! Delivers window notifications and routes native clicks back to their session.
 use super::*;
 use crate::notifications::{
     app_update::{self, AppUpdateEvent, InstalledUpdateNotice, WhatsNew, WhatsNewEvent},
@@ -42,6 +42,7 @@ pub(super) struct State {
     badge: usize,
     sounds_enabled: bool,
     sounds_enabled_at: u64,
+    next_mute_expiry: Option<u64>,
     poll: Option<gpui::Task<()>>,
 }
 
@@ -76,6 +77,7 @@ impl State {
             badge: 0,
             sounds_enabled: workspace.preferences.sounds,
             sounds_enabled_at: 0,
+            next_mute_expiry: None,
             poll: None,
         }
     }
@@ -345,13 +347,12 @@ impl Shell {
                             this.poll_reminders(cx);
                         }
                         this.poll_linked_activity(cx);
-                        // Scheduled mutes expire without a preference change.
-                        if !this.notification_state.approvals.read(cx).is_empty()
-                            || this
-                                .notification_chats(cx)
-                                .iter()
-                                .any(|v| v.read(cx).needs_approval())
+                        if this
+                            .notification_state
+                            .next_mute_expiry
+                            .is_some_and(|at| now >= at)
                         {
+                            this.notification_state.next_mute_expiry = None;
                             cx.notify();
                         }
                     })
@@ -396,23 +397,39 @@ impl Shell {
         let snapshots: Vec<_> = self
             .notification_chats(cx)
             .iter()
-            .map(|view| {
-                let chat = view.read(cx);
-                SessionInputs {
-                    session_id: chat.summary.id.to_string(),
-                    title: chat.display_title().to_owned(),
-                    provider: chat.summary.provider.clone(),
-                    harness: Kind::display_label(&chat.summary.provider).to_owned(),
-                    pending: chat.pending_notification_inputs(cx),
-                    inbox_ask: false,
-                    orchestration_worker: self.orchestration_worker(chat.summary.id),
-                    conversation_focused: false,
-                }
-            })
+            .filter_map(|view| self.input_snapshot(view.read(cx), false, cx))
             .collect();
         self.notification_state.approvals.update(cx, |notices, _| {
             notices.track_pending(&snapshots);
         });
+        self.publish_pending_inputs(&snapshots, cx);
+    }
+
+    fn input_snapshot(
+        &self,
+        chat: &Conversation,
+        check_visibility: bool,
+        cx: &App,
+    ) -> Option<SessionInputs> {
+        let pending = chat.pending_notification_inputs(cx);
+        if pending.is_empty() {
+            return None;
+        }
+        let id = chat.summary.id;
+        Some(SessionInputs {
+            session_id: id.to_string(),
+            title: chat.display_title().to_owned(),
+            provider: chat.summary.provider.clone(),
+            harness: Kind::display_label(&chat.summary.provider).to_owned(),
+            pending,
+            inbox_ask: false,
+            orchestration_worker: self.orchestration_worker(id),
+            // An on-screen conversation already shows its request inline.
+            conversation_focused: check_visibility && self.notice_session_visible(id, cx),
+        })
+    }
+
+    fn publish_pending_inputs(&mut self, snapshots: &[SessionInputs], cx: &mut Context<Self>) {
         let badge = delivery::dock_badge_count(
             snapshots
                 .iter()
@@ -422,7 +439,7 @@ impl Shell {
             self.notification_state.badge = badge;
             self.set_window_badge(badge, cx);
         }
-        for (session, input) in self.notification_state.announcements.reconcile(&snapshots) {
+        for (session, input) in self.notification_state.announcements.reconcile(snapshots) {
             if let Ok(id) = session.session_id.parse()
                 && let Some(view) = self.notification_chat(id, cx)
             {
@@ -500,10 +517,10 @@ impl Shell {
 
     pub(super) fn sync_notices(&mut self, cx: &mut Context<Self>) {
         let now = vorkspace_core::time::now_ms();
-        let prefs = self.workspace.preferences.clone();
-        if self.notification_state.sounds_enabled != prefs.sounds {
-            self.notification_state.sounds_enabled = prefs.sounds;
-            if prefs.sounds {
+        let sounds = self.workspace.preferences.sounds;
+        if self.notification_state.sounds_enabled != sounds {
+            self.notification_state.sounds_enabled = sounds;
+            if sounds {
                 self.notification_state.sounds_enabled_at = now;
             }
         }
@@ -530,49 +547,15 @@ impl Shell {
             {
                 completed.push((chat.summary.clone(), chat.notification_reply_body(cx)));
             }
-            directories.insert(id.to_string(), chat.summary.cwd.clone());
-            snapshots.push(SessionInputs {
-                session_id: id.to_string(),
-                title: chat.display_title().to_owned(),
-                provider: chat.summary.provider.clone(),
-                harness: Kind::display_label(&chat.summary.provider).to_owned(),
-                pending: chat.pending_notification_inputs(cx),
-                inbox_ask: false,
-                orchestration_worker: self.orchestration_worker(id),
-                // A conversation on screen already shows its request as the
-                // inline card, so a toast for it would ask the same thing twice.
-                // Where the keyboard focus sits does not change what is visible.
-                conversation_focused: self.window_active && self.notice_session_visible(id, cx),
-            });
+            if let Some(snapshot) = self.input_snapshot(chat, self.window_active, cx) {
+                directories.insert(snapshot.session_id.clone(), chat.summary.cwd.clone());
+                snapshots.push(snapshot);
+            }
         }
         self.notification_state
             .responding
             .retain(|id| live_ids.contains(id));
-        let badge = delivery::dock_badge_count(
-            snapshots
-                .iter()
-                .filter_map(|s| Some((s.session_id.parse().ok()?, !s.pending.is_empty()))),
-        );
-        if self.notification_state.badge != badge {
-            self.notification_state.badge = badge;
-            platform::set_dock_badge(badge);
-        }
-        let announcements = self.notification_state.announcements.reconcile(&snapshots);
-        for (session, input) in announcements {
-            if let Ok(id) = session.session_id.parse()
-                && let Some(view) = self.notification_chat(id, cx)
-            {
-                let summary = view.read(cx).summary.clone();
-                self.announce_input(&summary.title, &input.label);
-                self.deliver_session_notice(
-                    &summary,
-                    "agentInput",
-                    &input.label,
-                    Some(crate::sound::Cue::Input),
-                    cx,
-                );
-            }
-        }
+        self.publish_pending_inputs(&snapshots, cx);
         for (summary, body) in completed {
             self.announce(format!("{} finished", summary.title));
             self.deliver_session_notice(
@@ -583,6 +566,9 @@ impl Shell {
                 cx,
             );
         }
+        let prefs = &self.workspace.preferences;
+        self.notification_state.next_mute_expiry =
+            delivery::next_mute_expiry(&prefs.project_notifications, now);
         self.notification_state.approvals.update(cx, |notices, cx| {
             notices.sync(
                 &snapshots,

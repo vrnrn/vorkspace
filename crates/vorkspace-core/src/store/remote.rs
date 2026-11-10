@@ -272,7 +272,7 @@ impl Store {
     }
     pub fn sessions(&self) -> Result<Vec<Session>, String> {
         let hidden = self.hidden_legacy_remote_sessions()?;
-        let mut sessions: BTreeMap<_, _> = self
+        let mut sessions: HashMap<_, _> = self
             .local_sessions()?
             .into_iter()
             .filter(|summary| !hidden.contains(&summary.id))

@@ -58,6 +58,15 @@ fn timestamp(value: &Value) -> u64 {
         .unwrap_or(0)
 }
 
+pub(crate) fn next_mute_expiry(preferences: &Value, now: u64) -> Option<u64> {
+    preferences
+        .as_object()?
+        .values()
+        .map(|rule| timestamp(&rule["mutedUntil"]))
+        .filter(|&deadline| deadline > now)
+        .min()
+}
+
 pub fn should_notify(
     enabled: bool,
     permission: Permission,
