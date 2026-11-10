@@ -154,7 +154,6 @@ pub(crate) use crate::conversation::{
 };
 
 pub(crate) struct Bots {
-    minion_effects: effects::MinionEffects,
     pub(crate) minion_registry: MinionRegistry,
     pub(crate) team_histories: TeamHistories,
     pub(crate) conversation_views: BotConversations,
@@ -480,7 +479,6 @@ impl Bots {
             expanded_islands: HashMap::new(),
             minion_registry: Default::default(),
             team_histories: Default::default(),
-            minion_effects: Default::default(),
             conversation_views: Default::default(),
             retired_teams: Default::default(),
             route: None,
@@ -558,7 +556,7 @@ impl Bots {
             this.reload_files(&id, cx);
         }
         this.resume_peer_queues(cx);
-        this.sync_minions();
+        this.sync_minions(cx);
         this.sync_team_histories(cx);
         this
     }
@@ -616,7 +614,7 @@ impl Bots {
         let was = self.prefs.bots;
         self.prefs = prefs;
         bot::set_minions_enabled(self.prefs.bots && self.prefs.minions);
-        self.sync_minions();
+        self.sync_minions(cx);
         if was && !self.prefs.bots {
             self.active = None;
             self.creation = None;
@@ -749,8 +747,7 @@ impl Bots {
 
     fn sync_shared_roster(&mut self, cx: &mut Context<Self>) {
         let shared = self.shared_roster.read(cx);
-        // A queued snapshot still needs its original editor's save baseline.
-        if self.pending_roster_writes > 0 || self.roster_revision == shared.revision {
+        if self.roster_revision == shared.revision {
             return;
         }
         let Ok(committed) = &shared.snapshot else {
@@ -763,12 +760,32 @@ impl Bots {
             .filter(|id| shared.removed.contains_key(*id))
             .cloned()
             .collect();
+        let replaced = self
+            .chats
+            .iter()
+            .filter(|(id, view)| {
+                committed
+                    .get(id)
+                    .is_some_and(|bot| bot.session_id != Some(view.read(cx).summary.id))
+            })
+            .map(|(id, _)| id.clone())
+            .collect::<Vec<_>>();
+        for id in replaced {
+            self.stop_chat(&id, cx);
+        }
+        for id in deleted {
+            self.stop_deleted_bot(&id, cx);
+        }
+        // A queued snapshot still needs its original editor's save baseline.
+        // Revoking a view is independent of whether its editor can rebase.
+        if self.pending_roster_writes > 0 {
+            return;
+        }
+        let shared = self.shared_roster.read(cx);
+        let committed = shared.committed().expect("published Bot roster");
         let changed = match self.roster.rebase_onto(committed) {
             Ok(changed) => changed,
             Err(error) => {
-                for id in deleted {
-                    self.stop_deleted_bot(&id, cx);
-                }
                 self.error = Some(error);
                 cx.emit(Changed);
                 cx.notify();
@@ -794,12 +811,10 @@ impl Bots {
                     .map(|message| message.id.clone())
             })
             .collect();
-        for id in deleted {
-            self.stop_deleted_bot(&id, cx);
-        }
         if changed || deletion_published {
             if let Some(id) = self.active.clone() {
                 if self.roster.get(&id).is_some() {
+                    self.ensure_chat(&id, cx);
                     self.configure_chat(&id, cx);
                 } else {
                     self.close(cx);
@@ -824,7 +839,6 @@ impl Bots {
     }
 
     fn save(&mut self, cx: &mut Context<Self>) {
-        self.sync_minions();
         let live: HashSet<_> = self
             .roster
             .bots
@@ -901,6 +915,12 @@ impl Bots {
         .detach();
         self.changed(cx);
     }
+    fn claim_chat(&self, id: &str, cx: &mut Context<Self>) -> bool {
+        let owner = cx.weak_entity();
+        self.shared_roster
+            .update(cx, |shared, _| shared.claim_chat(id, owner))
+    }
+
     fn release_chat(&self, id: &str, cx: &mut Context<Self>) {
         let owner = cx.weak_entity();
         self.shared_roster
@@ -917,11 +937,7 @@ impl Bots {
         let Some(bot) = self.presentation_bot(id) else {
             return;
         };
-        let owner = cx.weak_entity();
-        if !self
-            .shared_roster
-            .update(cx, |shared, _| shared.claim_chat(id, owner))
-        {
+        if !self.claim_chat(id, cx) {
             return;
         }
         self.loading_chats.insert(id.into());
@@ -962,6 +978,25 @@ impl Bots {
                         return;
                     }
                 };
+                let shared = this.shared_roster.read(cx);
+                let owner = cx.weak_entity();
+                let saved = shared.committed().and_then(|roster| roster.get(&id));
+                let current = saved.or_else(|| this.roster.get(&id));
+                if shared.chat_owner(&id) != Some(&owner)
+                    || shared.removed.contains_key(&id)
+                    || current.is_none_or(|bot| bot.session_id != Some(summary.id))
+                {
+                    let refresh = this.active.as_deref() == Some(&id)
+                        && saved.is_some_and(|bot| bot.session_id != Some(summary.id));
+                    this.release_chat(&id, cx);
+                    this.sync_shared_roster(cx);
+                    if refresh && this.pending_roster_writes == 0
+                        && this.roster.get(&id).is_some_and(|bot| bot.session_id != Some(summary.id))
+                    {
+                        this.ensure_chat(&id, cx);
+                    }
+                    return;
+                }
                 if let Some(warning) = warning {
                     this.error = Some(warning);
                 }
@@ -1289,7 +1324,13 @@ impl Bots {
     fn dispatch(&mut self, id: &str, cx: &mut Context<Self>) {
         if !self.roster.is_active(id)
             || (self.roster.get(id).is_some_and(Bot::is_minion)
-                && !(self.prefs.bots && self.prefs.minions))
+                && (!(self.prefs.bots && self.prefs.minions)
+                    || self
+                        .shared_roster
+                        .read(cx)
+                        .committed()
+                        .is_none_or(|roster| !roster.is_active(id))))
+            || self.shared_roster.read(cx).removed.contains_key(id)
         {
             return;
         }

@@ -21,10 +21,7 @@ struct Setup {
     store: Database,
 }
 
-#[gpui::test]
-fn a_peer_reports_to_a_bot_conversation_parked_in_another_window(cx: &mut TestAppContext) {
-    let s = setup_bot(cx);
-    close_bot_pane(&s, cx);
+fn peer_window(s: &Setup, cx: &mut TestAppContext) -> WindowHandle<Shell> {
     let (store, project) = (s.store.clone(), s.project.clone());
     let peer = cx.update(|cx| {
         cx.open_window(Default::default(), |_, cx| {
@@ -33,6 +30,14 @@ fn a_peer_reports_to_a_bot_conversation_parked_in_another_window(cx: &mut TestAp
         .unwrap()
     });
     cx.run_until_parked();
+    peer
+}
+
+#[gpui::test]
+fn a_peer_reports_to_a_bot_conversation_parked_in_another_window(cx: &mut TestAppContext) {
+    let s = setup_bot(cx);
+    close_bot_pane(&s, cx);
+    let peer = peer_window(&s, cx);
     s.manager.read_with(cx, |bots, cx| {
         assert!(bots.active.is_none());
         assert!(bots.chats[&s.id].read(cx).ready_for_external(cx));
@@ -59,6 +64,92 @@ fn a_peer_reports_to_a_bot_conversation_parked_in_another_window(cx: &mut TestAp
         );
         assert!(bots.roster.get(&s.id).unwrap().pending_reports.is_empty());
     });
+}
+
+#[gpui::test]
+fn confirming_reset_does_not_replace_a_chat_that_opened_in_another_window(cx: &mut TestAppContext) {
+    let s = setup(cx);
+    close_bot_pane(&s, cx);
+    s.manager.update(cx, |bots, cx| {
+        bots.stop_chat(&s.id, cx);
+        bots.release_chat(&s.id, cx);
+    });
+    let peer = peer_window(&s, cx);
+    s.window
+        .update(cx, |_, window, cx| {
+            s.manager
+                .update(cx, |bots, cx| bots.reset_conversation(&s.id, window, cx));
+        })
+        .unwrap();
+    cx.run_until_parked();
+    let manager = peer
+        .update(cx, |shell, _, cx| {
+            let manager = shell.bot_manager();
+            manager.update(cx, |bots, cx| bots.ensure_chat(&s.id, cx));
+            manager
+        })
+        .unwrap();
+    cx.run_until_parked();
+    let visual = &mut gpui::VisualTestContext::from_window(s.window.into(), cx);
+    assert_eq!(visual.pending_prompt().unwrap().0, "Reset conversation?");
+    visual.simulate_prompt_answer("Reset");
+    visual.run_until_parked();
+    manager.read_with(visual, |bots, cx| {
+        assert_eq!(bots.chats[&s.id].read(cx).summary.id, s.session);
+    });
+    let db = locked(&s.store).unwrap();
+    assert_eq!(
+        Roster::load(&db).unwrap().get(&s.id).unwrap().session_id,
+        Some(s.session)
+    );
+}
+
+#[gpui::test]
+fn retiring_a_minion_revokes_the_permit_and_stops_its_chat_in_the_peer_window(
+    cx: &mut TestAppContext,
+) {
+    let s = setup(cx);
+    let peer = peer_window(&s, cx);
+    let manager = peer.update(cx, |shell, _, _| shell.bot_manager()).unwrap();
+    for bots in [&s.manager, &manager] {
+        bots.update(cx, |bots, cx| {
+            let mut prefs = bots.prefs.clone();
+            prefs.minions = true;
+            bots.set_preferences(prefs, cx);
+        });
+    }
+    let hired = call_as(
+        &s,
+        s.session,
+        "hire",
+        "minions.hire",
+        json!({"name": "Scout", "role": "Research"}),
+        cx,
+    )
+    .unwrap();
+    let id = hired["id"].as_str().unwrap();
+    manager.update(cx, |bots, cx| bots.ensure_chat(id, cx));
+    cx.run_until_parked();
+    let view = manager.read_with(cx, |bots, _| bots.chats[id].clone());
+    let permit = manager.read_with(cx, |bots, cx| {
+        bots.shared_roster
+            .read(cx)
+            .minion_permit(id, std::slice::from_ref(&s.project))
+            .unwrap()
+    });
+    view.update(cx, |view, _| view.busy = true);
+    let retired = call_as(
+        &s,
+        s.session,
+        "fire",
+        "minions.fire",
+        json!({"minion": id}),
+        cx,
+    )
+    .unwrap();
+    assert_eq!(retired["retired"], true);
+    assert!(permit.run(|| Ok(())).is_err());
+    view.read_with(cx, |view, _| assert!(!view.busy));
 }
 
 #[gpui::test]

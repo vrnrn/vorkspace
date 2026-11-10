@@ -27,15 +27,20 @@ impl Permit {
         drop(guard);
         Ok(())
     }
+    pub(super) fn check(&self) -> Result<(), String> {
+        self.0
+            .0
+            .load(Ordering::Acquire)
+            .then_some(())
+            .ok_or_else(|| "Minion authority changed before the action executed".into())
+    }
     pub(super) fn run<T>(&self, work: impl FnOnce() -> Result<T, String>) -> Result<T, String> {
         let active = self
             .0
             .1
             .lock()
             .map_err(|_| "Minion authority is unavailable")?;
-        if !self.0.0.load(Ordering::Acquire) {
-            return Err("Minion authority changed before the action executed".into());
-        }
+        self.check()?;
         let result = work();
         drop(active);
         result
@@ -81,9 +86,10 @@ impl MinionEffects {
             }
         }
     }
-    pub(super) fn permit(&self, actor: &str) -> Result<Permit, String> {
+    pub(super) fn permit(&self, actor: &str, projects: &[String]) -> Result<Permit, String> {
         self.active
             .get(actor)
+            .filter(|(scope, _)| scope == projects)
             .map(|(_, permit)| permit.clone())
             .ok_or_else(|| "Minion no longer owns an active app capability".into())
     }
@@ -143,7 +149,7 @@ mod tests {
             .unwrap();
         let mut effects = MinionEffects::default();
         effects.reconcile(&roster, true);
-        let old = effects.permit(&id).unwrap();
+        let old = effects.permit(&id, &[]).unwrap();
         effects.reconcile(&roster, true);
         assert_eq!(old.run(|| Ok(7)).unwrap(), 7);
         roster.get_mut("parent").unwrap().projects = vec!["/new-scope".into()];
@@ -157,15 +163,17 @@ mod tests {
             .is_err()
         );
         assert!(!executed);
-        let next = effects.permit(&id).unwrap();
+        assert!(effects.permit(&id, &[]).is_err());
+        let scope = ["/new-scope".into()];
+        let next = effects.permit(&id, &scope).unwrap();
         assert!(next.run(|| Ok(())).is_ok());
         effects.reconcile(&roster, false);
         assert!(next.run(|| Ok(())).is_err());
         effects.reconcile(&roster, true);
-        let retired = effects.permit(&id).unwrap();
+        let retired = effects.permit(&id, &scope).unwrap();
         roster.retire_minion("parent", &id).unwrap();
         effects.reconcile(&roster, true);
         assert!(retired.run(|| Ok(())).is_err());
-        assert!(effects.permit(&id).is_err());
+        assert!(effects.permit(&id, &scope).is_err());
     }
 }
