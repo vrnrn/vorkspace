@@ -1,5 +1,4 @@
-//! Read-only GitHub polling for linked session notifications. No GitHub calls
-//! occur until the shell invokes poll; acknowledgment persistence stays in shell.
+//! Shared linked-work activity and its read-only GitHub projection.
 use gpui::{Context, EventEmitter};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -9,7 +8,7 @@ use vorkspace_core::{
     session_groups::WorkItem,
     store::{Session, Store},
 };
-const SEEN_KEY: &str = "linked-work-item-seen";
+pub(crate) const SEEN_KEY: &str = "linked-work-item-seen";
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub(crate) struct Entry {
     pub id: String,
@@ -152,90 +151,125 @@ pub(crate) fn load_seen_with_metadata(
     }
     Ok(seen)
 }
-pub(crate) fn save_seen(store: &Store, seen: &HashMap<i64, i64>) -> Result<(), String> {
-    store.save_setting(
-        SEEN_KEY,
-        &serde_json::to_string(seen).map_err(|e| e.to_string())?,
-    )
+#[derive(Clone)]
+pub(crate) struct LinkedSession {
+    pub(crate) id: i64,
+    pub(crate) updated_at: i64,
+    pub(crate) item: WorkItem,
 }
+
+impl LinkedSession {
+    pub(crate) fn from_summary(summary: &Session) -> Option<Self> {
+        if summary.archived {
+            return None;
+        }
+        Some(Self {
+            id: summary.id,
+            updated_at: summary.updated_at.min(i64::MAX as u64) as i64,
+            item: summary.work_item.clone()?,
+        })
+    }
+}
+
 pub(crate) enum GithubActivityEvent {
-    Changed,
-    Acknowledged(HashMap<i64, i64>),
+    Changed { new_activity: Vec<i64> },
+    Acknowledged(String),
 }
+
+#[derive(Default)]
 pub(crate) struct GithubActivity {
     pub cards: HashMap<i64, Card>,
-    seen: HashMap<i64, i64>,
+    seen: Option<HashMap<i64, i64>>,
+    revisions: HashMap<i64, (WorkItem, i64)>,
+    primed: bool,
     checked: Option<Instant>,
     checking: bool,
 }
+
 impl EventEmitter<GithubActivityEvent> for GithubActivity {}
+
 impl GithubActivity {
-    pub(crate) fn new(seen: HashMap<i64, i64>) -> Self {
-        Self {
-            cards: HashMap::new(),
-            seen,
-            checked: None,
-            checking: false,
-        }
-    }
     pub(crate) fn restore_seen(&mut self, seen: HashMap<i64, i64>) {
-        for (id, at) in seen {
-            let current = self.seen.entry(id).or_default();
-            *current = (*current).max(at);
-        }
-        self.cards
-            .retain(|id, card| card.updated_at > *self.seen.get(id).unwrap_or(&0));
+        self.seen.get_or_insert(seen);
     }
+
     pub(crate) fn acknowledge(&mut self, session: i64, cx: &mut Context<Self>) {
-        if let Some(card) = self.cards.remove(&session) {
-            let seen = self.seen.entry(session).or_default();
-            *seen = (*seen).max(card.updated_at);
-            if self.seen.len() > 500 {
-                let mut entries: Vec<_> = self.seen.iter().map(|(id, at)| (*id, *at)).collect();
-                entries.sort_by_key(|(_, at)| std::cmp::Reverse(*at));
-                self.seen = entries.into_iter().take(500).collect();
-            }
-            cx.emit(GithubActivityEvent::Acknowledged(self.seen.clone()));
-            cx.emit(GithubActivityEvent::Changed);
-            cx.notify();
+        let Some(card) = self.cards.remove(&session) else {
+            return;
+        };
+        let seen = self.seen.get_or_insert_with(HashMap::new);
+        let current = seen.entry(session).or_default();
+        *current = (*current).max(card.updated_at);
+        if seen.len() > 500 {
+            let mut entries: Vec<_> = seen.iter().map(|(id, at)| (*id, *at)).collect();
+            entries.sort_unstable_by_key(|(id, at)| std::cmp::Reverse((*at, *id)));
+            *seen = entries.into_iter().take(500).collect();
         }
+        let encoded = serde_json::to_string(seen).expect("serialize linked activity timestamps");
+        cx.emit(GithubActivityEvent::Acknowledged(encoded));
+        cx.emit(GithubActivityEvent::Changed {
+            new_activity: Vec::new(),
+        });
     }
-    pub(crate) fn ready_to_poll(&self) -> bool {
-        !self.checking
-            && self
-                .checked
-                .is_none_or(|at| at.elapsed() >= Duration::from_secs(60))
-    }
-    pub(crate) fn poll(&mut self, sessions: Vec<Session>, cx: &mut Context<Self>) {
+
+    pub(crate) fn begin_poll(&mut self) -> Option<HashMap<i64, i64>> {
+        let seen = self.seen.as_ref()?;
         if self.checking
             || self
                 .checked
                 .is_some_and(|at| at.elapsed() < Duration::from_secs(60))
         {
-            return;
+            return None;
         }
-        self.checking = true;
         self.checked = Some(Instant::now());
-        let seen = self.seen.clone();
-        let work = cx
-            .background_executor()
-            .spawn(async move { fetch(sessions, &seen) });
-        cx.spawn(async move |this, cx| {
-            let cards = work.await;
-            let _ = this.update(cx, |this, cx| {
-                this.checking = false;
-                // An acknowledgment made while polling must not reappear.
-                this.cards = cards
-                    .into_iter()
-                    .filter(|(id, c)| c.updated_at > *this.seen.get(id).unwrap_or(&0))
-                    .collect();
-                cx.emit(GithubActivityEvent::Changed);
-                cx.notify();
-            });
-        })
-        .detach();
+        self.checking = true;
+        Some(seen.clone())
+    }
+
+    pub(crate) fn finish_poll(
+        &mut self,
+        mut cards: HashMap<i64, Card>,
+        current: &HashMap<i64, LinkedSession>,
+        cx: &mut Context<Self>,
+    ) {
+        self.checking = false;
+        let Some(seen) = &self.seen else {
+            return;
+        };
+        // Ignore results for a link that was removed/replaced, an archived
+        // conversation, a new local turn, or an acknowledgment during the poll.
+        cards.retain(|id, card| {
+            current.get(id).is_some_and(|session| {
+                let since = session.updated_at.max(*seen.get(id).unwrap_or(&0));
+                if card.item != session.item || card.updated_at <= since {
+                    return false;
+                }
+                card.entries
+                    .retain(|entry| timestamp(&entry.created_at) > since);
+                true
+            })
+        });
+        self.revisions
+            .retain(|id, (item, _)| current.get(id).is_some_and(|session| session.item == *item));
+        let mut new_activity = Vec::new();
+        for (&id, card) in &cards {
+            let previous = self
+                .revisions
+                .entry(id)
+                .or_insert_with(|| (card.item.clone(), 0));
+            if self.primed && card.updated_at > previous.1 && !card.details_error {
+                new_activity.push(id);
+            }
+            previous.1 = previous.1.max(card.updated_at);
+        }
+        self.primed = true;
+        if self.cards != cards {
+            self.cards = cards;
+            cx.emit(GithubActivityEvent::Changed { new_activity });
+        }
     }
 }
+
 fn timestamp(value: &str) -> i64 {
     chrono::DateTime::parse_from_rfc3339(value)
         .map(|d| d.timestamp_millis())
@@ -258,139 +292,162 @@ fn api(endpoint: &str) -> Result<Value, String> {
     )?;
     serde_json::from_str(&text).map_err(|e| e.to_string())
 }
-fn fetch(sessions: Vec<Session>, seen: &HashMap<i64, i64>) -> HashMap<i64, Card> {
-    let mut cards = HashMap::new();
-    let mut cache: HashMap<String, Option<Value>> = HashMap::new();
-    for session in sessions
-        .into_iter()
-        .filter(|s| !s.archived && s.work_item.is_some())
-    {
-        let item = session.work_item.unwrap();
-        // Only canonical GitHub repository slugs enter a gh API endpoint.
-        let parts = item.repo.split('/').collect::<Vec<_>>();
-        if item.number == 0
-            || parts.len() != 2
-            || parts.iter().any(|p| {
-                p.is_empty()
-                    || !p
-                        .chars()
-                        .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_' || c == '.')
-            })
-        {
+pub(crate) fn fetch(
+    sessions: HashMap<i64, LinkedSession>,
+    seen: &HashMap<i64, i64>,
+) -> HashMap<i64, Card> {
+    let mut groups: HashMap<String, Vec<LinkedSession>> = HashMap::new();
+    for session in sessions.into_values() {
+        let item = &session.item;
+        let collection = match item.kind.as_str() {
+            "pr" => "pulls",
+            "issue" => "issues",
+            _ => continue,
+        };
+        let slug = item.repo.split_once('/');
+        let valid = |part: &str| {
+            !matches!(part, "" | "." | "..")
+                && part
+                    .bytes()
+                    .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'-' | b'_' | b'.'))
+        };
+        if item.number == 0 || !slug.is_some_and(|(owner, repo)| valid(owner) && valid(repo)) {
             continue;
         }
         let base = format!(
-            "repos/{}/{}s/{}",
-            item.repo,
-            if item.kind == "pr" { "pull" } else { "issue" },
+            "repos/{}/{collection}/{}",
+            item.repo.to_ascii_lowercase(),
             item.number
         );
-        let Some(body) = cache
-            .entry(base.clone())
-            .or_insert_with(|| api(&base).ok())
-            .clone()
-        else {
+        groups.entry(base).or_default().push(session);
+    }
+
+    let mut cards = HashMap::new();
+    for (base, sessions) in groups {
+        let Ok(body) = api(&base) else {
             continue;
         };
         let updated_at = timestamp(body["updated_at"].as_str().unwrap_or(""));
-        let since = (session.updated_at.min(i64::MAX as u64) as i64)
-            .max(*seen.get(&session.id).unwrap_or(&0));
-        if updated_at <= since {
+        let mut affected = sessions
+            .into_iter()
+            .filter_map(|session| {
+                let since = session.updated_at.max(*seen.get(&session.id).unwrap_or(&0));
+                (updated_at > since).then_some((session, since))
+            })
+            .peekable();
+        let Some((first, _)) = affected.peek() else {
             continue;
-        }
-        let mut card = Card {
-            session: session.id,
-            title: body["title"].as_str().unwrap_or("").into(),
-            state: if body["merged"].as_bool() == Some(true) {
-                "merged".into()
-            } else {
-                body["state"].as_str().unwrap_or("").into()
-            },
-            updated_at,
-            item,
-            entries: Vec::new(),
-            details_error: false,
-            truncated: false,
         };
-        let issue_base = format!("repos/{}/issues/{}", card.item.repo, card.item.number);
+        let issue_base = format!(
+            "repos/{}/issues/{}",
+            first.item.repo.to_ascii_lowercase(),
+            first.item.number
+        );
         let mut feeds = vec![(format!("{issue_base}/comments?per_page=100"), "comment")];
-        if card.item.kind == "pr" {
+        if first.item.kind == "pr" {
             feeds.extend([
                 (format!("{base}/reviews?per_page=100"), "review"),
                 (format!("{base}/comments?per_page=100"), "review_comment"),
                 (format!("{base}/commits?per_page=100"), "commit"),
             ]);
         }
+        let mut entries = Vec::new();
+        let mut details_error = false;
+        let mut truncated = false;
         for (url, kind) in feeds {
-            let result = api(&url);
-            let Ok(body) = result else {
-                card.details_error = true;
+            let Ok(body) = api(&url) else {
+                details_error = true;
                 continue;
             };
-            let Some(entries) = body.as_array() else {
-                card.details_error = true;
+            let Some(feed) = body.as_array() else {
+                details_error = true;
                 continue;
             };
-            card.truncated |= entries.len() == 100;
-            for entry in entries {
-                let commit = kind == "commit";
-                let at = if commit {
-                    entry["commit"]["committer"]["date"].as_str()
-                } else if kind == "review" {
-                    entry["submitted_at"].as_str()
-                } else {
-                    entry["created_at"].as_str()
-                }
-                .unwrap_or("");
-                if timestamp(at) <= since {
-                    continue;
-                }
-                let text = if commit {
-                    entry["commit"]["message"]
-                        .as_str()
-                        .unwrap_or("")
-                        .lines()
-                        .next()
-                        .unwrap_or("")
-                        .into()
-                } else {
-                    let body = entry["body"].as_str().unwrap_or("");
-                    if kind == "review" {
-                        format!(
-                            "{}: {body}",
-                            entry["state"].as_str().unwrap_or("").replace('_', " ")
-                        )
-                    } else {
-                        body.to_owned()
-                    }
-                };
-                let text = text.split_whitespace().collect::<Vec<_>>().join(" ");
-                let text = if text.chars().count() > 140 {
-                    format!("{}…", text.chars().take(139).collect::<String>())
-                } else {
-                    text
-                };
-                card.entries.push(Entry {
-                    id: if commit {
-                        entry["sha"].as_str().unwrap_or("").into()
-                    } else {
-                        entry["id"].to_string()
-                    },
-                    kind: kind.into(),
-                    author: entry["user"]["login"]
-                        .as_str()
-                        .or_else(|| entry["author"]["login"].as_str())
-                        .unwrap_or("")
-                        .into(),
-                    text,
-                    created_at: at.into(),
-                    url: entry["html_url"].as_str().unwrap_or("").into(),
-                });
-            }
+            truncated |= feed.len() == 100;
+            entries.extend(feed.iter().map(|entry| read_entry(entry, kind)));
         }
-        card.entries
-            .sort_by_key(|e| std::cmp::Reverse(timestamp(&e.created_at)));
-        cards.insert(card.session, card);
+        entries.sort_by_key(|(at, _)| std::cmp::Reverse(*at));
+        let title = body["title"].as_str().unwrap_or("");
+        let state = if body["merged"].as_bool() == Some(true) {
+            "merged"
+        } else {
+            body["state"].as_str().unwrap_or("")
+        };
+        for (session, since) in affected {
+            cards.insert(
+                session.id,
+                Card {
+                    session: session.id,
+                    item: session.item,
+                    title: title.into(),
+                    state: state.into(),
+                    updated_at,
+                    entries: entries
+                        .iter()
+                        .take_while(|(at, _)| *at > since)
+                        .map(|(_, entry)| entry.clone())
+                        .collect(),
+                    details_error,
+                    truncated,
+                },
+            );
+        }
     }
     cards
+}
+
+fn read_entry(entry: &Value, kind: &str) -> (i64, Entry) {
+    let commit = kind == "commit";
+    let at = if commit {
+        entry["commit"]["committer"]["date"].as_str()
+    } else if kind == "review" {
+        entry["submitted_at"].as_str()
+    } else {
+        entry["created_at"].as_str()
+    }
+    .unwrap_or("");
+    let text = if commit {
+        entry["commit"]["message"]
+            .as_str()
+            .unwrap_or("")
+            .lines()
+            .next()
+            .unwrap_or("")
+            .into()
+    } else {
+        let body = entry["body"].as_str().unwrap_or("");
+        if kind == "review" {
+            format!(
+                "{}: {body}",
+                entry["state"].as_str().unwrap_or("").replace('_', " ")
+            )
+        } else {
+            body.to_owned()
+        }
+    };
+    let text = text.split_whitespace().collect::<Vec<_>>().join(" ");
+    let text = if text.chars().count() > 140 {
+        format!("{}…", text.chars().take(139).collect::<String>())
+    } else {
+        text
+    };
+    (
+        timestamp(at),
+        Entry {
+            id: if commit {
+                entry["sha"].as_str().unwrap_or("").into()
+            } else {
+                entry["id"].to_string()
+            },
+            kind: kind.into(),
+            author: entry["user"]["login"]
+                .as_str()
+                .or_else(|| entry["author"]["login"].as_str())
+                .unwrap_or("")
+                .into(),
+            text,
+            created_at: at.into(),
+            url: entry["html_url"].as_str().unwrap_or("").into(),
+        },
+    )
 }

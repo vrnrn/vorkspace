@@ -248,25 +248,24 @@ fn linked_github_activity_stays_with_each_visible_bot_pane(cx: &mut TestAppConte
         let (pane, session) = window
             .update(visual, |shell, _, cx| {
                 let pane = shell.workspace.active.unwrap();
-                let session = shell
-                    .bot_manager()
-                    .read(cx)
-                    .chat()
-                    .unwrap()
-                    .read(cx)
-                    .summary
-                    .id;
+                let chat = shell.bot_manager().read(cx).chat().unwrap();
+                let session = chat.read(cx).summary.id;
+                let item = WorkItem {
+                    kind: "pr".into(),
+                    repo: "example/project".into(),
+                    number,
+                    url: format!("https://github.com/example/project/pull/{number}"),
+                };
+                let updated_at = chat.update(cx, |chat, _| {
+                    chat.summary.work_item = Some(item.clone());
+                    chat.summary.updated_at as i64 + 1
+                });
                 let card = Card {
                     session,
-                    item: WorkItem {
-                        kind: "pr".into(),
-                        repo: "example/project".into(),
-                        number,
-                        url: format!("https://github.com/example/project/pull/{number}"),
-                    },
+                    item,
                     title: format!("Review feedback {number}"),
                     state: "open".into(),
-                    updated_at: vorkspace_core::time::now_ms() as i64,
+                    updated_at,
                     entries: vec![],
                     details_error: false,
                     truncated: false,

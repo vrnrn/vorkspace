@@ -25,12 +25,6 @@ pub(super) struct State {
     pub github: Entity<GithubActivity>,
     linked: HashMap<i64, Entity<LinkedActivity>>,
     linked_cleanup: HashMap<i64, Cleanup>,
-    linked_seen_ready: bool,
-    linked_last_poll: Option<std::time::Instant>,
-    linked_revisions: HashMap<String, i64>,
-    linked_primed: bool,
-    linked_started_at: u64,
-    linked_seen_writes: Option<gpui::Task<()>>,
     pub(super) whats_new: Option<(Entity<WhatsNew>, Subscription, FocusHandle)>,
     permission: Permission,
     permission_probe: Option<Receiver<Permission>>,
@@ -47,7 +41,11 @@ pub(super) struct State {
 }
 
 impl State {
-    pub(super) fn new(workspace: &Workspace, cx: &mut Context<Shell>) -> Self {
+    pub(super) fn new(
+        workspace: &Workspace,
+        github: Entity<GithubActivity>,
+        cx: &mut Context<Shell>,
+    ) -> Self {
         Self {
             region: AnchorSlot::default(),
             harness: cx
@@ -57,15 +55,9 @@ impl State {
             installed: cx.new(|_| InstalledUpdateNotice::new(None)),
             file_error: cx.new(|_| FileActionError::new()),
             reminder_error: None,
-            github: cx.new(|_| GithubActivity::new(HashMap::new())),
+            github,
             linked: HashMap::new(),
             linked_cleanup: HashMap::new(),
-            linked_seen_ready: false,
-            linked_last_poll: None,
-            linked_revisions: HashMap::new(),
-            linked_primed: false,
-            linked_started_at: vorkspace_core::time::now_ms(),
-            linked_seen_writes: None,
             whats_new: None,
             permission: Permission::Unsupported,
             permission_probe: None,
@@ -346,7 +338,7 @@ impl Shell {
                         {
                             this.poll_reminders(cx);
                         }
-                        this.poll_linked_activity(cx);
+                        this.settle_linked_cleanup(cx);
                         if this
                             .notification_state
                             .next_mute_expiry
@@ -364,7 +356,7 @@ impl Shell {
         }));
     }
 
-    fn notification_chats(&self, cx: &App) -> Vec<Entity<Conversation>> {
+    pub(super) fn notification_chats(&self, cx: &App) -> Vec<Entity<Conversation>> {
         let mut views: Vec<_> = self.sessions.values().cloned().collect();
         if let Some(bots) = &self.bots {
             views.extend(bots.read(cx).all_notification_chats(cx));
@@ -1081,68 +1073,21 @@ impl Shell {
         self.observations.push(cx.subscribe(
             &self.notification_state.github,
             |this, _, event, cx| {
-                match event {
-                    GithubActivityEvent::Acknowledged(seen) => {
-                        let seen = seen.clone();
-                        let store = this.store.clone();
-                        let previous = this.notification_state.linked_seen_writes.take();
-                        this.notification_state.linked_seen_writes =
-                            Some(cx.spawn(async move |_, cx| {
-                                if let Some(previous) = previous {
-                                    previous.await;
-                                }
-                                cx.background_executor()
-                                    .spawn(async move {
-                                        let _ = locked(&store)
-                                            .and_then(|s| github_activity::save_seen(&s, &seen));
-                                    })
-                                    .await;
-                            }));
-                    }
-                    GithubActivityEvent::Changed => {
-                        this.observe_linked_activity(cx);
-                        this.sync_linked_activity(cx);
-                    }
+                if matches!(event, GithubActivityEvent::Changed { .. }) {
+                    this.sync_linked_activity(cx);
+                    cx.notify();
                 }
-                cx.notify();
             },
         ));
-        let store = self.store.clone();
         let metadata = self.workspace.desktop_preferences_metadata.clone();
-        let work = cx.background_executor().spawn(async move {
-            locked(&store)
-                .and_then(|s| github_activity::load_seen_with_metadata(&s, metadata.as_ref()))
-        });
-        cx.spawn(async move |this, cx| {
-            let seen = work.await.unwrap_or_default();
-            let _ = this.update(cx, |this, cx| {
-                this.notification_state
-                    .github
-                    .update(cx, |feed, _| feed.restore_seen(seen));
-                this.notification_state.linked_seen_ready = true;
-                this.poll_linked_activity(cx);
-            });
-        })
-        .detach();
+        if let Some(core) = &self.app_core {
+            core.update(cx, |core, cx| core.start_linked_activity(metadata, cx));
+        }
     }
 
-    fn poll_linked_activity(&mut self, cx: &mut Context<Self>) {
-        if self.notification_state.linked_seen_ready
-            && self
-                .notification_state
-                .linked_last_poll
-                .is_none_or(|at| at.elapsed() >= Duration::from_secs(60))
-            && self.notification_state.github.read(cx).ready_to_poll()
-        {
-            self.notification_state.linked_last_poll = Some(std::time::Instant::now());
-            let mut sessions = self.session_summaries.clone();
-            for view in self.notification_chats(cx) {
-                let summary = view.read(cx).summary.clone();
-                sessions.insert(summary.id, summary);
-            }
-            self.notification_state.github.update(cx, |feed, cx| {
-                feed.poll(sessions.into_values().collect(), cx)
-            });
+    fn settle_linked_cleanup(&mut self, cx: &mut Context<Self>) {
+        if self.notification_state.linked_cleanup.is_empty() {
+            return;
         }
         let pending = self.notification_state.linked_cleanup.clone();
         for (id, action) in pending {
@@ -1185,59 +1130,42 @@ impl Shell {
             )
     }
 
-    fn observe_linked_activity(&mut self, cx: &mut Context<Self>) {
-        let cards: Vec<_> = self
-            .notification_state
+    pub(super) fn should_chime_linked_activity(
+        &self,
+        card: &github_activity::Card,
+        started_at: u64,
+    ) -> bool {
+        let occurred = u64::try_from(card.updated_at).unwrap_or(0);
+        self.linked_activity_allowed(card)
+            && self.workspace.preferences.sounds
+            && occurred >= self.notification_state.sounds_enabled_at
+            && occurred >= started_at
+    }
+
+    fn linked_card(&self, id: i64, cx: &App) -> Option<github_activity::Card> {
+        let chat = self.notification_chat(id, cx);
+        let current = chat
+            .as_ref()
+            .map(|chat| &chat.read(cx).summary)
+            .or_else(|| self.session_summaries.get(&id))?;
+        self.notification_state
             .github
             .read(cx)
             .cards
-            .values()
+            .get(&id)
+            .filter(|card| {
+                !current.archived
+                    && current.work_item.as_ref() == Some(&card.item)
+                    && card.updated_at as u64 > current.updated_at
+                    && self.linked_activity_allowed(card)
+            })
             .cloned()
-            .collect();
-        for card in cards {
-            let key = format!(
-                "{}:{}:{}:{}",
-                card.session,
-                card.item.repo.to_lowercase(),
-                card.item.kind,
-                card.item.number
-            );
-            let previous = self.notification_state.linked_revisions.get(&key).copied();
-            self.notification_state
-                .linked_revisions
-                .insert(key, previous.unwrap_or(0).max(card.updated_at));
-            // The first successful feed is a baseline, never a new-activity
-            // announcement. Acknowledgment and local-turn cutoffs are applied
-            // by the feed before a card enters this collection.
-            let newly_changed = self.notification_state.linked_primed
-                && previous.is_none_or(|at| card.updated_at > at);
-            let occurred = u64::try_from(card.updated_at).unwrap_or(0);
-            if newly_changed
-                && self.holds_scheduler(cx)
-                && !card.details_error
-                && self.linked_activity_allowed(&card)
-                && self.workspace.preferences.sounds
-                && occurred >= self.notification_state.sounds_enabled_at
-                && occurred >= self.notification_state.linked_started_at
-            {
-                // React uses a deduplicated chime, without an OS/banner here.
-                crate::sound::play(crate::sound::Cue::LinkedActivity, self.store.clone());
-            }
-        }
-        self.notification_state.linked_primed = true;
     }
 
     fn sync_linked_activity(&mut self, cx: &mut Context<Self>) {
         let ids: Vec<_> = self.notification_state.linked.keys().copied().collect();
         for id in ids {
-            let card = self
-                .notification_state
-                .github
-                .read(cx)
-                .cards
-                .get(&id)
-                .filter(|card| self.linked_activity_allowed(card))
-                .cloned();
+            let card = self.linked_card(id, cx);
             let can_cleanup = self.session_summaries.get(&id).is_some_and(|s| !s.archived);
             if let Some(notice) = self.notification_state.linked.get(&id) {
                 notice.update(cx, |notice, cx| {
@@ -1253,14 +1181,7 @@ impl Shell {
         id: i64,
         cx: &mut Context<Self>,
     ) -> Option<Entity<LinkedActivity>> {
-        let card = self
-            .notification_state
-            .github
-            .read(cx)
-            .cards
-            .get(&id)
-            .filter(|card| self.linked_activity_allowed(card))
-            .cloned()?;
+        let card = self.linked_card(id, cx)?;
         let can_cleanup = self.session_summaries.get(&id).is_some_and(|s| !s.archived);
         if let Some(notice) = self.notification_state.linked.get(&id) {
             notice.update(cx, |notice, cx| {

@@ -15,6 +15,7 @@
 //! claim: a lease whose window closed is free. A window also releases the lease
 //! when it drops the loaded conversation.
 mod layouts;
+mod notifications;
 mod scheduler;
 mod sessions;
 mod settings_writes;
@@ -90,6 +91,9 @@ pub(crate) struct AppCore {
     pub(super) remote_poll: super::remote_sessions::RemotePoll,
     pub(super) quick_shortcut: crate::composer::quick_composer::Shortcut,
     scheduler: Option<WeakEntity<Shell>>,
+    pub(super) github_activity: Entity<crate::notifications::github_activity::GithubActivity>,
+    linked_activity_clock: Option<gpui::Task<()>>,
+    linked_activity_started_at: u64,
     pub(super) automation_cutoff: i64,
     pub(super) automation_recovered: bool,
     automation_events: HashMap<String, vorkspace_core::inbox::Item>,
@@ -197,7 +201,9 @@ impl AppCore {
             None => SharedRoster::install(store.clone(), cx),
         };
         let checkouts = cx.new(|_| crate::git_status::CheckoutCatalog::default());
+        let github_activity = cx.new(|_| Default::default());
         let core = cx.new(|cx: &mut Context<AppCore>| {
+            AppCore::observe_linked_activity(&github_activity, cx);
             cx.subscribe(&bot_roster, |core, _, event: &MembershipChanged, cx| {
                 core.reconcile_bots(
                     event.vorkspace.as_deref().unwrap_or_default(),
@@ -221,6 +227,9 @@ impl AppCore {
                 remote_poll: Default::default(),
                 quick_shortcut: Default::default(),
                 scheduler: None,
+                github_activity,
+                linked_activity_clock: None,
+                linked_activity_started_at: vorkspace_core::time::now_ms(),
                 automation_cutoff: vorkspace_core::time::now_ms().min(i64::MAX as u64) as i64,
                 automation_recovered: false,
                 automation_events,
@@ -485,6 +494,9 @@ impl Shell {
             let _ = release.update(cx, |core, cx| {
                 core.keep_visible_agents(window, HashSet::new());
                 core.set_remote_scope(window, None, cx);
+                if !core.windows.iter().any(|window| window.upgrade().is_some()) {
+                    core.linked_activity_clock = None;
+                }
             });
         })
         .detach();

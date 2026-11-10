@@ -836,7 +836,8 @@ impl Shell {
         });
         let worktree_focus = workspace.worktree_focus.clone();
         let session_worktrees = sidebar_metadata.worktrees;
-        let notification_state = notifications::State::new(&workspace, cx);
+        let github_activity = app_core.read(cx).github_activity.clone();
+        let notification_state = notifications::State::new(&workspace, github_activity, cx);
         let owner = cx.weak_entity();
         let live_agents = cx.new(|cx| live_agents::LiveAgents::new(owner, cx));
         let mut this = Self {

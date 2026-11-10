@@ -188,8 +188,7 @@ mod tests {
         ));
         let writes = SettingsWrites::default();
         writes.stage_layouts(layouts("/old"));
-        let mut definition = VorkspaceDef::default();
-        definition.id = "shared".into();
+        let definition = serde_json::from_str(r#"{"id":"shared"}"#).unwrap();
         writes.stage_definitions(Saved {
             vorkspaces: Arc::new(vec![definition]),
             ..Default::default()
