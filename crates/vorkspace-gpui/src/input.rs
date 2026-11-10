@@ -9,7 +9,7 @@ use gpui::{
     point, prelude::*, px, relative, rgb, size,
 };
 use std::{borrow::Cow, ops::Range};
-use unicode_segmentation::UnicodeSegmentation;
+use unicode_segmentation::{GraphemeCursor, UnicodeSegmentation};
 
 mod code;
 mod command;
@@ -652,31 +652,20 @@ impl Input {
         if let Some(at) = self.folded_boundary(at, true) {
             return at;
         }
-        if self.code.is_some() {
-            return self.content[..at]
-                .grapheme_indices(true)
-                .next_back()
-                .map_or(0, |(at, _)| at);
-        }
-        self.content
-            .grapheme_indices(true)
-            .rev()
-            .find_map(|(ix, _)| (ix < at).then_some(ix))
+        GraphemeCursor::new(at, self.content.len(), true)
+            .prev_boundary(&self.content, 0)
+            .ok()
+            .flatten()
             .unwrap_or(0)
     }
     fn next(&self, at: usize) -> usize {
         if let Some(at) = self.folded_boundary(at, false) {
             return at;
         }
-        if self.code.is_some() {
-            return self.content[at..]
-                .grapheme_indices(true)
-                .nth(1)
-                .map_or(self.content.len(), |(next, _)| at + next);
-        }
-        self.content
-            .grapheme_indices(true)
-            .find_map(|(ix, _)| (ix > at).then_some(ix))
+        GraphemeCursor::new(at, self.content.len(), true)
+            .next_boundary(&self.content, 0)
+            .ok()
+            .flatten()
             .unwrap_or(self.content.len())
     }
     fn from16(&self, offset: usize) -> usize {
@@ -702,17 +691,19 @@ impl Input {
         })
     }
     fn previous_word(&self) -> usize {
+        let cursor = self.cursor();
         self.content
             .unicode_word_indices()
             .rev()
-            .find_map(|(start, _)| (start < self.cursor()).then_some(start))
+            .find_map(|(start, _)| (start < cursor).then_some(start))
             .unwrap_or(0)
     }
     fn next_word(&self) -> usize {
+        let cursor = self.cursor();
         self.content
             .unicode_word_indices()
             .map(|(start, word)| start + word.len())
-            .find(|end| *end > self.cursor())
+            .find(|end| *end > cursor)
             .unwrap_or(self.content.len())
     }
     fn line_edge(&self, end: bool) -> usize {
@@ -754,6 +745,38 @@ impl Input {
         } else {
             Cow::Borrowed(text)
         }
+    }
+    fn apply_replacement(
+        &mut self,
+        range: &Range<usize>,
+        text: &str,
+        cx: &mut Context<Self>,
+    ) -> Option<usize> {
+        let normalized = self.normalized(text);
+        if self.code.is_some() && !self.accept_code_edit(range, &normalized, cx) {
+            return None;
+        }
+        let text = self.max_chars.map_or(normalized.as_ref(), |limit| {
+            let outside = self.content[..range.start].encode_utf16().count()
+                + self.content[range.end..].encode_utf16().count();
+            limit_utf16(&normalized, limit.saturating_sub(outside))
+        });
+        let base_bytes = self.content.len() - range.len();
+        let byte_limit = if self.code.is_some() {
+            vorkspace_core::files::document::MAX_TEXT_BYTES
+        } else {
+            MAX_BYTES
+        };
+        let text = bounded(text, byte_limit.saturating_sub(base_bytes));
+        self.record_undo();
+        self.map_code_folds(range, text.len());
+        let mut updated = String::with_capacity(base_bytes + text.len());
+        updated.push_str(&self.content[..range.start]);
+        updated.push_str(text);
+        updated.push_str(&self.content[range.end..]);
+        self.content = updated.into();
+        self.code_changed();
+        Some(range.start + text.len())
     }
     fn position(&self, at: usize) -> Point<Pixels> {
         if self.code.is_some() {
@@ -1177,38 +1200,9 @@ impl EntityInputHandler for Input {
             .inline_commands
             .then(|| Command::leading(&self.content))
             .flatten();
-        let normalized = self.normalized(text);
-        if self.code.is_some() && !self.accept_code_edit(&r, &normalized, cx) {
+        let Some(end) = self.apply_replacement(&r, text, cx) else {
             return;
-        }
-        let mut normalized = normalized.into_owned();
-        if let Some(limit) = self.max_chars {
-            let remaining = limit.saturating_sub(
-                self.content[..r.start].encode_utf16().count()
-                    + self.content[r.end..].encode_utf16().count(),
-            );
-            normalized = limit_utf16(&normalized, remaining);
-        }
-        self.record_undo();
-        let text = bounded(
-            &normalized,
-            (if self.code.is_some() {
-                vorkspace_core::files::document::MAX_TEXT_BYTES
-            } else {
-                MAX_BYTES
-            })
-            .saturating_sub(self.content.len() - (r.end - r.start)),
-        );
-        self.map_code_folds(&r, text.len());
-        self.content = format!(
-            "{}{}{}",
-            &self.content[..r.start],
-            text,
-            &self.content[r.end..]
-        )
-        .into();
-        let end = r.start + text.len();
-        self.code_changed();
+        };
         self.selection = end..end;
         self.reversed = false;
         self.marked = None;
@@ -1230,42 +1224,14 @@ impl EntityInputHandler for Input {
         self.manual_scroll = false;
         self.reveal_pending = self.reveal_in_parent;
         let r = self.replacement_range(r);
-        let normalized = self.normalized(text);
-        if self.code.is_some() && !self.accept_code_edit(&r, &normalized, cx) {
+        let Some(end) = self.apply_replacement(&r, text, cx) else {
             return;
-        }
-        let mut normalized = normalized.into_owned();
-        if let Some(limit) = self.max_chars {
-            let remaining = limit.saturating_sub(
-                self.content[..r.start].encode_utf16().count()
-                    + self.content[r.end..].encode_utf16().count(),
-            );
-            normalized = limit_utf16(&normalized, remaining);
-        }
-        self.record_undo();
-        let text = bounded(
-            &normalized,
-            (if self.code.is_some() {
-                vorkspace_core::files::document::MAX_TEXT_BYTES
-            } else {
-                MAX_BYTES
-            })
-            .saturating_sub(self.content.len() - (r.end - r.start)),
-        );
-        self.map_code_folds(&r, text.len());
-        self.content = format!(
-            "{}{}{}",
-            &self.content[..r.start],
-            text,
-            &self.content[r.end..]
-        )
-        .into();
-        let text = text.to_owned();
-        self.code_changed();
-        self.marked = (!text.is_empty()).then_some(r.start..r.start + text.len());
+        };
+        let inserted = &self.content[r.start..end];
+        self.marked = (!inserted.is_empty()).then_some(r.start..end);
         let selection = selection
-            .map(|s| r.start + from16(&text, s.start)..r.start + from16(&text, s.end))
-            .unwrap_or(r.start + text.len()..r.start + text.len());
+            .map(|s| r.start + from16(inserted, s.start)..r.start + from16(inserted, s.end))
+            .unwrap_or(end..end);
         self.selection = self.clip_range(selection);
         self.reversed = false;
         cx.emit(Changed);
@@ -1292,14 +1258,14 @@ impl EntityInputHandler for Input {
         Some(self.to16(self.mouse_index(p)))
     }
 }
-fn limit_utf16(text: &str, units: usize) -> String {
-    let mut used = 0;
-    text.chars()
-        .take_while(|c| {
-            used += c.len_utf16();
-            used <= units
-        })
-        .collect()
+fn limit_utf16(text: &str, mut units: usize) -> &str {
+    for (byte, character) in text.char_indices() {
+        let Some(remaining) = units.checked_sub(character.len_utf16()) else {
+            return &text[..byte];
+        };
+        units = remaining;
+    }
+    text
 }
 fn bounded(text: &str, max: usize) -> &str {
     let mut n = max.min(text.len());

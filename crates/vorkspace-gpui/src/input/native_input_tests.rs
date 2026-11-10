@@ -439,6 +439,15 @@ fn ime_replacement_and_grapheme_deletion(cx: &mut TestAppContext) {
             assert_eq!(input.content.as_ref(), "e\u{301}");
             input.backspace(&Backspace, w, cx);
             assert!(input.content.is_empty());
+            input.set_text("🇨🇦e\u{301}👩‍💻".into(), cx);
+            input.select_range("🇨".len().."🇨".len(), cx);
+            input.right(&Right, w, cx);
+            assert_eq!(input.cursor(), "🇨🇦".len());
+            input.right(&Right, w, cx);
+            assert_eq!(input.cursor(), "🇨🇦e\u{301}".len());
+            input.delete(&Delete, w, cx);
+            assert_eq!(input.content.as_ref(), "🇨🇦e\u{301}");
+            input.select_all(&SelectAll, w, cx);
             input.replace_text_in_range(None, "line one\nline two", w, cx);
             assert_eq!(input.take(cx).as_deref(), Some("line one\nline two"));
         })

@@ -220,22 +220,15 @@ impl Input {
         cursor: usize,
         cx: &mut Context<Self>,
     ) {
-        if self.read_only || self.is_composing() || !self.accept_code_edit(&range, text, cx) {
+        if self.read_only || self.is_composing() || self.clip_range(range.clone()) != range {
             return;
         }
-        self.record_undo();
-        self.map_code_folds(&range, text.len());
-        self.content = format!(
-            "{}{}{}",
-            &self.content[..range.start],
-            text,
-            &self.content[range.end..]
-        )
-        .into();
-        let at = range.start + cursor.min(text.len());
+        let Some(end) = self.apply_replacement(&range, text, cx) else {
+            return;
+        };
+        let at = self.clip_offset(range.start + cursor.min(end - range.start));
         self.selection = at..at;
         self.reversed = false;
-        self.code_changed();
         if let Some(code) = &mut self.code {
             code.suppress_completion = true;
         }
