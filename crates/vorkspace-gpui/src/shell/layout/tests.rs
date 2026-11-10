@@ -1,6 +1,6 @@
 use super::*;
 use crate::{bots::Bots, shell::tests::window};
-use gpui::{Focusable, TestAppContext, WindowHandle};
+use gpui::{Entity, Focusable, TestAppContext, WindowHandle};
 
 fn pane_has_left_border(window: WindowHandle<Shell>, visual: &mut gpui::VisualTestContext) -> bool {
     let pane = visual.debug_bounds("main-pane-frame").unwrap();

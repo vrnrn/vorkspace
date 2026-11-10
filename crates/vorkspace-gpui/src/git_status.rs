@@ -77,6 +77,7 @@ impl EventEmitter<GitChanged> for ProjectGit {}
 impl ProjectGit {
     #[cfg(test)]
     pub(crate) fn new(project: String, cx: &mut Context<Self>) -> Self {
+        use gpui::AppContext as _;
         let catalog = cx.new(|_| CheckoutCatalog::default());
         Self::shared(project, catalog, cx)
     }

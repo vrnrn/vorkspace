@@ -224,7 +224,10 @@ fn listing_and_seed_preferences_publish_together_after_every_row_is_valid() {
         .unwrap_err();
     assert!(err.starts_with("Cannot read remote settings"));
     assert_eq!(std::fs::read(&sidecar).unwrap(), before);
-    assert_eq!(store.sessions().unwrap(), [broken.clone()]);
+    assert_eq!(
+        store.sessions().unwrap().as_slice(),
+        std::slice::from_ref(&broken)
+    );
 
     store.save_setting(&broken_key, "{}").unwrap();
     let listing = store

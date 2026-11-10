@@ -1,7 +1,7 @@
 //! Opt-in pixel parity. Renders the main surfaces offscreen so a refactor can be
 //! compared byte for byte against the captures of the commit before it.
 use super::*;
-use crate::{panel_kit::RightTab, settings::Section};
+use crate::{settings::Section, workspace::SidebarTab};
 use vorkspace_core::store::Store;
 
 const PROJECT: &str = "/tmp/vorkspace-ui-parity";
@@ -18,8 +18,7 @@ fn git(args: &[&str]) {
     assert!(status.success());
 }
 
-/// A fixed repository: the right panel only opens for a checkout, and its
-/// contents must not vary between the two runs being compared.
+/// A fixed repository supplies identical project tool contents to each capture.
 fn project() {
     let _ = std::fs::remove_dir_all(PROJECT);
     std::fs::create_dir_all(format!("{PROJECT}/src")).unwrap();
@@ -37,23 +36,16 @@ fn project() {
     .unwrap();
 }
 
-fn right_tab(shell: &mut Shell, tab: RightTab, window: &mut Window, cx: &mut Context<Shell>) {
-    shell.select_classic_sidebar(crate::workspace::SidebarTab::Files, window, cx);
-    if let Some(panel) = &shell.right_panel {
-        panel.update(cx, |panel, cx| panel.select(tab, cx));
-    }
-}
-
 const SURFACES: &[(&str, Open)] = &[
     ("chat", |_, _, _| {}),
     ("explorer", |shell, window, cx| {
-        right_tab(shell, RightTab::Files, window, cx)
+        shell.select_classic_sidebar(SidebarTab::Files, window, cx)
     }),
     ("changes", |shell, window, cx| {
-        right_tab(shell, RightTab::Changes, window, cx)
+        shell.select_classic_sidebar(SidebarTab::Changes, window, cx)
     }),
     ("graph", |shell, window, cx| {
-        right_tab(shell, RightTab::Graph, window, cx)
+        shell.select_classic_sidebar(SidebarTab::Graph, window, cx)
     }),
     ("notes", |shell, window, cx| shell.open_notes(window, cx)),
     ("todos", |shell, window, cx| shell.open_todos(window, cx)),

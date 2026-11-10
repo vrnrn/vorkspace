@@ -102,10 +102,7 @@ fn ready_turn_updates_return_to_the_executor_before_draining_the_queue(cx: &mut 
     window
         .update(cx, |view, _, cx| {
             assert_eq!(view.status, "Synthetic status 0");
-            assert_eq!(
-                view.transcript.read(cx).source_rows(),
-                update(0, false).rows
-            );
+            assert_eq!(view.transcript.read(cx).source_rows(), [synthetic_row(0)]);
             assert!(view.busy);
             // Control/user input gets an opportunity between atomic patches.
             view.input
@@ -116,7 +113,7 @@ fn ready_turn_updates_return_to_the_executor_before_draining_the_queue(cx: &mut 
     settle_turn(window, cx);
     window
         .update(cx, |view, _, cx| {
-            let expected: Vec<_> = (0..8).flat_map(|index| update(index, false).rows).collect();
+            let expected: Vec<_> = (0..8).map(synthetic_row).collect();
             assert_eq!(view.transcript.read(cx).source_rows(), expected);
             assert_eq!(view.status, "Synthetic status 7");
             assert!(!view.busy && !view.stopping);
@@ -155,10 +152,7 @@ fn superseding_a_yielded_receiver_protects_the_successor(cx: &mut TestAppContext
         .update(cx, |view, _, cx| {
             assert_eq!(view.status, "Successor");
             assert!(view.busy && !view.stopping);
-            assert_eq!(
-                view.transcript.read(cx).source_rows(),
-                update(0, false).rows
-            );
+            assert_eq!(view.transcript.read(cx).source_rows(), [synthetic_row(0)]);
         })
         .unwrap();
 }
@@ -211,7 +205,7 @@ fn stop_between_updates_skips_streaming_but_accepts_the_final_replay(cx: &mut Te
     settle_turn(window, cx);
     window
         .update(cx, |view, _, cx| {
-            let expected: Vec<_> = (0..2).flat_map(|index| update(index, false).rows).collect();
+            let expected: Vec<_> = (0..2).map(synthetic_row).collect();
             assert_eq!(view.transcript.read(cx).source_rows(), expected);
             assert_eq!(view.status, "Ready");
             assert!(!view.busy && !view.stopping);
@@ -356,7 +350,7 @@ fn verify_recovered_turn_refresh(cx: &mut TestAppContext, pending: bool) {
     let mut store = Store::open_vorkspace(&path).unwrap();
     let summary = store.create("codex", "/project").unwrap();
     let id = summary.id;
-    let stale = update(0, false).rows;
+    let stale = vec![synthetic_row(0)];
     let mut saved = stale.clone();
     saved[0].text = "Latest durable history".into();
     store.write_rows(id, 0, &saved).unwrap();
