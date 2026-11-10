@@ -72,7 +72,8 @@ actions!(
         ShowAll,
         Repository,
         ReportBug,
-        RequestFeature
+        RequestFeature,
+        ShowRunningWork,
     ]
 );
 
@@ -97,6 +98,7 @@ pub(crate) fn init(cx: &mut App) {
     cx.on_action(|_: &crate::CloseWindow, cx| {
         with_workspace(cx, shell::Shell::request_close_window);
     });
+    cx.on_action(|_: &ShowRunningWork, cx| with_workspace(cx, shell::Shell::show_running_work));
     cx.on_action(|_: &crate::NextWindow, cx| {
         let windows: Vec<_> = cx
             .windows()
@@ -300,6 +302,7 @@ pub(crate) fn build(prefs: &Preferences) -> Vec<Menu> {
             MenuItem::action("Automations", shell::ShowAutomations),
             MenuItem::action("Toggle Terminal", shell::ToggleTerminal),
             MenuItem::action("Switch Model…", shell::SwitchModel),
+            MenuItem::action("Running Work…", ShowRunningWork),
             MenuItem::separator(),
             MenuItem::action("Back", shell::VisitBack),
             MenuItem::action("Forward", shell::VisitForward),

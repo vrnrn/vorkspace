@@ -4,7 +4,7 @@ use vorkspace_ui::radius;
 use super::Shell;
 use crate::{
     popover::{Anchor, popover},
-    resource_pressure::SessionInfo,
+    resource_pressure::{SessionInfo, StopSession},
 };
 use gpui::{
     AnyElement, Context, CursorStyle, MouseButton, MouseDownEvent, StyleRefinement, Window, div,
@@ -24,8 +24,6 @@ impl Shell {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> AnyElement {
-        self.resources
-            .update(cx, |resources, cx| resources.set_classic(true, cx));
         let card = self.workspace_content(window, cx);
         // Every workspace destination shares the title row. Settings keeps
         // its own header above the parked workspace.
@@ -216,21 +214,39 @@ impl Shell {
         if !self.resources.read(cx).is_open() {
             return None;
         }
-        let mut sessions: HashMap<i64, SessionInfo> = self
-            .sessions
-            .iter()
-            .map(|(id, session)| {
-                let summary = &session.read(cx).summary;
-                let info = SessionInfo {
-                    title: summary.title.clone().into(),
-                    provider: summary.provider.clone(),
+        let roster = self
+            .app_core
+            .as_ref()
+            .and_then(|core| core.read(cx).bot_roster.read(cx).committed());
+        let sessions: HashMap<i64, SessionInfo> = self
+            .resources
+            .read(cx)
+            .displayed_sessions()
+            .filter_map(|id| {
+                let local_bot = self
+                    .bots
+                    .as_ref()
+                    .and_then(|bots| bots.read(cx).calling_view(id, cx));
+                let summary = self
+                    .sessions
+                    .get(&id)
+                    .or(local_bot.as_ref())
+                    .map(|view| &view.read(cx).summary)
+                    .or_else(|| self.session_summaries.get(&id));
+                let info = if let Some(summary) = summary {
+                    SessionInfo {
+                        title: summary.title.clone().into(),
+                        provider: Some(summary.provider.clone()),
+                    }
+                } else {
+                    SessionInfo {
+                        title: roster?.of_session(id)?.name.clone().into(),
+                        provider: None,
+                    }
                 };
-                (*id, info)
+                Some((id, info))
             })
             .collect();
-        if let Some(m) = &self.bots {
-            sessions.extend(m.read(cx).resource_sessions(cx));
-        }
         let content = self
             .resources
             .update(cx, |monitor, cx| monitor.dialog(&sessions, window, cx));
@@ -262,6 +278,33 @@ impl Shell {
                 )
                 .into_any_element(),
         )
+    }
+
+    pub(crate) fn show_running_work(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.management_modal_focus(cx).is_none() {
+            self.resources
+                .update(cx, |resources, cx| resources.open(window, cx));
+        }
+    }
+
+    pub(super) fn stop_resource_turn(&self, request: &StopSession, cx: &mut Context<Self>) {
+        let core = self.app_core.clone();
+        let monitor = self.resources.downgrade();
+        let request = request.clone();
+        // Routing reads peer windows, including this one. Wait for the current
+        // Shell update to release its lease before resolving the owner.
+        cx.defer(move |cx| {
+            let view = core.as_ref().and_then(|core| {
+                core.read(cx)
+                    .running_turn(request.session, &request.turn, cx)
+            });
+            let stopped = view.is_some_and(|view| {
+                view.update(cx, |view, cx| view.stop_running_turn(&request.turn, cx))
+            });
+            let _ = monitor.update(cx, |monitor, cx| {
+                monitor.finish_session_stop(&request, stopped, cx)
+            });
+        });
     }
 }
 

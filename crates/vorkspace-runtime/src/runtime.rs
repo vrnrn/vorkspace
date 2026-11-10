@@ -403,11 +403,13 @@ fn run_turn_using(
                     ..Default::default()
                 },
             )?;
-            let notice = vorkspace_core::worktree_setup::run_due(
-                std::path::Path::new(&summary.cwd),
-                std::path::Path::new(&working),
-                &cancel,
-            )
+            let notice = vorkspace_core::process::owned_turn(summary.id, &cancel, || {
+                vorkspace_core::worktree_setup::run_due(
+                    std::path::Path::new(&summary.cwd),
+                    std::path::Path::new(&working),
+                    &cancel,
+                )
+            })
             .map_err(|error| format!("Could not prepare worktree setup: {error}"))?;
             if cancel.load(Ordering::Relaxed) {
                 return Err("Stopped".into());
@@ -578,7 +580,7 @@ fn run_turn_using(
         }
         submissions.dispatch_initial()?;
         // The running-work list attributes the provider and its tools to this session.
-        let result = vorkspace_core::process::owned_by(summary.id, || {
+        let result = vorkspace_core::process::owned_turn(summary.id, &cancel, || {
             provider::run_with_controls(request, cancel.clone(), Some(controls), |events| {
                 // Cancellation freezes the transcript, even while the native
                 // provider drains its interrupt acknowledgement. A provider

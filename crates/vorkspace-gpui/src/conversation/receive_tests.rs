@@ -44,6 +44,25 @@ fn conversation(cx: &mut TestAppContext) -> WindowHandle<Conversation> {
     window
 }
 
+#[gpui::test]
+fn a_stale_resource_stop_cannot_cancel_the_next_turn(cx: &mut TestAppContext) {
+    let window = conversation(cx);
+    window
+        .update(cx, |view, _, cx| {
+            let old = vorkspace_core::process::TurnToken::from(&view.cancel);
+            view.cancel = Arc::new(AtomicBool::new(false));
+            view.begin_turn(cx);
+            let current = vorkspace_core::process::TurnToken::from(&view.cancel);
+            assert!(!view.stop_running_turn(&old, cx));
+            assert!(view.busy);
+            assert!(!view.cancel.load(Ordering::Relaxed));
+            assert!(view.stop_running_turn(&current, cx));
+            assert!(view.stopping);
+            assert!(view.cancel.load(Ordering::Relaxed));
+        })
+        .unwrap();
+}
+
 fn start_receiver(
     window: WindowHandle<Conversation>,
     rx: async_channel::Receiver<vorkspace_runtime::runtime::Update>,

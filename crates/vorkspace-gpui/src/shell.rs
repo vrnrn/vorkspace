@@ -830,12 +830,8 @@ impl Shell {
         let git = cx.new(|cx| crate::git_status::ProjectGit::shared(git_project, checkouts, cx));
         let resources = cx.new(ResourceMonitor::new);
         let resource_observation = cx.observe(&resources, |_, _, cx| cx.notify());
-        let resource_stops = cx.subscribe(&resources, |this, _, StopSession(id), cx| {
-            if let Some(session) = this.sessions.get(id) {
-                session.update(cx, |session, cx| session.stop_if_busy(cx));
-            } else if let Some(m) = this.bots.clone() {
-                m.update(cx, |m, cx| m.stop_session(*id, cx));
-            }
+        let resource_stops = cx.subscribe(&resources, |this, _, request: &StopSession, cx| {
+            this.stop_resource_turn(request, cx);
         });
         let worktree_focus = workspace.worktree_focus.clone();
         let session_worktrees = sidebar_metadata.worktrees;

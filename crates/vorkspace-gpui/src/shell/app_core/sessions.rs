@@ -79,6 +79,27 @@ impl AppCore {
                     .is_some_and(|m| m.read(cx).calling_view(session, cx).is_some())
             })
     }
+
+    pub(in crate::shell) fn running_turn(
+        &self,
+        id: i64,
+        token: &vorkspace_core::process::TurnToken,
+        cx: &App,
+    ) -> Option<Entity<Conversation>> {
+        let matches = |view: &Entity<Conversation>| view.read(cx).owns_running_turn(token);
+        self.sessions
+            .get(&id)
+            .and_then(WeakEntity::upgrade)
+            .and_then(|shell| shell.read(cx).sessions.get(&id).cloned())
+            .filter(matches)
+            .or_else(|| {
+                self.windows
+                    .iter()
+                    .filter_map(WeakEntity::upgrade)
+                    .filter_map(|shell| shell.read(cx).bots.as_ref()?.read(cx).calling_view(id, cx))
+                    .find(matches)
+            })
+    }
 }
 
 impl Shell {

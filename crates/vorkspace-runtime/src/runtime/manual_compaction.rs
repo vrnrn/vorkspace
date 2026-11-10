@@ -155,7 +155,7 @@ pub(super) fn run_using(
             model: settings.model.clone(),
             settings,
         };
-        vorkspace_core::process::owned_by(id, || {
+        vorkspace_core::process::owned_turn(id, &cancel, || {
             compact(request, cancel.clone(), &mut |events| {
                 for event in events {
                     match event {

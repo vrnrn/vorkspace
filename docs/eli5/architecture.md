@@ -28,6 +28,8 @@ The app keeps word-fade animation data while new text is arriving, then releases
 
 The Changes panel and title bar read from the same Git snapshot. The app checks for edits frequently and does the heavier refresh when something changes or the snapshot needs reconciling. Two windows on the same checkout share a commit graph, and each window keeps its own search and selection. If you switch checkouts while writing a commit message, each checkout keeps its own draft while Changes is open. A confirmation belongs to the checkout and branch where you opened it.
 
+Open **View → Running Work** to see the app’s local agents. You can stop a reply from another window. If that reply already ended, the button cannot stop a newer reply that took its place.
+
 Long indexed Bot chats opened from the Bot panel first show their newest messages. Scroll up or choose Load earlier messages to read older parts without losing your place. If the saved chat changes elsewhere, the app reloads it when you request another page; if loading fails temporarily, you can retry. Before a Bot runs or a message changes, the app loads the complete chat so older messages stay safe. Other kinds of history keep their existing loading behavior.
 
 Bots, sessions, terminals, notes, GitHub/GitLab/Jira items, Search, Automations and To-dos open in tabs. Different notes and items can stay open independently. Opening the same item again takes you back to its existing tab and unfinished work.

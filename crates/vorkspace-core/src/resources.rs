@@ -1,5 +1,5 @@
 //! System pressure and the processes vorkspace owns.
-use crate::process::{self, Agent};
+use crate::process::{self, Agent, TurnToken};
 use std::collections::{HashMap, HashSet};
 use std::process::Command;
 use std::time::{Duration, Instant};
@@ -88,6 +88,7 @@ pub struct OwnedProcess {
     pub pid: u32,
     pub identity: String,
     pub session: i64,
+    pub turn: Option<TurnToken>,
     pub command: String,
     pub cpu_percent: f64,
     pub memory_bytes: u64,
@@ -223,6 +224,7 @@ fn owned(
                 pid: process.pid,
                 identity: identity(process.pid)?,
                 session: root.session,
+                turn: root.turn.clone(),
                 command: process.command.clone(),
                 cpu_percent: process.cpu,
                 memory_bytes: process.memory,
@@ -410,6 +412,7 @@ mod tests {
             .collect();
         let roots = [Agent {
             session: 7,
+            turn: None,
             pid: 10,
             identity: Some("10:1:1".into()),
         }];
@@ -437,6 +440,7 @@ mod tests {
         let root_pid = std::process::id();
         let root = Agent {
             session: 1,
+            turn: None,
             pid: root_pid,
             identity: identity(root_pid),
         };
@@ -457,12 +461,25 @@ mod tests {
     }
 
     #[test]
-    fn owned_children_are_listed_under_their_session() {
+    fn owned_children_are_listed_under_their_exact_turn_even_when_the_pid_stays_warm() {
+        use std::sync::{atomic::AtomicBool, Arc};
         let mut child = Command::new("/bin/sleep").arg("30").spawn().unwrap();
-        let registration = process::owned_by(42, || process::register(child.id()));
+        let before = Arc::new(AtomicBool::new(false));
+        let after = Arc::new(AtomicBool::new(false));
+        let registration = process::owned_turn(42, &before, || process::register(child.id()));
         let agents = process::agents();
         let mine = agents.iter().find(|a| a.pid == child.id()).unwrap();
         assert_eq!(mine.session, 42);
+        let prior = mine.turn.as_ref().unwrap();
+        assert!(prior.matches(&before));
+        process::mark_idle(child.id(), true);
+        assert!(process::agents().iter().all(|a| a.pid != child.id()));
+        process::owned_turn(42, &after, || process::mark_idle(child.id(), false));
+        let agents = process::agents();
+        let successor = agents.iter().find(|a| a.pid == child.id()).unwrap();
+        assert_eq!(mine.identity, successor.identity);
+        assert_ne!(mine.turn, successor.turn);
+        assert!(successor.turn.as_ref().unwrap().matches(&after));
         drop(registration);
         assert!(process::agents().iter().all(|a| a.pid != child.id()));
         let _ = child.kill();

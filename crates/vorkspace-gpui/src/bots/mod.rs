@@ -301,35 +301,6 @@ impl Bots {
             .find(|view| view.read(cx).summary.id == id)
             .cloned()
     }
-    pub(crate) fn resource_sessions(
-        &self,
-        cx: &App,
-    ) -> Vec<(i64, crate::resource_pressure::SessionInfo)> {
-        self.chats
-            .values()
-            .chain(self.running.values().map(|r| &r.view))
-            .map(|v| {
-                let s = &v.read(cx).summary;
-                (
-                    s.id,
-                    crate::resource_pressure::SessionInfo {
-                        title: s.title.clone().into(),
-                        provider: s.provider.clone(),
-                    },
-                )
-            })
-            .collect()
-    }
-    pub(crate) fn stop_session(&mut self, id: i64, cx: &mut Context<Self>) {
-        if let Some(view) = self
-            .chats
-            .values()
-            .chain(self.running.values().map(|r| &r.view))
-            .find(|v| v.read(cx).summary.id == id)
-        {
-            view.update(cx, |v, cx| v.stop_if_busy(cx));
-        }
-    }
     pub(crate) fn bind_window(&mut self, window: &Window) {
         self.parent_window = Some(window.window_handle());
     }

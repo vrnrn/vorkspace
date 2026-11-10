@@ -3,6 +3,22 @@ use super::*;
 use vorkspace_ui::radius;
 
 impl Conversation {
+    pub(crate) fn owns_running_turn(&self, token: &vorkspace_core::process::TurnToken) -> bool {
+        self.busy && !self.stopping && token.matches(&self.cancel)
+    }
+
+    pub(crate) fn stop_running_turn(
+        &mut self,
+        token: &vorkspace_core::process::TurnToken,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        if !self.owns_running_turn(token) {
+            return false;
+        }
+        self.stop(cx);
+        true
+    }
+
     /// `Session: Stop` on Escape: cancels a running turn.
     pub(crate) fn stop_if_busy(&mut self, cx: &mut Context<Self>) {
         if self.cancel_edit_last_turn(cx) {

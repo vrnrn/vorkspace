@@ -39,11 +39,12 @@ pub(super) fn prepare(
     {
         let cancel = Arc::new(AtomicBool::new(false));
         let timer_cancel = cancel.clone();
+        let cancelled_turn = user_cancel.clone();
         let (settled, settlement) = mpsc::channel();
         let timer = std::thread::spawn(move || {
             let started = Instant::now();
             loop {
-                if user_cancel.load(Ordering::Relaxed)
+                if cancelled_turn.load(Ordering::Relaxed)
                     || started.elapsed() >= Duration::from_secs(45)
                 {
                     timer_cancel.store(true, Ordering::Relaxed);
@@ -79,7 +80,7 @@ pub(super) fn prepare(
             },
         };
         let (controls, control_rx) = mpsc::channel();
-        let _ = vorkspace_core::process::owned_by(session, || {
+        let _ = vorkspace_core::process::owned_turn(session, &user_cancel, || {
             provider::run_with_controls(request, cancel, Some(control_rx), |events| {
                 for event in events {
                     match event {
