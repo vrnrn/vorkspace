@@ -655,6 +655,7 @@ fn roster_edits_retain_unknown_fields_in_existing_messages_and_bots() {
 fn minions_resolve_to_their_parent_and_share_its_context() {
     let mut roster = Roster::default();
     let mut parent = Bot {
+        id: "parent".into(),
         name: "Oppy".into(),
         projects: vec!["/work".into()],
         ..Default::default()
@@ -666,10 +667,6 @@ fn minions_resolve_to_their_parent_and_share_its_context() {
         created_at: 1,
     });
     roster.bots.push(parent.clone());
-    let (found, minion) = roster.of_minion(42).unwrap();
-    assert_eq!(found.id, parent.id);
-    assert_eq!(minion.name, "Scout");
-    assert!(roster.of_minion(7).is_none());
     // Minions persist with the roster, and an empty list is omitted.
     let saved = serde_json::to_value(&parent).unwrap();
     assert_eq!(saved["minions"][0]["sessionId"], 42);
@@ -678,16 +675,22 @@ fn minions_resolve_to_their_parent_and_share_its_context() {
         .get("minions")
         .is_none());
 
+    roster.migrate_minions();
+    let member = roster.of_session(42).unwrap();
+    assert_eq!(roster.parent_of(&member.id).unwrap().id, parent.id);
+    assert_eq!(member.name, "Scout");
+    assert!(roster.of_session(7).is_none());
+    let actor = roster.effective_bot(&member.id).unwrap();
     let files = files::AgentFiles {
         soul: Some("Be brief.".into()),
         memory: "- Uses cargo".into(),
         ..Default::default()
     };
-    let context = minion_context(&parent, "Scout", "/work", &files, Path::new("/bin/v"));
-    assert!(context.contains("You are Scout, a minion of the Bot Oppy"));
+    let context = context(&actor, &files, Path::new("/bin/v"));
+    assert!(context.contains("You are Scout, a persistent Minion in Oppy's team"));
     assert!(context.contains("Be brief."));
     assert!(context.contains("- Uses cargo"));
-    assert!(context.contains("Work in /work only"));
+    assert!(context.contains("Live parent project scope: /work"));
 }
 
 #[test]

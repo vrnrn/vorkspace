@@ -14,23 +14,9 @@ impl Conversation {
     /// A restored project pane may still carry its old Operator environment.
     /// Once a Bot owns the conversation, only its configured capability applies.
     pub(super) fn prepare_app_environment(&self, settings: &mut Settings) {
-        if settings.bot.is_some() {
-            return;
-        }
-        if let Some((context, environment)) = self.minion() {
-            settings.minion = Some(context);
-            settings.environment.extend(environment);
-        } else {
+        if settings.bot.is_none() {
             settings.environment.extend(self.app_environment.clone());
         }
-    }
-    /// This session's minion attachment, if it is a minion now.
-    pub(crate) fn minion(&self) -> Option<crate::conversation::MinionAttachment> {
-        self.minions
-            .as_ref()?
-            .borrow()
-            .get(&self.summary.id)
-            .cloned()
     }
     pub(crate) fn enable_mode(&mut self, id: &str, cx: &mut Context<Self>) {
         if self.reject_user_entry(cx) {

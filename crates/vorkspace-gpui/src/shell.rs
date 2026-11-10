@@ -536,7 +536,6 @@ pub(crate) struct Shell {
     /// The project sidebar's board; it follows the current project.
     project_todos: Option<Entity<crate::todos::TodoBoardView>>,
     /// Minion sessions' context and capability, shared with Bots.
-    minion_registry: crate::conversation::MinionRegistry,
     team_histories: crate::conversation::TeamHistories,
     bot_conversations: crate::bots::BotConversations,
     inbox: Option<Entity<crate::inbox::Inbox>>,
@@ -898,7 +897,6 @@ impl Shell {
             bot_pane_views: HashMap::new(),
             todos_page: None,
             project_todos: None,
-            minion_registry: Default::default(),
             team_histories: Default::default(),
             bot_conversations: Default::default(),
             inbox: None,
@@ -1039,14 +1037,11 @@ impl Shell {
                 cx,
             )
         });
-        // Views opened before Bots existed share its registry too.
-        this.minion_registry = bots.read(cx).minion_registry.clone();
+        // Views opened before Bots existed share its team classification.
         this.team_histories = bots.read(cx).team_histories.clone();
         this.bot_conversations = bots.read(cx).conversation_views.clone();
         for view in this.sessions.values() {
-            let registry = this.minion_registry.clone();
             view.update(cx, |view, cx| {
-                view.minions = Some(registry);
                 view.team_histories = Some(this.team_histories.clone());
                 view.refresh_team_history(cx);
             });
@@ -1392,7 +1387,6 @@ impl Shell {
             if let Some(environment) = bridge {
                 view.set_app_environment(environment);
             }
-            view.minions = Some(self.minion_registry.clone());
             view.team_histories = Some(self.team_histories.clone());
             view.refresh_team_history(cx);
             view.set_project_appearance(appearance, cx);

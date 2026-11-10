@@ -150,12 +150,9 @@ struct RunningHabit {
     cards: Vec<serde_json::Value>,
     mailbox: Vec<String>,
 }
-pub(crate) use crate::conversation::{
-    BotConversations, MinionRegistry, TeamHistories, TeamHistory,
-};
+pub(crate) use crate::conversation::{BotConversations, TeamHistories, TeamHistory};
 
 pub(crate) struct Bots {
-    pub(crate) minion_registry: MinionRegistry,
     pub(crate) team_histories: TeamHistories,
     pub(crate) conversation_views: BotConversations,
     retired_teams: HashSet<String>,
@@ -449,7 +446,6 @@ impl Bots {
             habit_panel,
             open_islands: HashSet::new(),
             expanded_islands: HashMap::new(),
-            minion_registry: Default::default(),
             team_histories: Default::default(),
             conversation_views: Default::default(),
             retired_teams: Default::default(),

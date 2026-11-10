@@ -1277,15 +1277,6 @@ fn turn_prompt(
             &files,
             &bot.executable,
         ))
-    } else if let Some(minion) = &settings.minion {
-        let files = vorkspace_core::bot::load_files(&minion.root, &minion.bot)?;
-        Some(vorkspace_core::bot::minion_context(
-            &minion.bot,
-            &minion.name,
-            &history.summary.cwd,
-            &files,
-            &minion.executable,
-        ))
     } else {
         None
     };

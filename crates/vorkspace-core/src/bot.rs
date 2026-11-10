@@ -421,15 +421,6 @@ impl Roster {
     pub fn of_session(&self, id: i64) -> Option<&Bot> {
         self.bots.iter().find(|m| m.session_id == Some(id))
     }
-    /// The Bot that spawned this minion session, and the minion.
-    pub fn of_minion(&self, id: i64) -> Option<(&Bot, &Minion)> {
-        self.bots.iter().find_map(|bot| {
-            bot.minions
-                .iter()
-                .find(|minion| minion.session_id == id)
-                .map(|minion| (bot, minion))
-        })
-    }
     pub fn reorder(&mut self, ids: &[String]) {
         let mut seen = HashSet::new();
         let ordered: Vec<_> = ids
@@ -478,30 +469,6 @@ pub fn minions_enabled() -> bool {
 }
 
 const MINIONS_GUIDE: &str = "Minions are persistent team members with roles and specialties. Inspect minions.list and reuse useful members with bots.send {to,message,expectReply:true}; replies arrive automatically, so do not poll. Hire a missing role with minions.hire {name,role,specialties?}, then delegate through bots.send. A hire does not start a task. Inspect saved history before recovering failed tasks with minions.retry or minions.discard {minion,messageId}; never blindly replay uncertain work. Use minions.fire {minion} to retire an unhelpful member; its history stays saved. Do not create a new member for each task or every mention of Minions. Members share your soul, memory, todos and live project assignments. Their communication is limited to you and active siblings. Users cannot message them.";
-
-/// A minion's context: its parent's soul and memory, shared with the parent
-/// and its other minions.
-pub fn minion_context(
-    bot: &Bot,
-    name: &str,
-    project: &str,
-    files: &files::AgentFiles,
-    executable: &Path,
-) -> String {
-    let cli = format!(
-        "{} app",
-        shlex::try_quote(&executable.to_string_lossy()).unwrap_or_default()
-    );
-    format!(
-        "<vorkspace_context>\nVorkspace adds this context, not the user. Act on it without quoting or describing it.\n\nYou are {name}, a minion of the Bot {parent}. {parent} gave you the task in the first message. Work in {project} only. Commit work you create in a worktree, and never force a worktree removal or discard work: leave cleanup to {parent} unless told otherwise. Avoid overlapping edits with other minions, and finish with a concise report of what you did and found; it is delivered to {parent}.\n\nThe app CLI is `{cli} ACTION --json JSON`. {commands}\n\nYou share {parent}'s memory with {parent} and its other minions. {memory_guide} todos.* is {parent}'s board. You cannot start sessions, spawn minions, or change {parent}'s soul or habits.\n\n<soul>\n{soul}\n</soul>\n\n<memory>\n{memory}\nTopic notes: {topics}\n</memory>\n</vorkspace_context>",
-        memory_guide = memory::GUIDE,
-        commands = bridge::command_reference(true, minions_enabled()),
-        parent = bot.label(),
-        soul = files.soul.as_deref().unwrap_or_default(),
-        memory = memory::within_budget(&files.memory),
-        topics = files.topics.join(", "),
-    )
-}
 
 pub fn context(bot: &Bot, files: &files::AgentFiles, executable: &Path) -> String {
     if bot.minion.is_some() {

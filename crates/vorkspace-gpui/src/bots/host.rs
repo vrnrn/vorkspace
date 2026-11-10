@@ -860,12 +860,9 @@ impl Bots {
             })
             .unwrap()
     }
-    /// Kept as the Shell's shared attachment registry for source compatibility.
-    /// Persistent members now receive Bot context through their own executor.
-    pub(super) fn sync_minions(&mut self, cx: &mut Context<Self>) {
+    pub(super) fn sync_minions(&self, cx: &mut Context<Self>) {
         self.shared_roster.update(cx, |shared, _| {
             shared.configure_minions(self.prefs.bots && self.prefs.minions);
         });
-        self.minion_registry.borrow_mut().clear();
     }
 }

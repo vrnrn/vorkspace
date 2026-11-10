@@ -6,8 +6,8 @@ use std::{
     path::{Path, PathBuf},
 };
 use vorkspace_core::{
-    agent::{BotContext, MinionContext},
-    bot::{self, CompactionMode, Roster},
+    agent::BotContext,
+    bot::{self, CompactionMode, MinionMetadata, Roster},
     context::Usage,
     tool::{ToolCall, ToolState},
 };
@@ -1002,12 +1002,14 @@ fn manual_and_uncertain_compactions_refresh_bot_and_minion_context_without_consu
             let (store, summary, mut settings) = fixture(directory.path());
             settings.bot.as_mut().unwrap().bot.compaction_mode = CompactionMode::Native;
             if minion {
-                let bot = settings.bot.take().unwrap();
-                settings.minion = Some(MinionContext {
-                    bot: bot.bot,
-                    name: "Helper".into(),
-                    root: bot.root,
-                    executable: bot.executable,
+                let actor = &mut settings.bot.as_mut().unwrap().bot;
+                let parent_id = std::mem::replace(&mut actor.id, "helper".into());
+                actor.name = "Helper".into();
+                actor.minion = Some(MinionMetadata {
+                    parent_id,
+                    parent_name: "Parent".into(),
+                    role: "Reviewer".into(),
+                    ..Default::default()
                 });
             }
             let (_, receipt) = prepare(&store, &summary, &settings);

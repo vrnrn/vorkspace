@@ -170,16 +170,6 @@ impl SessionChanged {
 pub(crate) struct SessionActivityChanged;
 /// The review card asked to open the session's recorded changes.
 pub(crate) struct OpenSessionChanges(pub(crate) crate::git_tools::review::ReviewTab);
-/// A minion session's context and app environment.
-pub(crate) type MinionAttachment = (
-    vorkspace_core::agent::MinionContext,
-    std::collections::HashMap<String, String>,
-);
-/// Minion sessions by ID, shared with the shell so it can attach them to
-/// their views without reading `Bots`, which may be mid-update.
-pub(crate) type MinionRegistry =
-    std::rc::Rc<std::cell::RefCell<std::collections::HashMap<i64, MinionAttachment>>>;
-
 /// UI admission follows durable identity, including retired members and
 /// disabled Minions. Shared snapshots avoid reborrowing Bots from a chat.
 #[derive(Clone)]
@@ -224,10 +214,6 @@ pub(crate) struct Conversation {
     reviewing_submission: bool,
     submission_recovery_epoch: u64,
     app_environment: std::collections::HashMap<String, String>,
-    /// Bots' minion sessions. A minion's turns take its parent's context
-    /// and capability from here as each turn starts, so turning Minions on
-    /// or off reaches sessions that are already open. Never saved.
-    pub(crate) minions: Option<MinionRegistry>,
     pub(crate) team_histories: Option<TeamHistories>,
     team_dispatch: bool,
     team_look: Option<(crate::avatar::BotLookConfig, String)>,
@@ -550,7 +536,6 @@ impl Conversation {
             reviewing_submission: false,
             submission_recovery_epoch: 0,
             app_environment: Default::default(),
-            minions: None,
             team_histories: None,
             team_dispatch: false,
             team_look: None,
