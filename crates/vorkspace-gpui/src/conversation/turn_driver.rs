@@ -140,7 +140,7 @@ impl Admission {
         controls
     }
 
-    fn release(self, cx: &mut App) -> bool {
+    pub(super) fn release(self, cx: &mut App) -> bool {
         let runs = &mut cx.default_global::<Runs>().0;
         if runs
             .get(&self.key)

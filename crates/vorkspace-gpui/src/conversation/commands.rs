@@ -82,7 +82,13 @@ impl Conversation {
         let summary = source.clone();
         let account = settings.account.id.clone();
         let cwd = self.execution_cwd().to_owned();
-        self.cancel = Arc::new(AtomicBool::new(false));
+        let view = cx.weak_entity();
+        let Some(admission) = turn_driver::admit(&self.store, self.summary.id, view, cx) else {
+            self.status = turn_driver::ALREADY_ACTIVE.into();
+            cx.notify();
+            return;
+        };
+        self.cancel = admission.cancel_handle();
         let cancel = self.cancel.clone();
         self.busy = true;
         self.submission_generation = self.submission_generation.wrapping_add(1);
@@ -123,6 +129,9 @@ impl Conversation {
                 }
             });
             let finished = work.await;
+            if !cx.update(|cx| admission.release(cx)) {
+                return;
+            }
             let _ = this.update(cx, |this, cx| {
                 if this.submission_generation != generation || this.summary.id != source.id {
                     return;
