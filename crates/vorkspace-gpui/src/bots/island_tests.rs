@@ -193,11 +193,7 @@ fn native_bot_island_capture() {
                 title: session.title.clone(),
                 cwd: project.clone(),
                 harness: "codex".into(),
-                model: None,
-                origin_turn: 0,
-                notify_on_complete: false,
-                completed: false,
-                dismissed: false,
+                ..Default::default()
             })
             .collect();
         let window = cx

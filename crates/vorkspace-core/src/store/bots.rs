@@ -314,7 +314,7 @@ impl Store {
                     origin_turn: index as u64,
                     notify_on_complete: false,
                     completed: true,
-                    dismissed: false,
+                    ..Default::default()
                 });
             }
         }

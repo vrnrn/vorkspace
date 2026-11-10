@@ -904,7 +904,7 @@ impl Conversation {
         self.bot_turn = self
             .bot_turn
             .wrapping_add(1)
-            .max(vorkspace_core::time::now_ms() & 0xffff_ffff);
+            .max(vorkspace_core::time::now_ms());
         self.summary.updated_at = vorkspace_core::time::now_ms();
         self.transcript.update(cx, |v, cx| v.streaming(true, cx));
         self.summary.has_messages = true;

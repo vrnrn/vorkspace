@@ -165,17 +165,16 @@ impl Bots {
             .find(|view| view.read(cx).summary.id == caller)
             .map(|view| view.read(cx).bot_turn)
             .unwrap_or(0);
-        let launch = Launch {
+        let mut launch = Launch {
             session_id: start.summary.id,
             cwd: start.summary.cwd.clone(),
             title: start.summary.title.clone(),
             harness: start.summary.provider.clone(),
             model: start.settings.model.clone(),
-            origin_turn: ((caller as u64) << 32) | origin,
             notify_on_complete: flag(&call.input, "notifyOnComplete", !start.draft),
-            completed: false,
-            dismissed: false,
+            ..Default::default()
         };
+        launch.set_origin(caller, origin);
         let owner = self.owner.clone();
         let manager = cx.entity().downgrade();
         let handle = window.window_handle();
@@ -618,8 +617,26 @@ impl Bots {
                         if let Err(error)=sent {self.finish_call(call,Err(error),cx);return;}
                         if flag(&input,"notifyOnComplete",false) && let Some(bot)=self.roster.get_mut(&bot.id) {
                             let origin=source.map(|v|v.read(cx).bot_turn).unwrap_or(0);
-                            if let Some(launch)=bot.launches.iter_mut().find(|launch|launch.session_id==session) {launch.completed=false;launch.dismissed=false;launch.notify_on_complete=true;launch.origin_turn=((call.session as u64)<<32)|origin;}
-                            else {let summary=&view.read(cx).summary;bot.launches.push(Launch{session_id:session,cwd:summary.cwd.clone(),title:summary.title.clone(),harness:summary.provider.clone(),model:view.read(cx).bot_model(),origin_turn:((call.session as u64)<<32)|origin,notify_on_complete:true,completed:false,dismissed:false});}
+                            if let Some(launch) = bot.launches.iter_mut().find(|launch| launch.session_id == session) {
+                                launch.completed = false;
+                                launch.dismissed = false;
+                                launch.notify_on_complete = true;
+                                launch.set_origin(call.session, origin);
+                            } else {
+                                let conversation = view.read(cx);
+                                let summary = &conversation.summary;
+                                let mut launch = Launch {
+                                    session_id: session,
+                                    cwd: summary.cwd.clone(),
+                                    title: summary.title.clone(),
+                                    harness: summary.provider.clone(),
+                                    model: conversation.bot_model(),
+                                    notify_on_complete: true,
+                                    ..Default::default()
+                                };
+                                launch.set_origin(call.session, origin);
+                                bot.launches.push(launch);
+                            }
                         }
                         Ok(json!({"accepted":true}))
                     }
@@ -755,87 +772,6 @@ if let Some(enabled)=input.get("enabled").and_then(Value::as_bool){h.enabled=ena
             }
         })
         .detach();
-    }
-    pub(super) fn check_completions(&mut self, cx: &mut Context<Self>) {
-        let views = self.owner.session_views(cx);
-        let mut ready = Vec::new();
-        for bot in &self.roster.bots {
-            let groups: HashSet<_> = bot
-                .launches
-                .iter()
-                .filter(|l| l.notify_on_complete && !l.completed && !l.dismissed)
-                .map(|l| l.origin_turn)
-                .collect();
-            for group in groups {
-                let source = (group >> 32) as i64;
-                if self
-                    .chats
-                    .values()
-                    .chain(self.running.values().map(|r| &r.view))
-                    .any(|v| v.read(cx).summary.id == source && v.read(cx).busy)
-                {
-                    continue;
-                }
-                let children: Vec<_> = bot
-                    .launches
-                    .iter()
-                    .filter(|l| {
-                        l.origin_turn == group
-                            && l.notify_on_complete
-                            && !l.completed
-                            && !l.dismissed
-                    })
-                    .collect();
-                if !children.is_empty()
-                    && children.iter().all(|l| {
-                        views
-                            .iter()
-                            .find(|v| v.id == l.session_id)
-                            .is_none_or(|v| !v.busy && v.has_messages)
-                    })
-                    && !self.completion_work.contains(&(bot.id.clone(), group))
-                {
-                    ready.push((
-                        bot.id.clone(),
-                        group,
-                        children
-                            .iter()
-                            .map(|l| (l.session_id, l.title.clone()))
-                            .collect::<Vec<_>>(),
-                    ));
-                }
-            }
-        }
-        for (id, group, children) in ready {
-            self.completion_work.insert((id.clone(), group));
-            let store = self.store.clone();
-            let work = cx.background_executor().spawn(async move {
-                children
-                    .into_iter()
-                    .map(|(id, title)| {
-                        let rows = locked(&store)
-                            .and_then(|db| db.load(id))
-                            .map(|t| vorkspace_core::response::prose(&t.rows))
-                            .unwrap_or_else(|_| "Session was removed".into());
-                        format!(
-                            "Session {id}: {title}\n{}",
-                            vorkspace_core::response::limit(&rows, 12000)
-                        )
-                    })
-                    .collect::<Vec<_>>()
-                    .join("\n\n")
-            });
-            cx.spawn(async move |this,cx| {
-                let report=work.await;
-                let _=this.update(cx,|this,cx|{
-                    this.completion_work.remove(&(id.clone(),group));
-                    if let Some(bot)=this.roster.get_mut(&id){for launch in &mut bot.launches{if launch.origin_turn==group{launch.completed=true;}}}
-                    let message=format!("[Delegated work completed]\nAll sessions in this group have stopped. Inspect their results and give an integrated update.\n\n{report}");
-                    let source=(group>>32) as i64;
-                    if let Some(run)=this.running.get_mut(&source){run.mailbox.push(message);this.save(cx);this.habit_changed(source,cx);}else{this.enqueue(&id,message,Vec::new(),true,cx);this.ensure_chat(&id,cx);}
-                });
-            }).detach();
-        }
     }
 }
 

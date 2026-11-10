@@ -236,6 +236,8 @@ impl super::Bot {
         for launch in &mut launches {
             if let Some(previous) = previous_launches.get(&launch.session_id) {
                 launch.origin_turn = previous.origin_turn;
+                launch.origin = previous.origin;
+                launch.notification_id.clone_from(&previous.notification_id);
                 launch.notify_on_complete = previous.notify_on_complete;
                 launch.completed = previous.completed;
                 launch.dismissed = previous.dismissed;

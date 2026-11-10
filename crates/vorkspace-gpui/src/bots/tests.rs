@@ -2662,11 +2662,7 @@ fn cold_background_delegation_controls_do_not_require_a_visible_or_live_view(
             cwd: child.cwd,
             title: child.title,
             harness: child.provider,
-            model: None,
-            origin_turn: 0,
-            notify_on_complete: false,
-            completed: false,
-            dismissed: false,
+            ..Default::default()
         });
         manager.roster.save(&locked(&s.store).unwrap()).unwrap();
         assert!(manager.hidden_session(id));

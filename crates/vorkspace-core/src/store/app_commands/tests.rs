@@ -236,11 +236,7 @@ fn ordinary_background_launches_remain_mutable_after_reopen() {
             cwd: "/project".into(),
             title: "Background work".into(),
             harness: "codex".into(),
-            model: None,
-            origin_turn: 0,
-            notify_on_complete: false,
-            completed: false,
-            dismissed: false,
+            ..Default::default()
         });
         roster.hidden_sessions.push(internal);
         roster.save(&store).unwrap();

@@ -3,6 +3,7 @@
 pub(crate) use crate::avatar;
 use vorkspace_ui::radius;
 pub(crate) mod cards;
+mod completions;
 mod creation;
 mod document_pane;
 mod effects;
@@ -214,7 +215,7 @@ pub(crate) struct Bots {
     rail_ids: Vec<String>,
     running: HashMap<i64, RunningHabit>,
     active_run: Option<i64>,
-    completion_work: HashSet<(String, u64)>,
+    completion_work: HashSet<(String, bot::LaunchGroup)>,
     /// The open background dialog, centred in the window it opened in.
     background: Option<(
         Entity<crate::project_settings::BackgroundDialog>,
