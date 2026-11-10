@@ -213,7 +213,11 @@ fn pins_links_groups_and_reminders_survive_restart_and_delete_clears_them() {
         .unwrap();
     assert!(saved.pinned);
     assert_eq!(saved.work_item, Some(item));
-    assert_eq!(store.groups("/project").unwrap(), groups);
+    let groups = store.groups("/project").unwrap();
+    assert!(groups.pinned_collapsed);
+    assert_eq!(groups.folders.len(), 1);
+    assert_eq!(groups.folders[0].id, "f");
+    assert_eq!(groups.folders[0].session_ids, [keep.id, gone.id]);
     assert_eq!(store.groups("/other").unwrap(), Default::default());
     let snapshot = store.reminders().unwrap();
     let due = store.claim_due_reminders(&snapshot, 150).unwrap();

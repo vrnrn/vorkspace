@@ -123,55 +123,6 @@ impl SettingsWrites {
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    fn layouts(project: &str) -> WindowLayouts {
-        let mut layouts = WindowLayouts::default();
-        let workspace = Workspace {
-            project: project.into(),
-            ..Default::default()
-        };
-        layouts.record(1, serde_json::to_string(&workspace).unwrap(), true);
-        layouts
-    }
-
-    #[test]
-    fn an_encoding_in_flight_cannot_replace_a_newer_durable_layout() {
-        let database = Arc::new(Mutex::new(
-            vorkspace_core::store::Store::open(std::path::Path::new(":memory:")).unwrap(),
-        ));
-        let writes = SettingsWrites::default();
-        writes.stage_layouts(layouts("/old"));
-        writes.stage_definitions(Saved {
-            vorkspaces: Arc::new(vec![VorkspaceDef {
-                id: "shared".into(),
-                ..Default::default()
-            }]),
-            ..Default::default()
-        });
-        writes
-            .flush_encoding(&database, |old| {
-                let encoded = old.settings_values();
-                writes.commit_layouts(&database, &layouts("/new")).unwrap();
-                encoded
-            })
-            .unwrap();
-        let store = locked(&database).unwrap();
-        let legacy = store.ui_state().unwrap().unwrap();
-        let workspace: Workspace = serde_json::from_str(&legacy).unwrap();
-        assert_eq!(workspace.project, "/new");
-        let saved = WindowLayouts::load(&store);
-        let workspace: Workspace = serde_json::from_str(&saved.entries[0].workspace).unwrap();
-        assert_eq!(workspace.project, "/new");
-        let definitions: Saved =
-            serde_json::from_str(&store.setting(STORE_KEY).unwrap().unwrap()).unwrap();
-        assert_eq!(definitions.vorkspaces[0].id, "shared");
-        assert!(!writes.has_pending());
-    }
-}
-
 impl AppCore {
     pub(in crate::shell) fn flush_pending(&self, cx: &App) -> gpui::Task<Result<(), String>> {
         let writes = self.writes.clone();
@@ -213,5 +164,53 @@ impl AppCore {
                 }
             });
         }));
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn layouts(project: &str) -> WindowLayouts {
+        let mut layouts = WindowLayouts::default();
+        let workspace = Workspace {
+            project: project.into(),
+            ..Default::default()
+        };
+        layouts.record(1, serde_json::to_string(&workspace).unwrap(), true);
+        layouts
+    }
+
+    #[test]
+    fn an_encoding_in_flight_cannot_replace_a_newer_durable_layout() {
+        let database = Arc::new(Mutex::new(
+            vorkspace_core::store::Store::open(std::path::Path::new(":memory:")).unwrap(),
+        ));
+        let writes = SettingsWrites::default();
+        writes.stage_layouts(layouts("/old"));
+        let mut definition = VorkspaceDef::default();
+        definition.id = "shared".into();
+        writes.stage_definitions(Saved {
+            vorkspaces: Arc::new(vec![definition]),
+            ..Default::default()
+        });
+        writes
+            .flush_encoding(&database, |old| {
+                let encoded = old.settings_values();
+                writes.commit_layouts(&database, &layouts("/new")).unwrap();
+                encoded
+            })
+            .unwrap();
+        let store = locked(&database).unwrap();
+        let legacy = store.ui_state().unwrap().unwrap();
+        let workspace: Workspace = serde_json::from_str(&legacy).unwrap();
+        assert_eq!(workspace.project, "/new");
+        let saved = WindowLayouts::load(&store);
+        let workspace: Workspace = serde_json::from_str(&saved.entries[0].workspace).unwrap();
+        assert_eq!(workspace.project, "/new");
+        let definitions: Saved =
+            serde_json::from_str(&store.setting(STORE_KEY).unwrap().unwrap()).unwrap();
+        assert_eq!(definitions.vorkspaces[0].id, "shared");
+        assert!(!writes.has_pending());
     }
 }
