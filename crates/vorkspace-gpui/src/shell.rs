@@ -513,7 +513,7 @@ pub(crate) struct Shell {
     unseen_finished: HashSet<i64>,
     live_agents: Entity<live_agents::LiveAgents>,
     archiving: HashSet<i64>,
-    groups: HashMap<String, vorkspace_core::session_groups::Groups>,
+    groups: HashMap<String, Arc<session_groups::FolderIndex>>,
     renaming: Option<session_groups::Renaming>,
     link_dialog: Option<session_groups::LinkDialog>,
     deleting: HashSet<i64>,
@@ -871,7 +871,13 @@ impl Shell {
             unseen_finished: HashSet::new(),
             live_agents,
             archiving: HashSet::new(),
-            groups: sidebar_metadata.groups,
+            groups: sidebar_metadata
+                .groups
+                .into_iter()
+                .map(|(project, groups)| {
+                    (project, Arc::new(session_groups::FolderIndex::new(groups)))
+                })
+                .collect(),
             renaming: None,
             link_dialog: None,
             deleting: HashSet::new(),

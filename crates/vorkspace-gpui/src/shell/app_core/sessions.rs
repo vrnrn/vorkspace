@@ -19,7 +19,7 @@ impl EventEmitter<CatalogChanged> for AppCore {}
 
 struct GroupsChanged {
     project: String,
-    groups: vorkspace_core::session_groups::Groups,
+    folders: Arc<super::super::session_groups::FolderIndex>,
 }
 
 impl EventEmitter<GroupsChanged> for AppCore {}
@@ -147,9 +147,13 @@ impl Shell {
             }));
         self.observations
             .push(cx.subscribe(core, |this, _, event: &GroupsChanged, cx| {
-                if this.groups.get(&event.project) != Some(&event.groups) {
+                if this
+                    .groups
+                    .get(&event.project)
+                    .is_none_or(|folders| folders.saved() != event.folders.saved())
+                {
                     this.groups
-                        .insert(event.project.clone(), event.groups.clone());
+                        .insert(event.project.clone(), event.folders.clone());
                     this.invalidate_chrome(cx);
                     cx.notify();
                 }
@@ -216,11 +220,12 @@ impl Shell {
     pub(in crate::shell) fn publish_groups(&mut self, project: String, cx: &mut Context<Self>) {
         match locked(&self.store).and_then(|store| store.groups(&project)) {
             Ok(groups) => {
-                self.groups.insert(project.clone(), groups.clone());
+                let folders = Arc::new(super::super::session_groups::FolderIndex::new(groups));
+                self.groups.insert(project.clone(), folders.clone());
                 if let Some(core) = &self.app_core {
                     core.update(cx, |core, cx| {
                         core.catalog_revision = core.catalog_revision.wrapping_add(1);
-                        cx.emit(GroupsChanged { project, groups });
+                        cx.emit(GroupsChanged { project, folders });
                     });
                 }
             }

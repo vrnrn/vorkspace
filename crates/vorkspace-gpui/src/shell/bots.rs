@@ -92,7 +92,10 @@ impl Shell {
         Ok(())
     }
     pub(crate) fn bot_groups(&self, project: &str) -> vorkspace_core::session_groups::Groups {
-        self.groups.get(project).cloned().unwrap_or_default()
+        self.groups
+            .get(project)
+            .map(|index| index.saved().clone())
+            .unwrap_or_default()
     }
 }
 

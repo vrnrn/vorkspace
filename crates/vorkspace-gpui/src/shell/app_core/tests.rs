@@ -528,9 +528,11 @@ fn committed_folder_moves_are_applied_to_the_latest_groups_and_shared(cx: &mut T
                 .update(cx, |shell, _, cx| {
                     locked(&shell.store)
                         .unwrap()
-                        .edit_groups(&project, |groups| {
-                            groups.move_session(id, None, Some(label))
-                        })
+                        .move_sessions_to_folder(
+                            &project,
+                            &[id],
+                            vorkspace_core::session_groups::FolderDestination::New(label.into()),
+                        )
                         .unwrap();
                     shell.publish_groups(project.clone(), cx);
                 })

@@ -668,7 +668,7 @@ impl Shell {
             }
             "sessions.list" => Ok(json!(self.order.iter().map(|&id| self.session_metadata(id, cx).summary).filter(|s| s.cwd == project).map(|s| json!({"sessionId":s.id,"title":s.title,"harness":s.provider,"project":s.cwd,"archived":s.archived})).collect::<Vec<_>>())),
             "models.list" => Ok(json!(Kind::ALL.into_iter().map(|kind| json!({"harness":kind.id(),"name":kind.label(),"models":self.sessions.values().find(|v| { let v=v.read(cx); let profile=if kind.id()==provider { inherited.account.clone() } else { crate::accounts::get(cx).map(|center|center.read(cx).selected(kind,&project)).unwrap_or_default() }; v.summary.provider == kind.id() && v.settings.account.id==profile.id }).map(|v| v.read(cx).settings_models()).unwrap_or_default()})).collect::<Vec<_>>())),
-            "folders.list" => Ok(json!(self.groups.get(&project).cloned().unwrap_or_default().folders)),
+            "folders.list" => Ok(json!(self.groups.get(&project).map_or(&[][..], |folders| folders.saved().folders.as_slice()))),
             "sessions.stop" | "sessions.archive" | "sessions.delete" => {
                 session_id(&input,&self.store).and_then(|id|self.app_session_action(call.session,id,&project,&action,window,cx))
             }
@@ -727,9 +727,10 @@ impl Shell {
                 let id = match session_id(&input, &self.store) { Ok(id) => id, Err(e) => { self.finish_app_call(call, Err(e)); return; } };
                 if !self.session_summaries.contains_key(&id) || self.session_metadata(id, cx).summary.cwd != project { self.finish_app_call(call, Err("Session is outside this project.".into())); return; }
                 self.app_background(call, move |store| {
-                    locked(&store)?.edit_groups(&project, |groups| groups.move_session(
-                        id, input["folderId"].as_str(), input["newFolderName"].as_str(),
-                    ))?;
+                    let destination = vorkspace_core::session_groups::FolderDestination::from_parts(
+                        input["folderId"].as_str(), input["newFolderName"].as_str(),
+                    );
+                    locked(&store)?.move_sessions_to_folder(&project, &[id], destination)?;
                     Ok((json!({"moved":true}), Effect::Groups(project)))
                 }, cx); return;
             }

@@ -1,11 +1,13 @@
-//! Sidebar.tsx's session actions: pins, renames, GitHub links, reminders,
-//! folders and deletion, and the grouped list they shape.
+//! Session rail actions and the project-scoped folder read model.
 use super::*;
 use chrono::{Local, NaiveDateTime, TimeZone};
 use vorkspace_core::session_groups::{
-    format_reminder, parse_github_work_item, reminder_at, reminder_presets,
+    FolderDestination, format_reminder, parse_github_work_item, reminder_at, reminder_presets,
 };
 use vorkspace_ui::radius;
+
+mod folders;
+pub(super) use folders::FolderIndex;
 
 actions!(
     session_groups,
@@ -46,6 +48,18 @@ pub(super) fn local_reminder_label(ms: u64) -> String {
 #[derive(Clone, PartialEq)]
 pub(super) enum RenameTarget {
     Session(i64),
+    NewFolder {
+        anchor: i64,
+        sessions: Vec<i64>,
+        project: String,
+    },
+}
+impl RenameTarget {
+    pub(super) fn anchor(&self) -> i64 {
+        match self {
+            Self::Session(id) | Self::NewFolder { anchor: id, .. } => *id,
+        }
+    }
 }
 pub(super) struct Renaming {
     pub(super) target: RenameTarget,
@@ -286,6 +300,7 @@ impl Shell {
                 .into(),
             ]);
         }
+        items.extend(self.session_folder_menu(&ids, &summary.cwd, cx));
         items.extend([MenuAction::new("reminder", "Remind me")
             .icon("clock")
             .submenu(
@@ -361,6 +376,18 @@ impl Shell {
                 self.invalidate_chrome(cx);
             }
             "rename" => self.start_rename(RenameTarget::Session(id), window, cx),
+            "folder-new" if self.one_folder_project(&ids, &summary.cwd, cx) => self.start_rename(
+                RenameTarget::NewFolder {
+                    anchor: id,
+                    sessions: ids,
+                    project: summary.cwd,
+                },
+                window,
+                cx,
+            ),
+            "folder-unfile" if self.one_folder_project(&ids, &summary.cwd, cx) => {
+                self.move_session_folder(summary.cwd, ids, FolderDestination::Unfiled, cx);
+            }
             "link-work-item" => self.open_link_dialog(id, window, cx),
             "reminder:cancel" => {
                 let occurrences: Vec<_> = self
@@ -399,7 +426,18 @@ impl Shell {
                 }
             }
             "delete" => self.request_delete_sessions(ids, window, cx),
-            _ => {}
+            _ => {
+                if let Some(folder) = action.strip_prefix("folder-move:")
+                    && self.one_folder_project(&ids, &summary.cwd, cx)
+                {
+                    self.move_session_folder(
+                        summary.cwd,
+                        ids,
+                        FolderDestination::Existing(folder.into()),
+                        cx,
+                    );
+                }
+            }
         }
     }
 
@@ -540,7 +578,7 @@ impl Shell {
         if self
             .renaming
             .as_ref()
-            .is_some_and(|r| r.target == RenameTarget::Session(id))
+            .is_some_and(|r| r.target.anchor() == id)
         {
             self.renaming = None;
         }
@@ -554,16 +592,22 @@ impl Shell {
         cx: &mut Context<Self>,
     ) {
         self.close_preview(cx);
-        let text = match &target {
-            RenameTarget::Session(id) => self.session_metadata(*id, cx).display_title(),
-        };
-        let input = cx.new(|cx| {
-            let mut input = input::Input::field(
+        let (text, label, placeholder, save_on_blur) = match &target {
+            RenameTarget::Session(id) => (
+                self.session_metadata(*id, cx).display_title(),
                 "Rename. Press Enter to confirm or Escape to cancel.",
                 "",
-                content(0.35),
-                cx,
-            );
+                true,
+            ),
+            RenameTarget::NewFolder { .. } => (
+                String::new(),
+                "Folder name. Press Enter to create or Escape to cancel.",
+                "Folder name",
+                false,
+            ),
+        };
+        let input = cx.new(|cx| {
+            let mut input = input::Input::field(label, placeholder, content(0.35), cx);
             input.set_font_size(14.);
             input
         });
@@ -579,8 +623,8 @@ impl Shell {
                 window,
                 |this, _, _: &input::Submitted, window, cx| this.finish_rename(true, window, cx),
             ),
-            cx.on_blur(&focus, window, |this, window, cx| {
-                this.finish_rename(true, window, cx)
+            cx.on_blur(&focus, window, move |this, window, cx| {
+                this.finish_rename(save_on_blur, window, cx)
             }),
         ];
         window.focus(&focus, cx);
@@ -625,6 +669,11 @@ impl Shell {
                         });
                     }
                 }
+                RenameTarget::NewFolder {
+                    sessions, project, ..
+                } => {
+                    self.move_session_folder(project, sessions, FolderDestination::New(name), cx);
+                }
             }
         }
         if renaming.input.read(cx).focus_handle(cx).is_focused(window) {
@@ -634,12 +683,8 @@ impl Shell {
         cx.notify();
     }
     /// SessionRenameRow: the name in a focused field.
-    pub(super) fn rename_row(
-        &self,
-        target: &RenameTarget,
-        cx: &mut Context<Self>,
-    ) -> Option<AnyElement> {
-        let renaming = self.renaming.as_ref().filter(|r| r.target == *target)?;
+    pub(super) fn rename_row(&self, id: i64, cx: &mut Context<Self>) -> Option<AnyElement> {
+        let renaming = self.renaming.as_ref().filter(|r| r.target.anchor() == id)?;
         Some(
             div()
                 .key_context("SessionRename")

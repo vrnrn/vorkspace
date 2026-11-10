@@ -211,7 +211,11 @@ impl Shell {
                         self.workspace.preferences.show_archived,
                     )
                     && (self.query.is_empty()
-                        || s.display_title().to_lowercase().contains(&self.query))
+                        || s.display_title().to_lowercase().contains(&self.query)
+                        || self
+                            .groups
+                            .get(&s.summary.cwd)
+                            .is_some_and(|folders| folders.matches(id, &self.query)))
             })
             .collect();
         ids.sort_by_cached_key(|id| {

@@ -27,6 +27,7 @@ mod remote_legacy;
 mod vorkspace_import;
 pub use remote::{RemoteHistory, RemoteListing, RemoteProject, RemoteSession, RemoteUpload};
 pub(crate) use shared::handle as desktop_session_handle;
+mod session_folders;
 mod session_metadata;
 pub use session_metadata::{SessionMetadata, SessionSidebarMetadata};
 mod session_preview;
@@ -1164,44 +1165,6 @@ impl Store {
             )
             .map_err(|e| e.to_string())?;
         Ok(())
-    }
-    /// A project's folders and folded groups.
-    pub fn groups(&self, cwd: &str) -> Result<crate::session_groups::Groups, String> {
-        self.groups_from(cwd, self.setting(&format!("groups:{cwd}"))?.as_deref())
-    }
-    fn groups_from(
-        &self,
-        cwd: &str,
-        saved: Option<&str>,
-    ) -> Result<crate::session_groups::Groups, String> {
-        if let Some(saved) = saved {
-            let decoded = serde_json::from_str(saved);
-            return if self.shared.is_some() {
-                decoded.map_err(|error| error.to_string())
-            } else {
-                Ok(decoded.unwrap_or_default())
-            };
-        }
-        Ok(self
-            .desktop_preferences()
-            .and_then(|preferences| {
-                preferences.groups(cwd, |id| self.resolve_existing_session_id(id))
-            })
-            .unwrap_or_default())
-    }
-
-    /// Merge the edit with the current saved groups across independent stores.
-    pub fn edit_groups(
-        &self,
-        cwd: &str,
-        edit: impl FnOnce(&mut crate::session_groups::Groups) -> Result<(), String>,
-    ) -> Result<(), String> {
-        let key = format!("groups:{cwd}");
-        self.update_settings(|settings| {
-            let mut groups = self.groups_from(cwd, settings.get(&key).map(String::as_str))?;
-            edit(&mut groups)?;
-            Ok(((), vec![(key, shared::encode(&groups)?)]))
-        })
     }
     pub fn reminders(&self) -> Result<Vec<Reminder>, String> {
         if self.shared.is_some() {

@@ -30,26 +30,45 @@ pub struct Groups {
     pub reminders_collapsed: bool,
 }
 
+pub enum FolderDestination {
+    Existing(String),
+    New(String),
+    Unfiled,
+}
+
+impl FolderDestination {
+    pub fn from_parts(folder: Option<&str>, name: Option<&str>) -> Self {
+        match (folder, name) {
+            (_, Some(name)) => Self::New(name.to_owned()),
+            (Some(folder), None) => Self::Existing(folder.to_owned()),
+            (None, None) => Self::Unfiled,
+        }
+    }
+}
+
 impl Groups {
-    pub fn move_session(
+    pub(crate) fn move_sessions(
         &mut self,
-        id: i64,
-        folder: Option<&str>,
-        new_name: Option<&str>,
+        ids: &[i64],
+        destination: FolderDestination,
     ) -> Result<(), String> {
-        if let Some(name) = new_name {
-            if let Some(folder) =
-                self.create_folder(&[id], uuid::Uuid::new_v4().simple().to_string())
-            {
-                self.rename_folder(&folder, name);
+        match destination {
+            FolderDestination::New(name) => {
+                if let Some(folder) =
+                    self.create_folder(ids, uuid::Uuid::new_v4().simple().to_string())
+                {
+                    self.rename_folder(&folder, &name);
+                }
             }
-        } else if let Some(folder) = folder {
-            if self.folder(folder).is_none() {
-                return Err("Folder not found.".into());
+            FolderDestination::Existing(folder) => {
+                if self.folder(&folder).is_none() {
+                    return Err("Folder not found.".into());
+                }
+                for &id in ids {
+                    self.add_to_folder(&folder, id);
+                }
             }
-            self.add_to_folder(folder, id);
-        } else {
-            self.remove_sessions(&[id]);
+            FolderDestination::Unfiled => self.remove_sessions(ids),
         }
         Ok(())
     }

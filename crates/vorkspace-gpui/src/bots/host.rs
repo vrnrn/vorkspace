@@ -632,9 +632,10 @@ impl Bots {
                 let allowed=self.owner.ensure_session(session,cx).is_some_and(|v|v.read(cx).summary.cwd==project);
                 if !allowed{self.finish_call(call,Err("Session is outside this project".into()),cx);return;}
                 self.call_work(call,&actor.id,target,move|store|{
-                    locked(&store)?.edit_groups(&project, |groups| groups.move_session(
-                        session, input["folderId"].as_str(), input["newFolderName"].as_str(),
-                    ))?;
+                    let destination = vorkspace_core::session_groups::FolderDestination::from_parts(
+                        input["folderId"].as_str(), input["newFolderName"].as_str(),
+                    );
+                    locked(&store)?.move_sessions_to_folder(&project, &[session], destination)?;
                     Ok((json!({"moved":true}),Effect::Groups(project)))
                 },cx);return;
             }

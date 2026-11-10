@@ -411,12 +411,7 @@ impl Shell {
         let narrowed = !self.query.is_empty() || self.session_filters_active(cx);
         // Expanded, searching or filtering, every match is listed.
         if !(self.rail_sessions_expanded || narrowed) && sessions.len() > RAIL_SESSIONS {
-            let renaming = self.renaming.as_ref().map(
-                |super::session_groups::Renaming {
-                     target: super::session_groups::RenameTarget::Session(id),
-                     ..
-                 }| *id,
-            );
+            let renaming = self.renaming.as_ref().map(|edit| edit.target.anchor());
             let extra = renaming.and_then(|id| {
                 sessions[RAIL_SESSIONS..]
                     .iter()
@@ -697,6 +692,10 @@ impl Shell {
         cx: &mut Context<Self>,
     ) -> AnyElement {
         let meta = self.session_metadata(id, cx);
+        let folder = self
+            .groups
+            .get(&meta.summary.cwd)
+            .and_then(|folders| folders.folder_of(id));
         let s = RailSession {
             title: meta.display_title().to_string(),
             provider: meta.summary.provider.clone(),
@@ -707,9 +706,18 @@ impl Shell {
             archived: meta.summary.archived,
             updated_at: meta.summary.updated_at,
         };
-        if let Some(row) = self.rename_row(&super::session_groups::RenameTarget::Session(id), cx) {
+        if let Some(row) = self.rename_row(id, cx) {
             return row;
         }
+        let detail = match folder {
+            Some(folder) => format!("{} · {}", folder.name, s.project),
+            None => s.project.clone(),
+        };
+        let scope = folder.map_or_else(
+            || s.project.clone(),
+            |folder| format!("{} · Folder {}", s.project, folder.name),
+        );
+        let filed = folder.is_some();
         let active = self.selected_sessions.contains(&id)
             || (self.workspace.active == Some(id) && !self.bot_active(cx) && !self.app_view_open());
         let anchor = self.session_row_bounds.entry(id).or_default().clone();
@@ -761,7 +769,7 @@ impl Shell {
             .aria_label(s.title.clone())
             .aria_description(format!(
                 "{} · {} · {state}",
-                s.project,
+                scope,
                 Kind::from_id(&s.provider).label()
             ))
             .aria_keyshortcuts("F2 Shift+F10")
@@ -814,7 +822,8 @@ impl Shell {
                     .text_size(px(11.))
                     .text_color(content(0.45))
                     .child(provider_icon(&s.provider, 12.))
-                    .child(div().flex_1().min_w_0().truncate().child(s.project))
+                    .when(filed, |d| d.child(icon("folder", 11.).flex_shrink_0()))
+                    .child(div().flex_1().min_w_0().truncate().child(detail))
                     .when_some(bot, |d, (avatar, label)| {
                         d.child(
                             div()
