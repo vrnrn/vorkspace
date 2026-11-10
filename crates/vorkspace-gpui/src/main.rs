@@ -7,6 +7,7 @@ mod avatar;
 mod background_helper;
 mod bot_header;
 mod bots;
+mod card_saves;
 mod codebase;
 mod color_picker;
 mod composer;

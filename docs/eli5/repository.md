@@ -10,6 +10,8 @@ On your Mac, vorkspace is two programs: the main app, and a small helper that ke
 
 Code only depends on code below it, so a change low down cannot quietly depend on something built on top of it. A test checks this rule.
 
+The session runtime can save Bot card updates without a window. The app starts the saver when needed and gives accepted updates time to finish when you quit.
+
 `embedded` contains the small JavaScript helpers that ship inside the desktop: editor language tools and voice audio. `scripts` contains developer tools for building, testing, measuring, and packaging the app. `crates/vorkspace-gpui/fixtures` contains example visuals, while `vendor` and `licenses` keep dependency code and its legal notices.
 
 Windows share one place for their saved layouts, which chats they have open, and which window handles scheduled work. One writer collects settings edits before saving them. Notes keeps the code that saves your writing separate from the code that draws the list and editor.

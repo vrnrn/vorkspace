@@ -32,6 +32,8 @@ The desktop is a Rust workspace that runs as the app plus a small helper process
 
 In the core, `store` owns SQLite and sidecar persistence; `provider` owns CLI transports and process lifetime; `transcript` projects bounded display data. `bot` owns Bot state, `voice` owns Vox, and `remote` owns authenticated remote transport. Keep durable writes at those boundaries.
 
+`vorkspace-runtime` runs without GPUI. It owns admission and persistence for Bot card refreshes. The desktop starts one writer on demand and drains its accepted saves when the app quits.
+
 In GPUI, `conversation` connects the session runtime to input and transcript views. `shell` owns window navigation and workspace surfaces, with its topics in `shell/`. `git_tools/` holds source control surfaces, `file_tools/` the explorer and editor pane, and `composer/` prompt entry. `terminal`, `settings`, and `bots` contain their native views. Rendering consumes core state; it does not create a second persistence authority.
 
 `shell/app_core/` owns shared window layouts, session leases, scheduled work and settings publication. A single settings writer coalesces background saves. Closing a window can commit its layout durably through the same writer. `notes/` separates editing and revision-checked saves from library and document rendering.

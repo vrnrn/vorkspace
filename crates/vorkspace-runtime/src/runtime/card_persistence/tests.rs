@@ -33,7 +33,10 @@ fn complete(queue: &mut Queue) {
 fn delayed_write_coalesces_and_rebases_only_its_own_successful_commit() {
     let (store, id, base) = fixture();
     let mut queue = Queue::default();
-    let (_, old_reply) = queue
+    let Admission {
+        receiver: old_reply,
+        ..
+    } = queue
         .admit(store.clone(), id, base.clone(), title(&base, "One"))
         .unwrap()
         .unwrap();
@@ -48,11 +51,15 @@ fn delayed_write_coalesces_and_rebases_only_its_own_successful_commit() {
         (first, result)
     });
     ready.recv().unwrap();
-    let (_, middle) = queue
+    let Admission {
+        receiver: middle, ..
+    } = queue
         .admit(store.clone(), id, base.clone(), title(&base, "Two"))
         .unwrap()
         .unwrap();
-    let (_, latest) = queue
+    let Admission {
+        receiver: latest, ..
+    } = queue
         .admit(store.clone(), id, base.clone(), title(&base, "Three"))
         .unwrap()
         .unwrap();
@@ -80,7 +87,9 @@ fn delayed_write_coalesces_and_rebases_only_its_own_successful_commit() {
 fn commit_to_publication_gap_and_reversion_keep_the_latest_value() {
     let (store, id, base) = fixture();
     let mut queue = Queue::default();
-    let (_, first) = queue
+    let Admission {
+        receiver: first, ..
+    } = queue
         .admit(store.clone(), id, base.clone(), title(&base, "One"))
         .unwrap()
         .unwrap();
@@ -88,7 +97,9 @@ fn commit_to_publication_gap_and_reversion_keep_the_latest_value() {
     assert!(first.try_recv().unwrap().unwrap().is_some());
     // UI still displays the old base; its newer refresh reverts to that
     // value before the first receipt's publication callback has run.
-    let (_, reverted) = queue
+    let Admission {
+        receiver: reverted, ..
+    } = queue
         .admit(store.clone(), id, base.clone(), base.clone())
         .unwrap()
         .unwrap();
@@ -101,12 +112,14 @@ fn commit_to_publication_gap_and_reversion_keep_the_latest_value() {
 fn stale_external_card_and_store_failures_release_admission_without_rebasing() {
     let (store, id, base) = fixture();
     let mut queue = Queue::default();
-    let (_, old) = queue
+    let Admission { receiver: old, .. } = queue
         .admit(store.clone(), id, base.clone(), title(&base, "One"))
         .unwrap()
         .unwrap();
     let job = queue.next().unwrap();
-    let (_, newest) = queue
+    let Admission {
+        receiver: newest, ..
+    } = queue
         .admit(store.clone(), id, base.clone(), title(&base, "Two"))
         .unwrap()
         .unwrap();
@@ -122,7 +135,9 @@ fn stale_external_card_and_store_failures_release_admission_without_rebasing() {
     assert!(newest.try_recv().unwrap().unwrap().is_none());
     assert_eq!(saved(&store, id), external);
     assert!(queue.entries.is_empty());
-    let (_, failed) = queue
+    let Admission {
+        receiver: failed, ..
+    } = queue
         .admit(store.clone(), id, external.clone(), title(&base, "Retry"))
         .unwrap()
         .unwrap();
@@ -130,7 +145,9 @@ fn stale_external_card_and_store_failures_release_admission_without_rebasing() {
     queue.finish(job, Err("synthetic failure".into()));
     assert!(failed.try_recv().unwrap().is_err());
     assert!(queue.entries.is_empty());
-    let (_, retried) = queue
+    let Admission {
+        receiver: retried, ..
+    } = queue
         .admit(store.clone(), id, external.clone(), title(&base, "Retry"))
         .unwrap()
         .unwrap();
@@ -160,7 +177,9 @@ fn poison_is_an_error_and_unchanged_updates_do_not_even_wait_for_the_store() {
         .join()
         .is_err()
     );
-    let (_, reply) = queue
+    let Admission {
+        receiver: reply, ..
+    } = queue
         .admit(store, id, base.clone(), title(&base, "New"))
         .unwrap()
         .unwrap();
@@ -172,30 +191,17 @@ fn poison_is_an_error_and_unchanged_updates_do_not_even_wait_for_the_store() {
 #[test]
 fn application_worker_drains_after_observer_drop_and_rejects_shutdown_admission() {
     let (store, id, base) = fixture();
-    let worker = Worker::start().unwrap();
+    let worker = CardWriter::start().unwrap();
     let guard = locked(&store).unwrap();
-    let (_, observer) = worker
-        .shared
-        .queue
-        .lock()
-        .unwrap()
+    let observer = worker
         .admit(store.clone(), id, base.clone(), title(&base, "After drop"))
         .unwrap()
         .unwrap();
-    worker.shared.wake.notify_one();
     drop(observer); // Navigation/entity lifetime cannot cancel durable work.
-    worker.shared.queue.lock().unwrap().closed = true;
-    assert!(
-        worker
-            .shared
-            .queue
-            .lock()
-            .unwrap()
-            .admit(store.clone(), id, base.clone(), base)
-            .is_err()
-    );
+    worker.close();
+    assert!(worker.admit(store.clone(), id, base.clone(), base).is_err());
     drop(guard);
-    worker.shutdown(); // Joins the exact owned thread, including a pending save.
+    worker.finish_for_test(); // Joins the exact owned thread, including a pending save.
     assert_eq!(saved(&store, id)["title"], "After drop");
     assert!(worker.shared.queue.lock().unwrap().entries.is_empty());
     assert!(worker.thread.lock().unwrap().is_none());
@@ -204,17 +210,12 @@ fn application_worker_drains_after_observer_drop_and_rejects_shutdown_admission(
 #[test]
 fn closing_and_dropping_the_owner_never_wait_for_a_held_store() {
     let (store, id, base) = fixture();
-    let worker = Worker::start().unwrap();
+    let worker = CardWriter::start().unwrap();
     let guard = locked(&store).unwrap();
-    let (_, observer) = worker
-        .shared
-        .queue
-        .lock()
-        .unwrap()
+    let observer = worker
         .admit(store.clone(), id, base.clone(), title(&base, "After close"))
         .unwrap()
         .unwrap();
-    worker.shared.wake.notify_one();
     let finished = worker.close();
     assert!(finished.try_recv().is_err());
     drop(worker);
@@ -222,7 +223,14 @@ fn closing_and_dropping_the_owner_never_wait_for_a_held_store() {
     // lock. The detached consumer retains and drains the admitted save.
     drop(guard);
     finished.recv_blocking().unwrap();
-    assert!(observer.recv_blocking().unwrap().unwrap().is_some());
+    assert!(
+        observer
+            .receiver
+            .recv_blocking()
+            .unwrap()
+            .unwrap()
+            .is_some()
+    );
     assert_eq!(saved(&store, id)["title"], "After close");
 }
 
@@ -231,7 +239,11 @@ fn ticket_drop_releases_both_inflight_and_settled_observation_state() {
     for finish_first in [false, true] {
         let (store, id, base) = fixture();
         let shared = Arc::new(Shared::default());
-        let (version, receiver) = shared
+        let Admission {
+            key,
+            version,
+            receiver,
+        } = shared
             .queue
             .lock()
             .unwrap()
@@ -241,7 +253,7 @@ fn ticket_drop_releases_both_inflight_and_settled_observation_state() {
         let job = shared.queue.lock().unwrap().next().unwrap();
         let ticket = Ticket {
             version,
-            key: job.key.clone(),
+            key,
             shared: shared.clone(),
             receiver,
         };
@@ -262,7 +274,9 @@ fn ticket_drop_releases_both_inflight_and_settled_observation_state() {
 fn append_and_queue_delivery_are_not_admitted_through_the_card_worker() {
     let (store, id, base) = fixture();
     let mut queue = Queue::default();
-    let (_, reply) = queue
+    let Admission {
+        receiver: reply, ..
+    } = queue
         .admit(store.clone(), id, base.clone(), title(&base, "New"))
         .unwrap()
         .unwrap();

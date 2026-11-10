@@ -493,8 +493,7 @@ impl Conversation {
             return Ok(());
         }
         let session = self.summary.id;
-        let Some(saved) = vorkspace_runtime::runtime::card_persistence::admit(
-            cx,
+        let Some(saved) = crate::card_saves::writer(cx)?.admit(
             self.store.clone(),
             session,
             expected.clone(),
