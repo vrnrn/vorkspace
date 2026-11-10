@@ -125,6 +125,72 @@ fn failed_draft_transfer_rolls_back_the_local_dispatch_claim() {
 }
 
 #[test]
+fn a_distinct_queue_entry_can_commit_while_the_older_turn_is_offered() {
+    for shared in [false, true] {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("state.db");
+        let open = if shared {
+            Store::open_vorkspace
+        } else {
+            Store::open
+        };
+        let store = open(&path).unwrap();
+        let session = store.create("codex", "/project").unwrap().id;
+        let revision = store.save_composer_draft(session, 0, &payload()).unwrap();
+        let first = store.composer_origin(session, revision).unwrap();
+        reserve_draft(&store, session, &first, "older-turn");
+        assert!(store
+            .save_composer_after_local_offer(&first, &Value::Null)
+            .is_err());
+        assert!(store.composer_recoveries(session).unwrap().is_empty());
+
+        let mut newer = payload();
+        newer["text"] = json!("A distinct follow-up");
+        let (revision, recovery) = store
+            .save_composer_after_local_offer(&first, &newer)
+            .unwrap();
+        assert_eq!(recovery.unwrap().payload, payload());
+        let second = store.composer_origin(session, revision).unwrap();
+        let queue = crate::follow_up::State {
+            revision: 1,
+            paused: true,
+            messages: vec![crate::follow_up::Message {
+                id: "queue-next".into(),
+                text: "A distinct follow-up".into(),
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+        store
+            .accept_composer_message(session, &queue, &second, "queue-next")
+            .unwrap();
+        assert!(!store.composer_transfer_committed(&first).unwrap());
+        assert!(store.composer_transfer_committed(&second).unwrap());
+        drop(store);
+
+        let reopened = open(&path).unwrap();
+        let records = reopened.composer_recoveries(session).unwrap();
+        assert_eq!(records.len(), 1);
+        assert_eq!(records[0].payload, payload());
+        assert_eq!(
+            reopened.follow_ups(session).unwrap().messages,
+            queue.messages
+        );
+        assert!(
+            reopened
+                .dispatch_composer_submission("older-turn", &first)
+                .unwrap()
+                .claimed
+        );
+        assert!(reopened.composer_recoveries(session).unwrap().is_empty());
+        assert_eq!(
+            reopened.composer_draft(session).unwrap().unwrap().payload,
+            newer
+        );
+    }
+}
+
+#[test]
 fn a_queued_version_cannot_also_dispatch_as_an_initial_turn() {
     for shared in [false, true] {
         let dir = tempfile::tempdir().unwrap();

@@ -1,5 +1,6 @@
 //! Submitting prompts and receiving a turn's updates.
 use super::*;
+use composer_draft::ComposerLane;
 use std::path::PathBuf;
 use vorkspace_core::{agent::RemoteAction, store::ComposerOrigin};
 
@@ -67,7 +68,10 @@ impl Conversation {
         })
     }
     pub(super) fn send(&mut self, cx: &mut Context<Self>) {
-        if self.reject_user_entry(cx) || self.composer_submission_pending(cx) {
+        if self.reject_user_entry(cx)
+            || self.composer_draft.lane_pending(ComposerLane::Shelf)
+            || self.composer_submission_pending(cx)
+        {
             return;
         }
         self.follow_ups.admission_error = None;
@@ -275,7 +279,7 @@ impl Conversation {
         save_remote_draft: bool,
         cx: &mut Context<Self>,
     ) -> bool {
-        let origin = match self.prepare_composer_submission(cx) {
+        let origin = match self.prepare_composer_submission(ComposerLane::Turn, cx) {
             Ok(origin) => origin,
             Err(error) => {
                 self.status = error;
@@ -286,13 +290,13 @@ impl Conversation {
         let launched = self.launch_turn(
             prompt,
             PromptSource::Composer {
-                origin,
+                origin: origin.clone(),
                 save_remote_draft,
             },
             cx,
         );
         if !launched {
-            self.finish_composer_submission(cx);
+            self.finish_composer_submission(&origin, cx);
         }
         launched
     }

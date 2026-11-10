@@ -1,6 +1,7 @@
 //! A composer remains editable while files are staged. A queue row or draft
 //! card is visible only after it and the offered editor revision commit together.
 use super::*;
+use crate::conversation::composer_draft::ComposerLane;
 use vorkspace_core::{follow_up::StagedMessage, store::ComposerOrigin};
 
 #[derive(Clone, Copy)]
@@ -61,7 +62,7 @@ impl Conversation {
         destination: ShelfDestination,
         cx: &mut Context<Self>,
     ) {
-        let origin = match self.prepare_composer_submission(cx) {
+        let origin = match self.prepare_composer_submission(ComposerLane::Shelf, cx) {
             Ok(origin) => origin,
             Err(error) => {
                 self.shelf_admission_failed(destination, error, cx);
@@ -148,7 +149,7 @@ impl Conversation {
         let (next, message) = match accepted {
             Ok(accepted) => accepted,
             Err(error) => {
-                self.finish_composer_submission(cx);
+                self.finish_composer_submission(&origin, cx);
                 self.shelf_admission_failed(destination, error, cx);
                 return;
             }

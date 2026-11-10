@@ -23,6 +23,10 @@ impl ComposerOrigin {
     pub fn message_id(&self) -> String {
         format!("composer-draft-{}", self.revision)
     }
+
+    pub fn recovery_owner(&self) -> String {
+        format!("composer-offer-{}", self.revision)
+    }
 }
 
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
@@ -331,6 +335,15 @@ impl Store {
         if inserted == 0 {
             return Err("This version of the draft was already accepted.".into());
         }
+        if shared::has_table(transaction, "composer_draft_recoveries")? {
+            transaction
+                .execute(
+                    "DELETE FROM composer_draft_recoveries
+                     WHERE session_id=?1 AND owner=?2 AND revision=?3",
+                    params![origin.source, origin.recovery_owner(), revision],
+                )
+                .map_err(|error| error.to_string())?;
+        }
         if self.shared.is_some() {
             transaction
                 .execute(
@@ -395,20 +408,67 @@ impl Store {
         .collect()
     }
     pub fn save_composer_recovery(&self, id: i64, record: ComposerRecovery) -> Result<(), String> {
+        let source = self.composer_sources(id)?.current;
+        let tx = self
+            .conn
+            .unchecked_transaction()
+            .map_err(|e| e.to_string())?;
+        Self::write_composer_recovery(&tx, &source, &record)?;
+        tx.commit().map_err(|e| e.to_string())
+    }
+
+    fn write_composer_recovery(
+        tx: &rusqlite::Transaction<'_>,
+        source: &str,
+        record: &ComposerRecovery,
+    ) -> Result<(), String> {
         validate(&record.payload)?;
         crate::accounts::validate_id(&record.owner)?;
         let raw = serde_json::to_string(&record.payload).map_err(|e| e.to_string())?;
         if raw.len() > 10 * 1024 * 1024 {
             return Err("Recovered input exceeds supported limits".into());
         }
-        let source = self.composer_sources(id)?.current;
-        let tx = self
-            .conn
-            .unchecked_transaction()
-            .map_err(|e| e.to_string())?;
-        ensure_recovery_schema(&tx)?;
+        ensure_recovery_schema(tx)?;
         tx.execute("INSERT INTO composer_draft_recoveries VALUES(?1,?2,?3,?4,?5) ON CONFLICT(session_id,owner) DO UPDATE SET revision=excluded.revision,payload_json=excluded.payload_json,updated_at=excluded.updated_at",params![source,record.owner,record.revision.min(i64::MAX as u64) as i64,raw,crate::time::now_ms().min(i64::MAX as u64) as i64]).map_err(|e|e.to_string())?;
-        tx.commit().map_err(|e| e.to_string())
+        Ok(())
+    }
+
+    /// Preserve a displaced local offer until its own receipt commits. The
+    /// replacement and its predecessor's recovery are visible together.
+    pub fn save_composer_after_local_offer(
+        &self,
+        origin: &ComposerOrigin,
+        payload: &Value,
+    ) -> Result<(u64, Option<ComposerRecovery>), String> {
+        let tx = rusqlite::Transaction::new_unchecked(
+            &self.conn,
+            rusqlite::TransactionBehavior::Immediate,
+        )
+        .map_err(|error| error.to_string())?;
+        let sources = self.composer_sources(origin.session)?;
+        let version = self
+            .composer_version(origin.session, sources)?
+            .filter(|version| {
+                !version.remote
+                    && version.source == origin.source
+                    && version.revision == origin.revision
+            })
+            .ok_or(DRAFT_CHANGED)?;
+        let recovery = if version.deleted {
+            None
+        } else {
+            let original = self.composer_draft(origin.session)?.ok_or(DRAFT_CHANGED)?;
+            let record = ComposerRecovery {
+                owner: origin.recovery_owner(),
+                revision: origin.revision,
+                payload: original.payload,
+            };
+            Self::write_composer_recovery(&tx, &origin.source, &record)?;
+            Some(record)
+        };
+        let revision = self.save_composer_draft(origin.session, origin.revision, payload)?;
+        tx.commit().map_err(|error| error.to_string())?;
+        Ok((revision, recovery))
     }
     pub fn clear_composer_recovery(&self, id: i64, owner: &str) -> Result<(), String> {
         if !shared::has_table(&self.conn, "composer_draft_recoveries")? {
@@ -508,6 +568,17 @@ impl Store {
             .checked_add(1)
             .filter(|v| *v <= 9_007_199_254_740_991)
             .ok_or("Composer draft revision is exhausted")?;
+        let tx = self
+            .conn
+            .is_autocommit()
+            .then(|| {
+                rusqlite::Transaction::new_unchecked(
+                    &self.conn,
+                    rusqlite::TransactionBehavior::Immediate,
+                )
+            })
+            .transpose()
+            .map_err(|error| error.to_string())?;
         if self.shared.is_none() {
             if self.composer_draft(id)?.map_or(0, |d| d.revision) != expected {
                 return Err(
@@ -523,32 +594,30 @@ impl Store {
                 })
                 .map_err(|e| e.to_string())?,
             )?;
-            return Ok(revision);
-        }
-        let tx = self
-            .conn
-            .unchecked_transaction()
-            .map_err(|e| e.to_string())?;
-        // New stores create the same ordinary draft table on first save. No
-        // existing row is copied, converted or rewritten during an upgrade.
-        ensure_draft_schema(&tx)?;
-        let sources = self.composer_sources(id)?;
-        let current = self
-            .read_composer_row(&sources, "revision", |row| row.get::<_, i64>(0))?
-            .unwrap_or(0)
-            .max(0) as u64;
-        if current != expected {
-            return Err(
-                "Composer draft changed in another window; your input was preserved".into(),
-            );
-        }
-        let cwd = payload["cwd"]
-            .as_str()
-            .ok_or("Composer draft directory is missing")?;
-        tx.execute("INSERT INTO composer_drafts(session_id,cwd,revision,payload_json,deleted,updated_at) VALUES(?1,?2,?3,?4,?5,?6)
+        } else {
+            // New stores create the same ordinary draft table on first save. No
+            // existing row is copied, converted or rewritten during an upgrade.
+            ensure_draft_schema(&self.conn)?;
+            let sources = self.composer_sources(id)?;
+            let current = self
+                .read_composer_row(&sources, "revision", |row| row.get::<_, i64>(0))?
+                .unwrap_or(0)
+                .max(0) as u64;
+            if current != expected {
+                return Err(
+                    "Composer draft changed in another window; your input was preserved".into(),
+                );
+            }
+            let cwd = payload["cwd"]
+                .as_str()
+                .ok_or("Composer draft directory is missing")?;
+            self.conn.execute("INSERT INTO composer_drafts(session_id,cwd,revision,payload_json,deleted,updated_at) VALUES(?1,?2,?3,?4,?5,?6)
             ON CONFLICT(session_id) DO UPDATE SET cwd=excluded.cwd,revision=excluded.revision,payload_json=excluded.payload_json,deleted=excluded.deleted,updated_at=excluded.updated_at",
             params![sources.current,cwd,revision as i64,raw,deleted,crate::time::now_ms().min(i64::MAX as u64) as i64]).map_err(|e|e.to_string())?;
-        tx.commit().map_err(|e| e.to_string())?;
+        }
+        if let Some(tx) = tx {
+            tx.commit().map_err(|e| e.to_string())?;
+        }
         Ok(revision)
     }
 }

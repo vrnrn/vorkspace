@@ -13,13 +13,21 @@ pub(super) struct State {
     hydrating: bool,
     pub(super) error: Option<String>,
     resolving: bool,
-    submission: Option<PendingSubmission>,
+    submissions: Vec<PendingSubmission>,
     send_after_restore: Option<u64>,
 }
 
 struct PendingSubmission {
     origin: ComposerOrigin,
     generation: u64,
+    lane: ComposerLane,
+    recovery_owner: String,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(super) enum ComposerLane {
+    Turn,
+    Shelf,
 }
 pub(super) struct Writer {
     store: Database,
@@ -32,6 +40,7 @@ pub(super) struct Writer {
     owner: String,
     recoveries: Vec<vorkspace_core::store::ComposerRecovery>,
     generation: u64,
+    displaced_offer: Option<ComposerOrigin>,
     discarded: bool,
 }
 impl State {
@@ -48,6 +57,7 @@ impl State {
                 owner: vorkspace_core::bot::new_id(),
                 recoveries: Vec::new(),
                 generation: 0,
+                displaced_offer: None,
                 discarded: false,
             })),
             timer: None,
@@ -56,7 +66,7 @@ impl State {
             hydrating: true,
             error: None,
             resolving: false,
-            submission: None,
+            submissions: Vec::new(),
             send_after_restore: None,
         }
     }
@@ -72,6 +82,7 @@ impl State {
         let mut writer = self.writer.lock().unwrap_or_else(|e| e.into_inner());
         writer.discarded = true;
         writer.pending = None;
+        writer.displaced_offer = None;
     }
     pub(super) fn generation(&self) -> u64 {
         self.writer
@@ -80,7 +91,30 @@ impl State {
             .generation
     }
     pub(super) fn submitting(&self) -> bool {
-        self.submission.is_some()
+        !self.submissions.is_empty()
+    }
+
+    pub(super) fn lane_pending(&self, lane: ComposerLane) -> bool {
+        self.submissions.iter().any(|offer| offer.lane == lane)
+    }
+
+    fn take_submission(&mut self, origin: &ComposerOrigin) -> Option<PendingSubmission> {
+        let at = self
+            .submissions
+            .iter()
+            .position(|offer| &offer.origin == origin)?;
+        Some(self.submissions.swap_remove(at))
+    }
+
+    fn visible_recovery<'a>(
+        &self,
+        writer: &'a Writer,
+    ) -> Option<&'a vorkspace_core::store::ComposerRecovery> {
+        writer.recoveries.iter().rev().find(|record| {
+            self.submissions
+                .iter()
+                .all(|offer| offer.recovery_owner != record.owner)
+        })
     }
     pub(super) fn waiting_to_submit(&self) -> bool {
         self.send_after_restore.is_some()
@@ -121,9 +155,18 @@ pub(super) fn flush(writer: &Arc<Mutex<Writer>>) -> Result<(), String> {
     let Some(payload) = state.pending.as_ref() else {
         return Ok(());
     };
-    let result = locked(&state.store)?.save_composer_draft(state.id, state.revision, payload);
-    let revision = match result {
-        Ok(revision) => revision,
+    let result = {
+        let store = locked(&state.store)?;
+        if let Some(origin) = &state.displaced_offer {
+            store.save_composer_after_local_offer(origin, payload)
+        } else {
+            store
+                .save_composer_draft(state.id, state.revision, payload)
+                .map(|revision| (revision, None))
+        }
+    };
+    let (revision, recovery) = match result {
+        Ok(saved) => saved,
         Err(error) => {
             let recovery = vorkspace_core::store::ComposerRecovery {
                 owner: state.owner.clone(),
@@ -136,6 +179,11 @@ pub(super) fn flush(writer: &Arc<Mutex<Writer>>) -> Result<(), String> {
             return Err(error);
         }
     };
+    if let Some(recovery) = recovery {
+        state.recoveries.retain(|old| old.owner != recovery.owner);
+        state.recoveries.push(recovery);
+    }
+    state.displaced_offer = None;
     state.revision = revision;
     state.base = state.pending.take().unwrap();
     state.deleted = state.base["text"].as_str() == Some("")
@@ -254,20 +302,27 @@ impl Conversation {
     }
 
     pub(super) fn composer_version_offered(&self) -> bool {
+        let generation = self.composer_draft.generation();
         self.composer_draft
-            .submission
-            .as_ref()
-            .is_some_and(|submission| submission.generation == self.composer_draft.generation())
+            .submissions
+            .iter()
+            .any(|offer| offer.generation == generation)
     }
 
     pub(super) fn prepare_composer_submission(
         &mut self,
+        lane: ComposerLane,
         cx: &mut Context<Self>,
     ) -> Result<ComposerOrigin, String> {
-        if !self.composer_draft.ready_for_replacement() || self.composer_draft.submitting() {
+        if !self.composer_draft.ready_for_replacement() {
             return Err("Wait for the current draft to finish loading or sending.".into());
         }
         self.capture_composer(cx);
+        if self.composer_version_offered() || self.composer_draft.lane_pending(lane) {
+            return Err(
+                "Wait for the previous message to finish saving. Your input was preserved.".into(),
+            );
+        }
         self.composer_draft.flush()?;
         let (revision, generation) = {
             let writer = self
@@ -278,9 +333,11 @@ impl Conversation {
             (writer.revision, writer.generation)
         };
         let origin = locked(&self.store)?.composer_origin(self.summary.id, revision)?;
-        self.composer_draft.submission = Some(PendingSubmission {
+        self.composer_draft.submissions.push(PendingSubmission {
+            recovery_owner: origin.recovery_owner(),
             origin: origin.clone(),
             generation,
+            lane,
         });
         Ok(origin)
     }
@@ -290,19 +347,19 @@ impl Conversation {
         origin: &ComposerOrigin,
         cx: &mut Context<Self>,
     ) {
-        let Some(generation) = self
+        let Some(at) = self
             .composer_draft
-            .submission
-            .as_ref()
-            .filter(|pending| pending.origin == *origin)
-            .map(|pending| pending.generation)
+            .submissions
+            .iter()
+            .position(|offer| &offer.origin == origin)
         else {
             return;
         };
         self.persist_composer(cx);
-        self.composer_draft.submission = None;
-        let cleared =
-            self.composer_draft.generation() == generation && !self.input.read(cx).is_composing();
+        let offer = self.composer_draft.submissions.swap_remove(at);
+        self.composer_draft.forget_recovery(&offer.recovery_owner);
+        let cleared = self.composer_draft.generation() == offer.generation
+            && !self.input.read(cx).is_composing();
         if cleared {
             let clear_mode = self.follow_ups.draft_selected || self.selected_turn_mode().is_some();
             self.attachments.clear();
@@ -317,8 +374,12 @@ impl Conversation {
         cx.notify();
     }
 
-    pub(super) fn finish_composer_submission(&mut self, cx: &mut Context<Self>) {
-        if self.composer_draft.submission.take().is_some() {
+    pub(super) fn finish_composer_submission(
+        &mut self,
+        origin: &ComposerOrigin,
+        cx: &mut Context<Self>,
+    ) {
+        if self.composer_draft.take_submission(origin).is_some() {
             self.persist_composer(cx);
         }
     }
@@ -330,9 +391,9 @@ impl Conversation {
     ) {
         if !self
             .composer_draft
-            .submission
-            .as_ref()
-            .is_some_and(|pending| &pending.origin == origin)
+            .submissions
+            .iter()
+            .any(|offer| &offer.origin == origin)
         {
             return;
         }
@@ -342,7 +403,7 @@ impl Conversation {
             Ok(true) => {
                 self.accept_composer_submission(origin, cx);
             }
-            Ok(false) => self.finish_composer_submission(cx),
+            Ok(false) => self.finish_composer_submission(origin, cx),
             // Keep the offered version fenced until storage or a newer edit
             // supplies ownership. An uncertain read must not recreate it.
             Err(_) => {}
@@ -491,7 +552,7 @@ impl Conversation {
                 .writer
                 .lock()
                 .unwrap_or_else(|e| e.into_inner());
-            let recovered = state.recoveries.last()?;
+            let recovered = self.composer_draft.visible_recovery(&state)?;
             (
                 recovered.payload["text"]
                     .as_str()
@@ -504,7 +565,7 @@ impl Conversation {
                     .map_or(0, Vec::len),
             )
         };
-        let disabled = self.composer_draft.resolving;
+        let disabled = self.composer_draft.resolving || self.composer_draft.submitting();
         Some(
             div()
                 .px_3()
@@ -578,7 +639,7 @@ impl Conversation {
         }
     }
     fn resolve_composer_recovery(&mut self, recovered: bool, cx: &mut Context<Self>) {
-        if self.composer_draft.resolving {
+        if self.composer_draft.resolving || self.composer_draft.submitting() {
             return;
         }
         if self.composer_draft.error.is_some() {
@@ -588,7 +649,10 @@ impl Conversation {
         let writer = self.composer_draft.writer.clone();
         let (choice, generation) = {
             let state = writer.lock().unwrap_or_else(|e| e.into_inner());
-            (state.recoveries.last().cloned(), state.generation)
+            (
+                self.composer_draft.visible_recovery(&state).cloned(),
+                state.generation,
+            )
         };
         let Some(choice) = choice else {
             return;
@@ -790,12 +854,15 @@ impl Conversation {
             current["text"].as_str() == Some(input.content.as_ref()) && same_files && same_tags;
         let same_selection = current["selectionStart"].as_u64() == Some(selection.start as u64)
             && current["selectionEnd"].as_u64() == Some(selection.end as u64);
+        let offer = self
+            .composer_draft
+            .submissions
+            .iter()
+            .find(|offer| offer.generation == state.generation);
         // Moving the caret while this version is offered must not publish
         // another unsent copy of the same input after its receipt commits.
         if same_input
-            && (same_selection
-                || self.composer_draft.submitting()
-                || self.composer_draft.waiting_to_submit())
+            && (same_selection || offer.is_some() || self.composer_draft.waiting_to_submit())
         {
             return false;
         }
@@ -854,9 +921,27 @@ impl Conversation {
         {
             return false;
         }
+        let explicit_mode = input::Command::leading(&input.content).is_some_and(|command| {
+            matches!(
+                command.name(),
+                "draft" | "plan" | "operator" | "orchestrator"
+            )
+        });
+        let replaced_offer = offer.is_some() && !same_input;
+        if let Some(offer) = offer.filter(|_| replaced_offer && !self.is_remote()) {
+            state.displaced_offer = Some(offer.origin.clone());
+        }
         state.pending = Some(payload);
         state.generation = state.generation.wrapping_add(1);
+        drop(state);
         self.composer_draft.touched = true;
+        if replaced_offer
+            && !explicit_mode
+            && (self.follow_ups.draft_selected || self.selected_turn_mode().is_some())
+        {
+            self.follow_ups.draft_selected = false;
+            self.clear_submitted_mode(cx);
+        }
         true
     }
     pub(crate) fn append_review_comment(
@@ -903,7 +988,17 @@ impl Conversation {
                 .spawn(async move { flush(&writer) });
             let result = work.await;
             let _ = this.update(cx, |this, cx| match result {
-                Ok(()) => this.composer_draft.error = None,
+                Ok(()) => {
+                    this.composer_draft.error = None;
+                    let state = this
+                        .composer_draft
+                        .writer
+                        .lock()
+                        .unwrap_or_else(|e| e.into_inner());
+                    if this.composer_draft.visible_recovery(&state).is_some() {
+                        cx.notify();
+                    }
+                }
                 Err(error) => {
                     this.status = format!("Could not save composer: {error}");
                     this.composer_draft.error = Some(this.status.clone());

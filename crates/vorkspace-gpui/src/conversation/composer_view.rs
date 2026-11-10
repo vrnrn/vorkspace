@@ -763,7 +763,10 @@ impl Conversation {
             && (self.composer_draft.waiting_to_submit()
                 || ticket_pending
                 || (self.responding() && (!has_value || self.composer_version_offered())));
-        let offering = self.composer_draft.submitting();
+        let offering = self.composer_version_offered()
+            || self
+                .composer_draft
+                .lane_pending(composer_draft::ComposerLane::Shelf);
         let draft = self.draft_active(cx);
         let enabled = ticket_pending
             || (!self.attaching
