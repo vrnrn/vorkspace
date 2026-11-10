@@ -390,6 +390,9 @@ impl Shell {
             cx.notify();
             return false;
         }
+        for view in self.sessions.values() {
+            view.update(cx, |view, cx| view.save_side_question_draft(cx));
+        }
         self.window_closing = true;
         self.forget_closed_window(cx);
         true
