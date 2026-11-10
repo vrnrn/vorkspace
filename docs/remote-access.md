@@ -129,6 +129,8 @@ Host CI runs on macOS. The Linux service and bootstrap paths are exercised with 
 
 The host stores session metadata beside durable transcripts and indexes that metadata separately. Session listings and unchanged-revision checks read the covering metadata index, so they do not load or parse transcript bodies. Missing or malformed legacy summaries fall back to the saved transcript.
 
+The desktop requests summary-only project listings. Updated hosts skip the per-worktree Git queries for those requests, while older hosts can return the enriched listing.
+
 The desktop tracks the latest host metadata revision separately from the latest full configuration. Older responses cannot overwrite newer status or settings; a full snapshot may fill fields omitted by a listing at the same revision. Command receipts update their local journal while preserving newer host metadata. Revisionless legacy hosts remain readable until a versioned snapshot establishes that binding's revision boundary.
 
 The desktop validates and applies a project listing as one catalog update. New bindings, their initial settings, and the markers for removed legacy tabs commit together. An absent conversation is removed only if its binding still matches the revision captured before the request. Unbound drafts, uploads, pending commands, and rejected messages available for recovery stay on the desktop.

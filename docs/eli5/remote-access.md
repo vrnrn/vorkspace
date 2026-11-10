@@ -38,6 +38,8 @@ The source for the remote host lives under `host/`. Its connection test is `scri
 
 Checking whether a remote chat changed reads its small summary instead of reopening the whole chat. Large downloads arrive in pieces. If a download is abandoned, the host releases its temporary copy after two minutes without activity.
 
+Refreshing the chat list needs only those summaries. An updated host can skip looking up Git branches for that refresh.
+
 When a chat changes, the host reads the new or updated messages and their order without loading every old message. Before a new turn can start, the host finishes stopping the old turn and saves its outcome.
 
 While a reply streams, the host can reuse the message list it just saved. It checks that the list is still current before writing the new text.

@@ -149,7 +149,7 @@ impl app_core::AppCore {
             let response = client.request(
                 &machine.id,
                 "sessions.list",
-                json!({"projectId":project.project_id}),
+                json!({"projectId": project.project_id, "includeGit": false}),
             )?;
             let values = response.as_array().ok_or("Invalid remote session list")?;
             locked(&store)?.apply_remote_listing(&project, values, &baseline)

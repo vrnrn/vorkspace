@@ -275,6 +275,10 @@ export function createHostServer(engine, providers, lifecycle) {
             const projectId = String(params.projectId ?? "");
             const project = engine.store.project(projectId);
             const summaries = engine.store.summaries(projectId);
+            if (params.includeGit === false) {
+              result = summaries;
+              break;
+            }
             const paths = [
               ...new Set(
                 summaries.map((session) => session.cwd ?? project.cwd),

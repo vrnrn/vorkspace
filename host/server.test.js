@@ -373,6 +373,12 @@ describe("remote host API", () => {
       worktreeCwd: tree.path,
       repo: s.project.name,
     });
+    const plain = await s.call("sessions.list", {
+      projectId: s.project.id,
+      includeGit: false,
+    });
+    expect(plain.status).toBe(200);
+    expect(plain.value.result).toEqual(s.store.summaries(s.project.id));
     expect(
       (
         await s.call("commands.dispatch", {
