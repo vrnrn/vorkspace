@@ -38,13 +38,11 @@ impl RewindError {
 
 pub use crate::kind::supports_rewind;
 
-/// Runs on a worker, after the caller has reserved its conversation. Returns the
-/// provider binding to persist with the confirmed local truncation. Pi forks to
-/// a new session; Codex keeps the current thread. No prompt is sent here.
-pub fn rewind_last_turn(
+/// Check the saved provider context while the Store holds exclusive admission.
+pub fn prepare_rewind(
     request: Request,
     before_turn: Option<&str>,
-) -> Result<String, RewindError> {
+) -> Result<PreparedRewind, RewindError> {
     if !supports_rewind(request.kind) || request.settings.text_only {
         return Err("This provider does not support editing the last turn".into());
     }
@@ -52,7 +50,8 @@ pub fn rewind_last_turn(
         .provider_id
         .as_deref()
         .filter(|id| !id.trim().is_empty())
-        .ok_or("The conversation has no saved provider session to rewind")?;
+        .ok_or("The conversation has no saved provider session to rewind")?
+        .to_owned();
     // Remove the previous warm process before reverting its underlying session.
     // It must not later resume with a pre-revert in-memory context.
     parked::discard_session(&request);
@@ -71,30 +70,25 @@ pub fn rewind_last_turn(
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
     process::isolate(&mut command);
-    let mut wire = parked::Wire::spawn(&mut command, &request)?;
     let mut rpc = Rpc {
-        wire: &mut wire,
+        wire: parked::Wire::spawn(&mut command, &request)?,
         serial: 100,
         pi: request.kind.is_pi(),
     };
     if rpc.pi {
         let state = rpc.call("get_state", json!({}), Effect::Read)?;
-        if pi_binding(&state).as_deref() != Some(session) {
+        if pi_binding(&state).as_deref() != Some(session.as_str()) {
             return Err("Pi resumed a different session; history was preserved".into());
         }
         if state["isStreaming"] == true || state["isCompacting"] == true {
             return Err("Stop the current turn before editing the last message".into());
         }
         let messages = rpc.call("get_fork_messages", json!({}), Effect::Read)?;
-        let entry = last_fork_entry(&messages)?;
-        let fork = rpc.call("fork", json!({"entryId":entry}), Effect::Change)?;
-        if fork["cancelled"] == true {
-            return Err("Edit cancelled".into());
-        }
-        let state = rpc.call("get_state", json!({}), Effect::AfterChange)?;
-        return pi_binding(&state)
-            .filter(|binding| binding != session)
-            .ok_or_else(|| RewindError::uncertain("Pi did not expose a new forked session"));
+        let target = Target::Pi {
+            original: session,
+            entry: last_fork_entry(&messages)?,
+        };
+        return Ok(PreparedRewind { rpc, target });
     }
     rpc.call("initialize", json!({"clientInfo":{"name":"vorkspace_native","title":"vorkspace Native","version":env!("CARGO_PKG_VERSION")},"capabilities":{"experimentalApi":true}}), Effect::Read)?;
     write_json(&mut rpc.wire.stdin, json!({"method":"initialized"}))?;
@@ -104,35 +98,65 @@ pub fn rewind_last_turn(
             json!({"threadId":session,"cwd":request.cwd}),
             Effect::Read,
         )?,
+        &session,
+    )?;
+    let before_turn = before_turn
+        .filter(|id| !id.trim().is_empty())
+        .ok_or("Codex did not expose an exact user turn to edit")?
+        .to_owned();
+    let target = Target::Codex {
         session,
-    )?;
-    let before_turn = if let Some(id) = before_turn.filter(|id| !id.trim().is_empty()) {
-        id.to_owned()
-    } else {
-        let page = rpc.call(
-            "thread/turns/list",
-            json!({"threadId":session,"limit":100,"sortDirection":"desc","itemsView":"summary"}),
-            Effect::Read,
-        )?;
-        page["data"]
-            .as_array()
-            .into_iter()
-            .flatten()
-            .find(|turn| {
-                turn["items"]
-                    .as_array()
-                    .is_some_and(|items| items.iter().any(|item| item["type"] == "userMessage"))
-            })
-            .and_then(|turn| turn["id"].as_str())
-            .ok_or("Codex did not expose a user turn id to edit")?
-            .to_owned()
+        before_turn,
     };
-    rpc.call(
-        "thread/revert",
-        json!({"threadId":session,"beforeTurnId":before_turn}),
-        Effect::Change,
-    )?;
-    Ok(session.into())
+    Ok(PreparedRewind { rpc, target })
+}
+
+enum Target {
+    Codex {
+        session: String,
+        before_turn: String,
+    },
+    Pi {
+        original: String,
+        entry: String,
+    },
+}
+
+pub struct PreparedRewind {
+    rpc: Rpc,
+    target: Target,
+}
+
+impl PreparedRewind {
+    /// Execute the mutation after the caller records dispatch. Return the
+    /// binding to commit with the local prefix. Pi forks, Codex rewinds in place.
+    pub fn rewind(mut self) -> Result<String, RewindError> {
+        match self.target {
+            Target::Codex {
+                session,
+                before_turn,
+            } => {
+                self.rpc.call(
+                    "thread/revert",
+                    json!({"threadId":session,"beforeTurnId":before_turn}),
+                    Effect::Change,
+                )?;
+                Ok(session)
+            }
+            Target::Pi { original, entry } => {
+                let fork = self
+                    .rpc
+                    .call("fork", json!({"entryId":entry}), Effect::Change)?;
+                if fork["cancelled"] == true {
+                    return Err("Edit cancelled".into());
+                }
+                let state = self.rpc.call("get_state", json!({}), Effect::AfterChange)?;
+                pi_binding(&state)
+                    .filter(|binding| binding != &original)
+                    .ok_or_else(|| RewindError::uncertain("Pi did not expose a new forked session"))
+            }
+        }
+    }
 }
 
 fn validate_codex_resume(resumed: &Value, session: &str) -> Result<(), RewindError> {
@@ -171,8 +195,8 @@ fn pi_binding(state: &Value) -> Option<String> {
             .all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-'))
     .then(|| id.to_owned())
 }
-struct Rpc<'a> {
-    wire: &'a mut parked::Wire,
+struct Rpc {
+    wire: parked::Wire,
     serial: u64,
     pi: bool,
 }
@@ -200,7 +224,7 @@ impl Effect {
     }
 }
 
-impl Rpc<'_> {
+impl Rpc {
     fn call(&mut self, method: &str, params: Value, effect: Effect) -> Result<Value, RewindError> {
         let timeout = Duration::from_secs(match method {
             "get_state" | "thread/resume" | "thread/revert" => 45,
@@ -384,9 +408,8 @@ mod tests {
             .stderr(Stdio::piped());
         process::isolate(&mut command);
         let request = request(Kind::Codex, "/bin/sh".into(), Path::new("/tmp"));
-        let mut wire = parked::Wire::spawn(&mut command, &request).unwrap();
         let mut rpc = Rpc {
-            wire: &mut wire,
+            wire: parked::Wire::spawn(&mut command, &request).unwrap(),
             serial: 100,
             pi: false,
         };
@@ -437,7 +460,7 @@ for line in sys.stdin:
                 .settings
                 .environment
                 .insert("FORK_OUTCOME".into(), outcome.into());
-            let result = rewind_last_turn(request, None);
+            let result = prepare_rewind(request, None).and_then(PreparedRewind::rewind);
             if outcome == "new" {
                 assert_eq!(result.unwrap(), "forked");
             } else {

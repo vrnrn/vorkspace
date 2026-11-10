@@ -177,7 +177,8 @@ impl Conversation {
         let fill = composer_fill();
         let bot = self.settings.bot.is_some();
         let input = self.input.read(cx);
-        let has_value = input.has_message_text() || !self.attachments.is_empty();
+        let has_value = (input.has_message_text() || !self.attachments.is_empty())
+            && !self.editing_last_turn.blocks_send();
         // Sessions complete files, commands and skills; a Bot's field is plain.
         let field = if bot {
             self.input.clone().into_any_element()
@@ -231,6 +232,7 @@ impl Conversation {
             )
             .children(self.composer_recovery_banner(cx))
             .children(self.local_submission_banner(cx))
+            .children(self.edit_recovery_banner())
             .children(self.recovered_turn_banner(cx))
             .children(self.attachment_chips(cx))
             .child(
@@ -616,7 +618,7 @@ impl Conversation {
                     .child(model)
                     .children(controls)
                     .when(!bot, |d| d.child(access))
-                    .when(self.editing_last_turn.pending(), |d| {
+                    .when(self.editing_last_turn.can_cancel(), |d| {
                         d.child(
                             div()
                                 .id("cancel-edit-last-turn")

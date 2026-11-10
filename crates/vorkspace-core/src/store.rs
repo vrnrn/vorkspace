@@ -15,7 +15,8 @@ mod follow_up;
 pub use composer_draft::{ComposerDraft, ComposerRecovery};
 mod local_submissions;
 pub use local_submissions::{
-    SubmissionClaim, SubmissionInput, SubmissionOwner, SubmissionReceipt, SubmissionReservation,
+    EditAdmissionError, EditBarrier, EditClaim, SubmissionClaim, SubmissionInput, SubmissionOwner,
+    SubmissionReceipt, SubmissionReservation,
 };
 mod managed_sessions;
 mod notes;

@@ -112,7 +112,8 @@ fn bot_claim_waiting_for_edit_or_detach_never_holds_the_sidecar_lock() {
             PREFERENCE_GATE
                 .with(|gate| *gate.borrow_mut() = Some((writer_ready_tx, writer_resume_rx)));
             let result = if edit {
-                writer.shared_finish_edit(id, &snapshot, "fork")
+                let mut claim = crate::store::edit::dispatched_edit(&writer, id, snapshot);
+                writer.finish_edit_last_turn(&mut claim, "fork")
             } else {
                 writer
                     .detach_worktree("/project-worktrees/feature", "/project")

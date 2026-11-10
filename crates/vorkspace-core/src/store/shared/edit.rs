@@ -1,20 +1,19 @@
 use super::*;
-use crate::store::EditSnapshot;
+use crate::store::{EditClaim, EditSnapshot};
 
 impl Store {
     pub(in crate::store) fn shared_validate_edit_rows(
         &self,
         id: i64,
         expected: &[Value],
-        rows: &[Row],
     ) -> Result<(), String> {
         let current = self.shared_blocks(id)?;
-        if current != expected || blocks::project(&current)? != rows {
+        if current != expected {
             return Err("Conversation metadata changed; its history was preserved".into());
         }
-        Ok(())
+        self.shared_edit_queue_empty(id, &current)
     }
-    pub(in crate::store) fn shared_edit_queue_empty(&self, id: i64) -> Result<(), String> {
+    fn shared_edit_queue_empty(&self, id: i64, blocks: &[Value]) -> Result<(), String> {
         // Validation must not refresh the optimistic queue/history revision:
         // a failed edit leaves the visible revision old and still guarded.
         let field = self.shared_field("queued_messages_json", "'[]'");
@@ -24,12 +23,7 @@ impl Store {
             |row| row.get(0),
         ))?;
         let queued: Vec<Value> = parse(&raw)?;
-        if !queued.is_empty()
-            || self
-                .shared_blocks(id)?
-                .iter()
-                .any(|block| block["draft"] == true)
-        {
+        if !queued.is_empty() || blocks.iter().any(|block| block["draft"] == true) {
             return Err(
                 "Clear queued messages and saved drafts before editing the last message".into(),
             );
@@ -43,16 +37,14 @@ impl Store {
         turn_id: Option<&str>,
     ) -> Result<EditSnapshot, String> {
         self.shared_writable()?;
-        self.edit_queue_empty(id)?;
         let session = self
-            .sessions()?
-            .into_iter()
-            .find(|s| s.id == id)
+            .bot_session(id)?
             .ok_or("Conversation no longer exists")?;
         if !crate::kind::supports_rewind(crate::kind::Kind::from_id(&session.provider)) {
             return Err("This provider does not support editing the last turn".into());
         }
         let blocks = self.shared_blocks(id)?;
+        self.shared_edit_queue_empty(id, &blocks)?;
         if blocks.iter().any(|b| b["role"] == "handoff") {
             return Err("Editing a turn across a provider handoff is unavailable".into());
         }
@@ -162,13 +154,14 @@ impl Store {
     }
     pub(in crate::store) fn shared_finish_edit(
         &self,
-        id: i64,
-        edit: &EditSnapshot,
+        claim: &mut EditClaim,
         provider_id: &str,
     ) -> Result<(), String> {
-        self.shared_writable()?;
-        let tx = sql(self.conn.unchecked_transaction())?;
+        let id = claim.session;
+        let edit = &claim.snapshot;
+        let tx = self.edit_transaction()?;
         self.validate_edit_last_turn(id, edit)?;
+        claim.confirm(&tx)?;
         let blocks = edit
             .blocks
             .as_ref()
@@ -202,6 +195,7 @@ impl Store {
             .snapshots
             .borrow_mut()
             .insert(id, HistoryRevision::of(next));
+        claim.close();
         Ok(())
     }
 }
@@ -209,6 +203,7 @@ impl Store {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::store::edit::dispatched_edit;
 
     fn fixture(blocks: Value) -> (Store, i64) {
         let store = Store::open_vorkspace(Path::new(":memory:")).unwrap();
@@ -231,7 +226,7 @@ mod tests {
             {"id":"steer","role":"user","text":"Edited follow-up","providerTurnId":"turn","attachments":[{"id":"image","path":"/tmp/image.png","future":true}]},
             {"id":"replaced","role":"assistant","text":"Old answer"}
         ]);
-        let (mut store, id) = fixture(blocks.clone());
+        let (store, id) = fixture(blocks.clone());
         let rows = store.load(id).unwrap().rows;
         let edit = store.prepare_edit_last_turn(id, &rows, None).unwrap();
         assert_eq!(edit.start, 2);
@@ -241,7 +236,8 @@ mod tests {
             store.shared_blocks(id).unwrap(),
             blocks.as_array().unwrap().to_vec()
         );
-        store.finish_edit_last_turn(id, &edit, "thread").unwrap();
+        let mut claim = dispatched_edit(&store, id, edit);
+        store.finish_edit_last_turn(&mut claim, "thread").unwrap();
         assert_eq!(
             store.shared_blocks(id).unwrap(),
             blocks.as_array().unwrap()[..3]
@@ -254,16 +250,17 @@ mod tests {
     }
     #[test]
     fn hidden_metadata_changes_during_provider_rewind_preserve_every_source_block() {
-        let (mut store, id) = fixture(json!([
+        let (store, id) = fixture(json!([
             {"id":"user","role":"user","text":"Prompt","providerTurnId":"turn"},
             {"id":"answer","role":"assistant","text":"Answer","future":"first"}
         ]));
         let rows = store.load(id).unwrap().rows;
         let edit = store.prepare_edit_last_turn(id, &rows, None).unwrap();
+        let mut claim = dispatched_edit(&store, id, edit);
         let mut newer = store.shared_blocks(id).unwrap();
         newer[1]["future"] = json!("another window");
         store.shared_store_blocks(id, &newer).unwrap();
-        assert!(store.finish_edit_last_turn(id, &edit, "fork").is_err());
+        assert!(store.finish_edit_last_turn(&mut claim, "fork").is_err());
         assert_eq!(store.shared_blocks(id).unwrap(), newer);
         assert_eq!(
             store.sessions().unwrap()[0].provider_id.as_deref(),
@@ -289,10 +286,11 @@ mod tests {
     }
     #[test]
     fn a_queue_added_after_preparation_is_never_removed_by_confirmed_rewind() {
-        let (mut store, id) =
+        let (store, id) =
             fixture(json!([{"role":"user","id":"u","text":"Prompt","providerTurnId":"turn"}]));
         let rows = store.load(id).unwrap().rows;
         let edit = store.prepare_edit_last_turn(id, &rows, None).unwrap();
+        let mut claim = dispatched_edit(&store, id, edit);
         let queue = crate::follow_up::State {
             revision: 1,
             messages: vec![crate::follow_up::Message {
@@ -303,7 +301,7 @@ mod tests {
             ..Default::default()
         };
         store.save_follow_ups(id, &queue).unwrap();
-        assert!(store.finish_edit_last_turn(id, &edit, "fork").is_err());
+        assert!(store.finish_edit_last_turn(&mut claim, "fork").is_err());
         assert_eq!(store.load(id).unwrap().rows, rows);
         assert_eq!(
             store.follow_ups(id).unwrap().messages[0].text,

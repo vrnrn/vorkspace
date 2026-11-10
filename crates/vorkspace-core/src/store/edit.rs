@@ -4,7 +4,7 @@ use crate::kind::Kind;
 use serde_json::Value;
 use std::path::PathBuf;
 
-#[derive(Clone, Debug)]
+#[derive(Debug)]
 pub struct EditSnapshot {
     pub start: usize,
     pub prompt: String,
@@ -68,32 +68,6 @@ pub(super) fn untracked_attachment_tail(prompt: &str) -> bool {
 }
 
 impl Store {
-    /// Durable guard for provider context that diverged after a confirmed edit.
-    pub fn edit_recovery_reason(&self, id: i64) -> Result<Option<String>, String> {
-        Ok(self
-            .setting(&format!("edit-recovery:{id}"))?
-            .filter(|reason| !reason.is_empty()))
-    }
-    pub fn mark_edit_recovery_required(&self, id: i64) -> Result<(), String> {
-        self.save_setting(&format!("edit-recovery:{id}"),"A previous edit changed provider context before local history could be reconciled. Start a new conversation; the saved history is preserved here.")
-    }
-    /// A confirmed rewind that lost the local compare-and-swap leaves the
-    /// canonical history intact. Abandon only the exact thread that rewound.
-    pub fn recover_confirmed_rewind(
-        &self,
-        id: i64,
-        edit: &EditSnapshot,
-        returned_binding: &str,
-    ) -> Result<(), String> {
-        if returned_binding == edit.provider_id {
-            self.reset_provider_id_if(id, Some(returned_binding))?;
-        }
-        self.clear_edit_recovery(id)
-    }
-
-    fn clear_edit_recovery(&self, id: i64) -> Result<(), String> {
-        self.save_setting(&format!("edit-recovery:{id}"), "")
-    }
     /// `expected` is the visible transcript; never recall an unloaded revision.
     pub fn prepare_edit_last_turn(
         &self,
@@ -108,9 +82,7 @@ impl Store {
             return self.shared_prepare_edit(id, expected, turn_id);
         }
         let session = self
-            .sessions()?
-            .into_iter()
-            .find(|s| s.id == id)
+            .bot_session(id)?
             .ok_or("Conversation no longer exists")?;
         if !crate::kind::supports_rewind(Kind::from_id(&session.provider)) {
             return Err("This provider does not support editing the last turn".into());
@@ -171,10 +143,7 @@ impl Store {
             provider: session.provider,
         })
     }
-    pub(super) fn edit_queue_empty(&self, id: i64) -> Result<(), String> {
-        if self.shared.is_some() {
-            return self.shared_edit_queue_empty(id);
-        }
+    fn edit_queue_empty(&self, id: i64) -> Result<(), String> {
         let queue = self.follow_ups(id)?;
         if !queue.messages.is_empty() || queue.draft.is_some() {
             return Err(
@@ -183,20 +152,30 @@ impl Store {
         }
         Ok(())
     }
-    /// Checks again immediately before the external RPC, without retaining the
-    /// database mutex while waiting on provider I/O.
-    pub fn validate_edit_last_turn(&self, id: i64, edit: &EditSnapshot) -> Result<(), String> {
+    pub(super) fn edit_preferences(&self, id: i64) -> Result<crate::agent::Settings, String> {
+        let settings = if self.shared.is_some() {
+            self.shared_agent_preferences(id)?
+        } else {
+            self.agent_settings(id)?
+        };
+        Ok(settings.unwrap_or_default())
+    }
+
+    /// Validate the captured revision inside admission, dispatch and commit.
+    pub(super) fn validate_edit_last_turn(
+        &self,
+        id: i64,
+        edit: &EditSnapshot,
+    ) -> Result<(), String> {
         let session = self
-            .sessions()?
-            .into_iter()
-            .find(|s| s.id == id)
+            .bot_session(id)?
             .ok_or("Conversation no longer exists")?;
         if session.provider != edit.provider
             || session.provider_id.as_deref() != Some(edit.provider_id.as_str())
         {
             return Err("Provider session changed before the edit could be applied".into());
         }
-        let settings = self.agent_settings(id)?.unwrap_or_default();
+        let settings = self.edit_preferences(id)?;
         if settings.account.id != edit.account_id
             || settings.worktree_cwd.as_deref().unwrap_or(&session.cwd) != edit.cwd
         {
@@ -206,36 +185,31 @@ impl Store {
             );
         }
         if let Some(expected) = &edit.blocks {
-            self.shared_validate_edit_rows(id, expected, &edit.rows)?;
-        } else if self.load(id)?.rows != edit.rows {
+            return self.shared_validate_edit_rows(id, expected);
+        }
+        if self.load(id)?.rows != edit.rows {
             return Err("Conversation changed; its history was preserved".into());
         }
-        self.edit_queue_empty(id)?;
-        Ok(())
+        self.edit_queue_empty(id)
     }
-    /// Call only after `rewind_last_turn` confirms. This is a compare-and-swap,
+    /// Call only after the provider confirms. This is a compare-and-swap,
     /// preserving an independently changed conversation instead of deleting it.
     pub fn finish_edit_last_turn(
-        &mut self,
-        id: i64,
-        edit: &EditSnapshot,
+        &self,
+        claim: &mut EditClaim,
         provider_id: &str,
     ) -> Result<(), String> {
-        // This API is called only after provider confirmation. A failed local
-        // transaction or crash must leave a durable guard against resuming it.
-        self.mark_edit_recovery_required(id)?;
         if self.shared.is_some() {
-            self.shared_finish_edit(id, edit, provider_id)?;
-            return self.clear_edit_recovery(id);
+            return self.shared_finish_edit(claim, provider_id);
         }
+        let id = claim.session;
+        let edit = &claim.snapshot;
         let start = i64::try_from(edit.start)
             .map_err(|_| "Conversation row index exceeds SQLite's integer range".to_owned())?;
         let updated_at = crate::time::now_ms().min(i64::MAX as u64) as i64;
-        let tx = self
-            .conn
-            .unchecked_transaction()
-            .map_err(|e| e.to_string())?;
+        let tx = self.edit_transaction()?;
         self.validate_edit_last_turn(id, edit)?;
+        claim.confirm(&tx)?;
         self.conn
             .execute(
                 "DELETE FROM native_rows WHERE session_id=?1 AND row_ix>=?2",
@@ -254,8 +228,18 @@ impl Store {
         }
         self.save_context_usage(id, &Default::default())?;
         tx.commit().map_err(|e| e.to_string())?;
-        self.clear_edit_recovery(id)
+        claim.close();
+        Ok(())
     }
+}
+
+#[cfg(test)]
+pub(super) fn dispatched_edit(store: &Store, id: i64, edit: EditSnapshot) -> EditClaim {
+    let claim = store
+        .admit_edit_rewind(id, std::sync::Arc::new(edit))
+        .unwrap();
+    store.dispatch_edit_rewind(&claim).unwrap();
+    claim
 }
 
 #[cfg(test)]
@@ -299,11 +283,12 @@ mod tests {
     }
     #[test]
     fn confirmed_edit_truncates_exactly_the_last_turn_and_rebinds_forks() {
-        let (mut store, id, rows) = fixture();
+        let (store, id, rows) = fixture();
         let edit = store
             .prepare_edit_last_turn(id, &rows, Some("turn"))
             .unwrap();
-        store.finish_edit_last_turn(id, &edit, "fork").unwrap();
+        let mut claim = dispatched_edit(&store, id, edit);
+        store.finish_edit_last_turn(&mut claim, "fork").unwrap();
         assert_eq!(store.load(id).unwrap().rows, rows[..2]);
         assert_eq!(
             store.sessions().unwrap()[0].provider_id.as_deref(),
@@ -316,14 +301,15 @@ mod tests {
         let edit = store
             .prepare_edit_last_turn(id, &rows, Some("turn"))
             .unwrap();
+        let mut claim = dispatched_edit(&store, id, edit);
         store.provider_id(id, "another-thread").unwrap();
-        assert!(store.finish_edit_last_turn(id, &edit, "fork").is_err());
+        assert!(store.finish_edit_last_turn(&mut claim, "fork").is_err());
         assert_eq!(store.load(id).unwrap().rows, rows);
         store.provider_id(id, "thread").unwrap();
         let mut changed = rows.clone();
         changed[3].text = "Another window".into();
         store.write_rows(id, 3, &changed[3..]).unwrap();
-        assert!(store.finish_edit_last_turn(id, &edit, "fork").is_err());
+        assert!(store.finish_edit_last_turn(&mut claim, "fork").is_err());
         assert_eq!(store.load(id).unwrap().rows, changed);
     }
     #[test]
@@ -350,7 +336,8 @@ mod tests {
             .unwrap();
         assert_eq!(edit.prompt, "Latest steer");
         assert_eq!(edit.start, 2);
-        store.finish_edit_last_turn(id, &edit, "thread").unwrap();
+        let mut claim = dispatched_edit(&store, id, edit);
+        store.finish_edit_last_turn(&mut claim, "thread").unwrap();
         assert_eq!(store.load(id).unwrap().rows, rows[..2]);
         assert!(store.agent_settings(id).unwrap().unwrap().turns.is_empty());
     }
@@ -393,14 +380,21 @@ mod tests {
         let edit = store
             .prepare_edit_last_turn(session.id, &transcript.rows, None)
             .unwrap();
+        let mut claim = dispatched_edit(&store, session.id, edit);
         store.provider_id(session.id, "another-session").unwrap();
-        assert!(store
-            .finish_edit_last_turn(session.id, &edit, "fork")
-            .is_err());
-        assert!(store.edit_recovery_reason(session.id).unwrap().is_some());
+        assert!(store.finish_edit_last_turn(&mut claim, "fork").is_err());
+        drop(claim);
+        assert_eq!(
+            store.edit_barrier(session.id).unwrap(),
+            Some(EditBarrier::RecoveryRequired)
+        );
         drop(store);
         let reopened = Store::open(&path).unwrap();
-        assert!(reopened.edit_recovery_reason(session.id).unwrap().is_some());
+        reopened.recover_local_submissions().unwrap();
+        assert_eq!(
+            reopened.edit_barrier(session.id).unwrap(),
+            Some(EditBarrier::RecoveryRequired)
+        );
         assert!(reopened
             .prepare_edit_last_turn(session.id, &transcript.rows, None)
             .is_err());

@@ -229,7 +229,7 @@ impl Conversation {
                 locked(&store).and_then(|s| s.follow_ups(id)),
                 locked(&store).and_then(|s| {
                     s.recover_local_submissions()?;
-                    s.latest_unconfirmed_submission(id)
+                    Ok((s.latest_unconfirmed_submission(id)?, s.edit_barrier(id)?))
                 }),
                 revision,
             )
@@ -244,7 +244,13 @@ impl Conversation {
                 this.context = context.ok().flatten();
                 if this.submission_recovery_epoch == recovery_epoch {
                     match unconfirmed {
-                        Ok(receipt) => this.unconfirmed_submission = receipt,
+                        Ok((receipt, barrier)) => {
+                            this.unconfirmed_submission = receipt;
+                            if barrier == Some(vorkspace_core::store::EditBarrier::RecoveryRequired)
+                            {
+                                this.editing_last_turn.require_recovery();
+                            }
+                        }
                         Err(error) => {
                             this.status = error;
                             return;

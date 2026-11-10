@@ -49,7 +49,7 @@ mod rewind;
 mod runner;
 mod tasks;
 mod text_output;
-pub use rewind::{rewind_last_turn, supports_rewind, RewindError};
+pub use rewind::{prepare_rewind, supports_rewind, PreparedRewind, RewindError};
 pub(crate) use runner::catalog_for;
 pub use runner::{
     run, run_restricted_text, run_text, run_text_with_timeout, run_with_controls,
