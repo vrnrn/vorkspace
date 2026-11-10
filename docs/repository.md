@@ -34,6 +34,8 @@ In the core, `store` owns SQLite and sidecar persistence; `provider` owns CLI tr
 
 In GPUI, `conversation` connects the session runtime to input and transcript views. `shell` owns window navigation and workspace surfaces, with its topics in `shell/`. `git_tools/` holds source control surfaces, `file_tools/` the explorer and editor pane, and `composer/` prompt entry. `terminal`, `settings`, and `bots` contain their native views. Rendering consumes core state; it does not create a second persistence authority.
 
+`shell/app_core/` owns shared window layouts, session leases, scheduled work and settings publication. A single settings writer coalesces background saves. Closing a window can commit its layout durably through the same writer. `notes/` separates editing and revision-checked saves from library and document rendering.
+
 The host's top-level modules own server, service, store, engine, and sync lifecycles. `host/runtime/models/` contains domain records and validation; `providers/` contains provider-specific adapters; `protocol/` contains their shared stream and RPC machinery; `platform/` owns Node filesystem/platform helpers; `lib/` contains small pure utilities. These modules run on the remote machine.
 
 ## Sources, generated files, and tests

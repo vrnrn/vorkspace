@@ -24,6 +24,10 @@ The [repository map](repository.md) shows where each part lives. Embedded helper
 
 Long saved chats are read a piece at a time. Hidden views keep their work without repeatedly asking to redraw, and repeated terminal redraw requests are combined. Cleaning up one idle agent does not hold the shared lock that other agents need.
 
+The app keeps word-fade animation data while new text is arriving, then releases it. When you scroll a long chat, the prompt rail uses your position to find nearby prompts.
+
+The Changes panel and title bar read from the same Git snapshot. The app checks for edits frequently and does the heavier refresh when something changes or the snapshot needs reconciling. If you switch checkouts while writing a commit message, each checkout keeps its own draft while Changes is open. A confirmation belongs to the checkout and branch where you opened it.
+
 Long indexed Bot chats opened from the Bot panel first show their newest messages. Scroll up or choose Load earlier messages to read older parts without losing your place. If the saved chat changes elsewhere, the app reloads it when you request another page; if loading fails temporarily, you can retry. Before a Bot runs or a message changes, the app loads the complete chat so older messages stay safe. Other kinds of history keep their existing loading behavior.
 
 Bots, sessions, terminals, notes, GitHub/GitLab/Jira items, Search, Automations and To-dos open in tabs. Different notes and items can stay open independently. Opening the same item again takes you back to its existing tab and unfinished work.
