@@ -269,11 +269,12 @@ fn copies_keep_running_sessions_and_route_new_tabs_and_splits(cx: &mut TestAppCo
             shell.sessions[&main_session]
                 .update(cx, |session, _| session.summary.has_messages = true);
             shell.open(main_session, w, cx);
-            shell
-                .groups
-                .entry(project.into())
-                .or_default()
-                .create_folder(&[main_session], "saved-folder".into());
+            let mut folders = vorkspace_core::session_groups::Groups::default();
+            folders.create_folder(&[main_session], "saved-folder".into());
+            shell.groups.insert(
+                project.into(),
+                Arc::new(super::super::session_groups::FolderIndex::new(folders)),
+            );
             shell.select_worktree(Some(feature.clone()), w, cx);
             assert_eq!(shell.workspace.project, project);
             assert_eq!(shell.workspace.active, Some(feature_session));
