@@ -114,7 +114,7 @@ for line in sys.stdin:
                 })
                 .unwrap();
         }
-        if !update.finished && update.follow_up_delivered.contains(&message.id) {
+        if !update.finished() && update.follow_up_delivered.contains(&message.id) {
             assert!(
                 update.activity.is_none(),
                 "a delivered steer resets latest tool activity"
@@ -144,7 +144,7 @@ for line in sys.stdin:
             receipt_seen = true;
             std::fs::write(fixture.0.join("receipt-observed"), "ready").unwrap();
         }
-        if update.finished {
+        if update.finished() {
             break update.status;
         }
     };
@@ -210,7 +210,7 @@ for line in sys.stdin:
             |_| Some(binary),
         );
         let updates: Vec<_> = std::iter::from_fn(|| rx.try_recv().ok()).collect();
-        assert!(updates.last().unwrap().finished);
+        assert!(updates.last().unwrap().finished());
         if retry {
             assert!(updates.last().unwrap().status.contains("not replayed"));
             assert!(!directory.path().join("provider-received").exists());

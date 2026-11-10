@@ -466,7 +466,8 @@ impl Conversation {
         cx.spawn(async move |this, cx| {
             let mut completed = false;
             while let Ok(update) = rx.recv().await {
-                let finished = update.finished;
+                let outcome = update.outcome;
+                let finished = outcome.is_some();
                 completed |= finished;
                 if this
                     .update(cx, |this, cx| {
@@ -680,7 +681,8 @@ impl Conversation {
                         } else if !finished && !this.questions.is_empty() {
                             this.status = "Waiting for your answer".into();
                         }
-                        if finished {
+                        if let Some(outcome) = outcome {
+                            use vorkspace_runtime::runtime::TurnOutcome;
                             if this.is_remote() {
                                 this.settings.remote_action = None;
                                 this.remote_state.refreshing = false;
@@ -703,7 +705,7 @@ impl Conversation {
                             this.follow_ups.ready = false;
                             if this.follow_ups.resuming {
                                 this.follow_ups.resuming = false;
-                                if !stopping && this.status == "Ready" {
+                                if !stopping && outcome == TurnOutcome::Completed {
                                     this.follow_ups.state.paused = false;
                                     for message in &mut this.follow_ups.state.messages {
                                         message.error = None;
@@ -718,7 +720,8 @@ impl Conversation {
                                     cx,
                                 );
                             }
-                            if this.status != "Ready" && !this.follow_ups.state.messages.is_empty()
+                            if outcome == TurnOutcome::Failed
+                                && !this.follow_ups.state.messages.is_empty()
                             {
                                 this.follow_ups.state.paused = true;
                                 if history_recovery.is_none() {

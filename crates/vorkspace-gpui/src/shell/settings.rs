@@ -542,6 +542,7 @@ impl Shell {
         window.set_ui_scale(self.workspace.preferences.interface_scale(), cx);
     }
     fn choose_chat_background(&mut self, cx: &mut Context<Self>) {
+        let store = self.store.clone();
         let prompt = cx.prompt_for_paths(PathPromptOptions {
             files: true,
             directories: false,
@@ -553,8 +554,11 @@ impl Shell {
                 && let Some(path) = paths.first()
             {
                 let source = path.clone();
-                let directory = crate::data_dir().join("backgrounds");
                 let work = cx.background_executor().spawn(async move {
+                    let directory = locked(&store)?
+                        .data_dir()
+                        .map(|path| path.join("backgrounds"))
+                        .ok_or("Background images need a database on disk.")?;
                     vorkspace_core::project_appearance::import_image(
                         &source, &directory, "global", false,
                     )

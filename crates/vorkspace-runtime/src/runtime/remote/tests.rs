@@ -180,7 +180,13 @@ fn observe_snapshots(snapshots: Vec<Value>) -> Vec<Update> {
     let mut snapshots = snapshots.into_iter();
     let host = Host::new(move |request| {
         assert_eq!(request["method"], "sessions.sync");
-        Some(json!({"kind":"snapshot","value":snapshots.next().expect("unexpected observation")}))
+        let snapshot = snapshots.next().expect("unexpected observation");
+        let revision = snapshot["revision"].as_u64();
+        if revision.is_some() && request["params"]["revision"].as_u64() == revision {
+            Some(json!({"kind":"unchanged","revision":revision}))
+        } else {
+            Some(json!({"kind":"snapshot","value":snapshot}))
+        }
     });
     let (tx, rx) = async_channel::unbounded();
     let (_controls_tx, controls) = std::sync::mpsc::channel();
@@ -203,7 +209,7 @@ fn observe_snapshots(snapshots: Vec<Value>) -> Vec<Update> {
     let mut updates = Vec::new();
     loop {
         let next = receive(&rx);
-        let finished = next.finished;
+        let finished = next.finished();
         updates.push(next);
         if finished {
             break;
@@ -215,21 +221,21 @@ fn observe_snapshots(snapshots: Vec<Value>) -> Vec<Update> {
 }
 
 #[test]
-fn unchanged_versioned_snapshots_skip_projection_and_empty_history_has_an_end() {
+fn unchanged_versioned_snapshots_skip_publication_and_empty_history_has_an_end() {
     let first = snapshot("running", 1);
     let mut empty = snapshot("ready", 2);
     empty["session"]["blocks"] = json!([]);
     let updates = observe_snapshots(vec![first.clone(), first, empty]);
-    assert_eq!(updates.len(), 3);
+    assert_eq!(
+        updates.len(),
+        2,
+        "an unchanged revision needs no view update"
+    );
     assert_eq!(updates[0].source_len, Some(updates[0].rows.len()));
     assert!(!updates[0].rows.is_empty());
     assert!(updates[1].rows.is_empty());
-    assert!(
-        updates[1].source_len.is_none(),
-        "an unchanged revision skips projection"
-    );
-    assert_eq!(updates[2].source_len, Some(0));
-    assert_eq!(updates[2].start, 0);
+    assert_eq!(updates[1].source_len, Some(0));
+    assert_eq!(updates[1].start, 0);
 }
 
 #[test]
@@ -480,7 +486,7 @@ fn attaching_never_replays_pending_sends_or_stops_a_run_when_receiver_closes() {
         )
     });
     let next = receive(&rx);
-    assert!(!next.finished);
+    assert!(!next.finished());
     assert_eq!(next.rows[0].text, "Original message");
     drop(rx);
     worker.join().unwrap();
@@ -521,9 +527,11 @@ fn explicit_stop_is_journaled_once_for_the_observed_run() {
             Some(receipt(command))
         } else {
             polls += 1;
-            Some(
-                json!({"kind":"snapshot","value":snapshot(if polls<4 {"running"}else{"idle"},polls)}),
-            )
+            match polls {
+                1 => Some(json!({"kind":"snapshot","value":snapshot("running",1)})),
+                2 | 3 => Some(json!({"kind":"unchanged","revision":1})),
+                _ => Some(json!({"kind":"snapshot","value":snapshot("idle",2)})),
+            }
         }
     });
     let (tx, rx) = async_channel::unbounded();
@@ -547,7 +555,9 @@ fn explicit_stop_is_journaled_once_for_the_observed_run() {
         )
     });
     loop {
-        if receive(&rx).finished {
+        let next = receive(&rx);
+        if next.finished() {
+            assert_eq!(next.outcome, Some(TurnOutcome::Cancelled));
             break;
         }
     }
@@ -737,7 +747,7 @@ require('node:readline').createInterface({input:process.stdin}).on('line', line 
             if !update.rows.is_empty() {
                 rows = update.rows;
             }
-            if update.finished {
+            if update.finished() {
                 assert_eq!(update.status, "Ready");
                 break;
             }
@@ -856,7 +866,7 @@ fn ambiguous_legacy_requests_block_direct_send_and_retry_before_transport() {
             tx,
         );
         let result = receive(&rx);
-        assert!(result.finished);
+        assert!(result.finished());
         assert_eq!(result.status, "Recover the original request");
         assert_eq!(
             locked(&store)

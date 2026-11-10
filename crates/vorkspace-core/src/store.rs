@@ -406,6 +406,19 @@ impl Store {
             .map_err(|e| e.to_string())
     }
     pub fn agent_settings(&self, id: i64) -> Result<Option<crate::agent::Settings>, String> {
+        self.read_agent_settings(id, true)
+    }
+
+    /// Read preferences without projecting saved turn metadata from the transcript.
+    pub fn agent_preferences(&self, id: i64) -> Result<Option<crate::agent::Settings>, String> {
+        self.read_agent_settings(id, false)
+    }
+
+    fn read_agent_settings(
+        &self,
+        id: i64,
+        include_turns: bool,
+    ) -> Result<Option<crate::agent::Settings>, String> {
         let remote = id < 0 || self.remote_session(id)?.is_some();
         if remote {
             if let Some(raw) = self.setting(&format!("remote-agent:{id}"))? {
@@ -418,7 +431,11 @@ impl Store {
             }
         }
         if self.shared.is_some() {
-            let mut settings = self.shared_agent(id)?;
+            let mut settings = if include_turns {
+                self.shared_agent(id)?
+            } else {
+                self.shared_agent_preferences(id)?
+            };
             if remote {
                 if let Some(settings) = settings.as_mut() {
                     if settings.worktree_cwd.is_none() {
@@ -555,6 +572,19 @@ impl Store {
         self.conn.execute("INSERT INTO native_settings(key,value) VALUES(?1,?2) ON CONFLICT(key) DO UPDATE SET value=excluded.value", params![format!("agent:{id}"), serde_json::to_string(settings).map_err(|e| e.to_string())?]).map_err(|e| e.to_string())?;
         Ok(())
     }
+
+    /// Save an edit to `agent_preferences` without rewriting transcript receipts.
+    pub fn save_agent_preferences(
+        &self,
+        id: i64,
+        preferences: &crate::agent::Settings,
+    ) -> Result<(), String> {
+        if self.shared.is_some() && id >= 0 && self.remote_session(id)?.is_none() {
+            return self.shared_save_agent_preferences(id, preferences);
+        }
+        self.save_agent_settings(id, preferences)
+    }
+
     pub fn configure_agent(
         &self,
         id: i64,
@@ -562,7 +592,7 @@ impl Store {
         settings: &crate::agent::Settings,
     ) -> Result<(), String> {
         if self
-            .agent_settings(id)?
+            .agent_preferences(id)?
             .is_some_and(|saved| saved.revision > settings.revision)
         {
             return Ok(());

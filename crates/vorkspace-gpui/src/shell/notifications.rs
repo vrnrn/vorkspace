@@ -131,7 +131,7 @@ impl Shell {
                 vorkspace_core::time::now_ms(),
             )
         {
-            crate::sound::play(crate::sound::Cue::LinkedActivity);
+            crate::sound::play(crate::sound::Cue::LinkedActivity, self.store.clone());
         }
     }
 
@@ -671,7 +671,7 @@ impl Shell {
                 && occurred >= self.notification_state.sounds_enabled_at
                 && let Some(cue) = cue
             {
-                crate::sound::play(cue);
+                crate::sound::play(cue, self.store.clone());
             }
             return;
         }
@@ -710,7 +710,7 @@ impl Shell {
                     && prefs.allows_project_notification(&directory, &category, Some(occurred), now)
                     && let Some(cue) = cue
                 {
-                    crate::sound::play(cue);
+                    crate::sound::play(cue, this.store.clone());
                 }
             });
         })
@@ -1217,7 +1217,7 @@ impl Shell {
                 && occurred >= self.notification_state.linked_started_at
             {
                 // React uses a deduplicated chime, without an OS/banner here.
-                crate::sound::play(crate::sound::Cue::LinkedActivity);
+                crate::sound::play(crate::sound::Cue::LinkedActivity, self.store.clone());
             }
         }
         self.notification_state.linked_primed = true;

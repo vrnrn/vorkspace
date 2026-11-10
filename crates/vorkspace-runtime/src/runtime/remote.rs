@@ -25,10 +25,10 @@ fn require_ticket_context(descriptor: &Value) -> Result<(), String> {
     }
 }
 
-fn update(status: impl Into<String>, finished: bool) -> Update {
+fn update(status: impl Into<String>, outcome: Option<TurnOutcome>) -> Update {
     Update {
         status: status.into(),
-        finished,
+        outcome,
         ..Default::default()
     }
 }
@@ -485,7 +485,7 @@ pub fn run(
             client, summary, prompt, settings, controls, store, cancel, tx,
         ),
         Err(error) => {
-            let _ = tx.send_blocking(update(error, true));
+            let _ = tx.send_blocking(update(error, Some(TurnOutcome::Failed)));
         }
     }
 }
@@ -686,6 +686,7 @@ pub fn run_with_client(
         let mut activity = super::activity::ToolActivity::default();
         let mut seen_approvals = HashSet::new();
         let mut seen_questions = HashSet::new();
+        let mut current_question = None;
         let mut control_commands = Vec::<Value>::new();
         let mut stopping_run = None::<String>;
         loop {
@@ -694,72 +695,92 @@ pub fn run_with_client(
             if tx.is_closed() {
                 return Ok(());
             }
-            let snapshot = client.load_session(&machine.id, &id, known.as_ref())?;
-            let revision = snapshot["revision"].as_u64();
-            let running = snapshot["status"] == "running";
-            let current_approvals = approvals(&snapshot);
-            let current_question = question(&snapshot);
-            let mut next = update(if running { "Working…" } else { "Ready" }, !running);
-            next.start = latest_rows.len();
-            if snapshot_changed(known.as_ref(), &snapshot) {
-                let mut projected = snapshot.clone();
-                vorkspace_core::remote::attachments::qualify_snapshot(
-                    &mut projected,
-                    &binding.project.environment_id,
-                    &id,
-                );
-                let (history, _) =
-                    vorkspace_core::store::Store::project_remote_history(&projected)?;
-                let prefix = latest_rows
+            if let Some(snapshot) = client.poll_session(&machine.id, &id, known.as_ref())? {
+                let revision = snapshot["revision"].as_u64();
+                let running = snapshot["status"] == "running";
+                let current_approvals = approvals(&snapshot);
+                current_question = question(&snapshot);
+                let mut next = if running {
+                    update("Working…", None)
+                } else if snapshot["status"] == "interrupted" {
+                    update(
+                        "Host interrupted this turn. Inspect its work before continuing.",
+                        Some(TurnOutcome::Failed),
+                    )
+                } else if stopping_run.is_some() {
+                    update("Ready", Some(TurnOutcome::Cancelled))
+                } else {
+                    update("Ready", Some(TurnOutcome::Completed))
+                };
+                next.start = latest_rows.len();
+                if snapshot_changed(known.as_ref(), &snapshot) {
+                    let mut projected = snapshot.clone();
+                    vorkspace_core::remote::attachments::qualify_snapshot(
+                        &mut projected,
+                        &binding.project.environment_id,
+                        &id,
+                    );
+                    let (history, _) =
+                        vorkspace_core::store::Store::project_remote_history(&projected)?;
+                    let prefix = latest_rows
+                        .iter()
+                        .zip(&history.rows)
+                        .take_while(|(known, next)| known == next)
+                        .count();
+                    next.start = prefix;
+                    next.source_len = Some(history.rows.len());
+                    next.rows = history.rows[prefix..].to_vec();
+                    activity.snapshot(&history.rows, prefix, &binding.project.cwd);
+                    latest_rows = history.rows;
+                }
+                next.activity = activity.label();
+                next.provider_id = snapshot["session"]["providerSessionId"]
+                    .as_str()
+                    .map(str::to_owned);
+                next.model = snapshot["session"]["model"].as_str().map(str::to_owned);
+                (next.context, next.metrics) = accounting(&snapshot);
+                let current_ids: HashSet<_> =
+                    current_approvals.iter().map(|a| a.id.clone()).collect();
+                next.approvals_resolved =
+                    seen_approvals.difference(&current_ids).cloned().collect();
+                next.approvals = current_approvals
+                    .into_iter()
+                    .filter(|a| !seen_approvals.contains(&a.id))
+                    .collect();
+                seen_approvals = current_ids;
+                let question_ids: HashSet<_> =
+                    current_question.iter().map(|q| q.id.clone()).collect();
+                next.questions_resolved =
+                    seen_questions.difference(&question_ids).cloned().collect();
+                next.questions = current_question
                     .iter()
-                    .zip(&history.rows)
-                    .take_while(|(known, next)| known == next)
-                    .count();
-                next.start = prefix;
-                next.source_len = Some(history.rows.len());
-                next.rows = history.rows[prefix..].to_vec();
-                activity.snapshot(&history.rows, prefix, &binding.project.cwd);
-                latest_rows = history.rows;
+                    .filter(|q| !seen_questions.contains(&q.id))
+                    .cloned()
+                    .collect();
+                seen_questions = question_ids;
+                // Keep the selected desktop handle when creation's receipt binds a
+                // new host session. Metadata refreshes find this binding by host ID.
+                binding.running = running;
+                binding.host_revision = revision.or(binding.host_revision);
+                binding.needs_input = !seen_approvals.is_empty() || !seen_questions.is_empty();
+                binding.summary.title = snapshot["session"]["title"]
+                    .as_str()
+                    .unwrap_or(&binding.summary.title)
+                    .into();
+                binding.summary.provider_id = next.provider_id.clone();
+                binding.summary.updated_at = snapshot["updatedAt"]
+                    .as_u64()
+                    .unwrap_or(binding.summary.updated_at);
+                journal(&store, &binding)?;
+                tx.send_blocking(next).map_err(|_| "Window closed")?;
+                if !running {
+                    break;
+                }
+                known = Some(snapshot);
             }
-            next.activity = activity.label();
-            next.provider_id = snapshot["session"]["providerSessionId"]
-                .as_str()
-                .map(str::to_owned);
-            next.model = snapshot["session"]["model"].as_str().map(str::to_owned);
-            (next.context, next.metrics) = accounting(&snapshot);
-            let current_ids: HashSet<_> = current_approvals.iter().map(|a| a.id.clone()).collect();
-            next.approvals_resolved = seen_approvals.difference(&current_ids).cloned().collect();
-            next.approvals = current_approvals
-                .into_iter()
-                .filter(|a| !seen_approvals.contains(&a.id))
-                .collect();
-            seen_approvals = current_ids;
-            let question_ids: HashSet<_> = current_question.iter().map(|q| q.id.clone()).collect();
-            next.questions_resolved = seen_questions.difference(&question_ids).cloned().collect();
-            next.questions = current_question
-                .iter()
-                .filter(|q| !seen_questions.contains(&q.id))
-                .cloned()
-                .collect();
-            seen_questions = question_ids;
-            // Keep the selected desktop handle when creation's receipt binds a
-            // new host session. Metadata refreshes find this binding by host ID.
-            binding.running = running;
-            binding.host_revision = revision.or(binding.host_revision);
-            binding.needs_input = !seen_approvals.is_empty() || !seen_questions.is_empty();
-            binding.summary.title = snapshot["session"]["title"]
-                .as_str()
-                .unwrap_or(&binding.summary.title)
-                .into();
-            binding.summary.provider_id = next.provider_id.clone();
-            binding.summary.updated_at = snapshot["updatedAt"]
-                .as_u64()
-                .unwrap_or(binding.summary.updated_at);
-            journal(&store, &binding)?;
-            tx.send_blocking(next).map_err(|_| "Window closed")?;
-            if !running {
-                break;
-            }
+            let snapshot = known
+                .as_ref()
+                .ok_or("Host did not return a session snapshot")?;
             if cancel.load(Ordering::Relaxed) && stopping_run.is_none() {
                 let run_id = snapshot["runId"]
                     .as_str()
@@ -810,7 +831,6 @@ pub fn run_with_client(
                 journal(&store, &binding)?;
                 dispatch_outbox(&client, &machine.id, &store, &mut binding)?;
             }
-            known = Some(snapshot);
             for _ in 0..15 {
                 if tx.is_closed() {
                     return Ok(());
@@ -824,7 +844,7 @@ pub fn run_with_client(
         Ok(())
     })();
     if let Err(error) = result {
-        let mut next = update(error, true);
+        let mut next = update(error, Some(TurnOutcome::Failed));
         // Every valid snapshot was already published. An empty error patch
         // preserves any optimistic prompt awaiting a host receipt.
         next.start = latest_rows.len();

@@ -12,8 +12,12 @@ Code only depends on code below it, so a change low down cannot quietly depend o
 
 The session runtime can save Bot card updates without a window. The app starts the saver when needed and gives accepted updates time to finish when you quit.
 
+A finished turn tells the composer whether it completed, stopped, or failed. Changing a session preference can save the setting without reading or rewriting old turn receipts.
+
 `embedded` contains the small JavaScript helpers that ship inside the desktop: editor language tools and voice audio. `scripts` contains developer tools for building, testing, measuring, and packaging the app. `crates/vorkspace-gpui/fixtures` contains example visuals, while `vendor` and `licenses` keep dependency code and its legal notices.
 
 Windows share one place for their saved layouts, which chats they have open, and which window handles scheduled work. One writer collects settings edits before saving them. Notes keeps the code that saves your writing separate from the code that draws the list and editor.
+
+The launch code picks the data folder and reads saved state before the first window opens. Quit and restart use the same shutdown code and give pending Bot saves time to finish.
 
 Tests sit near the code they check. Extra pretend clients used by host tests live under `host/test-support`. `docs` explains the app, and `docs/eli5` explains the same topics in simpler language. Temporary build output, personal data, and work logs are kept separate from the maintained source.

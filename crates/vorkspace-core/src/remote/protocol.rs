@@ -190,19 +190,34 @@ impl Connections {
         session_id: &str,
         known: Option<&Value>,
     ) -> Result<Value, String> {
+        self.poll_session(machine_id, session_id, known)?
+            .or_else(|| known.cloned())
+            .ok_or_else(|| "Session sync is missing its snapshot".into())
+    }
+
+    /// Returns no snapshot when the host confirms the caller's exact revision.
+    pub fn poll_session(
+        &self,
+        machine_id: &str,
+        session_id: &str,
+        known: Option<&Value>,
+    ) -> Result<Option<Value>, String> {
         let sync = |revision| {
             read_session_sync(session_id, revision, |method, params| {
                 self.request(machine_id, method, params)
             })
         };
-        let update = sync(
-            known
-                .and_then(|value| value.get("revision"))
-                .and_then(Value::as_u64),
-        )?;
+        let revision = known.and_then(|value| value["revision"].as_u64());
+        let update = sync(revision)?;
+        if update["kind"] == "unchanged"
+            && revision.is_some()
+            && update["revision"].as_u64() == revision
+        {
+            return Ok(None);
+        }
         match apply_session_sync(known, &update) {
-            Ok(value) => Ok(value),
-            Err(_) => apply_session_sync(None, &sync(None)?),
+            Ok(value) => Ok(Some(value)),
+            Err(_) => apply_session_sync(None, &sync(None)?).map(Some),
         }
     }
 }

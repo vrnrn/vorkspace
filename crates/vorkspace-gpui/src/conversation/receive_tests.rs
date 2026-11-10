@@ -35,7 +35,7 @@ fn update(index: usize, finished: bool) -> vorkspace_runtime::runtime::Update {
         questions_resolved: vec![],
         handoff: None,
         status: format!("Synthetic status {index}"),
-        finished,
+        outcome: finished.then_some(vorkspace_runtime::runtime::TurnOutcome::Completed),
         history_recovery: None,
     }
 }
@@ -297,7 +297,7 @@ fn stopped_bot_accepts_a_settled_snapshot_without_its_initial_imported_rows(
         provider_turn_id: Some("managed-turn".into()),
         provider_id: Some("saved-thread".into()),
         status: "Ready".into(),
-        finished: true,
+        outcome: Some(vorkspace_runtime::runtime::TurnOutcome::Completed),
         ..Default::default()
     })
     .unwrap();
@@ -414,7 +414,7 @@ fn verify_recovered_turn_refresh(cx: &mut TestAppContext, pending: bool) {
     let (tx, rx) = async_channel::bounded(1);
     start_receiver(window, rx, cx);
     tx.try_send(vorkspace_runtime::runtime::Update {
-        finished: true,
+        outcome: Some(vorkspace_runtime::runtime::TurnOutcome::Completed),
         status: "Recovered a competing version of this turn".into(),
         history_recovery: Some(if pending {
             vorkspace_runtime::runtime::HistoryRecovery::Unsaved

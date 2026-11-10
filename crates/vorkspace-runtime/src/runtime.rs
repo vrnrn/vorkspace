@@ -64,11 +64,25 @@ pub struct Update {
     pub questions_resolved: Vec<String>,
     pub handoff: Option<Option<vorkspace_core::agent::Handoff>>,
     pub status: String,
-    pub finished: bool,
+    pub outcome: Option<TurnOutcome>,
     /// The losing turn has a separate owner in the same chat. Replace the projected
     /// transcript from storage instead of applying the losing row offsets.
     pub history_recovery: Option<HistoryRecovery>,
 }
+
+impl Update {
+    pub fn finished(&self) -> bool {
+        self.outcome.is_some()
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum TurnOutcome {
+    Completed,
+    Cancelled,
+    Failed,
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum HistoryRecovery {
     Saved,
@@ -405,10 +419,10 @@ fn run_turn_using(
             settings.new_worktree = false;
             {
                 let store = locked(&store)?;
-                let mut persisted = store.agent_settings(summary.id)?.unwrap_or_default();
+                let mut persisted = store.agent_preferences(summary.id)?.unwrap_or_default();
                 persisted.worktree_cwd = Some(cwd.clone());
                 persisted.new_worktree = false;
-                store.save_agent_settings(summary.id, &persisted)?;
+                store.save_agent_preferences(summary.id, &persisted)?;
             }
             publish(
                 &tx,
@@ -471,10 +485,10 @@ fn run_turn_using(
             {
                 let store = locked(&store)?;
                 store.reset_provider_id(summary.id)?;
-                let mut persisted = store.agent_settings(summary.id)?.unwrap_or_default();
+                let mut persisted = store.agent_preferences(summary.id)?.unwrap_or_default();
                 persisted.pending_provider_switch = None;
                 persisted.handoff = Some(prepared.clone());
-                store.save_agent_settings(summary.id, &persisted)?;
+                store.save_agent_preferences(summary.id, &persisted)?;
             }
             publish(
                 &tx,
@@ -673,9 +687,9 @@ fn run_turn_using(
                                 handoff = Some(None);
                                 let store = locked(&store)?;
                                 let mut persisted =
-                                    store.agent_settings(summary.id)?.unwrap_or_default();
+                                    store.agent_preferences(summary.id)?.unwrap_or_default();
                                 persisted.handoff = None;
-                                store.save_agent_settings(summary.id, &persisted)?;
+                                store.save_agent_preferences(summary.id, &persisted)?;
                             }
                         }
                         Event::FollowUpDispatch(message) => {
@@ -780,13 +794,13 @@ fn run_turn_using(
                             if provider_id.as_ref() != Some(&id) {
                                 let store = locked(&store)?;
                                 let mut settings =
-                                    store.agent_settings(summary.id)?.unwrap_or_default();
+                                    store.agent_preferences(summary.id)?.unwrap_or_default();
                                 if let Some(pending) = settings.pending_provider_switch.as_mut()
                                     && pending.from == summary.provider
                                     && pending.account.id == source_account
                                 {
                                     pending.provider_id = Some(id.clone());
-                                    store.save_agent_settings(summary.id, &settings)?;
+                                    store.save_agent_preferences(summary.id, &settings)?;
                                 } else if settings.account.id == source_account
                                     && store
                                         .bot_session(summary.id)?
@@ -827,7 +841,7 @@ fn run_turn_using(
                         } => {
                             let store = locked(&store)?;
                             let mut settings =
-                                store.agent_settings(summary.id)?.unwrap_or_default();
+                                store.agent_preferences(summary.id)?.unwrap_or_default();
                             if let Some(pending) = settings.pending_provider_switch.as_mut()
                                 && pending.from == summary.provider
                                 && pending.account.id == source_account
@@ -836,17 +850,18 @@ fn run_turn_using(
                                     pending.model = Some(id.clone());
                                 }
                                 pending.model_settings.extend(model_settings.clone());
+                                store.save_agent_preferences(summary.id, &settings)?;
                             } else if settings.account.id == source_account
-                                && store.sessions()?.iter().any(|session| {
-                                    session.id == summary.id && session.provider == summary.provider
-                                })
+                                && store
+                                    .bot_session(summary.id)?
+                                    .is_some_and(|session| session.provider == summary.provider)
                             {
                                 if let Some(id) = &changed_model {
                                     settings.model = Some(id.clone());
                                 }
                                 settings.model_settings.extend(model_settings.clone());
+                                store.save_agent_preferences(summary.id, &settings)?;
                             }
-                            store.save_agent_settings(summary.id, &settings)?;
                             if changed_model.is_some() {
                                 model = changed_model.clone();
                                 config_model = changed_model;
@@ -960,7 +975,7 @@ fn run_turn_using(
                             questions_resolved,
                             handoff,
                             status,
-                            finished: false,
+                            outcome: None,
                             history_recovery: None,
                         },
                     )
@@ -1002,6 +1017,13 @@ fn run_turn_using(
     })();
     let cancelled =
         cancel.load(Ordering::Relaxed) || result.as_ref().is_err_and(|error| error == "Stopped");
+    let mut outcome = if cancelled {
+        TurnOutcome::Cancelled
+    } else if result.is_ok() && history_loaded {
+        TurnOutcome::Completed
+    } else {
+        TurnOutcome::Failed
+    };
     let handoff = prepared_handoff.map(|mut ready| {
         if handoff_accepted {
             None
@@ -1098,16 +1120,19 @@ fn run_turn_using(
         if final_start < transcript.rows.len() {
             pending.changed(final_start);
         }
-        let status = pending
-            .flush(
-                &store,
-                summary.id,
-                &transcript,
-                &context,
-                std::time::Instant::now(),
-            )
-            .map(|_| "Ready".into())
-            .unwrap_or_else(|error| format!("Saving failed: {error}"));
+        let status = match pending.flush(
+            &store,
+            summary.id,
+            &transcript,
+            &context,
+            std::time::Instant::now(),
+        ) {
+            Ok(()) => "Ready".into(),
+            Err(error) => {
+                outcome = TurnOutcome::Failed;
+                format!("Saving failed: {error}")
+            }
+        };
         (final_start, status)
     };
     // Settle provenance in storage before notifying the view, including when
@@ -1120,11 +1145,13 @@ fn run_turn_using(
         info.completed_at = info.started_at.map(|_| completed);
         settled_provider_turn_id = info.provider_turn_id.clone();
         if let Err(error) = pending.receipt(&store, summary.id, turn, info) {
+            outcome = TurnOutcome::Failed;
             status = format!("{status} · Saving turn metadata failed: {error}");
         }
     }
     let mut history_recovery = None;
     if pending.overlap {
+        outcome = TurnOutcome::Failed;
         let recovery = locked(&store).and_then(|store| {
             store.save_or_retain_turn_overlap(
                 summary.id,
@@ -1156,18 +1183,20 @@ fn run_turn_using(
     drop(submissions);
     let handoff_save = if let Some(ready) = handoff.as_ref().filter(|_| !pending.overlap) {
         locked(&store).and_then(|store| {
-            let mut persisted = store.agent_settings(summary.id)?.unwrap_or_default();
+            let mut persisted = store.agent_preferences(summary.id)?.unwrap_or_default();
             persisted.pending_provider_switch = None;
             persisted.handoff = ready.clone();
-            store.save_agent_settings(summary.id, &persisted)
+            store.save_agent_preferences(summary.id, &persisted)
         })
     } else {
         Ok(())
     };
     if let Err(error) = submission_save {
+        outcome = TurnOutcome::Failed;
         status = format!("{status} · Saving local send receipt failed: {error}");
     }
     if let Err(error) = handoff_save {
+        outcome = TurnOutcome::Failed;
         status = format!("{status} · Saving handoff failed: {error}");
     }
     let bot_snapshot = history_loaded && !pending.overlap && bot_home.is_some();
@@ -1181,7 +1210,7 @@ fn run_turn_using(
             let Some(session) = store.bot_session(summary.id)? else {
                 return Ok(());
             };
-            let settings = store.agent_settings(summary.id)?.unwrap_or_default();
+            let settings = store.agent_preferences(summary.id)?.unwrap_or_default();
             if session.provider == summary.provider && settings.account.id == source_account {
                 vorkspace_core::bot::home::refresh_session(
                     &bot.root,
@@ -1233,7 +1262,7 @@ fn run_turn_using(
         usage_limit: if cancelled { None } else { usage_limit },
         handoff: if pending.overlap { None } else { handoff },
         status,
-        finished: true,
+        outcome: Some(outcome),
         ..Default::default()
     });
 }
@@ -1524,7 +1553,7 @@ mod unsupported_history_tests {
                 |_| panic!("a retired provider must never reach CLI resolution"),
             );
             let update = rx.recv_blocking().unwrap();
-            assert!(update.finished);
+            assert!(update.finished());
             assert!(update.status.contains("no longer supported"));
             assert!(update.rows.is_empty());
             let store = locked(&store).unwrap();

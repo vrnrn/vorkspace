@@ -107,6 +107,8 @@ The headless host runs the reused JavaScript adapters with a Node process backen
 
 Each active turn owns its provider, pending event batch, shutdown and settlement. A follow-up can start once the provider has stopped and the preceding turn's outcome has committed. For a client catching up to a newer revision, the host reads the current block order and decodes only the changed payloads. The metadata, order and blocks come from one SQLite read transaction.
 
+When a live poll confirms the same revision, the desktop keeps its existing projection and continues processing Stop and other controls from the last observed run identity.
+
 Stream batches can reuse block identities from their exact committed revision. When block order stays stable, the store checks that revision and writes changed or appended blocks without rereading the previous block index. Edits that remove or reorder blocks still reconcile against the durable index.
 
 ## Verify

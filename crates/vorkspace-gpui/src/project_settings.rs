@@ -11,6 +11,7 @@ use gpui::{
 use vorkspace_core::project_appearance::{
     Background, Effect, ProjectAppearance, Scope, import_image,
 };
+use vorkspace_runtime::runtime::{Database, locked};
 use vorkspace_ui::radius;
 use vorkspace_ui::theme::*;
 
@@ -67,6 +68,7 @@ fn button(
 
 pub(crate) struct BackgroundDialog {
     project: String,
+    store: Database,
     appearance: ProjectAppearance,
     background: Background,
     preview: Entity<ProjectBackground>,
@@ -96,6 +98,7 @@ impl BackgroundDialog {
     pub(crate) fn new(
         project: String,
         appearance: ProjectAppearance,
+        store: Database,
         cx: &mut Context<Self>,
     ) -> Self {
         let background = appearance.background.clone().unwrap_or_default();
@@ -103,6 +106,7 @@ impl BackgroundDialog {
         let preview_events = cx.observe(&preview, |_, _, cx| cx.notify());
         Self {
             project,
+            store,
             appearance,
             background,
             preview,
@@ -143,19 +147,18 @@ impl BackgroundDialog {
             prompt: Some("Choose background image".into()),
         });
         let project = self.project.clone();
+        let store = self.store.clone();
         cx.spawn(async move |this, cx| {
             let result = match picker.await {
                 Ok(Ok(Some(paths))) if !paths.is_empty() => {
                     let source = paths[0].clone();
                     cx.background_executor()
                         .spawn(async move {
-                            import_image(
-                                &source,
-                                &crate::data_dir().join("project-images"),
-                                &project,
-                                false,
-                            )
-                            .map(Some)
+                            let directory = locked(&store)?
+                                .data_dir()
+                                .map(|path| path.join("project-images"))
+                                .ok_or("Background images need a database on disk.")?;
+                            import_image(&source, &directory, &project, false).map(Some)
                         })
                         .await
                 }

@@ -41,7 +41,7 @@ impl Shell {
             ..Default::default()
         };
         let key = format!("vorkspace:{vorkspace}");
-        let view = cx.new(|cx| BackgroundDialog::new(key, appearance, cx));
+        let view = cx.new(|cx| BackgroundDialog::new(key, appearance, self.store.clone(), cx));
         let events = cx.subscribe_in(&view, window, {
             let vorkspace = vorkspace.clone();
             move |this, _, event: &Event, window, cx| match event {

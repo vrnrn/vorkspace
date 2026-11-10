@@ -1042,6 +1042,29 @@ fn configuring_the_same_provider_preserves_its_resume_id() {
 }
 
 #[test]
+fn preference_edits_keep_turn_metadata_in_the_saved_transcript() {
+    let store = Store::open_vorkspace(Path::new(":memory:")).unwrap();
+    let blocks = json!([
+        {"id":"prompt","role":"user","text":"Work","turnModel":{"harness":"codex","id":"codex:saved","name":"Saved model"}},
+        {"id":"reply","role":"assistant","text":"Done"}
+    ]);
+    let (id, _) = saved(&store, blocks.clone());
+    let full = store.agent_settings(id).unwrap().unwrap();
+    assert_eq!(full.turns[&1].model, "Saved model");
+    let mut preferences = store.agent_preferences(id).unwrap().unwrap();
+    assert!(preferences.turns.is_empty());
+    preferences.worktree_base = Some("main".into());
+    store.save_agent_preferences(id, &preferences).unwrap();
+    let saved = store.agent_settings(id).unwrap().unwrap();
+    assert_eq!(saved.worktree_base.as_deref(), Some("main"));
+    assert_eq!(saved.turns[&1].model, "Saved model");
+    assert_eq!(
+        store.shared_blocks(id).unwrap(),
+        blocks.as_array().unwrap().as_slice()
+    );
+}
+
+#[test]
 fn concurrent_queue_changes_are_preserved_and_transaction_is_rolled_back() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("vorkspace.db");

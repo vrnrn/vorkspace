@@ -1268,6 +1268,7 @@ impl Bots {
                     background: bot.background,
                     ..Default::default()
                 },
+                self.store.clone(),
                 cx,
             )
         });

@@ -145,7 +145,7 @@ fn cancelled_initial_delivery_replays_accepted_rows_in_the_final_update() {
         |_| None, // No real CLI lookup or launch, even if cancellation regresses.
     );
     let result = rx.try_recv().unwrap();
-    assert!(result.finished);
+    assert!(result.finished());
     assert_eq!(result.status, "Ready");
     assert_eq!(result.start, history.rows.len());
     assert_eq!(result.rows.len(), 2);
@@ -177,7 +177,7 @@ fn rejected_preflight_preserves_existing_history_without_a_provider_launch() {
         tx,
     );
     let result = rx.try_recv().unwrap();
-    assert!(result.finished);
+    assert!(result.finished());
     assert!(result.status.contains("worktree"));
     assert!(result.rows.is_empty());
     assert!(
@@ -244,7 +244,7 @@ fn worktree_creation_follows_message_acceptance_and_reports_the_checkout_in_the_
         |_| None, // No real CLI lookup or launch, even if cancellation regresses.
     );
     let first = rx.try_recv().unwrap();
-    assert!(!first.finished);
+    assert!(!first.finished());
     assert_eq!(first.status, "Creating worktree…");
     assert_eq!(first.rows[0].text, "Create the checkout");
     assert!(first.worktree_cwd.is_none());
@@ -252,7 +252,7 @@ fn worktree_creation_follows_message_acceptance_and_reports_the_checkout_in_the_
     let cwd = created.worktree_cwd.unwrap();
     assert!(std::path::Path::new(&cwd).is_dir());
     let finished = rx.try_recv().unwrap();
-    assert!(finished.finished);
+    assert!(finished.finished());
     assert_eq!(finished.worktree_cwd.as_deref(), Some(cwd.as_str()));
     let store = locked(&store).unwrap();
     let settings = store.agent_settings(id).unwrap().unwrap();
@@ -400,7 +400,7 @@ for line in sys.stdin:
         );
         loop {
             let update = rx.try_recv().unwrap();
-            if update.finished {
+            if update.finished() {
                 break update.status;
             }
         }
@@ -473,7 +473,7 @@ for line in sys.stdin:
         },
     );
     let finished = std::iter::from_fn(|| rx.try_recv().ok())
-        .find(|update| update.finished)
+        .find(|update| update.finished())
         .unwrap();
     assert_eq!(
         finished.history_recovery,

@@ -266,10 +266,10 @@ fn bot_final_snapshot_includes_imports_when_initial_publication_is_stopped_or_sk
         let finished = if stopped {
             first
         } else {
-            assert!(!first.finished);
+            assert!(!first.finished());
             rx.try_recv().unwrap()
         };
-        assert!(finished.finished && rx.is_empty());
+        assert!(finished.finished() && rx.is_empty());
         assert_eq!(finished.start, 0);
         assert_eq!(finished.source_len, Some(finished.rows.len()));
         assert_eq!(finished.bot_turn_start, Some(4));
@@ -280,8 +280,10 @@ fn bot_final_snapshot_includes_imports_when_initial_publication_is_stopped_or_sk
         assert_eq!(finished.rows[3].text, "Terminal answer");
         assert_eq!(finished.rows[4].text, "Managed prompt");
         if stopped {
+            assert_eq!(finished.outcome, Some(TurnOutcome::Cancelled));
             assert_eq!(finished.status, "Ready");
         } else {
+            assert_eq!(finished.outcome, Some(TurnOutcome::Failed));
             assert!(finished.status.contains("CLI not found"));
             assert_eq!(finished.rows.last().unwrap().role, "error");
         }
@@ -695,7 +697,7 @@ fn rollover_resets_context_before_provider_start_and_keeps_it_reset_on_failure()
                 let reset = std::iter::from_fn(|| rx.try_recv().ok())
                     .find(|update| update.provider_reset)
                     .expect("reset must reach the view before provider startup");
-                assert!(!reset.finished);
+                assert!(!reset.finished());
                 assert_eq!(reset.provider_id, None);
                 assert_eq!(reset.context, Some(Usage::default()));
                 let store = locked(&store).unwrap();
@@ -706,7 +708,7 @@ fn rollover_resets_context_before_provider_start_and_keeps_it_reset_on_failure()
             },
         );
         let finished = std::iter::from_fn(|| rx.try_recv().ok()).last().unwrap();
-        assert!(finished.finished && finished.provider_reset);
+        assert!(finished.finished() && finished.provider_reset);
         assert!(
             finished.status.contains("CLI not found"),
             "{}",
@@ -800,7 +802,7 @@ for line in sys.stdin:
         );
         let updates: Vec<_> = std::iter::from_fn(|| rx.try_recv().ok()).collect();
         let finished = updates.last().unwrap();
-        assert!(finished.finished && finished.provider_reset);
+        assert!(finished.finished() && finished.provider_reset);
         assert_eq!(finished.status, "Ready");
         assert_eq!(finished.provider_id.as_deref(), Some("replacement-thread"));
         let new_usage = report_usage.then_some(Usage {
@@ -929,7 +931,7 @@ for line in sys.stdin:
         );
         let updates: Vec<_> = std::iter::from_fn(|| rx.try_recv().ok()).collect();
         let finished = updates.last().unwrap();
-        assert!(finished.finished);
+        assert!(finished.finished());
         assert_eq!(finished.status, "Ready");
         assert_eq!(finished.provider_id, summary.provider_id);
         if turn == 2 {

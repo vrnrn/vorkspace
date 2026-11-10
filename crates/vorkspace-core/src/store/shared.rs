@@ -949,7 +949,11 @@ impl Store {
     /// Preference-only updates for validated operations which already preserve
     /// their source transcript inside a surrounding transaction (rewind and
     /// worktree cleanup). These must not re-save or re-index turn receipts.
-    fn shared_save_agent_preferences(&self, id: i64, settings: &Settings) -> Result<(), String> {
+    pub(super) fn shared_save_agent_preferences(
+        &self,
+        id: i64,
+        settings: &Settings,
+    ) -> Result<(), String> {
         let current = self.shared_agent_preferences(id)?.unwrap_or_default();
         let mut controls = current.model_settings;
         controls.extend(settings.model_settings.clone());

@@ -92,7 +92,7 @@ impl Conversation {
                     }
                     s.configure_agent(id, &provider, &settings)?;
                     if let Some(title) = title
-                        && s.agent_settings(id)?
+                        && s.agent_preferences(id)?
                             .is_some_and(|saved| saved.revision == settings.revision)
                     {
                         s.title(id, &title)?;

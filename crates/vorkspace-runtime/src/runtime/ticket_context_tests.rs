@@ -38,7 +38,7 @@ fn inaccessible_ticket_admission_keeps_queued_user_identity_and_never_dispatches
             |_| panic!("Ticket admission must finish before resolving or launching a provider"),
         );
         let update = rx.try_recv().unwrap();
-        assert!(update.finished);
+        assert!(update.finished());
         if !cancelled {
             assert!(
                 update.status.contains("Connect this Jira site"),

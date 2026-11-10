@@ -42,6 +42,8 @@ When a chat changes, the host reads the new or updated messages and their order 
 
 While a reply streams, the host can reuse the message list it just saved. It checks that the list is still current before writing the new text.
 
+If a live chat has stayed the same, the desktop can keep the messages already on screen. Stop still works while it waits for new output.
+
 Temporary downloads share a size budget. If it is busy, retry after another download finishes; active downloads are kept intact. A chat that exceeds the download size limit gets a clear error and stays saved on the host. Download limits do not delete conversation data.
 
 A slow reply from the host cannot undo newer status or settings. Partial chat lists can be filled in by a matching complete reply without treating missing fields as deleted.
