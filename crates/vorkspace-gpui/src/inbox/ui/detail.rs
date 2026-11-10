@@ -390,7 +390,20 @@ impl Inbox {
             .flex()
             .flex_col()
             .child(title)
-            .when_some(self.detail_error.clone(), |d, text| d.child(error(text)))
+            .when_some(
+                self.detail_target_error
+                    .as_ref()
+                    .or(self.detail_error.as_ref())
+                    .cloned(),
+                |d, text| {
+                    d.child(
+                        error(text.clone())
+                            .id("inbox-detail-error")
+                            .role(Role::Status)
+                            .aria_label(text),
+                    )
+                },
+            )
             .child(body)
             .into_any_element()
     }

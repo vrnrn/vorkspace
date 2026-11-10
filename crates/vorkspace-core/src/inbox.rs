@@ -253,6 +253,11 @@ pub struct Thread {
     pub base_ref_name: String,
     pub head_ref_name: String,
 }
+
+pub struct Discussion {
+    pub details: Result<Details, String>,
+    pub thread: Result<Thread, String>,
+}
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
 pub struct DiffFile {
@@ -799,46 +804,43 @@ impl Service {
             Path::new(&item.project_path)
         }
     }
-    pub fn discussion(&self, item: &Item) -> (Result<Details, String>, Result<Thread, String>) {
-        let read = || -> Result<_, String> {
-            Ok(match item.provider.as_str() {
-                "jira" => {
-                    let target = jira::Issue::bind(&self.data_dir, item)?;
-                    (
-                        target.details().and_then(convert),
-                        target.thread().and_then(convert),
-                    )
+    pub fn discussion(&self, item: &Item) -> Result<Discussion, String> {
+        Ok(match item.provider.as_str() {
+            "jira" => {
+                let target = jira::Issue::bind(&self.data_dir, item)?;
+                Discussion {
+                    details: target.details().and_then(convert),
+                    thread: target.thread().and_then(convert),
                 }
-                "gitlab" => {
-                    let target = gitlab::WorkItem::bind(&self.data_dir, item)?;
-                    (
-                        target.details().and_then(convert),
-                        target.thread().and_then(convert),
-                    )
+            }
+            "gitlab" => {
+                let target = gitlab::WorkItem::bind(&self.data_dir, item)?;
+                Discussion {
+                    details: target.details().and_then(convert),
+                    thread: target.thread().and_then(convert),
                 }
-                "github" => {
-                    let project = self.project(item);
-                    (
-                        github::git_github_work_item_details_for(
-                            project,
-                            &item.repo,
-                            &item.kind,
-                            item.number,
-                        )
-                        .and_then(convert),
-                        github::git_github_work_item_thread_for(
-                            project,
-                            &item.repo,
-                            &item.kind,
-                            item.number,
-                        )
-                        .and_then(convert),
+            }
+            "github" => {
+                let project = self.project(item);
+                Discussion {
+                    details: github::git_github_work_item_details_for(
+                        project,
+                        &item.repo,
+                        &item.kind,
+                        item.number,
                     )
+                    .and_then(convert),
+                    thread: github::git_github_work_item_thread_for(
+                        project,
+                        &item.repo,
+                        &item.kind,
+                        item.number,
+                    )
+                    .and_then(convert),
                 }
-                _ => return Err("Unsupported connector".into()),
-            })
-        };
-        read().unwrap_or_else(|error| (Err(error.clone()), Err(error)))
+            }
+            _ => return Err("Unsupported connector".into()),
+        })
     }
     pub fn comment(
         &self,

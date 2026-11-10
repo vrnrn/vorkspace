@@ -62,9 +62,7 @@ mod tests {
                 number: 42,
                 ..Default::default()
             };
-            let (details, thread) = service.discussion(&item);
-            assert!(details.unwrap_err().contains(hint));
-            assert!(thread.unwrap_err().contains(hint));
+            assert!(matches!(service.discussion(&item), Err(error) if error.contains(hint)));
             assert!(service
                 .comment(&item, "draft".into(), String::new())
                 .unwrap_err()

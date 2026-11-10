@@ -97,6 +97,7 @@ pub(crate) struct Inbox {
     posting: bool,
     acting: bool,
     error: Option<String>,
+    detail_target_error: Option<String>,
     detail_error: Option<String>,
     extra_error: Option<String>,
     post_error: Option<String>,
@@ -292,6 +293,7 @@ impl Inbox {
             posting: false,
             acting: false,
             error: None,
+            detail_target_error: None,
             detail_error: None,
             extra_error: None,
             post_error: None,
@@ -374,8 +376,11 @@ impl Inbox {
             if let Some(item) = self.item() {
                 self.state.seen.mark(&item);
                 self.save(cx);
-                if self.pinned_item.is_some() && self.details.is_none() && !self.detail_loading {
-                    self.load_detail(true, cx);
+                if self.pinned_item.is_some()
+                    && (self.details.is_none() || self.detail_target_error.is_some())
+                    && !self.detail_loading
+                {
+                    self.load_detail(self.details.is_none(), cx);
                 }
             } else if self.pinned_item.is_none()
                 && self.selected.is_none()
@@ -1073,6 +1078,7 @@ impl Inbox {
         self.extra_error = None;
         self.details = None;
         self.thread = None;
+        self.detail_target_error = None;
         self.document = None;
         self.comments.clear();
         self.reply = None;
@@ -1143,9 +1149,34 @@ impl Inbox {
             .background_executor()
             .spawn(async move { service.discussion(&item) });
         cx.spawn(async move |this, cx| {
-            let (details, thread) = task.await;
+            let result = task.await;
             let _ = this.update(cx, |this, cx| {
-                this.finish_detail(generation, key, details, thread, cx);
+                if this.detail_generation != generation || this.selected.as_ref() != Some(&key) {
+                    return;
+                }
+                match result {
+                    Ok(discussion) => {
+                        let restored = this.detail_target_error.take().is_some();
+                        this.finish_detail(
+                            generation,
+                            key,
+                            discussion.details,
+                            discussion.thread,
+                            cx,
+                        );
+                        if restored && this.tab != Tab::Summary {
+                            this.set_tab(this.tab, cx);
+                        }
+                    }
+                    Err(error) => {
+                        this.detail_loading = false;
+                        if this.post_error.as_ref() == Some(&error) {
+                            this.post_error = None;
+                        }
+                        this.detail_target_error = Some(error);
+                        cx.notify();
+                    }
+                }
             });
         })
         .detach();
@@ -1229,7 +1260,8 @@ impl Inbox {
         let Some(item) = self.item() else {
             return;
         };
-        if tab == Tab::Summary
+        if self.detail_target_error.is_some()
+            || tab == Tab::Summary
             || (tab == Tab::Code && self.diff.is_some())
             || (tab == Tab::Checks && self.checks.is_some())
         {
@@ -1293,7 +1325,7 @@ impl Inbox {
     }
 
     fn post_comment(&mut self, cx: &mut Context<Self>) {
-        if self.posting {
+        if self.posting || self.detail_target_error.is_some() {
             return;
         }
         let Some(item) = self.item() else {
@@ -1352,7 +1384,9 @@ impl Inbox {
                 }
                 self.refresh(cx);
             }
-            Err(error) if selected => self.post_error = Some(error),
+            Err(error) if selected && self.detail_target_error.as_ref() != Some(&error) => {
+                self.post_error = Some(error)
+            }
             Err(_) => {}
         }
         cx.notify();

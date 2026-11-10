@@ -268,8 +268,8 @@ impl Fetch for Service {
             number: reference.number,
             ..Default::default()
         };
-        let (details, thread) = self.discussion(&item);
-        Ok((details?, thread?))
+        let discussion = self.discussion(&item)?;
+        Ok((discussion.details?, discussion.thread?))
     }
 }
 fn prefix(text: &str, limit: usize) -> (&str, bool) {

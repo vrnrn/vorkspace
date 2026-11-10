@@ -101,7 +101,9 @@ impl Inbox {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> AnyElement {
-        let can_post = !self.posting && !self.comment.read(cx).content.trim().is_empty();
+        let can_post = !self.posting
+            && self.detail_target_error.is_none()
+            && !self.comment.read(cx).content.trim().is_empty();
         let body = if ix == 0 {
             div()
                 .py(self.detail_inset(window))
