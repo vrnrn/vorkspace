@@ -622,6 +622,7 @@ impl Shell {
             == (Removal::Discard {
                 delete_sessions: true,
             });
+        self.active_worktree_removals += 1;
         let check_cwd = cwd.clone();
         let work = cx.background_executor().spawn(async move {
             let project = Path::new(&check_cwd);
@@ -637,7 +638,10 @@ impl Shell {
             let path = match work.await {
                 Ok(path) => path,
                 Err(error) => {
-                    let _ = this.update(cx, |this, cx| done(this, Err(error), cx));
+                    let _ = this.update(cx, |this, cx| {
+                        this.active_worktree_removals -= 1;
+                        done(this, Err(error), cx);
+                    });
                     return;
                 }
             };
@@ -689,14 +693,17 @@ impl Shell {
                     .worktree_focus
                     .iter()
                     .filter(|(_, focus)| is_resolved_inside(&focus.path, &path))
-                    .map(|(project, _)| project.clone())
+                    .map(|(project, focus)| (project.clone(), focus.path.clone()))
                     .collect::<Vec<_>>();
                 Ok((guard, this.group_writes.take(), this.store.clone(), focuses))
             });
             let (mut guard, writes, store, focuses) = match admitted {
                 Ok(Ok(admitted)) => admitted,
                 Ok(Err(error)) => {
-                    let _ = this.update(cx, |this, cx| done(this, Err(error), cx));
+                    let _ = this.update(cx, |this, cx| {
+                        this.active_worktree_removals -= 1;
+                        done(this, Err(error), cx);
+                    });
                     return;
                 }
                 Err(_) => return,
@@ -765,10 +772,17 @@ impl Shell {
                     }
                     this.worktree_focus
                         .retain(|_, focus| !is_equal_or_inside(&focus.path, &path));
-                    for project in focuses {
-                        this.worktree_focus.remove(&project);
+                    for (project, previous) in focuses {
+                        if this
+                            .worktree_focus
+                            .get(&project)
+                            .is_some_and(|focus| focus.path == previous)
+                        {
+                            this.worktree_focus.remove(&project);
+                        }
                     }
                 });
+                this.active_worktree_removals -= 1;
                 done(this, result, cx);
             });
             drop(guard);

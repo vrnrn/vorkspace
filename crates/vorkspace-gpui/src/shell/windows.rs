@@ -339,6 +339,7 @@ impl Shell {
             || !self.archiving.is_empty()
             || !self.deleting.is_empty()
             || !self.deleting_projects.is_empty()
+            || self.active_worktree_removals > 0
             || !self.pending_project_creations.is_empty()
             || self
                 .preparing_sessions
