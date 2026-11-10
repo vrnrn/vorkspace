@@ -23,6 +23,9 @@ pub(crate) struct SharedRoster {
     pub(super) root: PathBuf,
     pub(super) snapshot: Result<Roster, String>,
     pub(super) revision: u64,
+    // A pending local creation and a committed deletion can both be absent
+    // from the snapshot. Keep the deletion revision to distinguish them.
+    pub(super) removed: HashMap<String, u64>,
     chat_owners: HashMap<String, WeakEntity<Bots>>,
     writes: Option<Task<()>>,
 }
@@ -43,6 +46,7 @@ impl SharedRoster {
             root,
             snapshot,
             revision: 0,
+            removed: HashMap::new(),
             chat_owners: HashMap::new(),
             writes: None,
         });
@@ -90,15 +94,6 @@ impl SharedRoster {
         if self.chat_owners.get(id) == Some(owner) {
             self.chat_owners.remove(id);
         }
-    }
-
-    fn ids(roster: &Roster) -> Vec<String> {
-        roster
-            .bots
-            .iter()
-            .filter(|bot| !bot.is_minion())
-            .map(|bot| bot.id.clone())
-            .collect()
     }
 
     /// Preserve command receipt ordering while publishing the roster even
@@ -210,13 +205,19 @@ impl SharedRoster {
                     let _ = shared.update(cx, |shared, cx| {
                         let ids = Self::ids(&snapshot);
                         let changed = shared.member_ids().as_ref() != Some(&ids);
+                        shared.revision += 1;
                         if let Ok(previous) = &shared.snapshot {
+                            for bot in &previous.bots {
+                                if snapshot.get(&bot.id).is_none() {
+                                    shared.removed.insert(bot.id.clone(), shared.revision);
+                                }
+                            }
+                            shared.removed.retain(|id, _| snapshot.get(id).is_none());
                             shared.chat_owners.retain(|id, _| {
                                 previous.get(id).is_none() || snapshot.get(id).is_some()
                             });
                         }
                         shared.snapshot = Ok(snapshot);
-                        shared.revision += 1;
                         if changed {
                             cx.emit(MembershipChanged { ids, vorkspace });
                         }

@@ -715,11 +715,11 @@ impl Bots {
     }
 
     pub(crate) fn confirmed_missing(&self, id: &str, cx: &App) -> bool {
+        let shared = self.shared_roster.read(cx);
         self.roster_loaded
             && !self.awaiting_creation.contains(id)
-            && self
-                .shared_roster
-                .read(cx)
+            && (self.roster.get(id).is_none() || shared.removed.contains_key(id))
+            && shared
                 .committed()
                 .is_some_and(|roster| roster.get(id).is_none())
     }
@@ -753,7 +753,7 @@ impl Bots {
             .chats
             .keys()
             .chain(self.running.values().map(|run| &run.bot))
-            .filter(|id| committed.get(id).is_none() && !self.awaiting_creation.contains(*id))
+            .filter(|id| shared.removed.contains_key(*id))
             .cloned()
             .collect();
         let changed = match self.roster.rebase_onto(committed) {
@@ -768,6 +768,10 @@ impl Bots {
                 return;
             }
         };
+        let deletion_published = shared
+            .removed
+            .values()
+            .any(|&revision| revision > self.roster_revision);
         self.roster_revision = shared.revision;
         self.roster_loaded = true;
         self.held.clone_from(&self.roster.held_messages);
@@ -786,7 +790,7 @@ impl Bots {
         for id in deleted {
             self.stop_deleted_bot(&id, cx);
         }
-        if changed {
+        if changed || deletion_published {
             if let Some(id) = self.active.clone() {
                 if self.roster.get(&id).is_some() {
                     self.configure_chat(&id, cx);
