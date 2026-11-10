@@ -1,22 +1,19 @@
-//! GitHistoryGraph.tsx's standalone History tab: its toolbar, search and
-//! 44px rows with the swimlane graph painted per row.
+//! Window-local History navigation over a shared checkout's commit graph.
 use crate::{
-    git_status::{GitChanged, ProjectGit},
+    git_status::{Checkout, GitChanged, HistoryItem, ProjectGit},
     input::{self, Input},
     panel_kit::*,
 };
 use gpui::{
-    App, Bounds, Context, Entity, FocusHandle, Focusable, FontWeight, Hsla, KeyBinding, Role,
-    SharedString, Subscription, UniformListScrollHandle, Window, actions, canvas, div, fill, point,
-    prelude::*, px, rgb, size, uniform_list,
+    App, Bounds, Context, Entity, FocusHandle, Focusable, FontWeight, Hsla, KeyBinding,
+    PathBuilder, Role, SharedString, Subscription, UniformListScrollHandle, Window, actions,
+    canvas, div, fill, point, prelude::*, px, rgb, size, uniform_list,
 };
-use std::{collections::HashMap, path::PathBuf};
-use vorkspace_core::scm::{self, HistoryCommit};
-use vorkspace_model::git_graph::{self, GraphCommit, NodeKind, Row, RowGraph, SWIMLANE_WIDTH};
+use std::sync::Arc;
+use vorkspace_model::git_graph::{self, PathCommand, RowGraph, SWIMLANE_WIDTH};
 use vorkspace_ui::radius;
 use vorkspace_ui::theme::*;
 
-const ROW: f32 = 44.;
 actions!(history, [CloseSearch]);
 
 pub(crate) fn bind(cx: &mut App) {
@@ -37,20 +34,13 @@ pub(crate) enum HistoryEvent {
 }
 impl gpui::EventEmitter<HistoryEvent> for History {}
 
-struct Item {
-    commit: HistoryCommit,
-    row: Row,
-    graph: RowGraph,
-}
-
 pub(crate) struct History {
     git: Entity<ProjectGit>,
     cwd: String,
     enabled: bool,
-    items: Vec<Item>,
-    /// historyByCwd: a revisit opens on the last read.
-    cache: HashMap<String, Vec<HistoryCommit>>,
-    request: u64,
+    items: Arc<[HistoryItem]>,
+    checkout: Option<Entity<Checkout>>,
+    observation: Option<Subscription>,
     loading: bool,
     error: Option<String>,
     search_open: bool,
@@ -77,15 +67,22 @@ impl History {
                 this.filter();
                 cx.notify();
             }),
-            cx.subscribe(&git, |this, _, _: &GitChanged, cx| this.git_changed(cx)),
+            cx.subscribe(&git, |this, _, _: &GitChanged, cx| this.sync_project(cx)),
         ];
+        let viewer = cx.entity_id();
+        cx.on_release(move |this, cx| {
+            if let Some(checkout) = this.checkout.take() {
+                checkout.update(cx, |checkout, cx| checkout.watch_history(viewer, false, cx));
+            }
+        })
+        .detach();
         Self {
             git,
             cwd: String::new(),
             enabled: false,
-            items: Vec::new(),
-            cache: HashMap::new(),
-            request: 0,
+            items: Arc::default(),
+            checkout: None,
+            observation: None,
             loading: false,
             error: None,
             search_open: false,
@@ -100,113 +97,83 @@ impl History {
         }
     }
     pub(crate) fn set_enabled(&mut self, enabled: bool, cx: &mut Context<Self>) {
-        let was = self.enabled;
-        self.enabled = enabled;
-        if enabled && !was {
+        if self.enabled != enabled {
+            self.enabled = enabled;
             self.sync_project(cx);
-            self.load(cx);
         }
     }
-    /// The window came back into focus.
+
     pub(crate) fn resume(&mut self, cx: &mut Context<Self>) {
-        if self.enabled {
-            self.load(cx);
+        if let Some(checkout) = &self.checkout {
+            checkout.update(cx, |checkout, cx| checkout.load_history(false, cx));
         }
     }
-    fn git_changed(&mut self, cx: &mut Context<Self>) {
-        if !self.enabled {
-            return;
+
+    fn sync_project(&mut self, cx: &mut Context<Self>) {
+        let git = self.git.read(cx);
+        let next = self.enabled.then(|| git.checkout()).flatten();
+        let moved = self.cwd != git.project();
+        if moved {
+            self.cwd = git.project().to_owned();
+            self.search_open = false;
+            self.query.clear();
+            self.selected = None;
+            self.scroll = UniformListScrollHandle::new();
+            self.search
+                .update(cx, |search, cx| search.set_text(String::new(), cx));
         }
-        self.sync_project(cx);
-        self.load(cx);
-    }
-    /// A new checkout clears the search and opens on its cached history.
-    fn sync_project(&mut self, cx: &mut Context<Self>) -> bool {
-        let root = self.git.read(cx).project().to_owned();
-        if root == self.cwd {
-            return false;
-        }
-        self.cwd = root;
-        self.request += 1;
-        self.loading = false;
-        self.error = None;
-        self.search_open = false;
-        self.query.clear();
-        self.search
-            .update(cx, |s, cx| s.set_text(String::new(), cx));
-        let cached = self.cache.get(&self.cwd).cloned().unwrap_or_default();
-        self.set_commits(cached);
-        cx.notify();
-        true
-    }
-    fn available(&self) -> bool {
-        !self.cwd.is_empty() && self.cwd != "~"
-    }
-    fn load(&mut self, cx: &mut Context<Self>) {
-        if !self.enabled || !self.available() {
-            return;
-        }
-        self.request += 1;
-        let request = self.request;
-        self.loading = true;
-        self.error = None;
-        let cwd = self.cwd.clone();
-        let path = PathBuf::from(&cwd);
-        let work = cx
-            .background_executor()
-            .spawn(async move { scm::history(&path, Some(200)) });
-        cx.spawn(async move |this, cx| {
-            let result = work.await;
-            let _ = this.update(cx, |this, cx| {
-                if this.request != request {
-                    return;
-                }
-                this.loading = false;
-                match result {
-                    Ok(history) => {
-                        let same = this.items.len() == history.commits.len()
-                            && this
-                                .items
-                                .iter()
-                                .zip(&history.commits)
-                                .all(|(a, b)| &a.commit == b);
-                        if !same {
-                            this.cache.insert(cwd, history.commits.clone());
-                            this.set_commits(history.commits);
-                        }
-                    }
-                    Err(error) => this.error = Some(error),
-                }
+        if self.checkout == next {
+            if moved {
                 cx.notify();
-            });
-        })
-        .detach();
-        cx.notify();
+            }
+            return;
+        }
+        self.observation = None;
+        let viewer = cx.entity_id();
+        if let Some(checkout) = self.checkout.take() {
+            checkout.update(cx, |checkout, cx| checkout.watch_history(viewer, false, cx));
+        }
+        if let Some(checkout) = next {
+            self.observation = Some(cx.observe(&checkout, |this, checkout, cx| {
+                if this.checkout.as_ref() == Some(&checkout) {
+                    this.sync_history(&checkout, cx);
+                }
+            }));
+            self.checkout = Some(checkout.clone());
+            checkout.update(cx, |checkout, cx| checkout.watch_history(viewer, true, cx));
+            self.sync_history(&checkout, cx);
+        } else {
+            self.items = Arc::default();
+            self.loading = false;
+            self.error = None;
+            self.filter();
+            cx.notify();
+        }
     }
-    fn set_commits(&mut self, commits: Vec<HistoryCommit>) {
-        let graph: Vec<GraphCommit> = commits
-            .iter()
-            .map(|c| GraphCommit {
-                sha: c.sha.clone(),
-                parents: c.parents.clone(),
-                head: c.head,
-                refs: c
-                    .refs
-                    .iter()
-                    .map(|r| (r.name.clone(), r.kind.clone()))
-                    .collect(),
-            })
-            .collect();
-        let rows = git_graph::layout(&graph);
-        self.items = commits
-            .into_iter()
-            .zip(rows)
-            .map(|(commit, row)| {
-                let graph = git_graph::row_graph(&row, ROW);
-                Item { commit, row, graph }
-            })
-            .collect();
-        self.filter();
+
+    fn sync_history(&mut self, checkout: &Entity<Checkout>, cx: &mut Context<Self>) {
+        let state = checkout.read(cx).history();
+        let items_changed = !Arc::ptr_eq(&self.items, &state.items);
+        let changed = items_changed || self.loading != state.loading || self.error != state.error;
+        self.loading = state.loading;
+        self.error.clone_from(&state.error);
+        if items_changed {
+            self.items = state.items.clone();
+            self.filter();
+        }
+        if changed {
+            cx.notify();
+        }
+    }
+
+    fn available(&self) -> bool {
+        self.checkout.is_some()
+    }
+
+    fn load(&self, cx: &mut Context<Self>) {
+        if let Some(checkout) = &self.checkout {
+            checkout.update(cx, |checkout, cx| checkout.load_history(true, cx));
+        }
     }
     fn filter(&mut self) {
         let needle = self.query.trim().to_lowercase();
@@ -242,8 +209,14 @@ impl History {
         window.focus(&self.focus, cx);
         cx.notify();
     }
-    fn select(&mut self, ix: usize, cx: &mut Context<Self>) {
-        let commit = &self.items[ix].commit;
+    fn select(&mut self, cwd: &str, sha: &str, cx: &mut Context<Self>) {
+        if self.cwd != cwd {
+            return;
+        }
+        let Some(item) = self.items.iter().find(|item| item.commit.sha == sha) else {
+            return;
+        };
+        let commit = &item.commit;
         self.selected = Some(commit.sha.clone());
         cx.emit(HistoryEvent::OpenCommit {
             cwd: self.cwd.clone(),
@@ -367,21 +340,18 @@ impl History {
         let active = self.selected.as_deref() == Some(commit.sha.as_str());
         let hovered = self.hovered == Some(ix);
         let filtered = !self.query.trim().is_empty();
-        let head = item.row.kind == NodeKind::Head;
-        let badge = item
-            .row
-            .refs
-            .iter()
-            .find(|r| r.color.is_some())
-            .or(item.row.refs.first())
-            .cloned();
+        let head = commit.head;
+        let badge = item.badge.clone();
         let date = short_date(commit.timestamp);
-        let graph = item.graph.clone();
+        let items = self.items.clone();
         let width = if filtered {
             SWIMLANE_WIDTH * 2.
         } else {
-            graph.width
+            item.graph.width
         };
+        let height = item.graph.height;
+        let cwd = self.cwd.clone();
+        let sha = commit.sha.clone();
         let title: SharedString = {
             let mut t = format!("{} {}", commit.short_sha, commit.subject);
             if !commit.author.is_empty() {
@@ -395,7 +365,7 @@ impl History {
             .map(vorkspace_ui::theme::tab_reachable)
             .aria_label(title)
             .aria_selected(active)
-            .h(px(ROW))
+            .h(px(height))
             .w_full()
             .min_w_0()
             .flex()
@@ -420,16 +390,24 @@ impl History {
                     cx.notify();
                 }
             }))
-            .on_click(cx.listener(move |this, _, _, cx| this.select(ix, cx)))
+            .on_click(cx.listener(move |this, _, _, cx| this.select(&cwd, &sha, cx)))
             .child(
                 canvas(
                     |_, _, _| (),
                     move |bounds, _, window, _| {
-                        paint_graph(&graph, bounds, filtered, head, active, hovered, window)
+                        paint_graph(
+                            &items[ix].graph,
+                            bounds,
+                            filtered,
+                            head,
+                            active,
+                            hovered,
+                            window,
+                        )
                     },
                 )
                 .w(px(width))
-                .h(px(ROW))
+                .h(px(height))
                 .flex_shrink_0(),
             )
             .child(
@@ -633,8 +611,26 @@ fn paint_graph(
     let origin = bounds.origin;
     if !filtered {
         for path in &graph.paths {
-            let color = soft(path.color).opacity(0.8);
-            git_graph::stroke_path(&path.d, origin, path.stroke_width, color, window);
+            let mut builder = PathBuilder::stroke(px(1.));
+            let at = |x, y| origin + point(px(x), px(y));
+            for &command in &path.commands {
+                match command {
+                    PathCommand::Move(x, y) => builder.move_to(at(x, y)),
+                    PathCommand::Line(x, y) => builder.line_to(at(x, y)),
+                    PathCommand::Arc {
+                        x,
+                        y,
+                        radius,
+                        sweep,
+                    } => {
+                        let radius = px(radius);
+                        builder.arc_to(point(radius, radius), px(0.), false, sweep, at(x, y));
+                    }
+                }
+            }
+            if let Ok(shape) = builder.build() {
+                window.paint_path(shape, soft(path.color).opacity(0.8));
+            }
         }
     }
     let count = graph.circles.len();

@@ -9,6 +9,10 @@ use std::{
 };
 use vorkspace_core::scm::{self, CheckoutStamp, DiffIndex};
 
+mod history;
+pub(crate) use history::HistoryItem;
+use history::HistoryState;
+
 const POLL: Duration = Duration::from_secs(2);
 const FULL_REFRESH: Duration = Duration::from_secs(20);
 const RETAINED_CHECKOUTS: usize = 24;
@@ -163,10 +167,11 @@ impl Observation {
     }
 }
 
-pub(super) struct Checkout {
+pub(crate) struct Checkout {
     path: String,
     catalog: WeakEntity<CheckoutCatalog>,
     observation: Option<Observation>,
+    history: HistoryState,
     pub(super) revision: u64,
     generation: u64,
     scanning: bool,
@@ -182,6 +187,7 @@ impl Checkout {
             path,
             catalog,
             observation: None,
+            history: HistoryState::default(),
             revision: 0,
             generation: 0,
             scanning: false,
@@ -269,6 +275,7 @@ impl Checkout {
                 {
                     this.publish(read, cx);
                 }
+                this.refresh_history_if_due(cx);
                 if std::mem::take(&mut this.reload_pending) {
                     this.scan(true, cx);
                 }
@@ -291,17 +298,62 @@ impl Checkout {
                     || before.versions.as_ref().map(Arc::as_ptr)
                         != read.versions.as_ref().map(Arc::as_ptr)
             });
-        let bytes = (changed || invalidate).then(|| read.bytes());
+        let history_changed = self.observation.as_ref().is_some_and(|before| {
+            history_inputs_changed(&before.snapshot.index, &read.snapshot.index)
+        });
         self.observation = Some(read);
         if invalidate {
             self.revision += 1;
         }
-        if let Some(bytes) = bytes {
-            let checkout = cx.entity();
-            let _ = self
-                .catalog
-                .update(cx, |catalog, _| catalog.retain(&self.path, checkout, bytes));
+        if history_changed {
+            self.invalidate_history(cx);
+        }
+        if changed || invalidate {
+            self.retain(cx);
             cx.notify();
         }
+    }
+
+    fn retain(&self, cx: &mut Context<Self>) {
+        let bytes = self.observation.as_ref().map_or(0, Observation::bytes) + self.history.bytes;
+        let checkout = cx.entity();
+        let _ = self
+            .catalog
+            .update(cx, |catalog, _| catalog.retain(&self.path, checkout, bytes));
+    }
+}
+
+fn history_inputs_changed(before: &DiffIndex, after: &DiffIndex) -> bool {
+    before.head != after.head
+        || before.branch != after.branch
+        || before.upstream != after.upstream
+        || before.default_branch != after.default_branch
+        || before.ahead != after.ahead
+        || before.behind != after.behind
+        || before.ahead_of_default != after.ahead_of_default
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn working_tree_edits_do_not_invalidate_the_commit_graph() {
+        let before = DiffIndex {
+            head: Some("old-tip".into()),
+            branch: Some("main".into()),
+            ..Default::default()
+        };
+        let mut after = DiffIndex {
+            additions: 9,
+            deletions: 2,
+            ..before.clone()
+        };
+        assert!(!history_inputs_changed(&before, &after));
+        after.head = Some("new-tip".into());
+        assert!(history_inputs_changed(&before, &after));
+        after.head.clone_from(&before.head);
+        after.branch = Some("release".into());
+        assert!(history_inputs_changed(&before, &after));
     }
 }

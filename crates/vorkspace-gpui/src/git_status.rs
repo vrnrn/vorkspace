@@ -4,8 +4,8 @@ use std::{collections::HashMap, sync::Arc};
 use vorkspace_core::scm::DiffIndex;
 
 mod checkout;
-pub(crate) use checkout::CheckoutCatalog;
-use checkout::{Checkout, Snapshot};
+use checkout::Snapshot;
+pub(crate) use checkout::{Checkout, CheckoutCatalog, HistoryItem};
 
 /// A disk or Git change: Changes, History and the Explorer reread.
 pub(crate) struct GitChanged;
@@ -116,6 +116,9 @@ impl ProjectGit {
     }
     pub(crate) fn checkout_revision(&self) -> u64 {
         self.checkout_revision
+    }
+    pub(crate) fn checkout(&self) -> Option<Entity<Checkout>> {
+        self.checkout.clone()
     }
     pub(crate) fn index(&self) -> Option<&DiffIndex> {
         self.snapshot
