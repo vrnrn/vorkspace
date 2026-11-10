@@ -88,7 +88,7 @@ fn command_w_closes_workspace_pages_and_restores_conversation(cx: &mut TestAppCo
             shell.open(session, w, cx);
             let chat = shell.sessions[&session].clone();
             chat.update(cx, |chat, cx| {
-                chat.busy = true;
+                chat.set_running_for_test(true);
                 chat.input.update(cx, |input, cx| {
                     input.set_text("unsent conversation draft".into(), cx)
                 });
@@ -140,7 +140,7 @@ fn command_w_closes_workspace_pages_and_restores_conversation(cx: &mut TestAppCo
                 assert_eq!(shell.workspace.title_order, strip);
                 assert_eq!(shell.sessions[&session], chat);
                 let chat = chat.read(cx);
-                assert!(chat.busy, "page close must not cancel parked work");
+                assert!(chat.responding(), "page close must not cancel parked work");
                 assert_eq!(chat.input.read(cx).content, "unsent conversation draft");
                 assert!(chat.input.focus_handle(cx).is_focused(w), "{page:?}");
                 if page == TitleTab::Search {
@@ -211,7 +211,7 @@ fn command_w_parks_bot_work_and_draft_and_restores_conversation(cx: &mut TestApp
                 [TitleTab::Workspace(session), bot_tab.clone()]
             );
             chat.update(cx, |chat, cx| {
-                chat.busy = true;
+                chat.set_running_for_test(true);
                 chat.input.update(cx, |input, cx| {
                     input.set_text("unsent bot draft".into(), cx)
                 });
@@ -236,7 +236,7 @@ fn command_w_parks_bot_work_and_draft_and_restores_conversation(cx: &mut TestApp
                     .focus_handle(cx)
                     .is_focused(w)
             );
-            assert!(chat.read(cx).busy);
+            assert!(chat.read(cx).responding());
             assert_eq!(chat.read(cx).input.read(cx).content, "unsent bot draft");
             shell.open_title_tab(&bot_tab, w, cx);
         })
@@ -251,7 +251,7 @@ fn command_w_parks_bot_work_and_draft_and_restores_conversation(cx: &mut TestApp
                 2,
                 "reopening creates one Bot tab"
             );
-            assert!(chat.read(cx).busy);
+            assert!(chat.read(cx).responding());
             assert_eq!(chat.read(cx).input.read(cx).content, "unsent bot draft");
         })
         .unwrap();

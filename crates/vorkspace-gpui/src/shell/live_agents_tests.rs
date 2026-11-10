@@ -9,7 +9,7 @@ fn busy(window: WindowHandle<Shell>, id: i64, running: bool, cx: &mut TestAppCon
     window
         .update(cx, |shell, _, cx| {
             shell.sessions[&id].update(cx, |view, cx| {
-                view.busy = running;
+                view.set_running_for_test(running);
                 cx.emit(SessionChanged::Loaded);
                 cx.notify();
             });
@@ -143,7 +143,7 @@ fn fast_completion_archive_and_cancellation_follow_semantic_notifications(cx: &m
         .update(cx, |shell, _, cx| {
             // Publish both changes before painting another frame.
             shell.sessions[&a].update(cx, |view, cx| {
-                view.busy = true;
+                view.set_running_for_test(true);
                 cx.emit(SessionChanged::Loaded);
             });
         })
@@ -152,7 +152,7 @@ fn fast_completion_archive_and_cancellation_follow_semantic_notifications(cx: &m
     window
         .update(cx, |shell, _, cx| {
             shell.sessions[&a].update(cx, |view, cx| {
-                view.busy = false;
+                view.set_running_for_test(false);
                 cx.emit(SessionChanged::Loaded);
             });
         })
@@ -313,7 +313,7 @@ fn native_activity_capture() {
                     for (ix, id) in shell.order.clone().into_iter().enumerate() {
                         let view = shell.ensure_session(id, cx).unwrap();
                         view.update(cx, |view, cx| {
-                            view.busy = !single || ix == 2;
+                            view.set_running_for_test(!single || ix == 2);
                             view.activity = if matches!(name, "plain" | "done" | "motion") {
                                 None
                             } else {
@@ -343,14 +343,14 @@ fn native_activity_capture() {
                             .update(cx, |view, cx| view.sidebar_test_approval(true, cx));
                         let id = shell.order[1];
                         shell.sessions[&id].update(cx, |view, cx| {
-                            view.busy = false;
+                            view.set_running_for_test(false);
                             cx.emit(SessionChanged::Loaded);
                         });
                     }
                     if name == "done" {
                         let id = shell.order[2];
                         shell.sessions[&id].update(cx, |view, cx| {
-                            view.busy = false;
+                            view.set_running_for_test(false);
                             cx.emit(SessionChanged::Loaded);
                         });
                     }

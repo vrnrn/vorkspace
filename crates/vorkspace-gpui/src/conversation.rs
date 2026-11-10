@@ -68,7 +68,7 @@ use vorkspace_core::{
     catalog::{self, Model},
 };
 use vorkspace_core::{provider::Kind, store::Session};
-use vorkspace_runtime::runtime::{Database, locked};
+use vorkspace_runtime::runtime::{Database, TurnOutcome, locked};
 use vorkspace_ui::clock::Instant;
 use vorkspace_ui::{composer_motion::ComposerMotion, theme::*};
 // Keep empty and docked composers aligned with the transcript column. Below
@@ -160,6 +160,16 @@ pub(crate) enum SessionChanged {
     Loaded,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum TurnState {
+    Idle,
+    Running,
+    /// The UI has stopped streaming while the worker finishes its durable save.
+    Stopping,
+    Settled(TurnOutcome),
+    Unconfirmed,
+}
+
 impl SessionChanged {
     pub(crate) fn affects_attention(self) -> bool {
         matches!(
@@ -236,9 +246,7 @@ pub(crate) struct Conversation {
     loading: bool,
     native_syncing: bool,
     native_recovery: Option<native_history::Recovery>,
-    pub(crate) busy: bool,
-    /// The UI is idle; serialize the next launch behind the worker's last save.
-    pub(crate) stopping: bool,
+    turn_state: TurnState,
     notification_cancelled: bool,
     /// The store's saved-draft flag, until the conversation loads its own.
     pub(crate) draft_hint: bool,
@@ -371,10 +379,28 @@ impl Conversation {
         !self.approvals.is_empty() || !self.questions.is_empty()
     }
     pub(crate) fn is_stopping(&self) -> bool {
-        self.stopping
+        self.turn_state == TurnState::Stopping
     }
     pub(crate) fn responding(&self) -> bool {
-        self.busy && !self.stopping
+        self.turn_state == TurnState::Running
+    }
+    pub(crate) fn turn_in_flight(&self) -> bool {
+        matches!(self.turn_state, TurnState::Running | TurnState::Stopping)
+    }
+    pub(crate) fn turn_state(&self) -> TurnState {
+        self.turn_state
+    }
+    #[cfg(test)]
+    pub(crate) fn set_running_for_test(&mut self, running: bool) {
+        self.turn_state = if running {
+            TurnState::Running
+        } else {
+            TurnState::Idle
+        };
+    }
+    #[cfg(test)]
+    pub(crate) fn set_stopping_for_test(&mut self) {
+        self.turn_state = TurnState::Stopping;
     }
     pub(crate) fn new(summary: Session, store: Database, cx: &mut Context<Self>) -> Self {
         #[cfg(test)]
@@ -547,8 +573,7 @@ impl Conversation {
             loading: false,
             native_syncing: false,
             native_recovery: None,
-            busy: false,
-            stopping: false,
+            turn_state: TurnState::Idle,
             notification_cancelled: false,
             draft_hint: false,
             model: std::env::var(format!(

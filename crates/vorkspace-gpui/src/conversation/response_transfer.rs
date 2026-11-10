@@ -12,7 +12,7 @@ impl Conversation {
             self.defer_edit_transfer(settings, prompt, cx);
             return;
         }
-        if self.needs_history_restore() || self.stopping {
+        if self.needs_history_restore() || self.is_stopping() {
             self.defer_history_action(
                 move |this, cx| {
                     // Bot callers may configure their live context immediately

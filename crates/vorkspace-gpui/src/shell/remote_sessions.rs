@@ -155,7 +155,7 @@ impl Shell {
                     self.remote_tombstones.remove(&id);
                     repaint |= self.remote_marks.insert(id, marks) != Some(marks);
                     if let Some(view) = self.sessions.get(&id)
-                        && !view.read(cx).busy
+                        && !view.read(cx).turn_in_flight()
                         && view.read(cx).summary.updated_at <= summary.updated_at
                         && view.read(cx).summary != *summary
                     {

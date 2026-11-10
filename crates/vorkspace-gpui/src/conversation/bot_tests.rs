@@ -73,7 +73,7 @@ fn island_status_distinguishes_finished_work_from_attention_and_active_turns(
             view.status = "Ready".into();
             view.summary.has_messages = true;
             assert_eq!(view.bot_status_label(), "Done");
-            view.busy = true;
+            view.set_running_for_test(true);
             view.status = "Thinking…".into();
             assert_eq!(view.bot_status_label(), "Thinking");
             view.status = "Running a tool".into();
@@ -81,7 +81,7 @@ fn island_status_distinguishes_finished_work_from_attention_and_active_turns(
             view.settings.usage_limit = Some(Default::default());
             assert_eq!(view.bot_status_label(), "Usage limit reached");
             view.settings.usage_limit = None;
-            view.busy = false;
+            view.set_running_for_test(false);
             view.status = "Provider disconnected".into();
             assert_eq!(
                 view.bot_status_label(),
@@ -998,7 +998,7 @@ fn automatic_updates_stay_quiet_and_peer_delivery_keeps_one_transcript_message(
         visual.simulate_resize(size(px(width), px(600.)));
         window
             .update(visual, |view, _, cx| {
-                view.busy = false;
+                view.set_running_for_test(false);
                 view.bot_ui.pending.clear();
                 view.bot_ui.delivered = None;
                 view.sync_bot_pending(cx);
@@ -1009,7 +1009,7 @@ fn automatic_updates_stay_quiet_and_peer_delivery_keeps_one_transcript_message(
         let composer = visual.debug_bounds("composer-box").unwrap();
         window
             .update(visual, |view, _, cx| {
-                view.busy = true;
+                view.set_running_for_test(true);
                 view.bot_ui.pending = vec![
                     message("background", "[Delegated work completed]", true),
                     peer_message(),
@@ -1027,12 +1027,12 @@ fn automatic_updates_stay_quiet_and_peer_delivery_keeps_one_transcript_message(
 
         window
             .update(visual, |view, _, cx| {
-                view.busy = false;
+                view.set_running_for_test(false);
                 view.bot_post("bot-system", peer_message().text, cx)
                     .unwrap();
                 view.bot_ui.delivered = Some("peer".into());
                 view.sync_bot_pending(cx);
-                view.busy = true;
+                view.set_running_for_test(true);
                 cx.notify();
             })
             .unwrap();
@@ -1147,7 +1147,7 @@ fn only_the_users_own_message_steers_a_running_bot_turn(cx: &mut TestAppContext)
                     .push((event.id.clone(), event.error.clone()));
             })
             .detach();
-            view.busy = true;
+            view.set_running_for_test(true);
             view.controls = Some(controls);
             let user = Message {
                 prepared_prompt: Some("Saved MCP context\n\nUse the other approach".into()),
@@ -1198,7 +1198,7 @@ fn a_final_update_keeps_the_accepted_steer_receipt(cx: &mut TestAppContext) {
     let (controls, _received) = std::sync::mpsc::channel();
     window
         .update(cx, |view, _, cx| {
-            view.busy = true;
+            view.set_running_for_test(true);
             view.controls = Some(controls);
             view.follow_ups.ready = true;
             assert!(view.bot_steer(&message("steer", "Change course", false), cx));

@@ -17,7 +17,7 @@ fn conversation(cx: &mut TestAppContext) -> WindowHandle<Conversation> {
                 let mut view = Conversation::new(summary, Arc::new(Mutex::new(store)), cx);
                 view.loaded = true;
                 view.summary.has_messages = true;
-                view.busy = true;
+                view.set_running_for_test(true);
                 view.follow_ups.state.paused = true;
                 view
             })

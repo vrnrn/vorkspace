@@ -43,7 +43,7 @@ impl Bots {
             .chain(self.running.get(&source).map(|run| &run.view))
             .any(|view| {
                 let view = view.read(cx);
-                view.summary.id == source && view.busy
+                view.summary.id == source && view.turn_in_flight()
             })
     }
 

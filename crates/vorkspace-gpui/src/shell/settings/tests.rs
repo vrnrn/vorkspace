@@ -8,7 +8,7 @@ fn project_archive_leaves_the_selected_project_and_refuses_running_work(cx: &mut
     window
         .update(cx, |shell, w, cx| {
             // Running work in a project refuses its archive.
-            shell.sessions[&a].update(cx, |view, _| view.busy = true);
+            shell.sessions[&a].update(cx, |view, _| view.set_running_for_test(true));
             let busy_project = shell.session_metadata(a, cx).summary.cwd.clone();
             shell.archive_project(&busy_project, w, cx);
             assert!(
@@ -21,7 +21,7 @@ fn project_archive_leaves_the_selected_project_and_refuses_running_work(cx: &mut
                 shell.workspace.project_archive.get(&busy_project),
                 Some(&true)
             );
-            shell.sessions[&a].update(cx, |view, _| view.busy = false);
+            shell.sessions[&a].update(cx, |view, _| view.set_running_for_test(false));
             // The selected project can be archived: another one is selected.
             shell.workspace.add_project("/work/archive");
             shell.workspace.project = "/work/archive".into();

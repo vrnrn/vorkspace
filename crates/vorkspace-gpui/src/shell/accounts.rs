@@ -107,11 +107,11 @@ impl Shell {
         if current.settings.account.id == id {
             return;
         }
-        if current.account_recovery_limit(cx).is_some() && !current.busy {
+        if current.account_recovery_limit(cx).is_some() && !current.responding() {
             view.update(cx, |v, cx| v.switch_usage_account(profile, cx));
             return;
         }
-        if !current.summary.has_messages && !current.busy {
+        if !current.summary.has_messages && !current.responding() {
             view.update(cx, |v, cx| v.set_blank_account(profile, cx));
             self.update_usage_provider(cx);
             return;

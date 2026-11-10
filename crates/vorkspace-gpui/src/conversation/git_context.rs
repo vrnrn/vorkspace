@@ -113,7 +113,7 @@ impl Conversation {
         cx.notify();
     }
     pub(super) fn open_git(&mut self, mode: GitMode, window: &mut Window, cx: &mut Context<Self>) {
-        if self.busy || self.preparing_worktree {
+        if self.responding() || self.preparing_worktree {
             return;
         }
         if self.git_picker.take().is_some() {

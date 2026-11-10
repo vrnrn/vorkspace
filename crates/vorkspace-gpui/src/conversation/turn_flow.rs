@@ -37,7 +37,7 @@ impl Conversation {
             self.defer_edit_transfer(settings, Some(prompt), cx);
             return;
         }
-        if self.needs_history_restore() || self.stopping {
+        if self.needs_history_restore() || self.is_stopping() {
             self.defer_history_action(
                 move |this, cx| {
                     if this.preserve_new_composer(cx) {
@@ -216,7 +216,7 @@ impl Conversation {
             cx.notify();
             return;
         }
-        if !self.loaded || (self.preparing_worktree && !self.busy && !self.stopping) {
+        if !self.loaded || (self.preparing_worktree && !self.turn_in_flight()) {
             return;
         }
         if self.draft_active(cx) {
@@ -231,7 +231,7 @@ impl Conversation {
         if self.input.read(cx).is_composing() {
             return;
         }
-        if !self.busy && !self.stopping {
+        if !self.turn_in_flight() {
             if !self.launch_account_ready(kind, cx) {
                 return;
             }
@@ -244,8 +244,7 @@ impl Conversation {
         if self.prepare_ticket_context(cx) {
             return;
         }
-        let queueing = self.stopping
-            || self.busy
+        let queueing = self.turn_in_flight()
             || self.settings.pending_provider_switch.is_some()
             || (!self.follow_ups.state.messages.is_empty() && !self.follow_ups.state.paused);
         let text = self.input.read(cx).content.as_ref();
@@ -358,7 +357,7 @@ impl Conversation {
                 return false;
             }
         };
-        if self.stopping {
+        if self.is_stopping() {
             if !matches!(source, PromptSource::Direct) {
                 return false;
             }
@@ -620,15 +619,14 @@ impl Conversation {
     ) {
         // The sender can disappear while unwinding, without a final Update.
         // A superseded worker must never release the replacement turn's UI.
-        if self.submission_generation != generation || (!self.busy && !self.stopping) {
+        if self.submission_generation != generation || !self.turn_in_flight() {
             return;
         }
         if let Some(origin) = composer_origin {
             self.settle_composer_submission(origin, cx);
         }
         self.cancel.store(true, Ordering::Relaxed);
-        self.busy = false;
-        self.stopping = false;
+        self.turn_state = TurnState::Unconfirmed;
         self.preparing_worktree = false;
         self.planning_orchestration = false;
         self.orchestration_progress = None;
@@ -679,8 +677,7 @@ impl Conversation {
             self.composer_motion.capture(self.composer_anchor.get());
         }
         self.activity = None;
-        self.busy = true;
-        self.stopping = false;
+        self.turn_state = TurnState::Running;
         self.notification_cancelled = false;
         self.review
             .update(cx, |review, cx| review.set_busy(true, cx));

@@ -930,7 +930,7 @@ mod minion_history_tests {
         window
             .update(cx, |shell, _, cx| {
                 let view = shell.bot_ensure_session(id, cx).unwrap();
-                view.update(cx, |view, _| view.busy = true);
+                view.update(cx, |view, _| view.set_running_for_test(true));
                 shell.team_histories.borrow_mut().insert(
                     id,
                     crate::bots::TeamHistory {
@@ -960,7 +960,7 @@ mod minion_history_tests {
                         .iter()
                         .any(|agent| agent.id == id)
                 );
-                view.update(cx, |view, _| view.busy = false);
+                view.update(cx, |view, _| view.set_running_for_test(false));
             })
             .unwrap();
     }

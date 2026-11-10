@@ -106,7 +106,7 @@ fn team_history_rejects_user_send_voice_quote_retry_and_resume_without_consuming
                             .messages
                             .is_empty()
                     );
-                    assert!(!view.busy);
+                    assert!(!view.responding());
                     let actor = view.team_histories.as_ref().unwrap().borrow()[&view.summary.id]
                         .actor
                         .clone();
@@ -175,7 +175,7 @@ fn restored_team_views_keep_bot_capabilities_and_reject_unowned_dispatch(cx: &mu
             attachments: vec![],
         };
         assert!(!view.bot_dispatch(&message, cx));
-        assert!(!view.busy);
+        assert!(!view.responding());
         assert!(view.settings.bot_message_id.is_none());
     })
     .unwrap();

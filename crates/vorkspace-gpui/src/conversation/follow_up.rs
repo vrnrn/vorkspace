@@ -78,7 +78,7 @@ impl Conversation {
             return Err("Session history is loading; retry the message when ready".into());
         }
         if !self.history_ready()
-            || self.stopping
+            || self.is_stopping()
             || self.account_switching
             || self.attaching
             || self.settings.worktree_removed
@@ -318,7 +318,7 @@ impl Conversation {
                 .try_global::<vorkspace_ui::preferences::Preferences>()
                 .is_none_or(|prefs| prefs.follow_up == "steer")
                 && Kind::from_id(&self.summary.provider).can_steer();
-            if !self.busy {
+            if !self.responding() {
                 self.follow_ups.requested = Some(message.id.clone());
             }
             self.follow_ups.motion.insert(
@@ -541,7 +541,10 @@ impl Conversation {
             return;
         }
 
-        if self.execution_provider().is_err() || self.editing_last_turn.pending() || self.stopping {
+        if self.execution_provider().is_err()
+            || self.editing_last_turn.pending()
+            || self.is_stopping()
+        {
             return;
         }
         if !self.history_ready() {
@@ -579,7 +582,7 @@ impl Conversation {
         {
             return;
         }
-        if self.busy {
+        if self.responding() {
             let requested = self.follow_ups.requested.as_deref() == Some(message.id.as_str());
             if self.settings.pending_provider_switch.is_some() {
                 if requested {
@@ -636,18 +639,21 @@ impl Conversation {
             return;
         }
 
-        if self.stopping {
+        if self.is_stopping() {
             self.defer_history_action(|this, cx| this.resume_queue(cx), cx);
             return;
         }
-        if self.busy || !self.follow_ups.state.paused || self.follow_ups.state.messages.is_empty() {
+        if self.responding()
+            || !self.follow_ups.state.paused
+            || self.follow_ups.state.messages.is_empty()
+        {
             return;
         }
         // Resume the interrupted provider turn before releasing its outbox,
         // matching App.tsx's queueStatus = "resuming" continuation.
         self.follow_ups.resuming = true;
         self.launch_prompt("Continue from where you left off.".into(), cx);
-        if !self.busy {
+        if !self.responding() {
             self.follow_ups.resuming = false;
         }
         cx.notify();
@@ -767,8 +773,9 @@ impl Conversation {
                         let (steer, edit, remove) = (id.clone(), id.clone(), id);
                         row.child(div().flex_1().min_w_0().py_1().child(div().id("queued-message-text").role(Role::Label).aria_label(message.label()).truncate().text_color(content(0.75)).child(message.label())).when_some(message.error.clone(), |d, error| d.child(div().id("queue-error").role(Role::Alert).text_color(vorkspace_ui::theme::danger()).child(error))))
                             .when(Kind::from_id(&self.summary.provider).can_steer(), |d| d.child(queue_button("queue-steer", "Steer queued message", "queue-steer").w_auto().px_2().gap(px(6.)).tab_stop(!sending).opacity(if sending { 0.4 } else { 1. }).child("Steer").on_click(cx.listener(move |this, _, _, cx| {
+                                let running = this.responding();
                                 if !sending && let Some(message) = this.follow_ups.state.messages.iter_mut().find(|m| m.id == steer) {
-                                    if !message.can_steer() && this.busy { return; }
+                                    if !message.can_steer() && running { return; }
                                     message.steer = true;
                                     message.error = None;
                                     this.follow_ups.requested = Some(steer.clone());

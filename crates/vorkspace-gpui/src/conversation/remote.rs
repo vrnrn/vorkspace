@@ -39,7 +39,7 @@ impl Conversation {
         self.summary.cwd.starts_with("remote://")
     }
     pub(crate) fn remote_connection_error(&mut self, error: &str, cx: &mut Context<Self>) {
-        if self.is_remote() && !self.busy {
+        if self.is_remote() && !self.responding() {
             self.remote_state.online = false;
             self.remote_state.error = Some(error.into());
             self.status = error.into();
@@ -56,7 +56,7 @@ impl Conversation {
                     if this
                         .update(cx, |this, cx| {
                             // Live turns have their own 750 ms sync and control loop.
-                            if !this.busy && !this.stopping && !this.history_unloaded {
+                            if !this.turn_in_flight() && !this.history_unloaded {
                                 this.refresh_remote_snapshot(cx);
                             }
                         })
@@ -94,7 +94,7 @@ impl Conversation {
             Some(self.remote_state.legacy_recovery_error().unwrap_or(
                 "A remote command needs confirmation. Choose Retry before sending another message.",
             ))
-        } else if self.busy || self.stopping {
+        } else if self.turn_in_flight() {
             Some("Wait for this remote turn to finish before sending another message.")
         } else if self.remote_state.awaiting_successor {
             Some("Refreshing conversation…")
@@ -163,8 +163,7 @@ impl Conversation {
             return;
         }
 
-        if self.busy
-            || self.stopping
+        if self.turn_in_flight()
             || self.remote_state.pending
             || self.remote_state.awaiting_successor
             || !self.remote_state.online
@@ -204,7 +203,7 @@ impl Conversation {
         self.launch_composer(prompt, true, cx);
     }
     pub(super) fn remote_notice(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
-        if !self.is_remote() || self.busy {
+        if !self.is_remote() || self.responding() {
             return None;
         }
         let legacy = self.remote_state.legacy_recovery_error();
@@ -266,7 +265,7 @@ impl Conversation {
             cx.notify();
             return;
         }
-        if self.busy || self.stopping {
+        if self.turn_in_flight() {
             return;
         }
         if self.remote_state.pending {

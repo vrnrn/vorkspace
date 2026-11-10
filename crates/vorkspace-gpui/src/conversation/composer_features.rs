@@ -520,9 +520,14 @@ impl Conversation {
         let rows = self.transcript.read(cx).source_rows();
         let start = rows.iter().rposition(|row| row.role == "user").unwrap_or(0);
         let text = vorkspace_core::response::prose(&rows[start..]);
+        let status = if self.turn_state == TurnState::Settled(TurnOutcome::Cancelled) {
+            "Stopped"
+        } else {
+            self.status.as_str()
+        };
         (
-            self.status == "Ready",
-            vorkspace_core::response::limit(&format!("{}\n{}", self.status, text), 12_000),
+            self.turn_state == TurnState::Settled(TurnOutcome::Completed),
+            vorkspace_core::response::limit(&format!("{status}\n{text}"), 12_000),
         )
     }
     pub(crate) fn ready_for_external(&self, cx: &gpui::App) -> bool {
@@ -533,8 +538,7 @@ impl Conversation {
             && self.pending_attachments.is_empty()
             && self.history_ready()
             && !self.editing_last_turn.pending()
-            && !self.busy
-            && !self.stopping
+            && !self.turn_in_flight()
             && !self.preparing_worktree
             && !self.attaching
             && !self.account_switching
@@ -544,10 +548,9 @@ impl Conversation {
     /// Managed runs must wait for history restoration and worktree setup as
     /// well as the provider, including submissions deferred by the editor.
     pub(crate) fn external_submission_pending(&self) -> bool {
-        self.busy
+        self.turn_in_flight()
             || self.composer_draft.waiting_to_submit()
             || self.ticket_context.pending()
-            || self.stopping
             || self.preparing_worktree
             || self.attaching
             || self.account_switching
@@ -558,10 +561,10 @@ impl Conversation {
     /// An evicted history can be restored for a managed run; a user's draft
     /// or an already accepted message must keep ownership of this composer.
     pub(crate) fn available_for_managed_run(&self, cx: &gpui::App) -> bool {
-        !self.busy
+        !self.responding()
             && turn_driver::available(&self.store, self.summary.id, cx)
             && !self.ticket_context.pending()
-            && !self.stopping
+            && !self.is_stopping()
             && !self.preparing_worktree
             && !self.attaching
             && !self.account_switching
@@ -573,7 +576,7 @@ impl Conversation {
             && !self.settings.worktree_removed
     }
     pub(crate) fn send_coordinator_report(&mut self, prompt: String, cx: &mut Context<Self>) {
-        if !self.history_ready() || self.stopping {
+        if !self.history_ready() || self.is_stopping() {
             self.defer_history_action(move |this, cx| this.send_coordinator_report(prompt, cx), cx);
             return;
         }

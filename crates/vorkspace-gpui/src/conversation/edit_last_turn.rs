@@ -132,8 +132,7 @@ impl Conversation {
     }
     fn can_prepare_edit(&self, cx: &gpui::App) -> bool {
         self.history_ready()
-            && !self.busy
-            && !self.stopping
+            && !self.turn_in_flight()
             && !self.editing_last_turn.pending()
             && self.settings.bot.is_none()
             && !self.settings.worktree_removed
@@ -206,7 +205,7 @@ impl Conversation {
                             && edit.matches(this.transcript.read(cx).source_rows())
                             && this.input.read(cx).content.is_empty()
                             && this.attachments.is_empty()
-                            && !this.busy
+                            && !this.responding()
                             && !this.input.read(cx).is_composing() =>
                     {
                         this.input
@@ -290,8 +289,7 @@ impl Conversation {
         if !self.input.read(cx).has_message_text() && self.attachments.is_empty() {
             return true;
         }
-        if self.busy
-            || self.stopping
+        if self.turn_in_flight()
             || self.attaching
             || self.account_switching
             || self.preparing_worktree

@@ -52,7 +52,7 @@ impl Conversation {
         let files_pending = self.attaching || !self.pending_attachments.is_empty();
         let occupied =
             self.input.read(cx).has_message_text() || !self.attachments.is_empty() || files_pending;
-        let disabled = self.reviewing_submission || self.busy;
+        let disabled = self.reviewing_submission || self.responding();
         let draft_ready = self.composer_draft.ready_for_replacement();
         let compaction = snapshot.is_none()
             && receipt
@@ -70,7 +70,7 @@ impl Conversation {
             .into_any_element())
     }
     fn review_local_submission(&mut self, restore: bool, cx: &mut Context<Self>) {
-        if self.reviewing_submission || self.busy {
+        if self.reviewing_submission || self.responding() {
             return;
         }
         let Some(receipt) = self.unconfirmed_submission.as_ref() else {

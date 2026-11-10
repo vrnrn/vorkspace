@@ -119,7 +119,7 @@ fn working_marks_animate_independently_and_completed_replies_clear_when_seen(
     let transcript = window
         .update(cx, |shell, _, cx| {
             shell.sessions[&a].update(cx, |session, cx| {
-                session.busy = true;
+                session.set_running_for_test(true);
                 session.summary.cwd = "/work/vorkspace".into();
                 session.summary.has_messages = true;
                 cx.emit(SessionChanged::Loaded);
@@ -140,7 +140,7 @@ fn working_marks_animate_independently_and_completed_replies_clear_when_seen(
     window
         .update(cx, |shell, _, cx| {
             shell.sessions[&a].update(cx, |session, cx| {
-                session.busy = false;
+                session.set_running_for_test(false);
                 cx.emit(SessionChanged::Loaded);
             });
         })
@@ -585,7 +585,7 @@ fn tab_lifecycle_close_stays_in_project_and_keeps_running_drafts(cx: &mut TestAp
     window
         .update(cx, |shell, w, cx| {
             shell.sessions[&b].update(cx, |s, cx| {
-                s.busy = true;
+                s.set_running_for_test(true);
                 s.input.update(cx, |i, cx| {
                     i.replace_text_in_range(None, "Keep this draft", w, cx)
                 });
@@ -602,7 +602,7 @@ fn tab_lifecycle_close_stays_in_project_and_keeps_running_drafts(cx: &mut TestAp
             assert_ne!(blank, b);
             assert_eq!(shell.workspace.tabs, [a, blank]);
             assert!(!shell.sessions[&blank].read(cx).summary.has_messages);
-            assert!(shell.sessions[&b].read(cx).busy);
+            assert!(shell.sessions[&b].read(cx).responding());
             shell.open(b, w, cx);
             assert_eq!(
                 shell.sessions[&b].read(cx).input.read(cx).content.as_ref(),
@@ -994,7 +994,7 @@ fn title_tabs_draw_their_own_session_marks(cx: &mut TestAppContext) {
     window
         .update(cx, |shell, _, cx| {
             shell.sessions[&a].update(cx, |session, cx| {
-                session.busy = true;
+                session.set_running_for_test(true);
                 cx.emit(SessionChanged::Loaded);
             });
         })
@@ -1032,7 +1032,7 @@ fn resizing_project_rail_with_working_session_marks_keeps_cached_paint_valid(
                 });
             }
             shell.sessions[&a].update(cx, |session, cx| {
-                session.busy = true;
+                session.set_running_for_test(true);
                 cx.emit(SessionChanged::Loaded);
             });
             shell.focus_active(w, cx);
@@ -2759,7 +2759,7 @@ fn escape_closes_explorer_search_before_stopping_a_turn(cx: &mut TestAppContext)
         .update(visual, |shell, window, cx| {
             let chat = shell.sessions[&id].clone();
             chat.update(cx, |chat, cx| {
-                chat.busy = true;
+                chat.set_running_for_test(true);
                 window.focus(&chat.input.read(cx).focus_handle(cx), cx);
                 cx.notify();
             });
@@ -2779,7 +2779,7 @@ fn escape_closes_explorer_search_before_stopping_a_turn(cx: &mut TestAppContext)
     assert!(visual.debug_bounds("explorer-project-search").is_none());
     window
         .update(visual, |shell, _, cx| {
-            assert!(shell.sessions[&id].read(cx).busy);
+            assert!(shell.sessions[&id].read(cx).responding());
         })
         .unwrap();
 }
@@ -3954,7 +3954,7 @@ fn closing_and_reopening_tabs_preserves_busy_session_draft_and_history(cx: &mut 
     window
         .update(cx, |shell, w, cx| {
             shell.sessions[&b].update(cx, |v, cx| {
-                v.busy = true;
+                v.set_running_for_test(true);
                 v.input.update(cx, |i, cx| {
                     i.replace_text_in_range(None, "A retained draft 🙂", w, cx)
                 });
@@ -3962,7 +3962,7 @@ fn closing_and_reopening_tabs_preserves_busy_session_draft_and_history(cx: &mut 
             shell.close(b, w, cx);
             assert_eq!(shell.workspace.active, None);
             assert_eq!(shell.workspace.project, "/work/vorkspace");
-            assert!(shell.sessions[&b].read(cx).busy);
+            assert!(shell.sessions[&b].read(cx).responding());
             shell.open(a, w, cx);
             shell.open(b, w, cx);
             assert_eq!(shell.workspace.active, Some(b));

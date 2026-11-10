@@ -217,7 +217,7 @@ mod tests {
                 }
                 shell.sessions[&a].update(cx, |s, _| {
                     s.summary.provider = "codex".into();
-                    s.busy = true;
+                    s.set_running_for_test(true);
                 });
                 shell.sessions[&b].update(cx, |s, _| s.summary.provider = "claude".into());
                 shell.selected_sessions.insert(b);
@@ -239,7 +239,7 @@ mod tests {
                 assert!(shell.menu.is_some(), "status checkboxes keep the menu open");
                 assert_eq!(shell.sidebar_session_ids(cx), [a]);
                 assert_eq!(shell.workspace.active, Some(b));
-                assert!(shell.sessions[&a].read(cx).busy);
+                assert!(shell.sessions[&a].read(cx).responding());
                 assert!(!shell.selected_sessions.contains(&b));
                 let state: Workspace =
                     serde_json::from_str(&shell.latest_window_layout(cx)).unwrap();
@@ -250,11 +250,11 @@ mod tests {
             .update(visual, |shell, _, cx| {
                 shell.change_session_filter("clear", cx);
                 assert_eq!(shell.sidebar_session_ids(cx).len(), 2);
-                shell.sessions[&a].update(cx, |s, _| s.busy = false);
+                shell.sessions[&a].update(cx, |s, _| s.set_running_for_test(false));
                 shell.unseen_finished.insert(a);
                 shell.change_session_filter("done", cx);
                 assert_eq!(shell.sidebar_session_ids(cx), [a]);
-                shell.sessions[&b].update(cx, |s, _| s.busy = true);
+                shell.sessions[&b].update(cx, |s, _| s.set_running_for_test(true));
                 shell.change_session_filter("working", cx);
                 assert_eq!(shell.sidebar_session_ids(cx).len(), 2);
                 shell.change_session_filter("provider:claude", cx);

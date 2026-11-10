@@ -254,7 +254,7 @@ fn copies_keep_running_sessions_and_route_new_tabs_and_splits(cx: &mut TestAppCo
             shell.sessions[&feature_session].update(cx, |session, cx| {
                 session.summary.cwd = project.into();
                 session.settings.worktree_cwd = Some(feature.path.clone());
-                session.busy = true;
+                session.set_running_for_test(true);
                 session
                     .input
                     .update(cx, |input, cx| input.set_text("keep this draft".into(), cx));

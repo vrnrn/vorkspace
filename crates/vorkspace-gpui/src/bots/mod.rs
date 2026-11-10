@@ -546,7 +546,7 @@ impl Bots {
             || !self.loading_chats.is_empty()
             || self.chats.values().any(|chat| {
                 let chat = chat.read(cx);
-                chat.busy || chat.external_submission_pending()
+                chat.external_submission_pending()
             })
     }
 
@@ -1339,7 +1339,7 @@ impl Bots {
         let Some(view) = self.chats.get(id).cloned() else {
             return;
         };
-        if view.read(cx).busy {
+        if view.read(cx).responding() {
             self.steer(id, cx);
             return;
         }
@@ -1488,8 +1488,13 @@ impl Bots {
         }
         if finished {
             if let Some(mut sent) = self.inflight.remove(id) {
-                let (mut ok, mut status) = self.chats[id].read(cx).external_outcome(cx);
-                if sent.peer.is_some() && self.chats[id].read(cx).notification_was_cancelled() {
+                let chat = self.chats[id].read(cx);
+                let (mut ok, mut status) = chat.external_outcome(cx);
+                let stopped = chat.turn_state()
+                    == crate::conversation::TurnState::Settled(
+                        vorkspace_runtime::runtime::TurnOutcome::Cancelled,
+                    );
+                if sent.peer.is_some() && (stopped || chat.notification_was_cancelled()) {
                     ok = false;
                     status = "Stopped before the peer reply completed. Inspect the conversation before retrying.".into();
                 }
@@ -1507,7 +1512,7 @@ impl Bots {
                         self.save(cx);
                         self.configure_chat(id, cx);
                     }
-                } else if sent.peer.is_some() || !status.starts_with("Stopped") {
+                } else if sent.peer.is_some() || !stopped {
                     if let Some(bot) = self.roster.get_mut(id) {
                         if let Some(queued) = bot.outbox.iter_mut().find(|m| m.id == sent.id) {
                             queued.error = Some(status);

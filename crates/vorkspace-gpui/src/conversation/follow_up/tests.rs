@@ -34,7 +34,7 @@ fn queue_entrances_slide_above_a_stationary_composer_for_the_first_and_later_mes
     window
         .update(cx, |view, _, cx| {
             view.summary.has_messages = true;
-            view.busy = true;
+            view.set_running_for_test(true);
             view.follow_ups.state.paused = true;
             cx.notify();
         })
@@ -96,7 +96,7 @@ fn submitted_modes_clear_after_queueing_and_do_not_leak_into_the_next_message(
         cx.run_until_parked();
         window
             .update(cx, |view, _, cx| {
-                view.busy = true;
+                view.set_running_for_test(true);
                 view.follow_ups.state.paused = true;
                 view.toggle_mode(mode, cx);
                 let selected = view.input.read(cx).content.clone();
@@ -145,7 +145,7 @@ fn rejected_queue_and_draft_saves_preserve_the_editor(cx: &mut TestAppContext) {
         window
             .update(cx, |view, _, cx| {
                 let original = "An important message";
-                view.busy = !draft;
+                view.set_running_for_test(!draft);
                 view.follow_ups.draft_selected = draft;
                 view.input
                     .update(cx, |input, cx| input.set_text(original.into(), cx));
@@ -190,7 +190,7 @@ fn voice_send_is_durable_before_acceptance_and_never_consumes_drafts(cx: &mut Te
     });
     window
         .update(cx, |view, _, cx| {
-            view.busy = true;
+            view.set_running_for_test(true);
             view.input
                 .update(cx, |i, cx| i.set_text("typed draft".into(), cx));
             assert!(view.voice_send("voice message".into(), cx).is_err());
@@ -217,7 +217,7 @@ fn busy_sends_keep_their_order_attachments_and_edits_until_accepted(cx: &mut Tes
     let (controls, received) = std::sync::mpsc::channel();
     window
         .update(cx, |view, _, cx| {
-            view.busy = true;
+            view.set_running_for_test(true);
             view.controls = Some(controls);
             view.input
                 .update(cx, |i, cx| i.set_text("first".into(), cx));
@@ -290,13 +290,13 @@ fn stop_pauses_the_queue_and_retires_its_controls(cx: &mut TestAppContext) {
     let (controls, received) = std::sync::mpsc::channel();
     window
         .update(cx, |view, _, cx| {
-            view.busy = true;
+            view.set_running_for_test(true);
             view.controls = Some(controls);
             view.input
                 .update(cx, |input, cx| input.set_text("keep this".into(), cx));
             view.send(cx);
             view.stop(cx);
-            assert!(view.stopping);
+            assert!(view.is_stopping());
             assert!(view.follow_ups.state.paused);
             assert!(!view.follow_ups.ready);
             assert!(view.controls.is_none());
@@ -321,7 +321,7 @@ fn a_rejected_steer_keeps_its_text_for_retry(cx: &mut TestAppContext) {
     let (controls, received) = std::sync::mpsc::channel();
     window
         .update(cx, |view, _, cx| {
-            view.busy = true;
+            view.set_running_for_test(true);
             view.controls = Some(controls);
             view.follow_ups.ready = true;
             view.input
@@ -359,7 +359,7 @@ fn working_sessions_and_bots_can_save_a_draft_without_sending_it(cx: &mut TestAp
                         cx,
                     );
                 }
-                view.busy = true;
+                view.set_running_for_test(true);
                 view.summary.has_messages = true;
                 view.follow_ups.ready = true;
                 view.controls = Some(controls);
@@ -392,7 +392,7 @@ fn working_sessions_and_bots_can_save_a_draft_without_sending_it(cx: &mut TestAp
         visual.run_until_parked();
         window
             .update(visual, |view, _, cx| {
-                assert!(view.busy, "saving must not stop the running agent");
+                assert!(view.responding(), "saving must not stop the running agent");
                 assert_eq!(
                     view.follow_ups.state.draft.as_ref().unwrap().text,
                     "Save this for later"
@@ -434,7 +434,7 @@ fn draft_commands_save_without_starting_an_agent_and_remove_restores_a_blank(
             });
             view.attachments.push("/tmp/note.txt".into());
             view.send(cx);
-            assert!(!view.busy);
+            assert!(!view.responding());
             assert!(view.summary.has_messages);
             assert!(
                 view.transcript.read(cx).source_rows().is_empty(),
@@ -487,7 +487,7 @@ fn sending_a_saved_draft_preserves_the_new_composer(cx: &mut TestAppContext) {
             view.input
                 .update(cx, |i, cx| i.set_text("/draft send later".into(), cx));
             view.send(cx);
-            view.busy = true;
+            view.set_running_for_test(true);
             view.follow_ups.ready = true;
             view.controls = Some(controls);
             view.input

@@ -77,7 +77,7 @@ impl Conversation {
         self.load_complete(cx);
     }
     pub(super) fn run_history_actions(&mut self, cx: &mut Context<Self>) {
-        while self.history_ready() && !self.stopping && !self.editing_last_turn.pending() {
+        while self.history_ready() && !self.is_stopping() && !self.editing_last_turn.pending() {
             let Some(action) = self.history_actions.pop_front() else {
                 break;
             };
@@ -106,8 +106,7 @@ impl Conversation {
     pub(crate) fn can_unload_history(&self, cx: &gpui::App) -> bool {
         self.history_loaded()
             && !self.loading
-            && !self.busy
-            && !self.stopping
+            && !self.turn_in_flight()
             && !self.editing_last_turn.pending()
             && !self
                 .btw

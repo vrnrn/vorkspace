@@ -330,8 +330,7 @@ impl Conversation {
     }
     pub(crate) fn bot_ready(&self, cx: &App) -> bool {
         self.history_ready()
-            && !self.busy
-            && !self.stopping
+            && !self.turn_in_flight()
             && self.loaded
             && self.settings.usage_limit.is_none()
             && !self.account_switching
@@ -339,7 +338,7 @@ impl Conversation {
             && turn_driver::available(&self.store, self.summary.id, cx)
     }
     pub(crate) fn bot_settled(&self) -> bool {
-        !self.busy && !self.stopping
+        !self.turn_in_flight()
     }
     /// Model selection belongs to the conversation, while Settings also holds
     /// the last loaded model. Derived execution lanes need the live selection.
@@ -364,11 +363,10 @@ impl Conversation {
             self.load_complete(cx);
             return false;
         }
-        if self.settings.pending_provider_switch.is_some() && self.busy {
+        if self.settings.pending_provider_switch.is_some() && self.responding() {
             self.stop(cx);
         }
-        if self.busy
-            || self.stopping
+        if self.turn_in_flight()
             || !self.loaded
             || self.settings.usage_limit.is_some()
             || self.account_switching
@@ -385,8 +383,8 @@ impl Conversation {
         if message.peer.is_some()
             || message.internal
             || message.error.is_some()
-            || !self.busy
-            || self.stopping
+            || !self.responding()
+            || self.is_stopping()
             || !self.follow_ups.ready
             || self.follow_ups.sending.is_some()
             || self.settings.pending_provider_switch.is_some()
@@ -454,7 +452,7 @@ impl Conversation {
         if self.submission_generation != generation {
             return Ok(());
         }
-        if !self.history_ready() || self.stopping {
+        if !self.history_ready() || self.is_stopping() {
             return Err("Conversation history is loading; retry the update when ready".into());
         }
         // Row offsets are merely hints. Card IDs and the captured value own
@@ -537,7 +535,7 @@ impl Conversation {
             "Needs your input"
         } else if self.settings.usage_limit.is_some() {
             "Usage limit reached"
-        } else if self.stopping {
+        } else if self.is_stopping() {
             "Stopping"
         } else if self.responding() {
             if self.status == "Thinking…" {
@@ -567,7 +565,7 @@ impl Conversation {
     }
     #[cfg(test)]
     pub(crate) fn app_steerable_turn(&mut self, controls: std::sync::mpsc::Sender<Control>) {
-        self.busy = true;
+        self.turn_state = TurnState::Running;
         self.controls = Some(controls);
         self.follow_ups.ready = true;
     }
@@ -580,8 +578,8 @@ impl Conversation {
     pub(crate) fn app_settle_stopped_turn(&mut self, cx: &mut Context<Self>) {
         // Reproduce a late terminal update that leaves status Ready. The
         // cancellation receipt, not the provider's status text, must win.
-        assert!(self.stopping);
-        self.stopping = false;
+        assert!(self.is_stopping());
+        self.turn_state = TurnState::Settled(vorkspace_runtime::runtime::TurnOutcome::Cancelled);
         cx.emit(SessionChanged::Settled);
         cx.notify();
     }
@@ -630,7 +628,7 @@ impl Conversation {
             self.load_complete(cx);
             return Err("Conversation history is loading; retry the report when ready".into());
         }
-        if self.busy || self.stopping {
+        if self.turn_in_flight() {
             return Err("Wait for the current turn before posting a report".into());
         }
         let row = vorkspace_core::transcript::Row {
@@ -652,7 +650,7 @@ impl Conversation {
         super::bot_settings::access_options(
             Kind::from_id(&self.summary.provider),
             self.settings.access,
-            self.busy,
+            self.responding(),
         )
     }
     pub(crate) fn bot_access(
@@ -680,7 +678,7 @@ impl Conversation {
         id: &str,
         cx: &mut Context<Self>,
     ) -> Result<(), String> {
-        if self.busy || self.stopping {
+        if self.turn_in_flight() {
             return Err("Wait for the current reply before changing model settings".into());
         }
         self.menu_choice(id, cx);
@@ -694,7 +692,7 @@ impl Conversation {
         values: std::collections::HashMap<String, String>,
         cx: &mut Context<Self>,
     ) -> Result<(), String> {
-        if self.busy || self.stopping {
+        if self.turn_in_flight() {
             return Err("Wait for the current reply before changing models".into());
         }
         if self.summary.provider != provider.id() {

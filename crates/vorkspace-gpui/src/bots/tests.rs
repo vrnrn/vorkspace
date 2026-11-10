@@ -132,7 +132,7 @@ fn ordinary_bot_work_survives_its_owning_window_closing_after_save(cx: &mut Test
     let peer = peer_window(&s, cx);
     let manager = peer.update(cx, |shell, _, _| shell.bot_manager()).unwrap();
     s.manager.update(cx, |bots, cx| {
-        bots.chats[&s.id].update(cx, |view, _| view.busy = true)
+        bots.chats[&s.id].update(cx, |view, _| view.set_running_for_test(true))
     });
     manager.update(cx, |bots, cx| {
         bots.enqueue_held(
@@ -281,7 +281,7 @@ fn retiring_a_minion_revokes_the_permit_and_stops_its_chat_in_the_peer_window(
             .minion_permit(id, std::slice::from_ref(&s.project))
             .unwrap()
     });
-    view.update(cx, |view, _| view.busy = true);
+    view.update(cx, |view, _| view.set_running_for_test(true));
     let retired = call_as(
         &s,
         s.session,
@@ -293,7 +293,7 @@ fn retiring_a_minion_revokes_the_permit_and_stops_its_chat_in_the_peer_window(
     .unwrap();
     assert_eq!(retired["retired"], true);
     assert!(permit.run(|| Ok(())).is_err());
-    view.read_with(cx, |view, _| assert!(!view.busy));
+    view.read_with(cx, |view, _| assert!(!view.responding()));
 }
 
 #[gpui::test]
@@ -508,11 +508,11 @@ fn peer_delivery_is_durable_replies_once_and_accepts_the_next_message(cx: &mut T
         });
         m.save(cx);
         m.ensure_chat("peer-beta", cx);
-        m.chats[&s.id].update(cx, |v, _| v.busy = true);
+        m.chats[&s.id].update(cx, |v, _| v.set_running_for_test(true));
     });
     cx.run_until_parked();
     s.manager.update(cx, |m, cx| {
-        m.chats["peer-beta"].update(cx, |v, _| v.busy = true);
+        m.chats["peer-beta"].update(cx, |v, _| v.set_running_for_test(true));
     });
     let input = json!({"to":"Beta","message":"Review the approach"});
     let first = call(&s, "peer-one", "bots.send", input.clone(), cx)
@@ -533,7 +533,7 @@ fn peer_delivery_is_durable_replies_once_and_accepts_the_next_message(cx: &mut T
         assert_eq!(sent.peer.as_ref().unwrap().hop, 1);
         let recipient = m.chats["peer-beta"].clone();
         recipient.update(cx, |v, cx| {
-            v.busy = false;
+            v.set_running_for_test(false);
             v.bot_post("bot-system", sent.text.clone(), cx).unwrap();
             v.bot_post("assistant", "The approach is sound.".into(), cx)
                 .unwrap();
@@ -547,7 +547,7 @@ fn peer_delivery_is_durable_replies_once_and_accepts_the_next_message(cx: &mut T
         assert!(reply.text.ends_with("The approach is sound."));
         assert!(!reply.peer.as_ref().unwrap().expect_reply);
         assert_eq!(reply.peer.as_ref().unwrap().hop, 2);
-        recipient.update(cx, |v, _| v.busy = true);
+        recipient.update(cx, |v, _| v.set_running_for_test(true));
     });
     cx.run_until_parked();
     call(
@@ -603,7 +603,7 @@ fn submitted_peer_messages_pause_after_reopening_instead_of_replaying(cx: &mut T
         let message = &m.roster.get(&s.id).unwrap().outbox[0];
         assert!(message.error.as_deref().unwrap().contains("Interrupted"));
         assert_eq!(message.peer.as_ref().unwrap().hop, 2);
-        assert!(!m.chats[&s.id].read(cx).busy);
+        assert!(!m.chats[&s.id].read(cx).responding());
         assert!(!m.inflight.contains_key(&s.id));
     });
 }
@@ -692,7 +692,7 @@ fn cold_peer_recovery_loads_inactive_recipients_and_pauses_submitted_work(cx: &m
                 !m.chats.contains_key("unrelated-idle"),
                 "idle Bots need no new owner"
             );
-            assert!(!m.chats[&s.id].read(cx).busy);
+            assert!(!m.chats[&s.id].read(cx).responding());
             assert!(!m.inflight.contains_key(&s.id));
             let message = m
                 .roster
@@ -781,7 +781,7 @@ fn usage_resume_preserves_uncertain_peer_requests_until_explicit_retry(cx: &mut 
             sent_at: None,
             attachments: Vec::new(),
         });
-        m.chats[&s.id].update(cx, |v, _| v.busy = true);
+        m.chats[&s.id].update(cx, |v, _| v.set_running_for_test(true));
         m.save(cx);
         result
     });
@@ -815,10 +815,10 @@ fn usage_resume_preserves_uncertain_peer_requests_until_explicit_retry(cx: &mut 
     s.manager.update(cx, |m, cx| {
         m.chats[&s.id].update(cx, |v, cx| {
             v.settings.usage_limit = Some(Default::default());
-            v.busy = false;
+            v.set_running_for_test(false);
             v.resume_usage(cx);
             // Hold execution before deferred recovery events are delivered.
-            v.busy = true;
+            v.set_running_for_test(true);
         })
     });
     cx.run_until_parked();
@@ -968,7 +968,7 @@ fn stopped_peer_turn_keeps_its_request_and_never_forwards_a_late_partial_reply(
             v.bot_post("bot-system", sent.text.clone(), cx).unwrap();
             v.bot_post("assistant", "Unfinished answer".into(), cx)
                 .unwrap();
-            v.busy = true;
+            v.set_running_for_test(true);
         });
         m.inflight.insert(s.id.clone(), sent);
         m.save(cx);
@@ -2333,7 +2333,7 @@ fn app_actions_are_project_scoped_and_mutation_retries_are_idempotent(cx: &mut T
         assert_eq!(m.roster.get(&s.id).unwrap().launches.len(), 1);
         let view = m.owner.session_entity(child, cx).unwrap();
         assert_eq!(view.read(cx).input.read(cx).content, "Review the project");
-        assert!(!view.read(cx).busy);
+        assert!(!view.read(cx).responding());
         assert!(m.hidden_session(child));
     });
 }
@@ -2361,7 +2361,7 @@ fn selected_working_session(s: &Setup, cx: &mut TestAppContext) -> i64 {
                 .unwrap()
                 .update(cx, |view, cx| {
                     // Exercise activity projection without starting a provider.
-                    view.busy = true;
+                    view.set_running_for_test(true);
                     cx.emit(SessionChanged::Loaded);
                     cx.notify();
                 });
@@ -2421,10 +2421,16 @@ fn app_group_publication_during_start_preserves_launches_and_idempotent_receipts
             .update(cx, |shell, _, cx| {
                 assert_eq!(shell.bot_groups(&s.project), groups);
                 assert_eq!(shell.workspace.active, Some(working));
-                assert!(shell.bot_session_entity(working).unwrap().read(cx).busy);
+                assert!(
+                    shell
+                        .bot_session_entity(working)
+                        .unwrap()
+                        .read(cx)
+                        .responding()
+                );
                 let view = shell.bot_session_entity(child).unwrap();
                 assert_eq!(view.read(cx).input.read(cx).content, request);
-                assert!(!view.read(cx).busy);
+                assert!(!view.read(cx).responding());
             })
             .unwrap();
     }
@@ -2451,7 +2457,13 @@ fn app_group_publication_during_folder_move_keeps_selected_work(cx: &mut TestApp
         .update(cx, |shell, _, cx| {
             assert_eq!(shell.bot_groups(&s.project), groups);
             assert_eq!(shell.workspace.active, Some(working));
-            assert!(shell.bot_session_entity(working).unwrap().read(cx).busy);
+            assert!(
+                shell
+                    .bot_session_entity(working)
+                    .unwrap()
+                    .read(cx)
+                    .responding()
+            );
         })
         .unwrap();
 }
@@ -2615,7 +2627,7 @@ fn background_delegation_keeps_controls_when_hidden_from_the_sidebar(cx: &mut Te
     );
     // Hold the downstream provider through its existing usage-limit gate; these
     // controls exercise real delegation without starting any external process.
-    assert!(!view.read_with(cx, |view, _| view.busy));
+    assert!(!view.read_with(cx, |view, _| view.responding()));
     assert!(
         call(
             &s,

@@ -30,14 +30,14 @@ fn failed_lookup_preserves_composer_selection_files_and_history(cx: &mut TestApp
             });
             chat.attachments.push("/missing/private.txt".into());
             chat.send(cx);
-            assert!(!chat.busy);
+            assert!(!chat.responding());
             assert_eq!(chat.input.read(cx).content.as_str(), REFERENCE);
         })
         .unwrap();
     cx.run_until_parked();
     window
         .update(cx, |chat, _, cx| {
-            assert!(!chat.busy);
+            assert!(!chat.responding());
             assert!(
                 chat.status
                     .contains("Ticket context storage is unavailable")
@@ -88,7 +88,7 @@ fn newer_typing_and_cancel_own_the_composer_before_lookup_completion(cx: &mut Te
             .update(cx, |chat, _, cx| {
                 assert_eq!(chat.input.read(cx).content.as_str(), "My newer draft 🙂");
                 assert_eq!(chat.status, "User owns the new draft");
-                assert!(!chat.busy && chat.ticket_context.ready.is_none());
+                assert!(!chat.responding() && chat.ticket_context.ready.is_none());
                 assert!(chat.transcript.read(cx).source_rows().is_empty());
             })
             .unwrap();
@@ -109,7 +109,7 @@ fn an_older_remote_host_cannot_consume_a_typed_ticket_reference(cx: &mut TestApp
             assert!(chat.status.contains("Update the remote host"));
             assert_eq!(chat.input.read(cx).content.as_str(), REFERENCE);
             assert_eq!(chat.attachments.len(), 1);
-            assert!(!chat.busy && chat.ticket_context.pending.is_none());
+            assert!(!chat.responding() && chat.ticket_context.pending.is_none());
         })
         .unwrap();
 }
@@ -131,7 +131,7 @@ fn editing_a_pending_lookup_clears_its_loading_indicator(cx: &mut TestAppContext
         .update(cx, |chat, _, cx| {
             assert_eq!(chat.input.read(cx).content.as_str(), "New draft");
             assert_eq!(chat.status, "Ready");
-            assert!(!chat.busy && !chat.ticket_context.pending());
+            assert!(!chat.responding() && !chat.ticket_context.pending());
         })
         .unwrap();
 }
@@ -155,7 +155,7 @@ fn unknown_remote_capabilities_wait_for_loading_without_consuming_the_draft(
             );
             assert!(!chat.status.contains("Update"));
             assert_eq!(chat.input.read(cx).content.as_str(), REFERENCE);
-            assert!(!chat.busy && chat.ticket_context.pending.is_none());
+            assert!(!chat.responding() && chat.ticket_context.pending.is_none());
         })
         .unwrap();
 }

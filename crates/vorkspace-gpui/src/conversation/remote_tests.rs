@@ -48,14 +48,14 @@ fn offline_pending_and_busy_guards_preserve_typed_message(cx: &mut TestAppContex
                 view.loaded = loaded;
                 view.remote_state.online = online;
                 view.remote_state.pending = pending;
-                view.busy = busy;
+                view.set_running_for_test(busy);
                 view.send(cx);
                 assert!(view.status.contains(expected), "{}", view.status);
                 assert_eq!(view.input.read(cx).content, "Keep this next message");
                 assert!(view.follow_ups.state.messages.is_empty());
                 assert!(view.transcript.read(cx).source_rows().is_empty());
             }
-            view.busy = false;
+            view.set_running_for_test(false);
         })
     });
 }
@@ -73,7 +73,7 @@ fn declined_remote_draft_and_compact_leave_the_composer_owned_by_the_user(cx: &m
             assert_eq!(view.input.read(cx).content.as_ref(), text);
             assert_eq!(view.attachments, [PathBuf::from("/tmp/keep.png")]);
             assert!(view.settings.remote_action.is_none());
-            assert!(!view.busy);
+            assert!(!view.responding());
         }
     });
 }
@@ -213,7 +213,7 @@ fn late_idle_snapshot_cannot_replace_a_new_turn_or_release_a_newer_refresh(
 
         // After completion a newer read owns admission. The older completion
         // cannot release it, even when both turns are now idle.
-        view.busy = false;
+        view.set_running_for_test(false);
         view.transcript
             .update(cx, |transcript, cx| transcript.streaming(false, cx));
         view.remote_state.refresh_generation = 2;
@@ -428,7 +428,7 @@ impl HostFixture {
     }
     fn wait(&self, view: &Entity<Conversation>, cx: &mut TestAppContext, settled: bool) {
         self.wait_for(view, cx, |view| {
-            view.loaded && (!settled || (!view.busy && !view.remote_state.refreshing))
+            view.loaded && (!settled || (!view.responding() && !view.remote_state.refreshing))
         });
     }
     fn wait_for(
@@ -684,7 +684,7 @@ fn ambiguous_legacy_requests_block_send_retry_and_restore_without_consuming_draf
                 "Open the original desktop to recover older pending requests."
             );
             assert_eq!(view.input.read(cx).content, "Keep this next message");
-            assert!(!view.busy);
+            assert!(!view.responding());
             assert!(view.settings.remote_action.is_none());
             assert!(view.transcript.read(cx).source_rows().is_empty());
         })

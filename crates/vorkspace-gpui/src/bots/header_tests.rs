@@ -110,7 +110,7 @@ fn bot_header_updates_from_chat_status_and_preserves_composer_and_layout(cx: &mu
             (false, false, "bot-chat-header-idle"),
         ] {
             chat.update(visual, |chat, cx| {
-                chat.busy = busy;
+                chat.set_running_for_test(busy);
                 chat.settings.usage_limit = attention.then(Default::default);
                 cx.notify();
             });
@@ -138,7 +138,7 @@ fn bot_header_updates_from_chat_status_and_preserves_composer_and_layout(cx: &mu
     visual.simulate_resize(size(px(560.), px(240.)));
     for (busy, attention) in [(false, false), (true, false), (true, true)] {
         chat.update(visual, |chat, cx| {
-            chat.busy = busy;
+            chat.set_running_for_test(busy);
             chat.settings.usage_limit = attention.then(Default::default);
             cx.notify();
         });

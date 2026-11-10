@@ -85,7 +85,7 @@ impl Conversation {
                             })
                             .child(if self.needs_approval() {
                                 "Needs approval".to_owned()
-                            } else if self.busy {
+                            } else if self.responding() {
                                 "Working…".to_owned()
                             } else if done {
                                 "Done".to_owned()
@@ -374,7 +374,7 @@ impl Conversation {
             self.load_history(recovering, cx);
             return;
         }
-        if self.loading || self.busy || self.stopping {
+        if self.loading || self.turn_in_flight() {
             return;
         }
         // A partial transcript is refreshed when a cursor or mutation guard
@@ -439,8 +439,7 @@ impl Conversation {
                     || (this.loading && !recovering)
                     || this.history_unloaded
                     || this.history_partial
-                    || this.busy
-                    || this.stopping
+                    || this.turn_in_flight()
                 {
                     return;
                 }

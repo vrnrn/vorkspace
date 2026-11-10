@@ -377,7 +377,7 @@ impl Conversation {
             let saved = if local_switch {
                 let transcript = self.transcript.read(cx).source_rows();
                 if next.pending_provider_switch.is_none()
-                    && (self.busy
+                    && (self.responding()
                         || self.summary.provider_id.is_some()
                         || transcript.iter().any(|row| row.is_prompt()))
                 {
@@ -441,7 +441,7 @@ impl Conversation {
                 })
                 .detach();
         }
-        if changed_model && self.settings.usage_limit.is_some() && !self.busy {
+        if changed_model && self.settings.usage_limit.is_some() && !self.responding() {
             self.recover_usage_after_model_change(cx);
         }
         self.refresh_catalog(cx);
@@ -587,7 +587,7 @@ impl Conversation {
             ComposerMenu::CompactSettings => {
                 let bot = self.settings.bot.is_some();
                 let draft = !self.summary.has_messages;
-                let enabled = !self.busy && !self.preparing_worktree && self.git.is_some();
+                let enabled = !self.responding() && !self.preparing_worktree && self.git.is_some();
                 let mut items = vec![MenuItem::Header(
                     if bot {
                         "Bot settings"
@@ -681,7 +681,7 @@ impl Conversation {
                 }
                 if !bot
                     && self.status != "Ready"
-                    && !self.busy
+                    && !self.responding()
                     && !self.loading
                     && self.settings.usage_limit.is_none()
                 {
@@ -794,7 +794,7 @@ impl Conversation {
                             .description("Save it without starting the agent")
                             .disabled(
                                 self.follow_ups.state.draft.is_some()
-                                    || (self.is_remote() && (self.busy || self.stopping)),
+                                    || (self.is_remote() && self.turn_in_flight()),
                             ),
                     ]
                     .into_iter()

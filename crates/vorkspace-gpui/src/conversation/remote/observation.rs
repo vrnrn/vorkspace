@@ -132,7 +132,7 @@ impl Refresh {
 
 impl Conversation {
     pub(in crate::conversation) fn refresh_remote_snapshot(&mut self, cx: &mut Context<Self>) {
-        if self.remote_state.refreshing || self.busy || self.stopping {
+        if self.remote_state.refreshing || self.turn_in_flight() {
             return;
         }
         self.remote_state.refreshing = true;
@@ -178,7 +178,7 @@ impl Conversation {
             return;
         }
         self.remote_state.refreshing = false;
-        if self.submission_generation != submission || self.busy || self.stopping {
+        if self.submission_generation != submission || self.turn_in_flight() {
             return;
         }
         self.loading = false;
@@ -300,7 +300,7 @@ impl Conversation {
         if let Some((row, query)) = self.pending_search.take() {
             self.reveal_search(row, query, cx);
         }
-        if let Some(run) = run.filter(|_| !self.busy && !self.stopping) {
+        if let Some(run) = run.filter(|_| !self.turn_in_flight()) {
             self.launch_remote(String::new(), RemoteAction::Attach(run), cx);
         } else {
             self.run_history_actions(cx);

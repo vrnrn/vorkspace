@@ -108,7 +108,7 @@ impl Shell {
                 || self.session_summary(id, cx).expect("available session"),
                 |v| &v.summary,
             ),
-            busy: live.is_some_and(|v| v.busy)
+            busy: live.is_some_and(Conversation::responding)
                 || self.remote_marks.get(&id).is_some_and(|state| state.0),
             live,
             draft: self.session_record(id, cx).is_some_and(|row| row.draft),

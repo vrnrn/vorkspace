@@ -489,7 +489,7 @@ fn workspace_existing_worktrees_open_as_a_submenu_and_preserve_the_draft(cx: &mu
                 Some(feature.as_str())
             );
             assert!(!c.settings.new_worktree);
-            assert!(!c.busy);
+            assert!(!c.responding());
             assert_eq!(c.input.read(cx).content.as_ref(), "Keep my unsent draft");
             assert!(c.input.focus_handle(cx).is_focused(w));
             assert_eq!(
@@ -583,7 +583,7 @@ fn submitted_modes_clear_for_a_started_turn_and_stay_cleared_after_completion(
                     .update(cx, |i, cx| i.set_text("check the composer".into(), cx));
                 view.toggle_mode(mode, cx);
                 view.send(cx);
-                assert!(view.busy);
+                assert!(view.responding());
                 assert!(view.input.read(cx).content.is_empty());
                 assert!(
                     !view.settings.plan && !view.settings.operator && !view.settings.orchestrator

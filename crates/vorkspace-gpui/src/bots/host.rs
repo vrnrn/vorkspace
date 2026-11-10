@@ -665,7 +665,7 @@ impl Bots {
                     let session=card["sessionId"].as_i64().unwrap();
                     let view=self.owner.ensure_session(session,cx).filter(|v|bot.works_on(&v.read(cx).summary.cwd));
                     let Some(view)=view else{self.finish_call(call,Err("Session is outside assigned projects".into()),cx);return;};
-                    card["title"]=json!(view.read(cx).summary.title);card["state"]=json!(if view.read(cx).busy{"Working"}else{"Saved"});
+                    card["title"]=json!(view.read(cx).summary.title);card["state"]=json!(if view.read(cx).responding(){"Working"}else{"Saved"});
                 }
                 if card["type"]=="pr"{
                     let cwd=bot.projects.first().cloned().unwrap_or_else(||std::env::var("HOME").unwrap_or_else(|_|".".into()));
@@ -846,7 +846,10 @@ impl Bots {
     pub(crate) fn minion_value(&self, member: &Bot, cx: &App) -> Value {
         let metadata = member.minion.as_ref().unwrap();
         let owner = self.roster.storage_owner(&member.id);
-        let working = self.chats.get(&member.id).is_some_and(|v| v.read(cx).busy);
+        let working = self
+            .chats
+            .get(&member.id)
+            .is_some_and(|v| v.read(cx).responding());
         json!({"id":member.id,"name":member.label(),"parentId":metadata.parent_id,"role":metadata.role,"specialties":metadata.specialties,"retired":metadata.retired,"createdAt":metadata.created_at,"sessionId":member.session_id,"working":working,"status":if metadata.retired {"retired"} else {self.member_status(&member.id,cx)},"pendingMessages":member.outbox.iter().map(|m|json!({"id":m.id,"error":m.error})).collect::<Vec<_>>(),"projects":owner.map(|p|&p.projects),"accepted":true})
     }
     fn next_minion_name(&self, parent: &str) -> String {

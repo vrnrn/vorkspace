@@ -74,8 +74,7 @@ impl Conversation {
             || self.remote_state.client.is_none()
             || self.remote_state.pending
             || self.remote_state.awaiting_successor
-            || self.busy
-            || self.stopping
+            || self.turn_in_flight()
         {
             self.status =
                 "Reconnect and wait for the remote turn to finish before building this plan."
@@ -108,8 +107,7 @@ impl Conversation {
         let id = reader.id.clone();
         let build = self.remote_plans.plans.get(&id).is_some_and(|plan| {
             plan.can_build(
-                self.busy
-                    || self.stopping
+                self.turn_in_flight()
                     || !self.remote_state.online
                     || self.remote_state.pending
                     || self.remote_state.awaiting_successor,

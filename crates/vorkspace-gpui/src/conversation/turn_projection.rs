@@ -53,7 +53,7 @@ impl TurnProjection {
         if finished && let Some(origin) = self.composer_origin.as_ref() {
             this.settle_composer_submission(origin, cx);
         }
-        let stopping = this.stopping;
+        let stopping = this.is_stopping();
         // The final update settles accepted rows and storage.
         // Ignore streaming notifications after the user stops.
         if stopping && !finished && !accepted {
@@ -280,8 +280,7 @@ impl TurnProjection {
                 this.remote_state.awaiting_successor = outcome == TurnOutcome::Superseded;
             }
             this.summary.updated_at = vorkspace_core::time::now_ms();
-            this.busy = false;
-            this.stopping = false;
+            this.turn_state = TurnState::Settled(outcome);
             if this.is_remote() {
                 this.refresh_remote_snapshot(cx);
             }

@@ -413,7 +413,7 @@ fn failed_install(
             assert_eq!(shell.workspace.projects,projects);
             assert_eq!(shell.observations.len(),observations);
             assert_eq!(shell.sessions[&caller].read(cx).input.read(cx).content,"Keep the caller's newer draft");
-            assert!(!shell.sessions[&caller].read(cx).busy);
+            assert!(!shell.sessions[&caller].read(cx).responding());
             // Remove the write failure before deferred callbacks and Drop run:
             // an undiscarded composer would now be free to recreate an orphan.
             connection.execute_batch("DROP TRIGGER reject_app_input;").unwrap();
@@ -853,7 +853,7 @@ fn operator_launch_honors_access_model_and_worktree_and_durable_retries(cx: &mut
             assert_eq!(view.settings.model_settings["custom"], "retained");
             assert_eq!(view.settings.worktree_cwd.as_deref(), Some(path));
             assert_eq!(view.input.read(cx).content, "Review this checkout");
-            assert!(!view.settings.operator && !view.busy);
+            assert!(!view.settings.operator && !view.responding());
             let draft = locked(&shell.store)
                 .unwrap()
                 .composer_draft(child)
@@ -1168,7 +1168,7 @@ fn operator_follow_up_rejects_an_account_switch_before_consuming_text(cx: &mut T
     window
         .update(cx, |shell, _, cx| {
             let view = shell.sessions[&child].read(cx);
-            assert!(!view.busy);
+            assert!(!view.responding());
             assert!(view.input.read(cx).content.is_empty());
             assert!(
                 locked(&shell.store)
@@ -1298,7 +1298,7 @@ fn app_send_cannot_acknowledge_a_prompt_its_stale_queue_did_not_save(cx: &mut Te
     window
         .update(cx, |shell, _, cx| {
             let view = shell.sessions[&child].read(cx);
-            assert!(!view.busy);
+            assert!(!view.responding());
             assert!(view.input.read(cx).content.is_empty());
             assert!(matches!(
                 locked(&shell.store)

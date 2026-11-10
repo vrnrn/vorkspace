@@ -38,7 +38,7 @@ impl Conversation {
             return;
         }
         if self.editing_last_turn.pending()
-            || self.stopping
+            || self.is_stopping()
             || self.attaching
             || self.input.read(cx).is_composing()
             || self.account_switching
@@ -48,7 +48,7 @@ impl Conversation {
         {
             return;
         }
-        if self.busy || !self.follow_ups.state.messages.is_empty() {
+        if self.responding() || !self.follow_ups.state.messages.is_empty() {
             self.status =
                 "Wait for the current turn and queued messages before compacting context.".into();
             cx.notify();
@@ -90,7 +90,10 @@ impl Conversation {
         };
         self.cancel = admission.cancel_handle();
         let cancel = self.cancel.clone();
-        self.busy = true;
+        self.turn_state = TurnState::Running;
+        self.notification_cancelled = false;
+        self.review
+            .update(cx, |review, cx| review.set_busy(true, cx));
         self.submission_generation = self.submission_generation.wrapping_add(1);
         let generation = self.submission_generation;
         self.status = "Compacting context…".into();
@@ -121,7 +124,7 @@ impl Conversation {
                 if this.submission_generation == generation
                     && this.summary.id == source.id
                     && source_selected(this)
-                    && !this.stopping
+                    && !this.is_stopping()
                     && let Some(history) = started.take()
                 {
                     visible_row = history.rows.last().cloned();
@@ -136,8 +139,15 @@ impl Conversation {
                 if this.submission_generation != generation || this.summary.id != source.id {
                     return;
                 }
-                this.busy = false;
-                this.stopping = false;
+                use vorkspace_runtime::runtime::TurnOutcome;
+                let outcome = match &finished.result {
+                    Ok(()) => TurnOutcome::Completed,
+                    Err(error) if error == "Stopped" => TurnOutcome::Cancelled,
+                    Err(_) => TurnOutcome::Failed,
+                };
+                this.turn_state = TurnState::Settled(outcome);
+                this.review
+                    .update(cx, |review, cx| review.set_busy(false, cx));
                 let source_selected = source_selected(this);
                 let mut refresh_history = finished.row.is_none() || !source_selected;
                 if let Some((start, row)) = finished.row.filter(|_| source_selected) {
@@ -186,7 +196,7 @@ impl Conversation {
                     }
                 }
                 this.refresh_submission_recovery(cx);
-                if this.status == "Ready" {
+                if matches!(outcome, TurnOutcome::Completed | TurnOutcome::Cancelled) {
                     this.run_history_actions(cx);
                     this.pump_follow_ups(cx);
                 }
@@ -195,6 +205,7 @@ impl Conversation {
             });
         })
         .detach();
+        cx.emit(SessionChanged::Turn);
         cx.notify();
     }
 

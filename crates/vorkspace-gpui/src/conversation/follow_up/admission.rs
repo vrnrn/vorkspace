@@ -49,7 +49,7 @@ impl Conversation {
         self.offer_shelf_message(
             message,
             ShelfDestination::Queue {
-                continuation: self.stopping || self.settings.pending_provider_switch.is_some(),
+                continuation: self.is_stopping() || self.settings.pending_provider_switch.is_some(),
             },
             cx,
         );
@@ -71,7 +71,7 @@ impl Conversation {
         self.follow_ups.offering = Some(ShelfOffer {
             origin,
             destination,
-            cancel: (self.responding() || self.stopping).then(|| self.cancel.clone()),
+            cancel: self.turn_in_flight().then(|| self.cancel.clone()),
         });
         self.follow_ups.admission_error = None;
         let session = self.summary.id;
@@ -119,7 +119,7 @@ impl Conversation {
                         return Err("The session’s message queue is full.".into());
                     }
                     // A Stop during attachment preparation wins over auto-send.
-                    next.paused |= self.stopping
+                    next.paused |= self.is_stopping()
                         || cancel
                             .as_ref()
                             .is_some_and(|flag| flag.load(Ordering::Acquire));

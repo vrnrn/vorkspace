@@ -344,7 +344,7 @@ impl Shell {
     fn finish_window_close(&mut self, cx: &mut Context<Self>) -> bool {
         let conversation_active = self.sessions.values().any(|view| {
             let view = view.read(cx);
-            view.busy || view.external_submission_pending()
+            view.external_submission_pending()
         });
         let bot_active = self
             .bots

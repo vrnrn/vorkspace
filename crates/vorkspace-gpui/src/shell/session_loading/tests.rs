@@ -276,9 +276,9 @@ fn session_metadata_responding_preserves_remote_running_and_stopping_state(
     window
         .update(cx, |shell, _, cx| {
             assert!(!shell.session_metadata(a, cx).responding());
-            shell.sessions[&a].update(cx, |s, _| s.busy = true);
+            shell.sessions[&a].update(cx, |s, _| s.set_running_for_test(true));
             assert!(shell.session_metadata(a, cx).responding());
-            shell.sessions[&a].update(cx, |s, _| s.stopping = true);
+            shell.sessions[&a].update(cx, |s, _| s.set_stopping_for_test());
             assert!(!shell.session_metadata(a, cx).responding());
 
             let remote_summary = locked(&shell.store)

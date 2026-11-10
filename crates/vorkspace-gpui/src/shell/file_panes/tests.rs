@@ -395,7 +395,7 @@ fn restored_bot_review_keeps_its_comment_destination_after_moving_beside_another
         let text = &chat.input.read(cx).content;
         assert!(text.starts_with("Keep this draft while typing\n\n"));
         assert_eq!(text.matches("A review comment").count(), 1);
-        assert!(!chat.busy);
+        assert!(!chat.responding());
     });
     other_chat.read_with(cx, |chat, cx| {
         assert!(chat.input.read(cx).content.is_empty())

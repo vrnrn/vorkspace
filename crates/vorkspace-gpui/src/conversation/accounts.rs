@@ -21,7 +21,7 @@ impl Conversation {
     pub(super) fn auth_notice(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
         let kind = Kind::from_id(&self.summary.provider);
         let action = vorkspace_core::accounts::AuthAction::SignIn;
-        if self.busy || vorkspace_core::accounts::login_arguments(kind, action).is_none() {
+        if self.responding() || vorkspace_core::accounts::login_arguments(kind, action).is_none() {
             return None;
         }
         let status = self.status.to_ascii_lowercase();
@@ -91,7 +91,7 @@ impl Conversation {
         self.model.as_deref().or(self.resolved_model.as_deref())
     }
     pub(crate) fn set_blank_account(&mut self, profile: Profile, cx: &mut Context<Self>) {
-        if self.busy || self.summary.has_messages {
+        if self.responding() || self.summary.has_messages {
             return;
         }
         self.settings.account = profile;
@@ -178,7 +178,7 @@ impl Conversation {
             .settings
             .usage_limit
             .as_ref()
-            .is_some_and(|l| l.resume_due(usage::now_ms(), self.busy))
+            .is_some_and(|l| l.resume_due(usage::now_ms(), self.responding()))
         {
             self.resume_usage(cx);
         }
@@ -193,8 +193,7 @@ impl Conversation {
             self.defer_history_action(|this, cx| this.resume_usage(cx), cx);
             return;
         }
-        if self.busy
-            || self.stopping
+        if self.turn_in_flight()
             || self.account_switching
             || self.settings.usage_limit.take().is_none()
         {
@@ -213,7 +212,7 @@ impl Conversation {
         cx.notify();
     }
     pub(super) fn recover_usage_after_model_change(&mut self, cx: &mut Context<Self>) {
-        if self.busy || self.stopping || self.settings.usage_limit.take().is_none() {
+        if self.turn_in_flight() || self.settings.usage_limit.take().is_none() {
             return;
         }
         self.status = "Ready".into();
@@ -237,10 +236,7 @@ impl Conversation {
             self.defer_history_action(move |this, cx| this.switch_usage_account(profile, cx), cx);
             return;
         }
-        if self.busy
-            || self.stopping
-            || self.account_switching
-            || self.settings.account.id == profile.id
+        if self.turn_in_flight() || self.account_switching || self.settings.account.id == profile.id
         {
             return;
         }
@@ -267,7 +263,7 @@ impl Conversation {
             let transfer = work.await;
             let _ = this.update(cx, |this, cx| {
                 this.account_switching = false;
-                if this.busy
+                if this.responding()
                     || this.settings.usage_limit.is_none()
                     || this.settings.account.id != old
                     || this.summary.provider_id != expected

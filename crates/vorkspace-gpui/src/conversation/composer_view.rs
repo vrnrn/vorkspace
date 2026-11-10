@@ -4,7 +4,7 @@ use vorkspace_ui::radius;
 
 impl Conversation {
     pub(crate) fn owns_running_turn(&self, token: &vorkspace_core::process::TurnToken) -> bool {
-        self.busy && !self.stopping && token.matches(&self.cancel)
+        self.responding() && token.matches(&self.cancel)
     }
 
     pub(crate) fn stop_running_turn(
@@ -24,7 +24,10 @@ impl Conversation {
         if self.cancel_edit_last_turn(cx) {
             return;
         }
-        if self.busy || self.ticket_context.pending() || self.composer_draft.waiting_to_submit() {
+        if self.responding()
+            || self.ticket_context.pending()
+            || self.composer_draft.waiting_to_submit()
+        {
             self.stop(cx);
         }
     }
@@ -40,11 +43,10 @@ impl Conversation {
             self.status = "Ready".into();
             cx.notify();
         }
-        if !self.busy || self.stopping {
+        if !self.responding() {
             return;
         }
-        self.stopping = true;
-        self.busy = false;
+        self.turn_state = TurnState::Stopping;
         self.follow_ups.resuming = false;
         self.follow_ups.continuations.clear();
         self.notification_cancelled = true;
@@ -61,8 +63,6 @@ impl Conversation {
         self.status = "Ready".into();
         self.transcript
             .update(cx, |view, cx| view.stop_streaming(cx));
-        self.review
-            .update(cx, |review, cx| review.set_busy(false, cx));
         cx.emit(SessionChanged::Turn);
         cx.notify();
     }
@@ -136,11 +136,11 @@ impl Conversation {
                             "Handoff from {} · Add your next instruction below",
                             Kind::display_label(from)
                         )))
-                        .when(!self.busy, |d| d.child(
+                        .when(!self.responding(), |d| d.child(
                             tool_pill("dismiss-handoff", "Dismiss handoff")
                                 .child(icon("close", 12.))
                                 .on_click(cx.listener(|this, _, _, cx| {
-                                    if this.busy {
+                                    if this.responding() {
                                         return;
                                     }
                                     this.settings.pending_provider_switch = None;
@@ -345,9 +345,9 @@ impl Conversation {
         } else {
             "Current checkout"
         };
-        let enabled = !self.busy && !self.preparing_worktree && self.git.is_some();
+        let enabled = !self.responding() && !self.preparing_worktree && self.git.is_some();
         // Still reading git is not unavailable: don't dim, then brighten.
-        let dimmed = !enabled && (self.loaded || self.busy || self.preparing_worktree);
+        let dimmed = !enabled && (self.loaded || self.responding() || self.preparing_worktree);
         let workspace = if draft {
             bar_trigger(
                 "composer-workspace",
@@ -658,7 +658,7 @@ impl Conversation {
                     })
                     .when(
                         !bot && self.status != "Ready"
-                            && !self.busy
+                            && !self.responding()
                             && !self.loading
                             && self.settings.usage_limit.is_none(),
                         |d| {
@@ -767,12 +767,12 @@ impl Conversation {
         let draft = self.draft_active(cx);
         let enabled = ticket_pending
             || (!self.attaching
-                && (!self.preparing_worktree || self.busy || self.stopping)
+                && (!self.preparing_worktree || self.turn_in_flight())
                 && (busy || (has_value && self.loaded && !offering))
                 && (busy
                     || !draft
                     || (self.follow_ups.state.draft.is_none()
-                        && (!self.is_remote() || (!self.busy && !self.stopping)))));
+                        && (!self.is_remote() || !self.turn_in_flight()))));
         let accent = primary_action(enabled);
         vorkspace_ui::theme::keyboard_reachable(div().id("send-or-stop"), enabled)
             .debug_selector(|| "send-or-stop".into())

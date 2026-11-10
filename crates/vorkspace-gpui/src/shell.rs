@@ -1456,7 +1456,7 @@ impl Shell {
         let running: Vec<(i64, String)> = self
             .sessions
             .iter()
-            .filter(|(_, view)| view.read(cx).busy)
+            .filter(|(_, view)| view.read(cx).turn_in_flight())
             .map(|(&id, view)| (id, view.read(cx).review.read(cx).session().1.to_owned()))
             .collect();
         for (&id, view) in &self.sessions {
@@ -1485,7 +1485,7 @@ impl Shell {
         if busy {
             self.busy_sessions.insert(id);
             self.unseen_finished.remove(&id);
-        } else if session.busy {
+        } else if session.is_stopping() || session.notification_was_cancelled() {
             // Explicit cancellation is already idle in the UI. The worker is
             // only finishing its save, so it must not announce a completed turn.
             self.busy_sessions.remove(&id);

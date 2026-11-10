@@ -138,7 +138,7 @@ impl Shell {
             return;
         }
         if !self.notification_state.responding.remove(&id)
-            || chat.busy
+            || chat.responding()
             || chat.notification_was_cancelled()
             || chat.summary.archived
             || self
@@ -475,7 +475,7 @@ impl Shell {
             if chat.responding() {
                 self.notification_state.responding.insert(id);
             } else if self.notification_state.responding.remove(&id)
-                && !chat.busy
+                && !chat.responding()
                 && !chat.notification_was_cancelled()
                 && !chat.summary.archived
                 && self.sessions.contains_key(&id)

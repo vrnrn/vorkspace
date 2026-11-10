@@ -14,7 +14,7 @@ fn send_during_account_switch_preserves_the_composer(cx: &mut TestAppContext) {
                 .update(cx, |input, cx| input.set_text("Keep this draft".into(), cx));
             view.attachments = vec!["/missing/retained.png".into()];
             view.send(cx);
-            assert!(!view.busy);
+            assert!(!view.responding());
             assert!(view.status.contains("account switch"));
             assert_eq!(view.input.read(cx).content.as_ref(), "Keep this draft");
             assert_eq!(view.attachments, [PathBuf::from("/missing/retained.png")]);
@@ -39,7 +39,7 @@ fn unsupported_history_keeps_the_unsent_composer_and_declines_external_work(
                 view.attachments = vec!["/missing/retained.png".into()];
                 let generation = view.submission_generation;
                 view.send(cx);
-                assert!(!view.busy);
+                assert!(!view.responding());
                 assert!(view.status.contains("no longer supported"));
                 assert_eq!(view.input.read(cx).content.as_str(), "My unsent draft");
                 assert_eq!(
@@ -93,7 +93,7 @@ fn unsupported_history_keeps_the_unsent_composer_and_declines_external_work(
                 assert!(view.follow_ups.sending.is_none());
                 assert_eq!(view.follow_ups.state.messages, vec![queued]);
                 view.launch_prompt("Direct retry".into(), cx);
-                assert!(!view.busy);
+                assert!(!view.responding());
                 assert!(view.transcript.read(cx).source_rows().is_empty());
                 view.follow_ups.state.messages.clear();
             })
@@ -206,7 +206,7 @@ fn dropped_sender_releases_the_current_ui_and_pauses_queue_without_replay(cx: &m
         cx.run_until_parked();
         window
             .update(cx, |view, _, cx| {
-                assert!(!view.busy && !view.stopping && !view.preparing_worktree);
+                assert!(!view.turn_in_flight() && !view.preparing_worktree);
                 assert!(!view.planning_orchestration);
                 assert!(
                     view.controls.is_none()
@@ -283,7 +283,7 @@ fn an_old_dropped_sender_cannot_release_a_successor_turn(cx: &mut TestAppContext
     window
         .update(cx, |view, _, _| {
             assert_eq!(view.submission_generation, generation);
-            assert!(view.busy && !view.stopping);
+            assert!(view.responding());
             assert!(view.controls.is_some() && view.follow_ups.ready);
             assert!(!view.follow_ups.state.paused);
             assert!(!view.cancel.load(Ordering::Relaxed));
@@ -330,7 +330,7 @@ fn send_keeps_the_composer_until_dispatch_and_keeps_failed_attempts_in_history(
                 view.input
                     .update(cx, |input, cx| input.set_text(text.clone(), cx));
                 view.send(cx);
-                assert!(view.busy);
+                assert!(view.responding());
                 assert_eq!(view.input.read(cx).content.as_ref(), text.as_str());
                 assert_eq!(view.attachments, std::slice::from_ref(&attachment));
                 assert!(view.transcript.read(cx).source_rows().is_empty());
@@ -344,7 +344,7 @@ fn send_keeps_the_composer_until_dispatch_and_keeps_failed_attempts_in_history(
         super::receive_tests::settle_turn(window, cx);
         window
             .update(cx, |view, _, cx| {
-                assert!(!view.busy);
+                assert!(!view.responding());
                 assert_ne!(view.status, UNCONFIRMED_TURN);
                 assert_eq!(view.input.read(cx).content.as_ref(), text.as_str());
                 assert_eq!(view.attachments, std::slice::from_ref(&attachment));
@@ -431,7 +431,7 @@ fn worktree_setup_keeps_the_unaccepted_draft_and_allows_a_distinct_follow_up(
                 input.set_text("Start in a worktree".into(), cx)
             });
             view.send(cx);
-            assert!(view.busy && view.preparing_worktree);
+            assert!(view.responding() && view.preparing_worktree);
             assert_eq!(view.status, "Creating worktree…");
             assert_eq!(view.input.read(cx).content, "Start in a worktree");
             assert!(!view.settings.plan);
@@ -450,7 +450,7 @@ fn worktree_setup_keeps_the_unaccepted_draft_and_allows_a_distinct_follow_up(
     super::receive_tests::settle_turn(window, cx);
     window
         .update(cx, |view, _, cx| {
-            assert!(!view.busy && !view.preparing_worktree);
+            assert!(!view.responding() && !view.preparing_worktree);
             assert_eq!(view.input.read(cx).content, "Unsent draft");
             assert!(view.follow_ups.state.paused);
             assert_eq!(view.follow_ups.state.messages[0].text, "Follow up");
@@ -481,16 +481,16 @@ fn stop_before_dispatch_preserves_the_draft_without_admitting_a_turn(cx: &mut Te
                     input.set_text("Keep this message".into(), cx)
                 });
                 view.send(cx);
-                assert!(view.busy);
+                assert!(view.responding());
                 view.stop(cx);
-                assert!(!view.busy);
+                assert!(!view.responding());
                 assert_eq!(view.input.read(cx).content, "Keep this message");
             })
             .unwrap();
         cx.run_until_parked();
         window
             .update(cx, |view, _, cx| {
-                assert!(!view.stopping);
+                assert!(!view.is_stopping());
                 assert!(!view.preparing_worktree);
                 assert_eq!(view.input.read(cx).content, "Keep this message");
                 assert!(view.transcript.read(cx).source_rows().is_empty());

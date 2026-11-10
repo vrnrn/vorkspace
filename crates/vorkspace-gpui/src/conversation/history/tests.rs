@@ -144,7 +144,7 @@ fn stale_history_refresh_cannot_replace_a_newer_turn(cx: &mut TestAppContext) {
             // Admit a turn before the asynchronous refresh can publish.
             // It may even finish before that older read returns.
             chat.submission_generation += 1;
-            chat.busy = running;
+            chat.set_running_for_test(running);
             chat.transcript.update(cx, |view, cx| {
                 view.patch(
                     1,
@@ -338,9 +338,9 @@ fn history_eviction_keeps_live_state_and_pins_drafts_running_and_failed_saves(
                 cx,
             );
         });
-        chat.busy = true;
+        chat.set_running_for_test(true);
         assert!(!chat.unload_history(cx));
-        chat.busy = false;
+        chat.set_running_for_test(false);
         chat.status = "Could not save history".into();
         assert!(!chat.unload_history(cx));
         chat.status = "Ready".into();
@@ -390,7 +390,7 @@ fn hidden_mutations_wait_for_history_without_changing_settings_or_receipts(
             ..Default::default()
         };
         chat.quick_submit("Queued API prompt".into(), transfer, cx);
-        assert!(!chat.busy);
+        assert!(!chat.responding());
         assert_eq!(chat.settings.revision, 17);
         assert_eq!(chat.model.as_deref(), Some("original-model"));
         assert_eq!(
@@ -491,6 +491,6 @@ fn restored_external_prompt_keeps_its_files_separate_from_new_composer_files(
             queued.attachments,
             vec![std::path::PathBuf::from("/tmp/accepted-prompt.png")]
         );
-        assert!(!chat.busy);
+        assert!(!chat.responding());
     });
 }

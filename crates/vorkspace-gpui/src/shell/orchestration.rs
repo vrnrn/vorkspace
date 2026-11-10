@@ -69,7 +69,7 @@ impl Shell {
             return;
         };
         let conversation = view.read(cx);
-        if conversation.busy {
+        if conversation.turn_in_flight() {
             return;
         }
         let cwd = conversation
@@ -501,7 +501,7 @@ mod tests {
         cx.run_until_parked();
         window
             .update(cx, |shell, _, cx| {
-                assert!(shell.sessions.values().all(|v| !v.read(cx).busy));
+                assert!(shell.sessions.values().all(|v| !v.read(cx).responding()));
                 let saved: HashSet<_> = locked(&shell.store)
                     .unwrap()
                     .sessions()

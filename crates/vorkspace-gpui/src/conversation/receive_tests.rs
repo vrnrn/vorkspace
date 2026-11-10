@@ -60,10 +60,10 @@ fn a_stale_resource_stop_cannot_cancel_the_next_turn(cx: &mut TestAppContext) {
             view.begin_turn(cx);
             let current = vorkspace_core::process::TurnToken::from(&view.cancel);
             assert!(!view.stop_running_turn(&old, cx));
-            assert!(view.busy);
+            assert!(view.responding());
             assert!(!view.cancel.load(Ordering::Relaxed));
             assert!(view.stop_running_turn(&current, cx));
-            assert!(view.stopping);
+            assert!(view.is_stopping());
             assert!(view.cancel.load(Ordering::Relaxed));
         })
         .unwrap();
@@ -109,7 +109,7 @@ pub(super) fn settle_turn(window: WindowHandle<Conversation>, cx: &mut TestAppCo
     // run_until_parked drains runnable work, but does not advance this
     // scheduler's clock. Await the semantic transition, driving its timers.
     let executor = cx.foreground_executor().clone();
-    executor.block_test(cx.condition(&entity, |view, _| !view.busy && !view.stopping));
+    executor.block_test(cx.condition(&entity, |view, _| !view.turn_in_flight()));
     cx.run_until_parked();
 }
 
@@ -128,7 +128,7 @@ fn ready_turn_updates_return_to_the_executor_before_draining_the_queue(cx: &mut 
         .update(cx, |view, _, cx| {
             assert_eq!(view.status, "Synthetic status 0");
             assert_eq!(view.transcript.read(cx).source_rows(), [synthetic_row(0)]);
-            assert!(view.busy);
+            assert!(view.responding());
             // Control/user input gets an opportunity between atomic patches.
             view.input
                 .update(cx, |input, cx| input.set_text("Unsent draft".into(), cx));
@@ -141,7 +141,7 @@ fn ready_turn_updates_return_to_the_executor_before_draining_the_queue(cx: &mut 
             let expected: Vec<_> = (0..8).map(synthetic_row).collect();
             assert_eq!(view.transcript.read(cx).source_rows(), expected);
             assert_eq!(view.status, "Synthetic status 7");
-            assert!(!view.busy && !view.stopping);
+            assert!(!view.turn_in_flight());
             assert_eq!(view.input.read(cx).content.as_str(), "Unsent draft");
         })
         .unwrap();
@@ -176,7 +176,7 @@ fn superseding_a_yielded_receiver_protects_the_successor(cx: &mut TestAppContext
     window
         .update(cx, |view, _, cx| {
             assert_eq!(view.status, "Successor");
-            assert!(view.busy && !view.stopping);
+            assert!(view.responding());
             assert_eq!(view.transcript.read(cx).source_rows(), [synthetic_row(0)]);
         })
         .unwrap();
@@ -223,7 +223,7 @@ fn stop_between_updates_skips_streaming_but_accepts_the_final_replay(cx: &mut Te
         .update(cx, |view, _, cx| {
             assert_eq!(view.status, "Synthetic status 0");
             view.stop(cx);
-            assert!(view.stopping && !view.busy);
+            assert!(view.is_stopping() && !view.responding());
         })
         .unwrap();
     drop(tx);
@@ -233,7 +233,7 @@ fn stop_between_updates_skips_streaming_but_accepts_the_final_replay(cx: &mut Te
             let expected: Vec<_> = (0..2).map(synthetic_row).collect();
             assert_eq!(view.transcript.read(cx).source_rows(), expected);
             assert_eq!(view.status, "Ready");
-            assert!(!view.busy && !view.stopping);
+            assert!(!view.turn_in_flight());
             assert!(view.approvals.is_empty());
             assert_eq!(view.summary.provider_id, None);
             assert_eq!(view.context, Some(Default::default()));
@@ -287,7 +287,7 @@ fn stopped_bot_accepts_a_settled_snapshot_without_its_initial_imported_rows(
     window
         .update(cx, |view, _, cx| {
             view.stop(cx);
-            assert!(view.stopping);
+            assert!(view.is_stopping());
             assert_eq!(view.transcript.read(cx).source_rows().len(), 2);
         })
         .unwrap();
@@ -440,7 +440,7 @@ fn verify_recovered_turn_refresh(cx: &mut TestAppContext, pending: bool) {
     let entity = window.entity(cx).unwrap();
     let executor = cx.foreground_executor().clone();
     executor.block_test(cx.condition(&entity, |view, cx| {
-        !view.busy
+        !view.responding()
             && !view.loading
             && view.transcript.read(cx).source_rows()[0].text == "Latest durable history"
     }));

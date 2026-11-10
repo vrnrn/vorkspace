@@ -238,7 +238,7 @@ fn failed_account_transfer_preserves_the_original_account_and_resume_binding(
         assert!(view.settings.pending_provider_switch.is_none());
         assert!(view.settings.usage_limit.is_some());
         assert!(view.status.starts_with("Could not switch accounts:"));
-        assert!(!view.busy);
+        assert!(!view.responding());
     });
     let summaries = locked(&store).unwrap().sessions().unwrap();
     assert_eq!(
