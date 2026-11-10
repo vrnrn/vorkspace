@@ -1,4 +1,6 @@
 pub mod accessibility;
+#[cfg(target_os = "macos")]
+pub mod filesystem_events;
 pub mod global_hotkey;
 pub mod hang_diagnostics;
 pub mod notch;

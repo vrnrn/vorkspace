@@ -208,7 +208,7 @@ impl ProjectGit {
         if let Some(checkout) = &self.checkout {
             checkout.update(cx, |checkout, cx| {
                 checkout.warm_choices(cx);
-                checkout.scan(true, cx);
+                checkout.reconcile(cx);
             });
         }
     }
@@ -223,7 +223,7 @@ impl ProjectGit {
 
     pub(crate) fn reload(&mut self, cx: &mut Context<Self>) {
         if let Some(checkout) = &self.checkout {
-            checkout.update(cx, |checkout, cx| checkout.scan(true, cx));
+            checkout.update(cx, Checkout::reconcile);
         }
     }
 }

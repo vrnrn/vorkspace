@@ -36,7 +36,7 @@ The app keeps word-fade animation data while new text is arriving, then releases
 
 The app prepares a few attachment thumbnails at a time across all windows. Opening a picture full screen has its own loading path.
 
-The Changes panel and title bar read from the same Git snapshot. The app checks for edits frequently and does the heavier refresh when something changes or the snapshot needs reconciling. Two windows on the same checkout share a commit graph, and each window keeps its own search and selection. If you switch checkouts while writing a commit message, each checkout keeps its own draft while Changes is open. A confirmation belongs to the checkout and branch where you opened it.
+The Changes panel and title bar read from the same Git snapshot. On your Mac, the app listens for file changes in an active checkout and still does a periodic check. Remote checkouts and folders the Mac cannot watch use periodic checks. Two windows on the same checkout share a commit graph, and each window keeps its own search and selection. If you switch checkouts while writing a commit message, each checkout keeps its own draft while Changes is open. A confirmation belongs to the checkout and branch where you opened it.
 
 Open **View → Running Work** to see the app’s local agents. A Stop click is tied to the reply shown in the list, even from another window. The app waits for a reply's final save before starting another reply in the same conversation.
 

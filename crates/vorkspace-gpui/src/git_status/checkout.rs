@@ -10,6 +10,8 @@ use std::{
 use vorkspace_core::scm::{self, CheckoutStamp, DiffIndex};
 
 mod history;
+#[cfg(target_os = "macos")]
+mod watch;
 pub(crate) use history::HistoryItem;
 use history::HistoryState;
 
@@ -17,6 +19,12 @@ const POLL: Duration = Duration::from_secs(2);
 const FULL_REFRESH: Duration = Duration::from_secs(20);
 const RETAINED_CHECKOUTS: usize = 24;
 const RETAINED_BYTES: usize = 16 * 1024 * 1024;
+
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+enum Refresh {
+    Probe,
+    Reconcile,
+}
 
 #[derive(Default)]
 pub(crate) struct CheckoutCatalog {
@@ -175,7 +183,7 @@ pub(crate) struct Checkout {
     pub(super) revision: u64,
     generation: u64,
     scanning: bool,
-    reload_pending: bool,
+    refresh_pending: Option<Refresh>,
     last_scan: Option<Instant>,
     pollers: HashSet<EntityId>,
     poll: Option<Task<()>>,
@@ -191,7 +199,7 @@ impl Checkout {
             revision: 0,
             generation: 0,
             scanning: false,
-            reload_pending: false,
+            refresh_pending: None,
             last_scan: None,
             pollers: Default::default(),
             poll: None,
@@ -209,7 +217,7 @@ impl Checkout {
         if self.observation.is_none() && !self.scanning {
             self.warm_choices(cx);
         }
-        self.scan(false, cx);
+        self.scan(Refresh::Probe, cx);
     }
 
     pub(super) fn poll(&mut self, viewer: EntityId, enabled: bool, cx: &mut Context<Self>) {
@@ -222,10 +230,23 @@ impl Checkout {
             self.poll = None;
         } else if self.poll.is_none() {
             self.attach(cx);
+            #[cfg(target_os = "macos")]
+            let watch_path = (!cx.is_test()).then(|| self.path.clone());
             self.poll = Some(cx.spawn(async move |this, cx| {
+                #[cfg(target_os = "macos")]
+                if let Some(path) = watch_path {
+                    watch::observe(&this, path, cx).await;
+                }
                 loop {
                     cx.background_executor().timer(POLL).await;
-                    if this.update(cx, |this, cx| this.scan(false, cx)).is_err() {
+                    if this
+                        .update(cx, |this, cx| {
+                            if !this.scanning {
+                                this.scan(Refresh::Probe, cx);
+                            }
+                        })
+                        .is_err()
+                    {
                         break;
                     }
                 }
@@ -238,7 +259,11 @@ impl Checkout {
         self.revision += 1;
         cx.notify();
         self.warm_choices(cx);
-        self.scan(true, cx);
+        self.reconcile(cx);
+    }
+
+    pub(super) fn reconcile(&mut self, cx: &mut Context<Self>) {
+        self.scan(Refresh::Reconcile, cx);
     }
 
     pub(super) fn warm_choices(&self, cx: &Context<Self>) {
@@ -250,9 +275,12 @@ impl Checkout {
             .detach();
     }
 
-    pub(super) fn scan(&mut self, force: bool, cx: &mut Context<Self>) {
+    fn scan(&mut self, refresh: Refresh, cx: &mut Context<Self>) {
         if self.scanning {
-            self.reload_pending |= force;
+            self.refresh_pending = Some(
+                self.refresh_pending
+                    .map_or(refresh, |pending| pending.max(refresh)),
+            );
             return;
         }
         self.scanning = true;
@@ -261,7 +289,7 @@ impl Checkout {
         let before = self.observation.clone();
         let stamp = self
             .last_scan
-            .filter(|at| !force && at.elapsed() < FULL_REFRESH)
+            .filter(|at| refresh == Refresh::Probe && at.elapsed() < FULL_REFRESH)
             .and_then(|_| before.as_ref()?.stamp);
         let work = cx
             .background_executor()
@@ -276,8 +304,8 @@ impl Checkout {
                     this.publish(read, cx);
                 }
                 this.refresh_history_if_due(cx);
-                if std::mem::take(&mut this.reload_pending) {
-                    this.scan(true, cx);
+                if let Some(refresh) = this.refresh_pending.take() {
+                    this.scan(refresh, cx);
                 }
             });
         })

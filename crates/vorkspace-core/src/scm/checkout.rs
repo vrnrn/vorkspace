@@ -8,8 +8,35 @@ use std::{
         ffi::OsStrExt,
         fs::{MetadataExt, OpenOptionsExt},
     },
-    path::{Component, Path},
+    path::{Component, Path, PathBuf},
 };
+
+/// A checkout can use separate worktree and common Git directories. Include
+/// all three inputs so a branch change or index replacement can wake readers.
+pub fn checkout_watch_paths(cwd: &Path) -> Option<Vec<PathBuf>> {
+    if remote_workspace::is_remote(cwd) {
+        return None;
+    }
+    let cwd = expand_home(cwd);
+    let resolve = |args: &[&str]| {
+        let output = git_output(&cwd, args)?;
+        let path = Path::new(OsStr::from_bytes(output.strip_suffix(b"\n")?));
+        path.canonicalize().ok()
+    };
+    let mut roots = [
+        resolve(&["rev-parse", "--show-toplevel"])?,
+        resolve(&["rev-parse", "--absolute-git-dir"])?,
+        resolve(&["rev-parse", "--path-format=absolute", "--git-common-dir"])?,
+    ];
+    roots.sort_unstable();
+    let mut paths = Vec::new();
+    for root in roots {
+        if !paths.iter().any(|path| root.starts_with(path)) {
+            paths.push(root);
+        }
+    }
+    Some(paths)
+}
 
 /// Inputs that can change a local checkout's diff between full reconciliations.
 #[derive(Clone, Copy, PartialEq, Eq)]

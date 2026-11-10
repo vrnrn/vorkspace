@@ -16,7 +16,7 @@ use crate::remote_workspace;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 
-pub use checkout::CheckoutStamp;
+pub use checkout::{checkout_watch_paths, CheckoutStamp};
 use checkout::{read_worktree_file, FileContents};
 #[cfg(test)]
 use command::git_cmd_for_args_with_path;
