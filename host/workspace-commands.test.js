@@ -67,6 +67,42 @@ function fixture() {
 }
 const apiRoot = (path) =>
   path;
+it.runIf(process.platform !== "win32")(
+  "preserves literal committed paths and the identity of empty added or removed blobs",
+  async () => {
+    const { commands, repo } = fixture();
+    const { cwd, git, write } = repo();
+    const literal = "nested/draft\twith\naccent-é\\slash.txt";
+    mkdirSync(join(cwd, "nested"));
+    write(literal, "old\n");
+    write("nested/removed.txt", "");
+    git("add", ".");
+    git("commit", "-qm", "Base");
+    write(literal, "new\nadded\n");
+    rmSync(join(cwd, "nested/removed.txt"));
+    write("nested/added.txt", "");
+    git("add", "-A");
+    git("commit", "-qm", "Exact paths");
+    const sha = git("rev-parse", "HEAD");
+    const nested = join(cwd, "nested");
+    const name = literal.slice("nested/".length);
+    const files = await commands.run("git_commit_files", { cwd: nested, sha });
+    expect(files).toEqual(expect.arrayContaining([
+      expect.objectContaining({ path: name, status: "modified", additions: 2, deletions: 1 }),
+      expect.objectContaining({ path: "added.txt", status: "added" }),
+      expect.objectContaining({ path: "removed.txt", status: "deleted" }),
+    ]));
+    for (const [relative, status, original, current] of [
+      [name, "modified", "old\n", "new\nadded\n"],
+      ["added.txt", "added", "", ""],
+      ["removed.txt", "deleted", "", ""],
+    ]) {
+      await expect(
+        commands.run("git_commit_file_diff", { cwd: nested, sha, relative }),
+      ).resolves.toMatchObject({ relative, status, original, current });
+    }
+  },
+);
 it("invalidates the cached project index after rename and delete", async () => {
   const { commands, repo } = fixture();
   const a = repo("a");

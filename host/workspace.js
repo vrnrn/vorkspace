@@ -558,6 +558,21 @@ function statusName(code) {
   if (code.includes("A") || code.includes("?")) return "added";
   return "modified";
 }
+export function gitNumstat(output) {
+  const counts = new Map();
+  const records = output.split("\0");
+  for (let index = 0; index < records.length; index++) {
+    const match = /^(\d+|-)\t(\d+|-)\t([\s\S]*)$/.exec(records[index]);
+    if (!match) continue;
+    const path = match[3] || records[(index += 2)];
+    if (!path) continue;
+    counts.set(path, {
+      additions: Number(match[1]) || 0,
+      deletions: Number(match[2]) || 0,
+    });
+  }
+  return counts;
+}
 export async function hostGitIndex(root, includeVersions = false) {
   // An ordinary folder has an empty Changes view, just as it does locally.
   const repository = await git(root, [
@@ -678,18 +693,7 @@ export async function hostGitIndex(root, includeVersions = false) {
         ).trim(),
       ) || 0
     : 0;
-  const counts = new Map();
-  const stats = numstat.split("\0");
-  for (let index = 0; index < stats.length; index++) {
-    const match = /^(\d+|-)\t(\d+|-)\t([\s\S]*)$/.exec(stats[index]);
-    if (!match) continue;
-    const path = match[3] || stats[(index += 2)];
-    if (!path) continue;
-    counts.set(path, {
-      additions: Number(match[1]) || 0,
-      deletions: Number(match[2]) || 0,
-    });
-  }
+  const counts = gitNumstat(numstat);
   const parts = statusText.split("\0");
   const files = [];
   for (let index = 0; index < parts.length; index++) {

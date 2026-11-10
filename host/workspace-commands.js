@@ -19,6 +19,7 @@ import {
   join,
   relative,
   resolve,
+  sep,
 } from "node:path";
 import { tmpdir } from "node:os";
 import { execFile } from "node:child_process";
@@ -33,6 +34,7 @@ import {
 import {
   createHostPath,
   existingPath,
+  gitNumstat,
   hostFileDiff,
   hostGitAction,
   hostGitIndex,
@@ -843,7 +845,7 @@ export class WorkspaceCommands {
     ]);
   }
   gitSha(value) {
-    if (typeof value !== "string" || !/^[0-9a-f]{4,40}$/i.test(value))
+    if (typeof value !== "string" || !/^[0-9a-f]{4,64}$/i.test(value))
       throw new Error("Invalid commit");
     return value;
   }
@@ -940,58 +942,34 @@ export class WorkspaceCommands {
   }
   async gitCommitFiles(cwd, shaInput) {
     const sha = await this.gitCommitSha(cwd, shaInput);
+    const flags = [
+      "diff-tree", "--root", "--no-commit-id", "--no-renames", "--relative", "-z", "-r",
+    ];
     const [names, stats] = await Promise.all([
-      this.gitCommand(cwd, [
-        "diff-tree",
-        "--root",
-        "--no-commit-id",
-        "--no-renames",
-        "--name-status",
-        "-r",
-        sha,
-      ]),
-      this.gitCommand(cwd, [
-        "diff-tree",
-        "--root",
-        "--no-commit-id",
-        "--no-renames",
-        "--numstat",
-        "-r",
-        sha,
-      ]),
+      this.gitCommand(cwd, [...flags, "--name-status", sha]),
+      this.gitCommand(cwd, [...flags, "--numstat", sha]),
     ]);
-    const counts = new Map(
-      stats
-        .split("\n")
-        .filter(Boolean)
-        .map((line) => {
-          const [added, removed, path] = line.split("\t");
-          return [
-            path,
-            { additions: Number(added) || 0, deletions: Number(removed) || 0 },
-          ];
-        }),
-    );
-    return names
-      .split("\n")
-      .filter(Boolean)
-      .map((line) => {
-        const [code, relativePath] = line.split("\t");
-        return {
-          path: relativePath,
-          relative: relativePath,
-          status:
-            code === "A" ? "added" : code === "D" ? "deleted" : "modified",
-          ...(counts.get(relativePath) ?? { additions: 0, deletions: 0 }),
-          staged: false,
-          unstaged: false,
-        };
+    const counts = gitNumstat(stats);
+    const fields = names.split("\0");
+    const files = [];
+    for (let index = 0; index + 1 < fields.length; index += 2) {
+      const code = fields[index];
+      const path = fields[index + 1];
+      files.push({
+        path,
+        relative: path,
+        status: code === "A" ? "added" : code === "D" ? "deleted" : "modified",
+        ...(counts.get(path) ?? { additions: 0, deletions: 0 }),
+        staged: false,
+        unstaged: false,
       });
+    }
+    return files;
   }
   async gitCommitFileDiff(cwd, shaInput, input) {
     const sha = await this.gitCommitSha(cwd, shaInput);
     const root = await this.gitRoot(cwd);
-    const path = relative(root, workspacePath(root, input)).replace(/\\/g, "/");
+    const path = relative(root, workspacePath(root, input)).split(sep).join("/");
     const parent = await this.gitCommand(root, [
       "rev-parse",
       "--verify",
@@ -999,9 +977,9 @@ export class WorkspaceCommands {
     ]).catch(() => "");
     const [original, current] = await Promise.all([
       parent
-        ? this.gitBlob(root, `${parent.trim()}:${path}`)
-        : Promise.resolve({ bytes: Buffer.alloc(0), tooLarge: false }),
-      this.gitBlob(root, `${sha}:${path}`),
+        ? this.gitBlob(root, `${parent.trim()}:./${path}`)
+        : Promise.resolve({ bytes: Buffer.alloc(0), tooLarge: false, present: false }),
+      this.gitBlob(root, `${sha}:./${path}`),
     ]);
     const binary = original.bytes.includes(0) || current.bytes.includes(0);
     const tooLarge =
@@ -1010,9 +988,9 @@ export class WorkspaceCommands {
       original.bytes.length > MAX_TEXT_FILE ||
       current.bytes.length > MAX_TEXT_FILE;
     const status =
-      !original.bytes.length && current.bytes.length
+      !original.present && current.present
         ? "added"
-        : original.bytes.length && !current.bytes.length
+        : original.present && !current.present
           ? "deleted"
           : "modified";
     return {
@@ -1037,11 +1015,14 @@ export class WorkspaceCommands {
       return {
         bytes: Buffer.isBuffer(stdout) ? stdout : Buffer.from(stdout),
         tooLarge: false,
+        present: true,
       };
     } catch (reason) {
+      const tooLarge = String(reason).includes("maxBuffer");
       return {
         bytes: Buffer.alloc(0),
-        tooLarge: String(reason).includes("maxBuffer"),
+        tooLarge,
+        present: tooLarge,
       };
     }
   }
