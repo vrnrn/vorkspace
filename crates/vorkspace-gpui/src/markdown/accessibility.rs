@@ -142,10 +142,10 @@ impl Element for LinkedText {
             if let Some(bounds) = bounds {
                 let scale = state.scale as f64;
                 node.set_bounds(Rect {
-                    x0: bounds.left().0 as f64 * scale,
-                    y0: bounds.top().0 as f64 * scale,
-                    x1: bounds.right().0 as f64 * scale,
-                    y1: bounds.bottom().0 as f64 * scale,
+                    x0: bounds.left().to_f64() * scale,
+                    y0: bounds.top().to_f64() * scale,
+                    x1: bounds.right().to_f64() * scale,
+                    y1: bounds.bottom().to_f64() * scale,
                 });
             }
             let node_id = builder.synthetic_node_id((target.is_some(), range.start));
