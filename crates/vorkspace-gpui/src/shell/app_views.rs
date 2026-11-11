@@ -303,7 +303,7 @@ impl Shell {
     ) {
         match event {
             inbox::Event::Close => {}
-            inbox::Event::ConnectorAvailabilityChanged => self.update_chat_visibility(cx),
+            inbox::Event::ConnectorAvailabilityChanged => self.refresh_pane_visibility(cx),
             inbox::Event::OpenTab(item) => self.open_item_tab(item.as_ref().clone(), window, cx),
             inbox::Event::OpenSession(id) => self.open(*id, window, cx),
             inbox::Event::StartSession { item, prompt, bot } => {

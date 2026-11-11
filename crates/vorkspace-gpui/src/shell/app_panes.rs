@@ -156,7 +156,7 @@ impl Shell {
     pub(super) fn update_app_pane_visibility(
         &mut self,
         shown: &HashSet<i64>,
-        visible_chats: &HashSet<gpui::EntityId>,
+        visible_chats: HashSet<gpui::EntityId>,
         cx: &mut Context<Self>,
     ) -> HashSet<gpui::EntityId> {
         let visible = |content: &AppPane| {
@@ -198,7 +198,6 @@ impl Shell {
             }
         }
         if let Some(manager) = self.bots.clone() {
-            let context = self.workspace_bot_context();
             let visible: HashSet<String> = shown
                 .iter()
                 .filter_map(
@@ -211,8 +210,7 @@ impl Shell {
                 )
                 .collect();
             return manager.update(cx, |manager, cx| {
-                manager.set_workspace_context(context.as_deref(), cx);
-                manager.set_visible_panes(&visible, visible_chats, cx)
+                manager.set_visible_panes(visible, visible_chats, cx)
             });
         }
         HashSet::new()

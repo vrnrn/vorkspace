@@ -174,6 +174,8 @@ pub(crate) struct Bots {
     pub(crate) vorkspace_hidden: HashSet<String>,
     pub(crate) active: Option<String>,
     chats: attachments::Chats,
+    visible_panes: HashSet<String>,
+    visible_session_views: HashSet<gpui::EntityId>,
     bridge: Option<bot::bridge::Server>,
     observations: Vec<Subscription>,
     _bridge_task: Option<gpui::Task<()>>,
@@ -436,6 +438,8 @@ impl Bots {
             vorkspace_hidden: HashSet::new(),
             active: None,
             chats: attachments::Chats::default(),
+            visible_panes: HashSet::new(),
+            visible_session_views: HashSet::new(),
             bridge,
             observations: vec![roster_subscription],
             _bridge_task: None,
@@ -598,7 +602,7 @@ impl Bots {
         &mut self,
         prefs: vorkspace_ui::preferences::Preferences,
         cx: &mut Context<Self>,
-    ) {
+    ) -> bool {
         let was = self.prefs.bots;
         self.prefs = prefs;
         bot::set_minions_enabled(self.prefs.bots && self.prefs.minions);
@@ -609,6 +613,7 @@ impl Bots {
             self.picker = None;
         }
         cx.notify();
+        was != self.prefs.bots
     }
     pub(crate) fn current(&self) -> Option<&Bot> {
         self.active.as_deref().and_then(|id| self.roster.get(id))
@@ -645,23 +650,29 @@ impl Bots {
     }
     pub(crate) fn set_visible_panes(
         &mut self,
-        visible: &HashSet<String>,
-        visible_chats: &HashSet<gpui::EntityId>,
+        visible: HashSet<String>,
+        visible_chats: HashSet<gpui::EntityId>,
         cx: &mut Context<Self>,
     ) -> HashSet<gpui::EntityId> {
-        for id in visible {
+        for id in &visible {
             self.ensure_chat(id, cx);
         }
+        self.visible_panes = visible;
+        self.visible_session_views = visible_chats;
         self.chats
             .iter()
             .map(|(id, chat)| {
-                let entity = chat.entity_id();
-                let shown = visible.contains(id) || visible_chats.contains(&entity);
-                let transcript = chat.read(cx).transcript.clone();
-                transcript.update(cx, |view, cx| view.visible(shown, cx));
-                entity
+                self.apply_chat_visibility(id, chat, cx);
+                chat.entity_id()
             })
             .collect()
+    }
+
+    fn apply_chat_visibility(&self, id: &str, chat: &Entity<Conversation>, cx: &mut App) {
+        let shown = self.visible_panes.contains(id)
+            || self.visible_session_views.contains(&chat.entity_id());
+        let transcript = chat.read(cx).transcript.clone();
+        transcript.update(cx, |view, cx| view.visible(shown, cx));
     }
     /// Queue an application message through the Bot's ordinary outbox.
     pub(crate) fn send_message(

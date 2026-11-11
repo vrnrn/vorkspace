@@ -1042,8 +1042,6 @@ impl Shell {
             cx.subscribe(&bots, |this, _, _: &crate::bots::Changed, cx| {
                 if this.prune_deleted_bot_tabs(cx) {
                     this.persist(cx);
-                } else if this.workspace_bot_context().is_some() {
-                    this.update_chat_visibility(cx);
                 }
                 // Restored legacy panes share the durable classification even
                 // when their original project-session view is still cached.
@@ -1177,6 +1175,17 @@ impl Shell {
         this
     }
     fn update_chat_visibility(&mut self, cx: &mut Context<Self>) {
+        if let Some(manager) = self.bots.clone() {
+            let context = self.workspace_bot_context();
+            manager.update(cx, |manager, cx| {
+                manager.set_workspace_context(context.as_deref(), cx);
+            });
+        }
+        self.refresh_pane_visibility(cx);
+    }
+
+    /// Availability changes can affect what is drawn without taking over navigation.
+    fn refresh_pane_visibility(&mut self, cx: &mut Context<Self>) {
         let shown: HashSet<i64> = self
             .workspace
             .active_tab()
@@ -1211,7 +1220,7 @@ impl Shell {
             .iter()
             .map(|id| self.sessions[id].entity_id())
             .collect();
-        let bot_chats = self.update_app_pane_visibility(&shown, &visible_entities, cx);
+        let bot_chats = self.update_app_pane_visibility(&shown, visible_entities, cx);
         for id in self.visible_chats.difference(&visible_chats) {
             if let Some(view) = self.sessions.get(id)
                 && !bot_chats.contains(&view.entity_id())

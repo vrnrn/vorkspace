@@ -16,7 +16,11 @@ fn managed_reuse_waits_for_the_cold_composer_and_history(cx: &mut TestAppContext
         .save_composer_draft(
             occupied.id,
             0,
-            &serde_json::json!({"cwd": path, "text": "Keep my cold draft"}),
+            &serde_json::json!({
+                "cwd": path, "text": "Keep my cold draft",
+                "selectionStart": 4, "selectionEnd": 11,
+                "attachments": [], "mcpTags": [],
+            }),
         )
         .unwrap();
     let store = Arc::new(Mutex::new(store));
@@ -32,6 +36,8 @@ fn managed_reuse_waits_for_the_cold_composer_and_history(cx: &mut TestAppContext
         }));
         chat.read_with(cx, |chat, cx| {
             assert_eq!(chat.input.read(cx).content, draft);
+            let selection = if draft.is_empty() { 0..0 } else { 4..11 };
+            assert_eq!(chat.input.read(cx).selection_utf16(), selection);
             let expected = if draft.is_empty() {
                 ManagedAvailability::Available
             } else {

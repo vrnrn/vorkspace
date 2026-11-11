@@ -462,7 +462,9 @@ impl Shell {
         self.keep_visible_idle_agents(cx);
         if let Some(bots) = &self.bots {
             let prefs = self.workspace.preferences.clone();
-            bots.update(cx, |m, cx| m.set_preferences(prefs, cx));
+            if bots.update(cx, |m, cx| m.set_preferences(prefs, cx)) {
+                self.update_chat_visibility(cx);
+            }
         }
         for session in self.sessions.values() {
             session.read(cx).transcript.clone().update(cx, |view, cx| {

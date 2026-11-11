@@ -679,7 +679,7 @@ impl Shell {
             }
         }
         if !self.sync_vorkspace_bot_visibility(cx) {
-            self.update_chat_visibility(cx);
+            self.refresh_pane_visibility(cx);
         }
         self.sync_remote_scope(cx);
         self.invalidate_chrome(cx);

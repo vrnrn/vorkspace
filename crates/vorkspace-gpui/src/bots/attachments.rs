@@ -57,6 +57,7 @@ impl Bots {
         view: Entity<Conversation>,
         cx: &mut Context<Self>,
     ) {
+        self.apply_chat_visibility(&id, &view, cx);
         let subscriptions = Self::observe_chat(&id, &view, cx);
         self.chats.0.insert(
             id,
