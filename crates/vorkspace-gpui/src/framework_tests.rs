@@ -1,5 +1,5 @@
 //! Contracts exercised through the embedded framework’s public entry points.
-use gpui::{TextRun, WindowTextSystem, px};
+use gpui::{AppContext, TextRun, WindowTextSystem, px};
 
 #[gpui::test]
 fn changing_line_clamp_keeps_complete_wrapping_geometry(cx: &mut gpui::TestAppContext) {
