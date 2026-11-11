@@ -44,7 +44,7 @@ The Changes panel and title bar read from the same Git snapshot. One Git status 
 
 When you open a file from a saved turn, Review shows that file as it was before and after that turn, even after another turn finishes. Undo and Keep apply to the turn shown on the card. If another turn has replaced it, the app refreshes the card for you.
 
-Open **View → Running Work** to see the app’s local agents. A Stop click is tied to the reply shown in the list, even from another window. The app waits for a reply's final save before starting another reply in the same conversation.
+Open **View → Running Work** to see the app’s local agents. A Stop click is tied to the reply shown in the list, even from another window or after its chat view disappears. The worker keeps ownership until its final save. An old Stop or screen update cannot affect a newer reply.
 
 When a Bot receives a message, the app sends that message's attachments and options with its own reply. Your composer and chat settings stay ready for your next message.
 
@@ -91,3 +91,5 @@ Each Mac window remembers which mouse pointer it should show. It updates the poi
 The background app is named **vorkspace helper**. It remains available after the main app quits while clipboard history or dictation is enabled. It also runs during meeting recordings and sends recording updates and transcript text to the main app. Clipboard history stays in the helper.
 
 Optional [Codebase Memory](codebase.md) uses a local helper engine to map a project’s symbols and calls. The app decides which projects may use it, keeps each checkout separate, and stops the work when you disable it.
+
+VoiceOver can read and open a complete link even when it wraps across lines or sits beside inline code. The words around it stay in reading order.
