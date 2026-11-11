@@ -1,5 +1,5 @@
 //! A local provider and its saved thread binding change in one transaction.
-use super::Store;
+use super::{LocalAgentBinding, Store};
 use crate::{
     agent::{Handoff, ProviderSwitch, Settings},
     provider::Kind,
@@ -48,10 +48,12 @@ impl Store {
             return Err("Remote provider choices belong to the Host".into());
         }
         let tx = self.agent_configuration_transaction()?;
-        let (current_provider, current_binding) = self.local_agent_binding(id)?;
+        let current = self
+            .local_agent_binding(id)?
+            .ok_or("Conversation no longer exists")?;
         let saved = self.agent_preferences(id)?.unwrap_or_default();
-        if current_provider != expected_provider
-            || current_provider == provider.id()
+        if current.provider != expected_provider
+            || current.provider == provider.id()
             || saved.revision >= next.revision
         {
             return Err("The saved provider changed. Reopen the conversation to retry.".into());
@@ -70,7 +72,7 @@ impl Store {
             }
             None => {
                 if let Some(pending) = next.pending_provider_switch.as_mut() {
-                    pending.provider_id = current_binding;
+                    pending.provider_id = current.provider_id;
                 }
                 None
             }
@@ -94,7 +96,9 @@ impl Store {
     ) -> Result<(), String> {
         let tx = self.agent_configuration_transaction()?;
         let mut settings = self.agent_preferences(id)?.unwrap_or_default();
-        if self.local_agent_binding(id)?.0 != provider
+        if self
+            .local_agent_binding(id)?
+            .is_none_or(|binding| binding.provider != provider)
             || settings.account.id != account
             || settings
                 .pending_provider_switch
@@ -126,7 +130,9 @@ impl Store {
     ) -> Result<bool, String> {
         let tx = self.agent_configuration_transaction()?;
         let mut settings = self.agent_preferences(id)?.unwrap_or_default();
-        if self.local_agent_binding(id)?.0 != provider
+        if self
+            .local_agent_binding(id)?
+            .is_none_or(|binding| binding.provider != provider)
             || settings.account.id != account
             || settings.pending_provider_switch.is_some()
             || settings.handoff.as_ref() != Some(prepared)
@@ -150,24 +156,27 @@ impl Store {
             .is_some_and(|saved| saved.revision > settings.revision))
     }
 
-    fn local_agent_binding(&self, id: i64) -> Result<(String, Option<String>), String> {
+    pub(super) fn local_agent_binding(&self, id: i64) -> Result<Option<LocalAgentBinding>, String> {
+        let read = |row: &rusqlite::Row<'_>| {
+            Ok(LocalAgentBinding {
+                provider: row.get(0)?,
+                provider_id: row.get(1)?,
+            })
+        };
         let binding = if self.shared.is_some() {
             self.conn.query_row(
                 "SELECT harness,provider_session_id FROM sessions WHERE id=?1",
                 [self.persisted_session_id(id)?],
-                |row| Ok((row.get(0)?, row.get(1)?)),
+                read,
             )
         } else {
             self.conn.query_row(
                 "SELECT provider,provider_id FROM native_sessions WHERE id=?1",
                 [id],
-                |row| Ok((row.get(0)?, row.get(1)?)),
+                read,
             )
         };
-        binding
-            .optional()
-            .map_err(|error| error.to_string())?
-            .ok_or("Conversation no longer exists".into())
+        binding.optional().map_err(|error| error.to_string())
     }
 }
 
@@ -225,7 +234,10 @@ mod tests {
         let peer = Store::read_vorkspace(&path).unwrap();
         assert_eq!(
             peer.local_agent_binding(id).unwrap(),
-            ("codex".into(), Some("latest-outgoing-thread".into()))
+            Some(LocalAgentBinding {
+                provider: "codex".into(),
+                provider_id: Some("latest-outgoing-thread".into()),
+            })
         );
         assert_eq!(peer.agent_preferences(id).unwrap().unwrap().revision, 1);
         store
@@ -249,7 +261,10 @@ mod tests {
         store.configure_agent(id, "codex", &original).unwrap();
         assert_eq!(
             peer.local_agent_binding(id).unwrap(),
-            ("claude".into(), None)
+            Some(LocalAgentBinding {
+                provider: "claude".into(),
+                provider_id: None
+            })
         );
         let saved = peer.agent_preferences(id).unwrap().unwrap();
         assert_eq!(saved.revision, 2);
@@ -263,7 +278,10 @@ mod tests {
         assert!(reverted.pending_provider_switch.is_none());
         assert_eq!(
             peer.local_agent_binding(id).unwrap(),
-            ("codex".into(), binding)
+            Some(LocalAgentBinding {
+                provider: "codex".into(),
+                provider_id: binding
+            })
         );
     }
 

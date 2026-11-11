@@ -382,6 +382,76 @@ fn wal_restart_preserves_partial_output_and_provider_context() {
 }
 
 #[test]
+fn history_recovery_reads_only_the_exact_local_agent_and_keeps_its_binding_snapshot() {
+    for shared in [false, true] {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("sessions.db");
+        let open = if shared {
+            Store::open_vorkspace
+        } else {
+            Store::open
+        };
+        let mut store = open(&path).unwrap();
+        let session = store.create("codex", "/project").unwrap();
+        let mut settings = crate::agent::Settings::default();
+        settings.account.id = "fixture-account".into();
+        store.save_agent_preferences(session.id, &settings).unwrap();
+        store.provider_id(session.id, "original-thread").unwrap();
+        let mut history = crate::transcript::Transcript::default();
+        history.begin("assistant");
+        history.append("Keep the recovered answer");
+        store.write_rows(session.id, 0, &history.rows).unwrap();
+        let unrelated = store.create("claude", "/other-project").unwrap();
+        let table = if shared {
+            "sessions"
+        } else {
+            "native_sessions"
+        };
+        store
+            .conn
+            .execute(
+                &format!("UPDATE {table} SET title=x'FF' WHERE id=?1"),
+                [store.persisted_session_id(unrelated.id).unwrap()],
+            )
+            .unwrap();
+        assert!(
+            store.sessions().is_err(),
+            "the unrelated row cannot be decoded as a sidebar card"
+        );
+
+        let loaded = store.load_local_history(session.id).unwrap();
+        assert_eq!(loaded.transcript.rows, history.rows);
+        assert_eq!(
+            loaded.settings.unwrap().unwrap().account.id,
+            "fixture-account"
+        );
+        assert_eq!(
+            loaded.binding,
+            Some(LocalAgentBinding {
+                provider: "codex".into(),
+                provider_id: Some("original-thread".into()),
+            })
+        );
+        let peer = open(&path).unwrap();
+        peer.provider_id(session.id, "successor-thread").unwrap();
+        assert_eq!(
+            loaded.binding.as_ref().unwrap().provider_id.as_deref(),
+            Some("original-thread")
+        );
+        assert_eq!(
+            store
+                .load_local_history(session.id)
+                .unwrap()
+                .binding
+                .unwrap()
+                .provider_id
+                .as_deref(),
+            Some("successor-thread")
+        );
+    }
+}
+
+#[test]
 fn a_worktree_is_only_removable_once_its_sessions_are_archived() {
     let dir = tempfile::tempdir().unwrap();
     let git = |args: &[&str]| crate::git::git(dir.path(), args).unwrap();

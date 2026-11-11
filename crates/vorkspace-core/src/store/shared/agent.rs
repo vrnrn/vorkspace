@@ -27,6 +27,14 @@ impl Store {
         &self,
         id: i64,
     ) -> Result<Option<Settings>, String> {
+        self.shared_agent_configuration(id)
+            .map(|configuration| configuration.map(|(_, settings)| settings))
+    }
+
+    pub(in crate::store) fn shared_agent_configuration(
+        &self,
+        id: i64,
+    ) -> Result<Option<(LocalAgentBinding, Settings)>, String> {
         let tx = self
             .conn
             .is_autocommit()
@@ -140,7 +148,13 @@ impl Store {
         if let Some(tx) = tx {
             sql(tx.commit())?;
         }
-        Ok(Some(settings))
+        Ok(Some((
+            LocalAgentBinding {
+                provider,
+                provider_id,
+            },
+            settings,
+        )))
     }
     pub(in crate::store) fn shared_save_agent(
         &self,

@@ -67,7 +67,16 @@ pub struct LoadedHistory {
     pub transcript: Transcript,
     /// A damaged preference record must still leave saved messages readable.
     pub settings: Result<Option<crate::agent::Settings>, String>,
+    /// Binding from the same scalar observation, available when preferences decode.
+    pub binding: Option<LocalAgentBinding>,
     pub revision: i64,
+}
+
+/// The local provider thread observed with its conversation preferences.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct LocalAgentBinding {
+    pub provider: String,
+    pub provider_id: Option<String>,
 }
 
 pub struct Store {
@@ -938,10 +947,17 @@ impl Store {
             .unchecked_transaction()
             .map_err(|e| e.to_string())?;
         let revision = self.session_history_revision(session)?;
-        let mut settings = if self.shared.is_some() {
-            self.shared_agent_preferences(session)
+        let (binding, mut settings) = if self.shared.is_some() {
+            match self.shared_agent_configuration(session) {
+                Ok(Some((binding, settings))) => (Some(binding), Ok(Some(settings))),
+                Ok(None) => (None, Ok(None)),
+                Err(error) => (None, Err(error)),
+            }
         } else {
-            self.agent_settings(session)
+            (
+                self.local_agent_binding(session)?,
+                self.agent_settings(session),
+            )
         };
         let transcript = if self.shared.is_some() {
             self.shared_load_projected(
@@ -959,6 +975,7 @@ impl Store {
         Ok(LoadedHistory {
             transcript,
             settings,
+            binding,
             revision,
         })
     }

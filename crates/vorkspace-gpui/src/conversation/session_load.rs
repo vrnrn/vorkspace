@@ -398,21 +398,13 @@ impl Conversation {
             }
             let history = store.load_local_history(id)?;
             let settings = history.settings?.unwrap_or_default();
-            let binding = if recovering {
-                store
-                    .sessions()?
-                    .into_iter()
-                    .find(|session| session.id == id)
-                    .map(|session| {
-                        (
-                            session.provider,
-                            session.provider_id,
-                            settings.account.id.clone(),
-                        )
-                    })
-            } else {
-                None
-            };
+            let binding = history.binding.filter(|_| recovering).map(|binding| {
+                (
+                    binding.provider,
+                    binding.provider_id,
+                    settings.account.id.clone(),
+                )
+            });
             drop(store);
             Ok(Some((
                 crate::transcript::PreparedHistory::new(history.transcript.rows, bot),

@@ -17,7 +17,7 @@ mod settings;
 #[cfg(test)]
 mod tests;
 
-use super::{Reminder, Session, Store, TurnHistory};
+use super::{LocalAgentBinding, Reminder, Session, Store, TurnHistory};
 use crate::{
     agent::Settings,
     context::Usage,
