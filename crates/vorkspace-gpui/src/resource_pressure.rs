@@ -217,20 +217,15 @@ impl ResourceMonitor {
                 if this
                     .update(cx, |this, cx| {
                         this.loading = false;
-                        match rows {
-                            Ok(rows) => {
-                                if this
-                                    .stopping
-                                    .as_ref()
-                                    .is_some_and(|stop| !stop.target.still_running(&rows))
-                                {
-                                    this.stopping = None;
-                                }
-                                this.processes = stable_order(&this.processes, rows);
-                                this.error = None;
-                            }
-                            Err(error) => this.error = Some(error),
+                        if this
+                            .stopping
+                            .as_ref()
+                            .is_some_and(|stop| !stop.target.still_running(&rows.processes))
+                        {
+                            this.stopping = None;
                         }
+                        this.processes = stable_order(&this.processes, rows.processes);
+                        this.error = rows.usage_error;
                         cx.notify();
                     })
                     .is_err()
@@ -339,6 +334,7 @@ impl ResourceMonitor {
             div()
                 .id(id)
                 .role(Role::Alert)
+                .aria_label(text.clone())
                 .mt_3()
                 .text_size(px(12.))
                 .text_color(status(StatusColor::Danger, 1.))
@@ -434,7 +430,7 @@ impl ResourceMonitor {
                     .when(self.error.is_some(), |d| {
                         d.child(error_line(
                             "resource-load-error",
-                            "Couldn't load running work. Trying again…".into(),
+                            "Process usage is unavailable. Known agents can still be stopped. Trying again…".into(),
                         ))
                     })
                     .when_some(self.stop_error.clone(), |d, error| {
@@ -532,7 +528,9 @@ impl ResourceMonitor {
         let title: SharedString = session
             .map(|s| s.title.clone())
             .unwrap_or_else(|| "Background work".into());
-        let memory: u64 = rows.iter().map(|r| r.memory_bytes).sum();
+        let memory = rows.iter().try_fold(0u64, |total, row| {
+            Some(total.saturating_add(row.memory_bytes?))
+        });
         let expanded = self.expanded.contains(&id);
         let turn = rows.iter().find_map(|process| process.turn.clone());
         let stopping_session = self.stopping.as_ref().is_some_and(|stop| {
@@ -637,14 +635,17 @@ impl ResourceMonitor {
                         12.,
                     ))
                     .child(format!(
-                        "{} {} · {} memory",
+                        "{} {} · {}",
                         rows.len(),
                         if rows.len() == 1 {
                             "process"
                         } else {
                             "processes"
                         },
-                        format_memory(memory)
+                        memory.map_or_else(
+                            || "Usage unavailable".into(),
+                            |bytes| format!("{} memory", format_memory(bytes)),
+                        )
                     ))
                     .on_click(cx.listener(move |this, _, _, cx| {
                         if !this.expanded.remove(&id) {
@@ -714,9 +715,14 @@ impl ResourceMonitor {
                             .text_size(px(10.))
                             .text_color(content(0.4))
                             .child(format!(
-                                "{:.0}% CPU · {} · PID {pid}",
-                                process.cpu_percent,
-                                format_memory(process.memory_bytes)
+                                "{} · {} · PID {pid}",
+                                process.cpu_percent.map_or_else(
+                                    || "CPU unavailable".into(),
+                                    |cpu| format!("{cpu:.0}% CPU"),
+                                ),
+                                process
+                                    .memory_bytes
+                                    .map_or_else(|| "Memory unavailable".into(), format_memory,),
                             )),
                     ),
             )
@@ -882,8 +888,8 @@ mod tests {
             session,
             turn: None,
             command: format!("process {pid}"),
-            cpu_percent: cpu,
-            memory_bytes: 0,
+            cpu_percent: Some(cpu),
+            memory_bytes: Some(0),
             agent: false,
         }
     }

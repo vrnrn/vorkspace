@@ -90,10 +90,16 @@ pub struct OwnedProcess {
     pub session: i64,
     pub turn: Option<TurnToken>,
     pub command: String,
-    pub cpu_percent: f64,
-    pub memory_bytes: u64,
+    pub cpu_percent: Option<f64>,
+    pub memory_bytes: Option<u64>,
     /// The provider process itself, rather than a tool it started.
     pub agent: bool,
+}
+
+#[derive(Default)]
+pub struct ProcessSnapshot {
+    pub processes: Vec<OwnedProcess>,
+    pub usage_error: Option<String>,
 }
 
 #[derive(Clone)]
@@ -201,14 +207,44 @@ fn verified_roots() -> Vec<Agent> {
         .collect()
 }
 
-/// Every live provider process and its descendants, busiest first. Blocking.
-pub fn processes() -> Result<Vec<OwnedProcess>, String> {
+/// Every live provider process and its observed descendants, busiest first.
+/// Verified provider roots remain controllable if usage enumeration fails. Blocking.
+pub fn processes() -> ProcessSnapshot {
     let roots = verified_roots();
     if roots.is_empty() {
-        return Ok(Vec::new());
+        return ProcessSnapshot::default();
     }
-    let processes = process_snapshot()?;
-    Ok(owned(&processes, &roots, identity))
+    observe_processes(&roots, process_snapshot())
+}
+
+fn observe_processes(
+    roots: &[Agent],
+    snapshot: Result<HashMap<u32, Process>, String>,
+) -> ProcessSnapshot {
+    match snapshot {
+        Ok(processes) => ProcessSnapshot {
+            processes: owned(&processes, roots, identity),
+            usage_error: None,
+        },
+        Err(error) => ProcessSnapshot {
+            processes: roots
+                .iter()
+                .filter_map(|root| {
+                    Some(OwnedProcess {
+                        pid: root.pid,
+                        identity: root.identity.clone()?,
+                        session: root.session,
+                        turn: root.turn.clone(),
+                        command: "Provider process".into(),
+                        cpu_percent: None,
+                        memory_bytes: None,
+                        agent: true,
+                    })
+                })
+                .collect(),
+            usage_error: Some(error),
+        },
+    }
 }
 
 fn owned(
@@ -226,15 +262,16 @@ fn owned(
                 session: root.session,
                 turn: root.turn.clone(),
                 command: process.command.clone(),
-                cpu_percent: process.cpu,
-                memory_bytes: process.memory,
+                cpu_percent: Some(process.cpu),
+                memory_bytes: Some(process.memory),
                 agent: process.pid == root.pid,
             })
         })
         .collect();
     owned.sort_by(|a, b| {
         b.cpu_percent
-            .total_cmp(&a.cpu_percent)
+            .unwrap_or_default()
+            .total_cmp(&a.cpu_percent.unwrap_or_default())
             .then(b.memory_bytes.cmp(&a.memory_bytes))
     });
     owned
@@ -426,6 +463,41 @@ mod tests {
             listed.iter().map(|p| (p.pid, p.agent)).collect::<Vec<_>>(),
             [(11, false), (12, false), (10, true)]
         );
+    }
+
+    #[test]
+    fn usage_failure_preserves_verified_turn_controls_without_fabricated_statistics() {
+        use std::sync::{atomic::AtomicBool, Arc};
+        let cancel = Arc::new(AtomicBool::new(false));
+        let pid = std::process::id();
+        let root = Agent {
+            session: 42,
+            turn: Some((&cancel).into()),
+            pid,
+            identity: identity(pid),
+        };
+        let unavailable = || {
+            let snapshot = observe_processes(std::slice::from_ref(&root), Err("ps failed".into()));
+            assert_eq!(snapshot.usage_error.as_deref(), Some("ps failed"));
+            assert_eq!(snapshot.processes.len(), 1);
+            let process = &snapshot.processes[0];
+            assert_eq!(process.pid, pid);
+            assert_eq!(Some(&process.identity), root.identity.as_ref());
+            assert_eq!(process.session, 42);
+            assert!(process.turn.as_ref().unwrap().matches(&cancel));
+            assert!(process.agent);
+            assert_eq!(process.cpu_percent, None);
+            assert_eq!(process.memory_bytes, None);
+        };
+        unavailable();
+        let process = parse_process(&format!("{pid} 1 27.5 2048 fixture-provider")).unwrap();
+        let snapshot = observe_processes(std::slice::from_ref(&root), Ok([(pid, process)].into()));
+        assert_eq!(snapshot.usage_error, None);
+        assert_eq!(snapshot.processes.len(), 1);
+        assert_eq!(snapshot.processes[0].turn, root.turn);
+        assert_eq!(snapshot.processes[0].cpu_percent, Some(27.5));
+        assert_eq!(snapshot.processes[0].memory_bytes, Some(2048 * 1024));
+        unavailable();
     }
 
     #[test]
