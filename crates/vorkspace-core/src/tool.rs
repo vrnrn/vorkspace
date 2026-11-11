@@ -7,8 +7,6 @@ pub use presentation::{CommandStep, ToolPresentation};
 pub(crate) const OUTPUT_LIMIT: usize = 64 * 1024;
 pub(crate) const OUTPUT_OMISSION: &str = "… earlier output omitted …\n";
 
-const OMITTED_OUTPUT: &str = "… earlier output omitted …\n";
-
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ToolState {
@@ -52,24 +50,25 @@ impl ToolCall {
     }
     pub fn bound_output(&mut self) {
         if let Some(tail) = self.output_tail() {
-            self.output = format!("{OMITTED_OUTPUT}{tail}");
+            self.output = format!("{OUTPUT_OMISSION}{tail}");
         }
     }
 
     /// Compare against the projected output without copying the full source.
     pub(crate) fn bounded_output_matches(&self, other: &str) -> bool {
         match self.output_tail() {
-            Some(tail) => other.strip_prefix(OMITTED_OUTPUT) == Some(tail),
+            Some(tail) => other.strip_prefix(OUTPUT_OMISSION) == Some(tail),
             None => self.output == other,
         }
     }
 
     fn output_tail(&self) -> Option<&str> {
-        const LIMIT: usize = 64 * 1024;
-        if self.output.len() <= LIMIT {
+        if self.output.len() <= OUTPUT_LIMIT {
             return None;
         }
-        let at = self.output.ceil_char_boundary(self.output.len() - LIMIT);
+        let at = self
+            .output
+            .ceil_char_boundary(self.output.len() - OUTPUT_LIMIT);
         Some(&self.output[at..])
     }
     pub fn summary(&self) -> (String, String) {
