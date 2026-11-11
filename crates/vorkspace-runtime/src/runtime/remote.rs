@@ -868,9 +868,11 @@ pub fn run_with_client(
                     }
                 };
                 next.activity = activity.label();
-                next.provider_id = snapshot["session"]["providerSessionId"]
-                    .as_str()
-                    .map(str::to_owned);
+                next.binding = ProviderBinding::Set(
+                    snapshot["session"]["providerSessionId"]
+                        .as_str()
+                        .map(str::to_owned),
+                );
                 next.model = snapshot["session"]["model"].as_str().map(str::to_owned);
                 (next.context, next.metrics) = accounting(snapshot);
                 let current_ids: HashSet<_> =
