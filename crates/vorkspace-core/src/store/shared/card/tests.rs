@@ -64,20 +64,8 @@ fn card_save_reopen_preserves_rich_owner_later_blocks_receipts_and_references() 
             .unwrap()
             .is_none());
         // A cold/partial UI is sufficient. No HistoryIndex or full rows are needed.
-        store
-            .shared
-            .as_ref()
-            .unwrap()
-            .incremental
-            .borrow_mut()
-            .clear();
-        store
-            .shared
-            .as_ref()
-            .unwrap()
-            .snapshots
-            .borrow_mut()
-            .clear();
+        store.shared.incremental.borrow_mut().clear();
+        store.shared.snapshots.borrow_mut().clear();
         let row = store
             .refresh_bot_card(id, &expected, &desired)
             .unwrap()
@@ -149,7 +137,7 @@ fn local_card_commit_keeps_warm_index_but_never_blesses_an_external_revision() {
             .refresh_bot_card(id, &expected, &desired)
             .unwrap()
             .unwrap();
-        let index_revision = store.shared.as_ref().unwrap().incremental.borrow()[&id].revision;
+        let index_revision = store.shared.incremental.borrow()[&id].revision;
         assert_eq!(index_revision, store.history_revision(&original).unwrap());
         // A provider loaded before the refresh appends only its new tail.
         let at = transcript.begin("assistant");
@@ -178,13 +166,7 @@ fn cold_digest_allows_own_card_then_provider_tail_but_rejects_stale_card_rows_an
             let (mut store, id, original, _, expected) = setup(Path::new(":memory:"), bot, 2);
             // load() deliberately owns a digest, even with a stale/no index.
             let mut transcript = store.load(id).unwrap();
-            store
-                .shared
-                .as_ref()
-                .unwrap()
-                .incremental
-                .borrow_mut()
-                .clear();
+            store.shared.incremental.borrow_mut().clear();
             let desired = title(&expected, "New");
             store
                 .refresh_bot_card(id, &expected, &desired)
@@ -274,13 +256,7 @@ fn early_card_work_is_constant_with_cold_and_warm_indices_and_unchanged_is_read_
             store.write_rows(id, history.rows.len(), &[]).unwrap();
             for warm in [true, false] {
                 if !warm {
-                    store
-                        .shared
-                        .as_ref()
-                        .unwrap()
-                        .incremental
-                        .borrow_mut()
-                        .clear();
+                    store.shared.incremental.borrow_mut().clear();
                 }
                 let mut desired = expected.clone();
                 // Restore baseline between measurements.

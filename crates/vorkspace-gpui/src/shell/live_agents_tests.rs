@@ -193,7 +193,7 @@ fn native_activity_capture() {
     let output = std::path::PathBuf::from(std::env::var_os("VOKKY_ACTIVITY_CAPTURE_DIR").unwrap());
     assert!(output.is_absolute() && output.is_dir());
     let directory = tempfile::tempdir().unwrap();
-    let store = Store::open(&directory.path().join("native.sqlite")).unwrap();
+    let store = Store::test(&directory.path().join("native.sqlite")).unwrap();
     let summaries: Vec<_> = (0..6)
         .map(|i| {
             let mut summary = store

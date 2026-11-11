@@ -193,9 +193,6 @@ fn provider(blocks: &[Value], owner: usize, thread: &Value, fallback: &str) -> O
 
 impl Store {
     pub fn desktop_side_threads(&self, id: i64) -> Result<Vec<DesktopSideThread>, String> {
-        if self.shared.is_none() {
-            return Ok(Vec::new());
-        }
         let blocks = self.shared_blocks(id)?;
         let session = self
             .sessions()?

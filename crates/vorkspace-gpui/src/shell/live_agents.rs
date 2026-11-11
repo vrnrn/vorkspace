@@ -907,7 +907,7 @@ mod minion_history_tests {
     #[gpui::test]
     fn restored_team_views_never_join_project_activity_trees(cx: &mut TestAppContext) {
         vorkspace_ui::clock::use_test_clock(cx);
-        let store = Store::open(std::path::Path::new(":memory:")).unwrap();
+        let store = Store::test(std::path::Path::new(":memory:")).unwrap();
         let session = store.create("codex", "/missing/team-project").unwrap();
         let id = session.id;
         let window = cx

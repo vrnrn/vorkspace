@@ -242,7 +242,7 @@ mod tests {
     fn direct_delivery_is_durable_deduplicated_and_keeps_the_shared_hop_budget() {
         let directory = tempfile::tempdir().unwrap();
         let path = directory.path().join("peers.db");
-        let store = Store::open(&path).unwrap();
+        let store = Store::test(&path).unwrap();
         let mut r = roster();
         let first = enqueue(&mut r, "a", "@Beta", "Review this", "request", 2, true).unwrap();
         assert_eq!(first.hop, 3);
@@ -255,7 +255,7 @@ mod tests {
         assert!(enqueue(&mut r, "a", "b", "Different", "request", 2, true).is_err());
         r.save(&store).unwrap();
         drop(store);
-        let store = Store::open(&path).unwrap();
+        let store = Store::test(&path).unwrap();
         let mut saved = Roster::load(&store).unwrap();
         let message = saved.get("b").unwrap().outbox[0].clone();
         assert_eq!(message.peer.unwrap().hop, 3);

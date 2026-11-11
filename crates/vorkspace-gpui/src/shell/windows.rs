@@ -619,7 +619,7 @@ mod compatibility_tests {
     #[test]
     fn desktop_import_refreshes_shared_defaults_without_replacing_local_layout() {
         let path = std::path::Path::new(":memory:");
-        let store = vorkspace_core::store::Store::open(path).unwrap();
+        let store = vorkspace_core::store::Store::test(path).unwrap();
         let mut local = Workspace {
             project: "/workspace/first".into(),
             projects: vec!["/workspace/first".into()],

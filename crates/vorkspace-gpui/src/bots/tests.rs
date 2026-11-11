@@ -891,7 +891,11 @@ fn peer_history_app_calls_page_public_text_without_loading_a_peer_conversation(
                 },
                 vorkspace_core::transcript::Row {
                     role: "tool".into(),
-                    text: "Private output".repeat(100_000),
+                    text: serde_json::to_string(&vorkspace_core::tool::ToolCall {
+                        output: "Private output".repeat(10_000),
+                        ..vorkspace_core::tool::ToolCall::new("private", "Read")
+                    })
+                    .unwrap(),
                     first: true,
                     sent_at: None,
                 },
@@ -1069,7 +1073,7 @@ fn bot_errors_use_cards_without_moving_content(cx: &mut TestAppContext) {
 fn saved_desktop_bot_opens_in_actual_manager_without_replacing_its_conversation(
     cx: &mut TestAppContext,
 ) {
-    let db = Store::open_vorkspace(std::path::Path::new(":memory:")).unwrap();
+    let db = Store::test(std::path::Path::new(":memory:")).unwrap();
     let session = db.create("codex", "/saved-project").unwrap();
     let original = db.persisted_session_id(session.id).unwrap();
     let settings = Settings {
@@ -1325,7 +1329,7 @@ fn setup_bot(cx: &mut TestAppContext) -> Setup {
     let dir = std::env::temp_dir().join(format!("native-bots-{}", bot::new_id()));
     std::fs::create_dir_all(&dir).unwrap();
     let project = dir.to_string_lossy().to_string();
-    let store = Arc::new(Mutex::new(Store::open(&dir.join("native.sqlite")).unwrap()));
+    let store = Arc::new(Mutex::new(Store::test(&dir.join("native.sqlite")).unwrap()));
     let db = store.clone();
     let cwd = project.clone();
     let saved: Option<String> = None;
@@ -1408,7 +1412,7 @@ fn send_after_recovery_choice(cx: &mut TestAppContext, recovered: bool) {
             .unwrap();
     });
     cx.run_until_parked();
-    let source = chat.read_with(cx, |view, cx| view.bot_rows(cx).to_vec());
+    let source = locked(&s.store).unwrap().load(s.session).unwrap().rows;
     let mut settings = chat.read_with(cx, |view, _| view.settings.clone());
     // Exercise admission and acknowledgement without starting a provider.
     settings.usage_limit = Some(Default::default());
@@ -1503,7 +1507,7 @@ fn send_after_recovery_choice(cx: &mut TestAppContext, recovered: bool) {
         assert_eq!(outbox[0].id == "recovered-send", recovered);
         assert_eq!(outbox[0].text, expected);
     });
-    let db = Store::open(&PathBuf::from(&s.project).join("native.sqlite")).unwrap();
+    let db = Store::test(&PathBuf::from(&s.project).join("native.sqlite")).unwrap();
     assert!(db.composer_recoveries(s.session).unwrap().is_empty());
     assert!(
         db.agent_settings(s.session)
@@ -1571,7 +1575,7 @@ fn saved_draft_outbox_identity_survives_restart_and_is_not_enqueued_twice(cx: &m
     });
     cx.run_until_parked();
     assert!(!s.manager.read_with(cx, |m, _| m.chats.contains_key(&s.id)));
-    let db = Store::open(Path::new(&s.project).join("native.sqlite").as_path()).unwrap();
+    let db = Store::test(Path::new(&s.project).join("native.sqlite").as_path()).unwrap();
     let roster = Roster::load(&db).unwrap();
     let queued: Vec<_> = roster
         .get(&s.id)
@@ -1594,7 +1598,7 @@ fn saved_draft_outbox_identity_survives_restart_and_is_not_enqueued_twice(cx: &m
     db.save_setting(&format!("bot-delivered:{}:{}", s.session, draft.id), "1")
         .unwrap();
     drop(db);
-    let reopened = Store::open(Path::new(&s.project).join("native.sqlite").as_path()).unwrap();
+    let reopened = Store::test(Path::new(&s.project).join("native.sqlite").as_path()).unwrap();
     assert!(reopened.follow_ups(s.session).unwrap().draft.is_none());
     s.manager
         .update(cx, |manager, cx| manager.ensure_chat(&s.id, cx));
@@ -1648,8 +1652,9 @@ fn failed_outbox_write_preserves_saved_draft_and_retry_steers_only_once(cx: &mut
             },
         );
     });
-    let conn = rusqlite::Connection::open(Path::new(&s.project).join("native.sqlite")).unwrap();
-    conn.execute_batch("CREATE TRIGGER fail_bot_roster BEFORE UPDATE ON native_settings WHEN NEW.key = 'bot-roster' BEGIN SELECT RAISE(FAIL, 'simulated outbox failure'); END;").unwrap();
+    locked(&s.store)
+        .unwrap()
+        .fail_setting_for_test(Some(("bot-roster", "simulated outbox failure")));
     let submit = |manager: &mut Bots, cx: &mut Context<Bots>| {
         manager.chats[&s.id].update(cx, |_, cx| {
             cx.emit(crate::conversation::BotSubmitted {
@@ -1684,7 +1689,7 @@ fn failed_outbox_write_preserves_saved_draft_and_retry_steers_only_once(cx: &mut
                 .contains("simulated outbox failure")
         )
     });
-    conn.execute_batch("DROP TRIGGER fail_bot_roster").unwrap();
+    locked(&s.store).unwrap().fail_setting_for_test(None);
     s.manager.update(cx, submit);
     cx.run_until_parked();
     let control = received.try_recv().expect("persisted retry should steer");
@@ -3920,7 +3925,7 @@ fn claimed_outbox_message_is_presented_as_uncertain_before_retry(cx: &mut TestAp
     });
     cx.run_until_parked();
     assert!(!s.manager.read_with(cx, |m, _| m.chats.contains_key(&s.id)));
-    let other = Store::open(&Path::new(&s.project).join("native.sqlite")).unwrap();
+    let other = Store::test(&Path::new(&s.project).join("native.sqlite")).unwrap();
     let queued = Roster::load(&other)
         .unwrap()
         .get(&s.id)
@@ -3948,7 +3953,7 @@ fn claimed_outbox_message_is_presented_as_uncertain_before_retry(cx: &mut TestAp
             .unwrap();
         assert!(message.error.as_deref().unwrap().contains("uncertain"));
     });
-    let reopened = Store::open(&Path::new(&s.project).join("native.sqlite")).unwrap();
+    let reopened = Store::test(&Path::new(&s.project).join("native.sqlite")).unwrap();
     assert!(
         !reopened
             .claim_bot_message(&s.id, &queued, "later-owner")
@@ -4157,14 +4162,8 @@ fn minion_actor_keeps_team_identity_but_uses_parent_storage_and_rejects_foreign_
             .unwrap()
             .paused
     );
-    let saved: vorkspace_core::follow_up::State = serde_json::from_str(
-        &locked(&s.store)
-            .unwrap()
-            .setting(&format!("follow-up:{session}"))
-            .unwrap()
-            .unwrap(),
-    )
-    .unwrap();
+    let path = locked(&s.store).unwrap().database_path().to_owned();
+    let saved = Store::test(&path).unwrap().follow_ups(session).unwrap();
     assert!(saved.paused);
     assert_eq!(saved.messages[0].text, "Preserve this legacy work");
     assert!(

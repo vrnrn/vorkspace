@@ -16,7 +16,7 @@ fn row(role: &str, text: &str, first: bool) -> Row {
 
 #[test]
 fn desktop_title_prefixes_are_hidden_before_search_highlighting() {
-    let store = Store::open_vorkspace(std::path::Path::new(":memory:")).unwrap();
+    let store = Store::test(std::path::Path::new(":memory:")).unwrap();
     let mut session = store.create("codex", "/project").unwrap();
     session.title = "codex · Café repair".into();
     let hits = titles(&[session.clone()], "café");
@@ -36,7 +36,7 @@ fn desktop_title_prefixes_are_hidden_before_search_highlighting() {
 fn saved_search_rejoins_messages_is_literal_and_survives_reopening() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("sessions.db");
-    let mut store = Store::open(&path).unwrap();
+    let mut store = Store::test(&path).unwrap();
     let session = store.create("codex", "/other/project").unwrap();
     store
         .write_rows(
@@ -51,7 +51,7 @@ fn saved_search_rejoins_messages_is_literal_and_survives_reopening() {
         )
         .unwrap();
     drop(store);
-    let store = Store::open(&path).unwrap();
+    let store = Store::test(&path).unwrap();
     let cancel = Arc::new(AtomicBool::new(false));
     let (hits, truncated) = store
         .search_sessions("CAFÉ and 100%_literal", cancel.clone())
@@ -81,7 +81,7 @@ fn saved_search_rejoins_messages_is_literal_and_survives_reopening() {
 
 #[test]
 fn cancelled_session_search_does_not_interrupt_later_store_operations() {
-    let mut store = Store::open(std::path::Path::new(":memory:")).unwrap();
+    let mut store = Store::test(std::path::Path::new(":memory:")).unwrap();
     let s = store.create("claude", "/a").unwrap();
     store
         .write_rows(s.id, 0, &[row("user", "needle", true)])
@@ -104,7 +104,7 @@ fn cancelled_session_search_does_not_interrupt_later_store_operations() {
 
 #[test]
 fn live_search_finds_split_phrases_tools_and_skips_reasoning() {
-    let store = Store::open(std::path::Path::new(":memory:")).unwrap();
+    let store = Store::test(std::path::Path::new(":memory:")).unwrap();
     let s = store.create("codex", "/a").unwrap();
     let mut transcript = Transcript::default();
     transcript.begin("assistant");
@@ -135,7 +135,7 @@ fn live_search_finds_split_phrases_tools_and_skips_reasoning() {
 
 #[test]
 fn grouping_matches_react_limits_order_and_live_deduplication() {
-    let store = Store::open(std::path::Path::new(":memory:")).unwrap();
+    let store = Store::test(std::path::Path::new(":memory:")).unwrap();
     let mut s = store.create("codex", "/a").unwrap();
     s.title = "Search parity".into();
     let mut hits = titles(&[s.clone()], "search");
@@ -181,7 +181,7 @@ fn fuzzy_tokens_filename_priority_and_utf8_ranges_match_react() {
 #[test]
 fn unopened_titles_are_searchable_and_the_reader_sees_new_writes() {
     let dir = tempfile::tempdir().unwrap();
-    let mut store = Store::open(&dir.path().join("search.db")).unwrap();
+    let mut store = Store::test(&dir.path().join("search.db")).unwrap();
     let session = store.create("codex", "/another-project").unwrap();
     store
         .title(session.id, "Unopened needle conversation")
@@ -211,7 +211,7 @@ fn unopened_titles_are_searchable_and_the_reader_sees_new_writes() {
 
 #[test]
 fn an_empty_query_offers_recent_conversations_files_and_projects() {
-    let store = Store::open_vorkspace(std::path::Path::new(":memory:")).unwrap();
+    let store = Store::test(std::path::Path::new(":memory:")).unwrap();
     let mut older = store.create("codex", "/project").unwrap();
     older.title = "Older".into();
     older.has_messages = true;

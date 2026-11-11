@@ -44,6 +44,7 @@ objc2-foundation = { version = "0.3", default-features = false, features = ["std
 objc2-user-notifications = "0.3"
 
 [dev-dependencies]
+vorkspace-core = { path = "../vorkspace-core", features = ["test-support"] }
 vorkspace-ui = { path = "../vorkspace-ui", features = ["test-support"] }
 vorkspace-runtime = { path = "../vorkspace-runtime", features = ["test-support"] }
 gpui = { package = "gpui-pre", version = "=0.3.9", default-features = false, features = ["test-support"] }

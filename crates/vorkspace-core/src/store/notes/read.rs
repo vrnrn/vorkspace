@@ -69,15 +69,7 @@ impl Store {
                 .collect::<rusqlite::Result<_>>()
                 .map_err(|error| error.to_string())?;
         }
-        if self.shared.is_none() {
-            let mut ids: HashSet<_> = notes.iter().map(|note| note.id.clone()).collect();
-            for note in self.legacy_notes()?.into_iter().map(legacy_note) {
-                if ids.insert(note.id.clone()) {
-                    notes.push(note);
-                }
-            }
-            notes.sort_by(|a, b| b.updated_at.cmp(&a.updated_at).then(a.id.cmp(&b.id)));
-        }
+
         Ok(notes)
     }
 
@@ -107,27 +99,12 @@ impl Store {
                 .collect::<rusqlite::Result<_>>()
                 .map_err(|error| error.to_string())?;
         }
-        if self.shared.is_none() {
-            let mut ids: HashSet<_> = notes.iter().map(|note| note.id.clone()).collect();
-            for note in self.legacy_notes()?.into_iter().map(legacy_note) {
-                if ids.insert(note.id.clone()) {
-                    notes.push(note.into());
-                }
-            }
-            notes.sort_by(|a, b| b.updated_at.cmp(&a.updated_at).then(a.id.cmp(&b.id)));
-        }
+
         Ok(notes)
     }
 
     /// Identity-only view for reconciling recording links.
     pub fn note_ids(&self) -> Result<HashSet<String>, String> {
-        if self.shared.is_none() {
-            return Ok(self
-                .list_note_summaries()?
-                .into_iter()
-                .map(|note| note.id)
-                .collect());
-        }
         let Some(columns) = NoteColumns::discover(&self.conn)? else {
             return Ok(HashSet::new());
         };
@@ -155,28 +132,7 @@ impl Store {
                 return Ok(note);
             }
         }
-        let Some(numeric) = id
-            .strip_prefix("gpui-note-")
-            .filter(|_| self.shared.is_none())
-        else {
-            return Ok(None);
-        };
-        let raw: Option<String> = self
-            .conn
-            .query_row(
-                "SELECT value FROM native_settings WHERE key=?1",
-                [format!("note:{numeric}")],
-                |row| row.get(0),
-            )
-            .optional()
-            .map_err(|error| error.to_string())?;
-        raw.map(|value| {
-            serde_json::from_str(&value)
-                .map(legacy_note)
-                .map_err(|error| error.to_string())
-        })
-        .transpose()
-        .map(|note| note.filter(|note| note.id == id))
+        Ok(None)
     }
 
     /// Resolve each unique mention in prompt order from one read snapshot.
@@ -185,13 +141,7 @@ impl Store {
         if slugs.is_empty() {
             return Ok(text.into());
         }
-        let picked = if self.shared.is_none() {
-            let notes = self.list_notes()?;
-            slugs
-                .iter()
-                .filter_map(|slug| notes.iter().find(|note| &note.slug == slug).cloned())
-                .collect()
-        } else {
+        let picked = {
             let tx = self
                 .conn
                 .unchecked_transaction()
@@ -273,21 +223,5 @@ impl Store {
         }
         expanded.push_str(&prompt);
         Ok(expanded)
-    }
-}
-
-fn legacy_note(note: crate::response::Note) -> Note {
-    let at = note.id.min(i64::MAX as u64) as i64;
-    Note {
-        id: format!("gpui-note-{}", note.id),
-        slug: format!("note-{}", note.id),
-        title: note.title,
-        body: note.body,
-        tags: note.tags,
-        source_session_id: (note.source_session != 0).then(|| note.source_session.to_string()),
-        source_cwd: (!note.source_cwd.is_empty()).then_some(note.source_cwd),
-        slug_pending: false,
-        created_at: at,
-        updated_at: at,
     }
 }

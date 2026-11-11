@@ -32,20 +32,10 @@ pub(crate) fn turn(id: &str, prompt: &str, answer: &str) -> Vec<Value> {
 }
 pub(crate) fn fixture(
     root: &Path,
-    shared: bool,
     provider: &str,
 ) -> (Store, crate::store::Session, PathBuf, PathBuf) {
-    let path = root.join(if shared {
-        "desktop.db"
-    } else {
-        "native.sqlite"
-    });
-    let store = if shared {
-        Store::open_vorkspace(&path)
-    } else {
-        Store::open(&path)
-    }
-    .unwrap();
+    let path = root.join("desktop.db");
+    let store = { Store::test(&path) }.unwrap();
     let session = store.create(provider, root.to_str().unwrap()).unwrap();
     let settings = Settings {
         account: Profile::new("fixture", root),
@@ -91,11 +81,11 @@ fn claude_answer(id: &str, kind: &str, body: &str) -> Value {
 
 #[test]
 fn native_history_claude_rescans_keep_each_message_once_after_reopen() {
-    for shared in [false, true] {
+    {
         for (legacy_receipt, remove_leaf) in [(false, false), (true, false), (true, true)] {
             let dir = tempfile::tempdir().unwrap();
             let root = dir.path();
-            let (mut store, session, source, path) = fixture(root, shared, "claude");
+            let (mut store, session, source, path) = fixture(root, "claude");
             let mut records = vec![
                 claude_user("u1", json!("Question")),
                 claude_answer("a1", "text", "First answer"),
@@ -125,12 +115,7 @@ fn native_history_claude_rescans_keep_each_message_once_after_reopen() {
             append(&replacement, &records);
             std::fs::rename(replacement, &source).unwrap();
 
-            let mut store = if shared {
-                Store::open_vorkspace(&path)
-            } else {
-                Store::open(&path)
-            }
-            .unwrap();
+            let mut store = { Store::test(&path) }.unwrap();
             let result = sync(&mut store, session.id, root);
             assert_eq!(result.imported, 1);
             assert!(result.reload_provider);
@@ -155,7 +140,7 @@ fn native_history_claude_late_blocks_preserve_managed_ownership() {
     for has_identity in [false, true] {
         let dir = tempfile::tempdir().unwrap();
         let root = dir.path();
-        let (mut store, session, source, _) = fixture(root, true, "claude");
+        let (mut store, session, source, _) = fixture(root, "claude");
         let mut local = Transcript::default();
         local.begin("user");
         local.append("Managed prompt");
@@ -201,10 +186,10 @@ fn native_history_claude_late_blocks_preserve_managed_ownership() {
 
 #[test]
 fn native_history_import_is_durable_idempotent_and_keeps_managed_rows_and_unsent_work() {
-    for shared in [false, true] {
+    {
         let dir = tempfile::tempdir().unwrap();
         let root = dir.path();
-        let (mut store, session, source, path) = fixture(root, shared, "codex");
+        let (mut store, session, source, path) = fixture(root, "codex");
         let mut local = Transcript::default();
         local.begin("user");
         local.append("Local prompt");
@@ -267,12 +252,7 @@ fn native_history_import_is_durable_idempotent_and_keeps_managed_rows_and_unsent
             "Still pending"
         );
         drop(store);
-        let mut store = if shared {
-            Store::open_vorkspace(&path)
-        } else {
-            Store::open(&path)
-        }
-        .unwrap();
+        let mut store = { Store::test(&path) }.unwrap();
         assert_eq!(sync(&mut store, session.id, root).imported, 0);
         assert_eq!(store.load(session.id).unwrap().rows, rows);
         // Atomic file replacement forces a rescan, not another copy of history.
@@ -293,7 +273,7 @@ fn native_history_import_is_durable_idempotent_and_keeps_managed_rows_and_unsent
 fn native_history_waits_for_complete_records_and_commits_cursor_with_rows() {
     let dir = tempfile::tempdir().unwrap();
     let root = dir.path();
-    let (mut store, session, source, path) = fixture(root, true, "codex");
+    let (mut store, session, source, path) = fixture(root, "codex");
     append(&source, &[meta()]);
     let records = turn("outside", "Question", "Answer");
     append(&source, &records[..6]);
@@ -334,7 +314,7 @@ fn native_history_waits_for_complete_records_and_commits_cursor_with_rows() {
 fn unchanged_native_reads_have_no_cursor_to_publish_and_same_size_rewrites_are_seen() {
     let dir = tempfile::tempdir().unwrap();
     let root = dir.path();
-    let (store, session, source, _) = fixture(root, true, "codex");
+    let (store, session, source, _) = fixture(root, "codex");
     append(&source, &[meta()]);
     append(&source, &turn("outside", "Question", "First"));
     let request = store
@@ -369,10 +349,10 @@ fn unchanged_native_reads_have_no_cursor_to_publish_and_same_size_rewrites_are_s
 
 #[test]
 fn native_history_recovery_commits_saved_text_with_confirmation_and_keeps_codex_suffix() {
-    for shared in [false, true] {
+    {
         let dir = tempfile::tempdir().unwrap();
         let root = dir.path();
-        let (mut store, session, source, path) = fixture(root, shared, "codex");
+        let (mut store, session, source, path) = fixture(root, "codex");
         let records = turn("outside", "Question", "Repeated answer");
         append(&source, &[meta()]);
         append(&source, &records[..6]);
@@ -449,7 +429,7 @@ fn native_history_recovery_commits_saved_text_with_confirmation_and_keeps_codex_
 fn native_history_rejects_changed_binding_cursor_and_local_writer() {
     let dir = tempfile::tempdir().unwrap();
     let root = dir.path();
-    let (mut store, session, source, _) = fixture(root, true, "codex");
+    let (mut store, session, source, _) = fixture(root, "codex");
     append(&source, &[meta()]);
     append(&source, &turn("outside", "Question", "Answer"));
     let mut request = store
@@ -501,7 +481,7 @@ fn native_history_rejects_changed_binding_cursor_and_local_writer() {
 fn native_history_claude_ignores_tools_and_sidechains_but_keeps_late_final_blocks() {
     let dir = tempfile::tempdir().unwrap();
     let root = dir.path();
-    let (mut store, session, source, _) = fixture(root, true, "claude");
+    let (mut store, session, source, _) = fixture(root, "claude");
     append(
         &source,
         &[
@@ -545,7 +525,7 @@ fn native_history_claude_ignores_tools_and_sidechains_but_keeps_late_final_block
 fn native_history_reads_compressed_codex_with_append_tail_and_compaction_marker() {
     let dir = tempfile::tempdir().unwrap();
     let root = dir.path();
-    let (mut store, session, source, _) = fixture(root, true, "codex");
+    let (mut store, session, source, _) = fixture(root, "codex");
     append(&source, &[meta()]);
     append(&source, &turn("old", "Before", "Before answer"));
     let compressed = source.with_extension("jsonl.zst");
@@ -574,7 +554,7 @@ fn native_history_reads_compressed_codex_with_append_tail_and_compaction_marker(
 fn native_history_refreshes_usage_and_discards_it_after_external_compaction() {
     let directory = tempfile::tempdir().unwrap();
     let root = directory.path();
-    let (mut store, session, source, path) = fixture(root, true, "codex");
+    let (mut store, session, source, path) = fixture(root, "codex");
     append(
         &source,
         &[

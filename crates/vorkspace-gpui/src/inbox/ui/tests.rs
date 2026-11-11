@@ -53,7 +53,7 @@ fn fixture(cx: &mut TestAppContext) -> WindowHandle<Fixture> {
         }, |_, cx| cx.new(|cx| {
             let item = Item { provider: "github".into(), kind: "pr".into(), state: "open".into(), number: 7, ..Default::default() };
             let inbox = cx.new(|cx| {
-                let store = Arc::new(Mutex::new(vorkspace_core::store::Store::open(std::path::Path::new(":memory:")).unwrap()));
+                let store = Arc::new(Mutex::new(vorkspace_core::store::Store::test(std::path::Path::new(":memory:")).unwrap()));
                 let mut view = Inbox::new_for_test(store, vec![], PathBuf::from("/private/tmp/inbox-regression"), cx);
                 Rc::make_mut(&mut view.snapshot).items = vec![item.clone()]; view.selected = Some(item.key());
                 view.details = Some(Details { body: "Description".into(), ..Default::default() });
@@ -91,7 +91,7 @@ fn inbox_window_at_width(cx: &mut TestAppContext, width: f32) -> WindowHandle<In
             |_, cx| {
                 cx.new(|cx| {
                     let store = Arc::new(Mutex::new(
-                        vorkspace_core::store::Store::open(std::path::Path::new(":memory:"))
+                        vorkspace_core::store::Store::test(std::path::Path::new(":memory:"))
                             .unwrap(),
                     ));
                     Inbox::new_for_test(
@@ -278,7 +278,7 @@ fn a_narrow_connector_tile_uses_its_width_inside_a_wide_window(cx: &mut TestAppC
             |_, cx| {
                 cx.new(|cx| {
                     let store = Arc::new(Mutex::new(
-                        vorkspace_core::store::Store::open(std::path::Path::new(":memory:"))
+                        vorkspace_core::store::Store::test(std::path::Path::new(":memory:"))
                             .unwrap(),
                     ));
                     let inbox = cx.new(|cx| {
@@ -772,7 +772,7 @@ fn pinned_item_page_renders_detail_without_a_library_list(cx: &mut TestAppContex
             },
             |_, cx| {
                 let store = Arc::new(Mutex::new(
-                    vorkspace_core::store::Store::open(std::path::Path::new(":memory:")).unwrap(),
+                    vorkspace_core::store::Store::test(std::path::Path::new(":memory:")).unwrap(),
                 ));
                 let root = cx.new(|cx| {
                     let mut root = Inbox::new_for_test(

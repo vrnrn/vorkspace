@@ -4,7 +4,7 @@ use std::{sync::Mutex, time::Duration};
 use vorkspace_core::store::Store;
 
 fn conversation(cx: &mut TestAppContext) -> WindowHandle<Conversation> {
-    let store = Store::open(Path::new(":memory:")).unwrap();
+    let store = Store::test(Path::new(":memory:")).unwrap();
     let summary = store.create("codex", "/tmp").unwrap();
     cx.update(|cx| {
         input::bind(cx);

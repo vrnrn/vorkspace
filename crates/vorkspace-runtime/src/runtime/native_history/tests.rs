@@ -84,19 +84,12 @@ fn saved_text(database: &Database, session: i64) -> Vec<String> {
 
 #[test]
 fn unfinished_external_turn_recovery_publishes_saved_text_before_managed_history() {
-    for shared in [false, true] {
+    {
         for log in [Log::CodexEvents, Log::CodexItems, Log::Claude] {
             let directory = tempfile::tempdir().unwrap();
             let root = directory.path();
             let path = root.join("sessions.db");
-            let open = || {
-                if shared {
-                    Store::open_vorkspace(&path)
-                } else {
-                    Store::open(&path)
-                }
-                .unwrap()
-            };
+            let open = || { Store::test(&path) }.unwrap();
             let owner = open();
             let kind = log.kind();
             let session = owner.create(kind.id(), root.to_str().unwrap()).unwrap();

@@ -9,7 +9,6 @@ pub(super) struct PendingSave {
     from: Option<usize>,
     context_dirty: bool,
     last_flush: Instant,
-    interval: Duration,
     context_owner: Option<ContextOwner>,
     pub(super) writer: Option<vorkspace_core::store::TurnHistory>,
     pub(super) overlap: bool,
@@ -22,16 +21,11 @@ struct ContextOwner {
 }
 
 impl PendingSave {
-    pub(super) fn new(shared: bool, now: Instant) -> Self {
+    pub(super) fn new(now: Instant) -> Self {
         Self {
             from: None,
             context_dirty: false,
             last_flush: now,
-            interval: if shared {
-                SHARED_SAVE_INTERVAL
-            } else {
-                Duration::ZERO
-            },
             context_owner: None,
             writer: None,
             overlap: false,
@@ -62,7 +56,7 @@ impl PendingSave {
 
     pub(super) fn due(&self, boundary: bool, now: Instant) -> bool {
         (self.from.is_some() || self.context_dirty)
-            && (boundary || now.saturating_duration_since(self.last_flush) >= self.interval)
+            && (boundary || now.saturating_duration_since(self.last_flush) >= SHARED_SAVE_INTERVAL)
     }
 
     pub(super) fn flush(

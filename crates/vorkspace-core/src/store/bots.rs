@@ -13,7 +13,7 @@ impl Store {
         next_id: Option<&str>,
     ) -> Result<bool, String> {
         let default_account = crate::accounts::DEFAULT;
-        if self.uses_vorkspace_schema() {
+        {
             self.shared_writable()?;
             let mut updates = String::from("provider_session_id=?5");
             for column in ["context_used", "context_window"] {
@@ -22,8 +22,7 @@ impl Store {
                 }
             }
             let account_column = self.shared_field("provider_account_id", "NULL");
-            return self
-                .conn
+            self.conn
                 .execute(
                     &format!(
                         "UPDATE sessions SET {updates}
@@ -40,39 +39,8 @@ impl Store {
                     ],
                 )
                 .map(|changed| changed == 1)
-                .map_err(|e| e.to_string());
+                .map_err(|e| e.to_string())
         }
-
-        let tx = self
-            .conn
-            .is_autocommit()
-            .then(|| self.conn.unchecked_transaction())
-            .transpose()
-            .map_err(|e| e.to_string())?;
-        let changed = self
-            .conn
-            .execute(
-                "UPDATE native_sessions SET provider_id=?5
-                 WHERE id=?1 AND provider=?2 AND provider_id IS ?4 AND COALESCE(
-                     (SELECT json_extract(value, '$.account.id') FROM native_settings
-                      WHERE key='agent:'||native_sessions.id), ?6
-                 )=?3",
-                params![id, provider, account, expected_id, next_id, default_account],
-            )
-            .map_err(|e| e.to_string())?;
-        if changed != 1 {
-            return Ok(false);
-        }
-        self.conn
-            .execute(
-                "DELETE FROM native_settings WHERE key=?1",
-                [format!("context:{id}")],
-            )
-            .map_err(|e| e.to_string())?;
-        if let Some(tx) = tx {
-            tx.commit().map_err(|e| e.to_string())?;
-        }
-        Ok(true)
     }
 
     /// Change only a Bot's workspace. Its provider identity, history and pending
@@ -81,7 +49,7 @@ impl Store {
         if session.cwd == cwd {
             return Ok(());
         }
-        let changed = if self.uses_vorkspace_schema() {
+        let changed = {
             self.conn.execute(
                 "UPDATE sessions SET cwd=?2 WHERE id=?1 AND cwd=?3 AND provider_session_id IS ?4 AND harness=?5",
                 rusqlite::params![
@@ -91,11 +59,6 @@ impl Store {
                     session.provider_id,
                     session.provider
                 ],
-            )
-        } else {
-            self.conn.execute(
-                "UPDATE native_sessions SET cwd=?2 WHERE id=?1 AND cwd=?3 AND provider_id IS ?4 AND provider=?5",
-                rusqlite::params![session.id, cwd, session.cwd, session.provider_id, session.provider],
             )
         }
         .map_err(|e| e.to_string())?;
@@ -110,12 +73,6 @@ impl Store {
     /// Look up an existing Bot conversation independently of the sidebar.
     /// Hidden sessions are valid conversations and must never be replaced.
     pub fn bot_session(&self, id: i64) -> Result<Option<Session>, String> {
-        if !self.uses_vorkspace_schema() {
-            return Ok(self
-                .sessions()?
-                .into_iter()
-                .find(|session| session.id == id));
-        }
         let original = self.persisted_session_id(id)?;
         let columns = [
             "title".to_string(),
@@ -155,9 +112,6 @@ impl Store {
     }
     /// Cheap freshness token; the blocks themselves are loaded only on change.
     pub fn bot_work_revision(&self, id: i64) -> Result<Option<(u64, u64, u64)>, String> {
-        if !self.uses_vorkspace_schema() {
-            return Ok(None);
-        }
         let original = self.persisted_session_id(id)?;
         let updated: i64 = self
             .conn
@@ -199,7 +153,7 @@ impl Store {
         id: &str,
         body: bool,
     ) -> Result<Option<crate::bot::Document>, String> {
-        if !self.uses_vorkspace_schema() || !super::shared::has_table(&self.conn, "notes")? {
+        if !super::shared::has_table(&self.conn, "notes")? {
             return Ok(None);
         }
         let has_kind: bool = self.conn.query_row("SELECT EXISTS(SELECT 1 FROM pragma_table_info('notes') WHERE name='artifact_kind')", [], |r| r.get(0)).map_err(|e| e.to_string())?;
@@ -233,9 +187,6 @@ impl Store {
     /// Metadata comes from the authoritative saved conversation: indexed Bot
     /// or ordinary history, or its older JSON source. No rollout is opened here.
     pub fn bot_work(&self, id: i64) -> Result<Option<crate::bot::Work>, String> {
-        if !self.uses_vorkspace_schema() {
-            return Ok(None);
-        }
         let original = self.persisted_session_id(id)?;
         // Return only references and confirmed app receipts from SQLite.
         let source = if let Some(tables) = self.shared_bot_tables(&original)? {
@@ -336,12 +287,13 @@ mod tests {
     #[test]
     fn bot_session_replacement_discards_only_the_current_owners_usage() {
         use crate::{agent::Settings, context::Usage};
-        for open in [Store::open_vorkspace, Store::open] {
+        {
+            let open = Store::test;
             let temp = tempfile::tempdir().unwrap();
             let path = temp.path().join("sessions.db");
             let store = open(&path).unwrap();
             let session = store.create("codex", "/project").unwrap();
-            if store.uses_vorkspace_schema() {
+            {
                 store
                     .conn
                     .execute(
@@ -442,7 +394,7 @@ mod tests {
 
     #[test]
     fn hidden_bot_summary_preserves_original_session_and_provider() {
-        let store = Store::open_vorkspace(Path::new(":memory:")).unwrap();
+        let store = Store::test(Path::new(":memory:")).unwrap();
         let session = store.create("claude", "/project").unwrap();
         let original = store.persisted_session_id(session.id).unwrap();
         store.conn.execute(
@@ -467,7 +419,7 @@ mod tests {
     fn desktop_work_uses_saved_block_references_and_note_bodies_without_mutation() {
         use serde_json::json;
         for storage in ["json", "bot", "ordinary"] {
-            let mut store = Store::open_vorkspace(Path::new(":memory:")).unwrap();
+            let mut store = Store::test(Path::new(":memory:")).unwrap();
             let bot = store.create("codex", "/bot").unwrap();
             let child = store.create("claude", "/moved-project").unwrap();
             let original = store.persisted_session_id(bot.id).unwrap();

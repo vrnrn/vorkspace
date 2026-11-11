@@ -1,7 +1,7 @@
 use super::*;
 use gpui::{TestAppContext, WindowHandle};
 fn fixture(cx: &mut TestAppContext) -> WindowHandle<Conversation> {
-    let store = vorkspace_core::store::Store::open(Path::new(":memory:")).unwrap();
+    let store = vorkspace_core::store::Store::test(Path::new(":memory:")).unwrap();
     let summary = store.create("codex", "/missing/ticket-project").unwrap();
     cx.update(|cx| {
         input::bind(cx);
@@ -16,8 +16,7 @@ fn fixture(cx: &mut TestAppContext) -> WindowHandle<Conversation> {
         .unwrap()
     })
 }
-const REFERENCE: &str =
-    "Explain vorkspace://context/github?url=https%3A%2F%2Fgithub.com%2Facme%2Fdemo%2Fissues%2F42";
+const REFERENCE: &str = "Explain vorkspace://context/github?url=https%3A%2F%2Fexample.invalid%2Facme%2Fdemo%2Fissues%2F42";
 #[gpui::test]
 fn failed_lookup_preserves_composer_selection_files_and_history(cx: &mut TestAppContext) {
     let window = fixture(cx);
@@ -38,10 +37,7 @@ fn failed_lookup_preserves_composer_selection_files_and_history(cx: &mut TestApp
     window
         .update(cx, |chat, _, cx| {
             assert!(!chat.responding());
-            assert!(
-                chat.status
-                    .contains("Ticket context storage is unavailable")
-            );
+            assert!(chat.status.contains("Invalid ticket context link"));
             assert_eq!(chat.input.read(cx).content.as_str(), REFERENCE);
             assert_eq!(chat.input.read(cx).selection_utf16(), 2..9);
             assert_eq!(

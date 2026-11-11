@@ -24,7 +24,7 @@ fn roster() -> Roster {
 fn a_hire_is_persistent_without_a_project_and_repeated_tasks_keep_identity_and_history() {
     let directory = tempfile::tempdir().unwrap();
     let path = directory.path().join("teams.db");
-    let db = Store::open(&path).unwrap();
+    let db = Store::test(&path).unwrap();
     let mut r = roster();
     let id = r
         .hire_minion(
@@ -48,7 +48,7 @@ fn a_hire_is_persistent_without_a_project_and_repeated_tasks_keep_identity_and_h
     peers::enqueue(&mut r, "parent", &id, "Second task", "second", 0, true).unwrap();
     r.save(&db).unwrap();
     drop(db);
-    let db = Store::open(&path).unwrap();
+    let db = Store::test(&path).unwrap();
     let r = Roster::load(&db).unwrap();
     let member = r.get(&id).unwrap();
     assert_eq!(member.session_id, Some(summary.id));
@@ -63,7 +63,7 @@ fn a_hire_is_persistent_without_a_project_and_repeated_tasks_keep_identity_and_h
 #[test]
 fn legacy_migration_is_idempotent_and_preserves_the_existing_session() {
     let directory = tempfile::tempdir().unwrap();
-    let mut db = Store::open(&directory.path().join("teams.db")).unwrap();
+    let mut db = Store::test(&directory.path().join("teams.db")).unwrap();
     let session = db.create("codex", "/old").unwrap().id;
     let history = vec![
         Row {
@@ -112,7 +112,7 @@ fn legacy_migration_is_idempotent_and_preserves_the_existing_session() {
 #[test]
 fn peer_admission_is_bidirectional_and_retirement_cannot_resurrect_queued_work() {
     let directory = tempfile::tempdir().unwrap();
-    let mut db = Store::open(&directory.path().join("teams.db")).unwrap();
+    let mut db = Store::test(&directory.path().join("teams.db")).unwrap();
     let mut r = roster();
     let a = r
         .hire_minion("parent", "A", "Review", vec![], None)

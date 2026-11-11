@@ -653,7 +653,7 @@ mod tests {
         let root = tempfile::tempdir().unwrap();
         let path = root.path().join("tasks.sqlite");
         let board = TodoBoard::Project("/dependency-test".into());
-        let store = Store::open(&path).unwrap();
+        let store = Store::test(&path).unwrap();
         let dependency = store
             .add_todo(&board, "Dependency", TodoStatus::Todo)
             .unwrap();
@@ -670,7 +670,7 @@ mod tests {
         let view = cx.new(|cx| {
             super::super::TodoBoardView::new(
                 std::sync::Arc::new(std::sync::Mutex::new(
-                    Store::open(Path::new(":memory:")).unwrap(),
+                    Store::test(Path::new(":memory:")).unwrap(),
                 )),
                 false,
                 cx,
@@ -715,7 +715,7 @@ mod tests {
             cx,
         );
         drop(store);
-        let store = Store::open(&path).unwrap();
+        let store = Store::test(&path).unwrap();
         // Revision-checked editors must reload after the link changes. A
         // caller supplying an older local ID still resolves the new identity.
         store.todo_action(&board, "todos.update", &json!({
@@ -765,7 +765,7 @@ mod tests {
         issue.description = format!("Old details\n\n[Attachment](<{retained}>)\n\n![]({hosted})");
         issue.attachments = vec![retained.into(), hosted.into()];
         let database = std::sync::Arc::new(std::sync::Mutex::new(
-            Store::open(Path::new(":memory:")).unwrap(),
+            Store::test(Path::new(":memory:")).unwrap(),
         ));
         let view = cx.new(|cx| TodoBoardView::new(database, false, cx));
         view.update(cx, |view, cx| {
@@ -801,7 +801,7 @@ mod tests {
         let path = directory.path().join("tasks.sqlite");
         let board = TodoBoard::Project(directory.path().to_string_lossy().into_owned());
         let database: Database =
-            std::sync::Arc::new(std::sync::Mutex::new(Store::open(&path).unwrap()));
+            std::sync::Arc::new(std::sync::Mutex::new(Store::test(&path).unwrap()));
         let old = remote_snapshot("Old/App", 7, &json!({"title":"Dependency"}));
         let current = remote_snapshot("New/App", 7, &json!({"title":"Dependency"}));
         let (task, receipt, items) = {
@@ -860,7 +860,7 @@ mod tests {
             view.save_details(cx);
         });
         cx.run_until_parked();
-        let store = Store::open(&path).unwrap();
+        let store = Store::test(&path).unwrap();
         let saved = store.get_todo(&board, &task.id).unwrap().unwrap();
         assert_eq!(saved.dependencies, [old_ref, new_ref]);
         assert_eq!(
@@ -890,7 +890,7 @@ mod tests {
 
     #[test]
     fn matched_create_keeps_reconciliation_and_initial_status() {
-        let store = Store::open(Path::new(":memory:")).unwrap();
+        let store = Store::test(Path::new(":memory:")).unwrap();
         let board = TodoBoard::Project("/project".into());
         let draft = store
             .add_todo(&board, "Review this", TodoStatus::InReview)
@@ -937,7 +937,7 @@ mod tests {
     #[test]
     fn active_edit_blocks_discard_and_late_completion_cannot_clear_a_successor() {
         let store: Database = std::sync::Arc::new(std::sync::Mutex::new(
-            Store::open(Path::new(":memory:")).unwrap(),
+            Store::test(Path::new(":memory:")).unwrap(),
         ));
         let board = TodoBoard::Project("/receipt-owner-test".into());
         let snapshot = remote_snapshot("test/receipt-owner", 7, &json!({"title":"Task"}));

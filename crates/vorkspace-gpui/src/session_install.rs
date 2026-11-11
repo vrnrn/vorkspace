@@ -65,7 +65,7 @@ impl Install {
     /// Register under the same database guard that created the row.
     pub(crate) fn track(&mut self, id: i64) {
         assert!(self.id.is_none());
-        // Legacy SQLite stores can allocate an ID again after a deletion.
+        // A newer installation may replace the pending owner of this identity.
         self.registry
             .0
             .lock()
@@ -129,18 +129,15 @@ mod tests {
     use vorkspace_core::store::Store;
 
     #[test]
-    fn a_reused_sqlite_row_cannot_be_exposed_or_deleted_by_its_previous_ticket() {
-        let mut store = Store::open(Path::new(":memory:")).unwrap();
+    fn a_replaced_installation_cannot_be_exposed_or_deleted_by_its_previous_ticket() {
+        let mut store = Store::test(Path::new(":memory:")).unwrap();
         let registry = Registry::default();
         let pending = Arc::new(AtomicUsize::new(0));
         let mut old = registry.begin(&pending);
         let id = store.create("codex", "/project").unwrap().id;
         old.track(id);
-        store.delete(id).unwrap();
         let mut new = registry.begin(&pending);
-        let replacement = store.create("codex", "/project").unwrap().id;
-        assert_eq!(id, replacement);
-        new.track(replacement);
+        new.track(id);
         assert!(!registry.permits(id, Some(&old)));
         assert!(old.discard(&mut store, id).is_err());
         drop(old);

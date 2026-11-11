@@ -4,7 +4,7 @@ use std::time::Duration;
 
 fn voice(_cx: &mut gpui::Context<Vox>) -> Vox {
     let store = Arc::new(std::sync::Mutex::new(
-        vorkspace_core::store::Store::open_vorkspace(std::path::Path::new(":memory:")).unwrap(),
+        vorkspace_core::store::Store::test(std::path::Path::new(":memory:")).unwrap(),
     ));
     let prefs = vorkspace_ui::preferences::Preferences {
         vox_enabled: true,

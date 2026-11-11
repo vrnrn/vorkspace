@@ -10,7 +10,7 @@ fn saved() -> Value {
 #[gpui::test]
 fn quick_submit_waits_for_hydration_and_never_sends_a_later_edit(cx: &mut TestAppContext) {
     for superseded in [false, true] {
-        let store = Store::open(Path::new(":memory:")).unwrap();
+        let store = Store::test(Path::new(":memory:")).unwrap();
         let summary = store.create("codex", "/tmp").unwrap();
         let chat = cx.new(|cx| {
             let mut chat = Conversation::new(summary, Arc::new(Mutex::new(store)), cx);
@@ -39,7 +39,7 @@ fn quick_submit_waits_for_hydration_and_never_sends_a_later_edit(cx: &mut TestAp
 
 #[gpui::test]
 fn typing_before_hydration_preserves_the_unseen_saved_draft(cx: &mut TestAppContext) {
-    let store = Store::open_vorkspace(Path::new(":memory:")).unwrap();
+    let store = Store::test(Path::new(":memory:")).unwrap();
     let summary = store.create("codex", "/project").unwrap();
     let id = summary.id;
     store.save_composer_draft(id, 0, &saved()).unwrap();
@@ -68,7 +68,7 @@ fn typing_before_hydration_preserves_the_unseen_saved_draft(cx: &mut TestAppCont
 
 #[gpui::test]
 fn bot_recovery_restores_submission_mode_and_queue_intent(cx: &mut TestAppContext) {
-    let store = Store::open_vorkspace(Path::new(":memory:")).unwrap();
+    let store = Store::test(Path::new(":memory:")).unwrap();
     let summary = store.create("codex", "/project").unwrap();
     let chat = cx.new(|cx| Conversation::new(summary, Arc::new(Mutex::new(store)), cx));
     cx.run_until_parked();
@@ -89,7 +89,7 @@ fn bot_recovery_restores_submission_mode_and_queue_intent(cx: &mut TestAppContex
 }
 #[gpui::test]
 fn restoring_direct_submission_keeps_its_identity_until_acknowledged(cx: &mut TestAppContext) {
-    let store = Store::open_vorkspace(Path::new(":memory:")).unwrap();
+    let store = Store::test(Path::new(":memory:")).unwrap();
     let summary = store.create("codex", "/project").unwrap();
     let id = summary.id;
     let mut payload = saved();
@@ -193,7 +193,7 @@ fn desktop_draft_restores_text_selection_files_and_mcp_then_saves_to_same_row(
 }
 #[gpui::test]
 fn typing_during_draft_load_wins_and_clear_keeps_a_revision_tombstone(cx: &mut TestAppContext) {
-    let store = Store::open_vorkspace(Path::new(":memory:")).unwrap();
+    let store = Store::test(Path::new(":memory:")).unwrap();
     let session = store.create("codex", "/project").unwrap();
     let id = session.id;
     store.save_composer_draft(id, 0, &saved()).unwrap();
@@ -226,7 +226,7 @@ fn typing_during_draft_load_wins_and_clear_keeps_a_revision_tombstone(cx: &mut T
 }
 #[gpui::test]
 fn quit_flush_before_load_completion_retains_the_latest_input(cx: &mut TestAppContext) {
-    let store = Store::open_vorkspace(Path::new(":memory:")).unwrap();
+    let store = Store::test(Path::new(":memory:")).unwrap();
     let session = store.create("codex", "/project").unwrap();
     let id = session.id;
     store.save_composer_draft(id, 0, &saved()).unwrap();
@@ -254,7 +254,7 @@ fn quit_flush_before_load_completion_retains_the_latest_input(cx: &mut TestAppCo
 fn same_mcp_token_saves_changed_server_identity_once_and_keeps_opaque_fields(
     cx: &mut TestAppContext,
 ) {
-    let store = Store::open_vorkspace(Path::new(":memory:")).unwrap();
+    let store = Store::test(Path::new(":memory:")).unwrap();
     let session = store.create("codex", "/project").unwrap();
     let id = session.id;
     store.save_composer_draft(id, 0, &saved()).unwrap();
@@ -345,7 +345,7 @@ fn conflicting_input_survives_close_reopen_and_explicit_restore_or_reload(cx: &m
 fn selection_changes_during_recovery_publication_preserve_the_newer_composer(
     cx: &mut TestAppContext,
 ) {
-    let store = Store::open_vorkspace(Path::new(":memory:")).unwrap();
+    let store = Store::test(Path::new(":memory:")).unwrap();
     let session = store.create("codex", "/project").unwrap();
     let id = session.id;
     store.save_composer_draft(id, 0, &saved()).unwrap();

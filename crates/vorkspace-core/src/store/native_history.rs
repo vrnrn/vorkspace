@@ -20,27 +20,6 @@ pub(super) fn ensure_receipt_schema(conn: &rusqlite::Connection) -> Result<(), S
         ON provider_history_receipts(session_id,binding,native_turn_id,imported);").map_err(|e|e.to_string())
 }
 
-pub(super) fn delete_if_present(conn: &rusqlite::Connection, id: &str) -> Result<(), String> {
-    for table in [
-        "provider_history_cursors",
-        "provider_history_receipts",
-        "provider_history_recoveries",
-    ] {
-        let exists: bool = conn
-            .query_row(
-                "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type='table' AND name=?1)",
-                [table],
-                |r| r.get(0),
-            )
-            .map_err(|e| e.to_string())?;
-        if exists {
-            conn.execute(&format!("DELETE FROM {table} WHERE session_id=?1"), [id])
-                .map_err(|e| e.to_string())?;
-        }
-    }
-    Ok(())
-}
-
 pub struct NativeHistoryRequest {
     pub session: Session,
     pub binding: Binding,
@@ -67,7 +46,7 @@ struct NativePublication {
 
 impl NativePublication {
     fn committed(self, store: &Store, id: i64) {
-        if self.imported != 0 && store.shared.is_some() {
+        if self.imported != 0 {
             store.shared_native_published(id, self.append);
         }
     }
@@ -93,12 +72,7 @@ impl Store {
         let Some(thread) = session.provider_id.as_deref() else {
             return Ok(None);
         };
-        let mut settings = if self.shared.is_some() {
-            self.shared_agent_preferences(id)?
-        } else {
-            self.agent_settings(id)?
-        }
-        .unwrap_or_default();
+        let mut settings = { self.agent_preferences(id)? }.unwrap_or_default();
         settings.account.root = self.data_dir().map(Path::to_path_buf);
         let Some(binding) = Binding::for_bot(&session.provider, thread, &settings.account, root)?
         else {
@@ -129,12 +103,7 @@ impl Store {
     ) -> Result<Option<Settings>, String> {
         let id = request.session.id;
         let current = self.bot_session(id)?;
-        let settings = if self.shared.is_some() {
-            self.shared_agent_preferences(id)?
-        } else {
-            self.agent_settings(id)?
-        }
-        .unwrap_or_default();
+        let settings = { self.agent_preferences(id)? }.unwrap_or_default();
         let active: bool = self.conn.query_row(
             "SELECT EXISTS(SELECT 1 FROM local_submissions WHERE session_id=?1 AND phase IN ('reserved','dispatching'))",
             [self.persisted_session_id(id)?], |r| r.get(0),
@@ -181,7 +150,7 @@ impl Store {
         expected: &str,
     ) -> Result<(), String> {
         let id = request.session.id;
-        if self.shared.is_some() {
+        {
             self.shared_history_schema()?;
         }
         let tx = rusqlite::Transaction::new_unchecked(&self.conn, TransactionBehavior::Immediate)
@@ -241,7 +210,7 @@ impl Store {
             });
         };
         let id = request.session.id;
-        if self.shared.is_some() {
+        {
             self.shared_history_schema()?;
         }
         let tx = rusqlite::Transaction::new_unchecked(&self.conn, TransactionBehavior::Immediate)
@@ -307,11 +276,7 @@ impl Store {
         let mut unseen = Vec::new();
         let mut reload_provider = false;
         {
-            let owners = if self.shared.is_some() {
-                self.shared_native_turn_owners(id, &request.binding, &turns, &settings)?
-            } else {
-                settings.turns.into_values().collect()
-            };
+            let owners = self.shared_native_turn_owners(id, &request.binding, &turns, &settings)?;
             let known: HashSet<_> = owners
                 .iter()
                 .filter_map(|t| t.provider_turn_id.clone())
@@ -409,61 +374,13 @@ impl Store {
         }
         let append = if unseen.is_empty() {
             None
-        } else if self.shared.is_some() {
-            self.shared_append_native(id, &request.binding, &unseen)?
         } else {
-            self.append_native_rows(id, &request.binding, &unseen)?;
-            None
+            self.shared_append_native(id, &request.binding, &unseen)?
         };
         Ok(NativePublication {
             imported: unseen.len(),
             reload_provider,
             append,
         })
-    }
-    fn append_native_rows(&self, id: i64, binding: &Binding, turns: &[Turn]) -> Result<(), String> {
-        let mut at = self
-            .conn
-            .query_row(
-                "SELECT coalesce(max(row_ix)+1,0) FROM native_rows WHERE session_id=?1",
-                [id],
-                |r| r.get::<_, i64>(0),
-            )
-            .map_err(|e| e.to_string())? as usize;
-        let mut settings = self.agent_settings(id)?.unwrap_or_default();
-        for turn in turns {
-            let rows = turn.transcript().rows;
-            let key = rows.iter().rposition(Row::is_prompt).map(|p| at + p + 1);
-            for row in rows {
-                self.conn.execute("INSERT INTO native_rows(session_id,row_ix,role,body,first,sent_at) VALUES(?1,?2,?3,?4,?5,?6)",params![id,at as i64,row.role,row.text,row.first,row.sent_at.and_then(|at|i64::try_from(at).ok())]).map_err(|e|e.to_string())?;
-                at += 1;
-            }
-            if let Some(key) = key {
-                settings.turns.insert(key, turn_info(binding, turn));
-            }
-        }
-        self.save_agent_settings(id, &settings)?;
-        self.conn
-            .execute(
-                "UPDATE native_sessions SET updated_at=?2 WHERE id=?1",
-                params![id, crate::time::now_ms() as i64],
-            )
-            .map_err(|e| e.to_string())?;
-        Ok(())
-    }
-}
-pub(super) fn turn_info(binding: &Binding, turn: &Turn) -> crate::agent::TurnInfo {
-    crate::agent::TurnInfo {
-        provider_turn_id: Some(turn.id.clone()),
-        provider: binding.provider.clone(),
-        model_id: turn.model.clone(),
-        started_at: turn.started_at,
-        completed_at: turn.completed_at,
-        duration_ms: turn
-            .completed_at
-            .zip(turn.started_at)
-            .map_or(0, |(end, start)| end.saturating_sub(start)),
-        duration_known: turn.completed_at.is_some(),
-        ..Default::default()
     }
 }

@@ -66,12 +66,13 @@ fn hovering_keeps_card_size_and_menu_archive_preserves_history(cx: &mut TestAppC
         .unwrap();
     cx.refresh().unwrap();
     let visual = &mut gpui::VisualTestContext::from_window(window.into(), cx);
-    let row = visual.debug_bounds("rail-session-1").unwrap();
+    let selector = Box::leak(format!("rail-session-{a}").into_boxed_str());
+    let row = visual.debug_bounds(selector).unwrap();
     visual.simulate_mouse_move(row.center(), None, Default::default());
     visual.run_until_parked();
     visual.refresh().unwrap();
     // Hover reveals nothing on the card, so passing over cards never moves them.
-    assert_eq!(visual.debug_bounds("rail-session-1").unwrap(), row);
+    assert_eq!(visual.debug_bounds(selector).unwrap(), row);
     window
         .update(visual, |shell, window, cx| {
             shell.run_menu(MenuTarget::Session(a), "archive", None, window, cx);
@@ -2050,6 +2051,14 @@ fn tab_project_and_session_keys_follow_vorkspace(cx: &mut TestAppContext) {
 #[gpui::test]
 fn session_menu_copies_ids_through_its_submenu(cx: &mut TestAppContext) {
     let (window, a, _) = window(cx);
+    let original = window
+        .update(cx, |shell, _, _| {
+            locked(&shell.store)
+                .unwrap()
+                .persisted_session_id(a)
+                .unwrap()
+        })
+        .unwrap();
     cx.update(crate::popover::bind);
     window
         .update(cx, |shell, w, cx| {
@@ -2066,11 +2075,11 @@ fn session_menu_copies_ids_through_its_submenu(cx: &mut TestAppContext) {
         .update(cx, |shell, _, _| assert!(shell.menu.is_none()))
         .unwrap();
     let copied = cx.update(|cx| cx.read_from_clipboard().and_then(|c| c.text()));
-    assert_eq!(copied, Some(a.to_string()));
+    assert_eq!(copied, Some(original));
 }
 #[gpui::test]
 fn desktop_database_sessions_load_and_copy_their_original_ids(cx: &mut TestAppContext) {
-    let mut store = Store::open_vorkspace(std::path::Path::new(":memory:")).unwrap();
+    let mut store = Store::test(std::path::Path::new(":memory:")).unwrap();
     let summary = store.create("codex", "/work/vorkspace").unwrap();
     let id = summary.id;
     let original = store.persisted_session_id(id).unwrap();
@@ -2190,7 +2199,8 @@ fn typing_in_the_session_filter_matches_titles_without_case_and_keeps_session_st
                 );
             })
             .unwrap();
-        for (id, selector) in [(a, "rail-session-1"), (b, "rail-session-2")] {
+        for id in [a, b] {
+            let selector = Box::leak(format!("rail-session-{id}").into_boxed_str());
             assert_eq!(
                 visual.debug_bounds(selector).is_some(),
                 expected.contains(&id),
@@ -2652,7 +2662,7 @@ fn pane_limit_native_capture() {
     let output = std::path::PathBuf::from(std::env::var_os("VORKSPACE_PANE_CAPTURE_DIR").unwrap());
     assert!(output.is_absolute() && output.is_dir());
     let store = Arc::new(Mutex::new(
-        Store::open(std::path::Path::new(":memory:")).unwrap(),
+        Store::test(std::path::Path::new(":memory:")).unwrap(),
     ));
     let sessions: Vec<_> = (0..5)
             .map(|_| {
@@ -2787,9 +2797,9 @@ pub(super) fn window_with_scale(
     cx: &mut TestAppContext,
     scale: u32,
 ) -> (WindowHandle<Shell>, i64, i64) {
-    let mut store = Store::open(std::path::Path::new(":memory:")).unwrap();
+    let mut store = Store::test(std::path::Path::new(":memory:")).unwrap();
     let mut a = store.create("codex", "/work/another-project").unwrap();
-    let b = store.create("claude", "/work/vorkspace").unwrap();
+    let mut b = store.create("claude", "/work/vorkspace").unwrap();
     store
         .write_rows(
             a.id,
@@ -2803,6 +2813,20 @@ pub(super) fn window_with_scale(
         )
         .unwrap();
     a.has_messages = true;
+    // Seed recency explicitly: two creations may share a millisecond, and
+    // desktop UUID handles do not encode their insertion order.
+    let conn = rusqlite::Connection::open(store.database_path()).unwrap();
+    for (session, time) in [(&mut a, 1_000), (&mut b, 2_000)] {
+        session.updated_at = time;
+        conn.execute(
+            "UPDATE sessions SET updated_at=?2 WHERE id=?1",
+            rusqlite::params![
+                store.persisted_session_id(session.id).unwrap(),
+                i64::try_from(time).unwrap()
+            ],
+        )
+        .unwrap();
+    }
     let ids = (a.id, b.id);
     let mut state = Workspace::default();
     state.preferences.ui_scale = scale;

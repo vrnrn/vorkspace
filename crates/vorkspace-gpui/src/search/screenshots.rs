@@ -27,7 +27,7 @@ fn native_search_capture() {
     assert!(output.is_absolute() && output.is_dir());
     let root = tempfile::tempdir().unwrap();
     let cwd = root.path().to_string_lossy().into_owned();
-    let store = Store::open(Path::new(":memory:")).unwrap();
+    let store = Store::test(Path::new(":memory:")).unwrap();
     let mut session = store.create("codex", PROJECT).unwrap();
     session.title = "Release preparation and signed desktop package verification".into();
     let message = search::message_hit(

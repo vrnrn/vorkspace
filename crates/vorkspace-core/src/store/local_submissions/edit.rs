@@ -212,9 +212,7 @@ impl Store {
     }
 
     pub(in crate::store) fn edit_transaction(&self) -> Result<Transaction<'_>, String> {
-        if self.shared.is_some() {
-            self.shared_writable()?;
-        }
+        self.shared_writable()?;
         Transaction::new_unchecked(&self.conn, TransactionBehavior::Immediate)
             .map_err(|e| e.to_string())
     }

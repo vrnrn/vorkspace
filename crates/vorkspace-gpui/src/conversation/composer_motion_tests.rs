@@ -4,7 +4,7 @@ use std::{sync::Mutex, time::Duration};
 use vorkspace_core::store::Store;
 
 fn window(cx: &mut TestAppContext, width: f32) -> gpui::WindowHandle<Conversation> {
-    let store = Store::open(Path::new(":memory:")).unwrap();
+    let store = Store::test(Path::new(":memory:")).unwrap();
     let summary = store.create("codex", "/work/vorkspace").unwrap();
     let store = Arc::new(Mutex::new(store));
     let window = cx.update(|cx| {
@@ -419,7 +419,7 @@ fn native_narrow_composer_capture() {
         vorkspace_ui::theme::configure(&prefs, false, true);
         cx.update(|cx| cx.set_global(prefs));
         for width in [260., 360., 480., 760.] {
-            let store = Store::open(Path::new(":memory:")).unwrap();
+            let store = Store::test(Path::new(":memory:")).unwrap();
             let summary = store.create("codex", "/work/vorkspace").unwrap();
             let store = Arc::new(Mutex::new(store));
             let window = cx
@@ -760,7 +760,7 @@ fn a_session_without_a_project_asks_plainly_and_offers_no_project_starters(
         input::bind(cx);
         crate::popover::bind(cx);
     });
-    let store = Store::open(Path::new(":memory:")).unwrap();
+    let store = Store::test(Path::new(":memory:")).unwrap();
     let summary = store.create("codex", "").unwrap();
     let store = Arc::new(Mutex::new(store));
     let window = cx.update(|cx| {

@@ -184,7 +184,7 @@ mod tests {
     #[test]
     fn an_encoding_in_flight_cannot_replace_a_newer_durable_layout() {
         let database = Arc::new(Mutex::new(
-            vorkspace_core::store::Store::open(std::path::Path::new(":memory:")).unwrap(),
+            vorkspace_core::store::Store::test(std::path::Path::new(":memory:")).unwrap(),
         ));
         let writes = SettingsWrites::default();
         writes.stage_layouts(layouts("/old"));

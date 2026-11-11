@@ -19,12 +19,9 @@ fn observe_version(store: &Store, version: &str) -> Result<Option<String>, Strin
     let previous = store.setting(VERSION)?;
     // DesktopPreferences already canonicalizes historical app-owned prefixes.
     // A cleared native marker takes precedence over immutable WebKit storage.
-    let raw = store.setting(MARKER)?.or_else(|| {
-        store
-            .desktop_preferences()
-            .and_then(|p| p.get(MARKER))
-            .map(str::to_owned)
-    });
+    let raw = store
+        .setting(MARKER)?
+        .or_else(|| store.desktop_preferences().get(MARKER).map(str::to_owned));
     let installed = raw
         .as_ref()
         .filter(|value| !value.is_empty())

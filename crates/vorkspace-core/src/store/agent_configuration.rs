@@ -97,7 +97,7 @@ impl Store {
         provider: &str,
         settings: &Settings,
     ) -> Result<(), String> {
-        if self.shared.is_some() && !settings.turns.is_empty() {
+        if !settings.turns.is_empty() {
             if self.agent_configuration_is_newer(id, settings)? {
                 return Ok(());
             }
@@ -237,19 +237,11 @@ impl Store {
                 provider_id: row.get(1)?,
             })
         };
-        let binding = if self.shared.is_some() {
-            self.conn.query_row(
-                "SELECT harness,provider_session_id FROM sessions WHERE id=?1",
-                [self.persisted_session_id(id)?],
-                read,
-            )
-        } else {
-            self.conn.query_row(
-                "SELECT provider,provider_id FROM native_sessions WHERE id=?1",
-                [id],
-                read,
-            )
-        };
+        let binding = self.conn.query_row(
+            "SELECT harness,provider_session_id FROM sessions WHERE id=?1",
+            [self.persisted_session_id(id)?],
+            read,
+        );
         binding.optional().map_err(|error| error.to_string())
     }
 }
@@ -260,211 +252,195 @@ mod tests {
 
     #[test]
     fn observed_threads_preserve_replacements_and_follow_only_the_exact_outgoing_source() {
-        for shared in [false, true] {
-            let directory = tempfile::tempdir().unwrap();
-            let path = directory.path().join("agent.db");
-            let open = if shared {
-                Store::open_vorkspace
-            } else {
-                Store::open
-            };
-            let store = open(&path).unwrap();
-            let id = store.create("omp", "/project").unwrap().id;
-            let peer = open(&path).unwrap();
-            let settings = Settings {
-                revision: 3,
-                ..Default::default()
-            };
-            store.save_agent_preferences(id, &settings).unwrap();
-            store.provider_id(id, "source-thread").unwrap();
-            let source = |provider_id| ProviderSource {
-                session: id,
-                provider: "omp",
-                account: crate::accounts::DEFAULT,
-                provider_id,
-                revision: 3,
-            };
-            store
-                .save_context_usage(
-                    id,
-                    &crate::context::Usage {
-                        used: 9000,
-                        window: Some(10000),
-                    },
-                )
-                .unwrap();
-            assert!(store
-                .record_provider_session(source(Some("source-thread")), "observed-thread", true)
-                .unwrap());
-            assert_eq!(
-                peer.local_agent_binding(id)
-                    .unwrap()
-                    .unwrap()
-                    .provider_id
-                    .as_deref(),
-                Some("observed-thread")
-            );
-            assert_eq!(peer.context_usage(id).unwrap(), None);
-            assert_eq!(peer.agent_preferences(id).unwrap().unwrap().revision, 3);
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("agent.db");
+        let open = { Store::test };
+        let store = open(&path).unwrap();
+        let id = store.create("omp", "/project").unwrap().id;
+        let peer = open(&path).unwrap();
+        let settings = Settings {
+            revision: 3,
+            ..Default::default()
+        };
+        store.save_agent_preferences(id, &settings).unwrap();
+        store.provider_id(id, "source-thread").unwrap();
+        let source = |provider_id| ProviderSource {
+            session: id,
+            provider: "omp",
+            account: crate::accounts::DEFAULT,
+            provider_id,
+            revision: 3,
+        };
+        store
+            .save_context_usage(
+                id,
+                &crate::context::Usage {
+                    used: 9000,
+                    window: Some(10000),
+                },
+            )
+            .unwrap();
+        assert!(store
+            .record_provider_session(source(Some("source-thread")), "observed-thread", true)
+            .unwrap());
+        assert_eq!(
+            peer.local_agent_binding(id)
+                .unwrap()
+                .unwrap()
+                .provider_id
+                .as_deref(),
+            Some("observed-thread")
+        );
+        assert_eq!(peer.context_usage(id).unwrap(), None);
+        assert_eq!(peer.agent_preferences(id).unwrap().unwrap().revision, 3);
 
-            peer.provider_id(id, "replacement-thread").unwrap();
-            assert!(!store
-                .record_provider_session(source(Some("observed-thread")), "stale-thread", true)
-                .unwrap());
-            assert_eq!(
-                peer.local_agent_binding(id)
-                    .unwrap()
-                    .unwrap()
-                    .provider_id
-                    .as_deref(),
-                Some("replacement-thread")
-            );
-            let mut replacement = settings.clone();
-            replacement.account.id = "replacement-account".into();
-            peer.save_agent_preferences(id, &replacement).unwrap();
-            assert!(!store
-                .record_provider_session(
-                    source(Some("replacement-thread")),
-                    "wrong-account-thread",
-                    false
-                )
-                .unwrap());
-            peer.save_agent_preferences(id, &settings).unwrap();
-            peer.select_local_provider(id, "omp", Kind::Claude, selection(Kind::Omp, 4))
-                .unwrap();
-            assert!(!store
-                .record_provider_session(
-                    source(Some("observed-thread")),
-                    "stale-outgoing-thread",
-                    false
-                )
-                .unwrap());
-            assert!(store
-                .record_provider_session(
-                    source(Some("replacement-thread")),
-                    "outgoing-thread",
-                    false
-                )
-                .unwrap());
-            let selected = peer.local_agent_binding(id).unwrap().unwrap();
-            assert_eq!(selected.provider, "claude");
-            assert_eq!(selected.provider_id, None);
-            let saved = peer.agent_preferences(id).unwrap().unwrap();
-            assert_eq!(saved.revision, 4);
-            assert_eq!(
-                saved
-                    .pending_provider_switch
-                    .unwrap()
-                    .provider_id
-                    .as_deref(),
-                Some("outgoing-thread")
-            );
-        }
+        peer.provider_id(id, "replacement-thread").unwrap();
+        assert!(!store
+            .record_provider_session(source(Some("observed-thread")), "stale-thread", true)
+            .unwrap());
+        assert_eq!(
+            peer.local_agent_binding(id)
+                .unwrap()
+                .unwrap()
+                .provider_id
+                .as_deref(),
+            Some("replacement-thread")
+        );
+        let mut replacement = settings.clone();
+        replacement.account.id = "replacement-account".into();
+        peer.save_agent_preferences(id, &replacement).unwrap();
+        assert!(!store
+            .record_provider_session(
+                source(Some("replacement-thread")),
+                "wrong-account-thread",
+                false
+            )
+            .unwrap());
+        peer.save_agent_preferences(id, &settings).unwrap();
+        peer.select_local_provider(id, "omp", Kind::Claude, selection(Kind::Omp, 4))
+            .unwrap();
+        assert!(!store
+            .record_provider_session(
+                source(Some("observed-thread")),
+                "stale-outgoing-thread",
+                false
+            )
+            .unwrap());
+        assert!(store
+            .record_provider_session(source(Some("replacement-thread")), "outgoing-thread", false)
+            .unwrap());
+        let selected = peer.local_agent_binding(id).unwrap().unwrap();
+        assert_eq!(selected.provider, "claude");
+        assert_eq!(selected.provider_id, None);
+        let saved = peer.agent_preferences(id).unwrap().unwrap();
+        assert_eq!(saved.revision, 4);
+        assert_eq!(
+            saved
+                .pending_provider_switch
+                .unwrap()
+                .provider_id
+                .as_deref(),
+            Some("outgoing-thread")
+        );
     }
 
     #[test]
     fn provider_feedback_preserves_new_choices_and_updates_the_exact_outgoing_source() {
-        for shared in [false, true] {
-            let directory = tempfile::tempdir().unwrap();
-            let path = directory.path().join("agent.db");
-            let open = if shared {
-                Store::open_vorkspace
-            } else {
-                Store::open
-            };
-            let store = open(&path).unwrap();
-            let id = store.create("omp", "/project").unwrap().id;
-            store.provider_id(id, "source-thread").unwrap();
-            let settings = Settings {
-                revision: 3,
-                thinking: Some(false),
-                ..Default::default()
-            };
-            store.save_agent_preferences(id, &settings).unwrap();
-            let source = || ProviderSource {
-                session: id,
-                provider: "omp",
-                account: crate::accounts::DEFAULT,
-                provider_id: Some("source-thread"),
-                revision: 3,
-            };
-            let patch = ConfigurationPatch {
-                model: Some("fixture/observed".into()),
-                model_settings: [
-                    ("fast".into(), "true".into()),
-                    ("thinking".into(), "high".into()),
-                    ("reasoningEffort".into(), "medium".into()),
-                    ("serviceTier".into(), "fast".into()),
-                ]
-                .into(),
-            };
-            assert!(store
-                .record_provider_configuration(source(), &patch)
-                .unwrap());
-            let peer = open(&path).unwrap();
-            let observed = peer.agent_preferences(id).unwrap().unwrap();
-            assert_eq!(observed.revision, 3);
-            assert_eq!(observed.model.as_deref(), Some("fixture/observed"));
-            assert!(observed.fast);
-            assert_eq!(observed.model_settings["fast"], "true");
-            assert_eq!(observed.model_settings["thinking"], "high");
-            assert_eq!(observed.effort.as_deref(), Some("medium"));
-            assert_eq!(observed.service_tier.as_deref(), Some("fast"));
-            assert!(observed.thinking.is_none());
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("agent.db");
+        let open = { Store::test };
+        let store = open(&path).unwrap();
+        let id = store.create("omp", "/project").unwrap().id;
+        store.provider_id(id, "source-thread").unwrap();
+        let settings = Settings {
+            revision: 3,
+            thinking: Some(false),
+            ..Default::default()
+        };
+        store.save_agent_preferences(id, &settings).unwrap();
+        let source = || ProviderSource {
+            session: id,
+            provider: "omp",
+            account: crate::accounts::DEFAULT,
+            provider_id: Some("source-thread"),
+            revision: 3,
+        };
+        let patch = ConfigurationPatch {
+            model: Some("fixture/observed".into()),
+            model_settings: [
+                ("fast".into(), "true".into()),
+                ("thinking".into(), "high".into()),
+                ("reasoningEffort".into(), "medium".into()),
+                ("serviceTier".into(), "fast".into()),
+            ]
+            .into(),
+        };
+        assert!(store
+            .record_provider_configuration(source(), &patch)
+            .unwrap());
+        let peer = open(&path).unwrap();
+        let observed = peer.agent_preferences(id).unwrap().unwrap();
+        assert_eq!(observed.revision, 3);
+        assert_eq!(observed.model.as_deref(), Some("fixture/observed"));
+        assert!(observed.fast);
+        assert_eq!(observed.model_settings["fast"], "true");
+        assert_eq!(observed.model_settings["thinking"], "high");
+        assert_eq!(observed.effort.as_deref(), Some("medium"));
+        assert_eq!(observed.service_tier.as_deref(), Some("fast"));
+        assert!(observed.thinking.is_none());
 
-            let mut newer = observed;
-            newer.revision = 4;
-            newer.model = Some("fixture/deliberate".into());
-            peer.save_agent_preferences(id, &newer).unwrap();
-            assert!(!store
-                .record_provider_configuration(source(), &patch)
-                .unwrap());
-            assert_eq!(
-                peer.agent_preferences(id).unwrap().unwrap().model,
-                newer.model
-            );
-            let changed_account = ProviderSource {
-                account: "replacement",
-                revision: 4,
-                ..source()
-            };
-            assert!(!store
-                .record_provider_configuration(changed_account, &patch)
-                .unwrap());
-            let changed_thread = ProviderSource {
-                provider_id: Some("replacement-thread"),
-                revision: 4,
-                ..source()
-            };
-            assert!(!store
-                .record_provider_configuration(changed_thread, &patch)
-                .unwrap());
+        let mut newer = observed;
+        newer.revision = 4;
+        newer.model = Some("fixture/deliberate".into());
+        peer.save_agent_preferences(id, &newer).unwrap();
+        assert!(!store
+            .record_provider_configuration(source(), &patch)
+            .unwrap());
+        assert_eq!(
+            peer.agent_preferences(id).unwrap().unwrap().model,
+            newer.model
+        );
+        let changed_account = ProviderSource {
+            account: "replacement",
+            revision: 4,
+            ..source()
+        };
+        assert!(!store
+            .record_provider_configuration(changed_account, &patch)
+            .unwrap());
+        let changed_thread = ProviderSource {
+            provider_id: Some("replacement-thread"),
+            revision: 4,
+            ..source()
+        };
+        assert!(!store
+            .record_provider_configuration(changed_thread, &patch)
+            .unwrap());
 
-            let next = Settings {
-                revision: 5,
-                model: Some("next-model".into()),
-                pending_provider_switch: Some(ProviderSwitch {
-                    from: "omp".into(),
-                    account: newer.account.clone(),
-                    ..Default::default()
-                }),
+        let next = Settings {
+            revision: 5,
+            model: Some("next-model".into()),
+            pending_provider_switch: Some(ProviderSwitch {
+                from: "omp".into(),
+                account: newer.account.clone(),
                 ..Default::default()
-            };
-            peer.select_local_provider(id, "omp", Kind::Claude, next)
-                .unwrap();
-            assert!(store
-                .record_provider_configuration(source(), &patch)
-                .unwrap());
-            let selected = peer.agent_preferences(id).unwrap().unwrap();
-            assert_eq!(selected.model.as_deref(), Some("next-model"));
-            assert!(!selected.fast);
-            assert_eq!(selected.revision, 5);
-            let pending = selected.pending_provider_switch.unwrap();
-            assert_eq!(pending.provider_id.as_deref(), Some("source-thread"));
-            assert_eq!(pending.model.as_deref(), Some("fixture/observed"));
-            assert!(pending.fast);
-            assert_eq!(pending.model_settings["thinking"], "high");
-        }
+            }),
+            ..Default::default()
+        };
+        peer.select_local_provider(id, "omp", Kind::Claude, next)
+            .unwrap();
+        assert!(store
+            .record_provider_configuration(source(), &patch)
+            .unwrap());
+        let selected = peer.agent_preferences(id).unwrap().unwrap();
+        assert_eq!(selected.model.as_deref(), Some("next-model"));
+        assert!(!selected.fast);
+        assert_eq!(selected.revision, 5);
+        let pending = selected.pending_provider_switch.unwrap();
+        assert_eq!(pending.provider_id.as_deref(), Some("source-thread"));
+        assert_eq!(pending.model.as_deref(), Some("fixture/observed"));
+        assert!(pending.fast);
+        assert_eq!(pending.model_settings["thinking"], "high");
     }
 
     #[test]
@@ -605,7 +581,7 @@ mod tests {
 
     #[test]
     fn delayed_handoff_settlement_cannot_clear_a_new_provider_selection() {
-        let store = Store::open_vorkspace(std::path::Path::new(":memory:")).unwrap();
+        let store = Store::test(std::path::Path::new(":memory:")).unwrap();
         let id = store.create("codex", "/project").unwrap().id;
         let (selected, _) = store
             .select_local_provider(id, "codex", Kind::Claude, selection(Kind::Codex, 1))

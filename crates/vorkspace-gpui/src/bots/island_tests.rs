@@ -166,7 +166,7 @@ fn native_bot_island_capture() {
     ] {
         let data = tempfile::tempdir().unwrap();
         let store = Arc::new(Mutex::new(
-            Store::open(&data.path().join("native.sqlite")).unwrap(),
+            Store::test(&data.path().join("native.sqlite")).unwrap(),
         ));
         let project = data
             .path()

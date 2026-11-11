@@ -231,7 +231,7 @@ fn native_terminal_tab_capture() {
     std::fs::create_dir(&project).unwrap();
     let cwd = project.to_string_lossy().into_owned();
     let store = Arc::new(Mutex::new(
-        vorkspace_core::store::Store::open(&directory.path().join("fixture.sqlite")).unwrap(),
+        vorkspace_core::store::Store::test(&directory.path().join("fixture.sqlite")).unwrap(),
     ));
     let mut workspace = Workspace::default();
     workspace.add_project(&cwd);

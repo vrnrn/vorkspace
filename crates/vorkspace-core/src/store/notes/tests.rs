@@ -1,7 +1,7 @@
 use super::*;
 
 fn store() -> Store {
-    Store::open(Path::new(":memory:")).unwrap()
+    Store::test(Path::new(":memory:")).unwrap()
 }
 fn input(id: &str, title: &str, body: &str) -> NoteUpsert {
     NoteUpsert {
@@ -21,7 +21,7 @@ fn schema_version(store: &Store) -> i64 {
 #[test]
 fn recovered_note_copy_keeps_its_images_when_the_original_is_deleted() {
     let root = tempfile::tempdir().unwrap();
-    let store = Store::open(&root.path().join("notes.db")).unwrap();
+    let store = Store::test(&root.path().join("notes.db")).unwrap();
     let image = root.path().join("diagram.svg");
     std::fs::write(&image, "<svg/>").unwrap();
     let draft = input("original", "Plan", "");
@@ -56,7 +56,7 @@ fn image_import_materializes_only_new_drafts_and_rejects_failed_or_deleted_notes
     let path = root.path().join("notes.db");
     let image = root.path().join("first.svg");
     std::fs::write(&image, "<svg/>").unwrap();
-    let store = Store::open(&path).unwrap();
+    let store = Store::test(&path).unwrap();
     let draft = input("image-first", "", "");
     assert!(store
         .save_note_image(&draft.id, &root.path().join("absent.svg"), Some(&draft))
@@ -65,7 +65,7 @@ fn image_import_materializes_only_new_drafts_and_rejects_failed_or_deleted_notes
     let asset = store
         .save_note_image(&draft.id, &image, Some(&draft))
         .unwrap();
-    let reopened = Store::open(&path).unwrap();
+    let reopened = Store::test(&path).unwrap();
     assert_eq!(
         reopened.get_note(&draft.id).unwrap().unwrap().body,
         crate::notes::image_markdown(&asset)
@@ -91,7 +91,7 @@ fn desktop_note_crud_keeps_source_tags_and_project_moves() {
         "design-notes".into(),
         "Rust".into(),
     ];
-    request.source_session_id = Some(session.id.to_string());
+    request.source_session_id = Some(store.persisted_session_id(session.id).unwrap());
     request.source_cwd = Some("/project".into());
     let saved = store.upsert_note(&request).unwrap();
     assert_eq!(saved.title, "A title");
@@ -193,7 +193,7 @@ fn note_mentions_expand_in_reference_order_once_and_ignore_missing_slugs() {
 
 #[test]
 fn desktop_note_reads_skip_unrelated_bodies_and_keep_legacy_columns_read_only() {
-    let store = Store::open_vorkspace(Path::new(":memory:")).unwrap();
+    let store = Store::test(Path::new(":memory:")).unwrap();
     let first = store
         .upsert_note(&input("first", "First", "Kept body"))
         .unwrap();
@@ -248,7 +248,7 @@ fn desktop_note_reads_skip_unrelated_bodies_and_keep_legacy_columns_read_only() 
 }
 
 #[test]
-fn response_note_facade_and_legacy_settings_share_one_saved_identity() {
+fn response_note_facade_keeps_one_saved_identity() {
     let store = store();
     let session = store.create("codex", "/project").unwrap();
     let mut response = crate::response::Note {
@@ -259,15 +259,8 @@ fn response_note_facade_and_legacy_settings_share_one_saved_identity() {
         source_session: session.id,
         source_cwd: "/project".into(),
     };
-    store
-        .conn
-        .execute(
-            "INSERT INTO native_settings(key,value) VALUES('note:123',?1)",
-            [serde_json::to_string(&response).unwrap()],
-        )
-        .unwrap();
-    assert_eq!(store.list_notes().unwrap().len(), 1);
     store.save_note(&response).unwrap();
+    assert_eq!(store.list_notes().unwrap().len(), 1);
     response.body = "Edited response".into();
     store.save_note(&response).unwrap();
     assert_eq!(store.list_notes().unwrap().len(), 1);
@@ -353,17 +346,10 @@ fn note_summary_projection_keeps_order_and_excludes_artifacts() {
     original.tags = vec!["rust".into()];
     original.source_cwd = Some("/project".into());
     store.upsert_note(&original).unwrap();
-    let legacy = crate::response::Note {
-        id: 42,
-        title: "Legacy note".into(),
-        body: "A legacy body".into(),
-        tags: vec!["old".into()],
-        source_session: 0,
-        source_cwd: "/archive".into(),
-    };
-    store
-        .save_setting("note:42", &serde_json::to_string(&legacy).unwrap())
-        .unwrap();
+    let mut earlier = input("gpui-note-42", "Earlier note", "An earlier body");
+    earlier.tags = vec!["old".into()];
+    earlier.source_cwd = Some("/archive".into());
+    store.upsert_note(&earlier).unwrap();
     upsert_content(
         &store.conn,
         &input("artifact", "Artifact", "Separate"),
@@ -371,6 +357,19 @@ fn note_summary_projection_keeps_order_and_excludes_artifacts() {
         None,
     )
     .unwrap();
+    store
+        .conn
+        .execute_batch("UPDATE notes SET updated_at=CASE id WHEN 'native' THEN 20 ELSE 10 END")
+        .unwrap();
+    assert_eq!(
+        store
+            .list_note_summaries()
+            .unwrap()
+            .into_iter()
+            .map(|note| note.id)
+            .collect::<Vec<_>>(),
+        ["native", "gpui-note-42"]
+    );
     assert_eq!(
         store.list_note_summaries().unwrap(),
         store
@@ -382,7 +381,7 @@ fn note_summary_projection_keeps_order_and_excludes_artifacts() {
     );
     assert_eq!(
         store.get_note("gpui-note-42").unwrap().unwrap().body,
-        legacy.body
+        earlier.body
     );
 }
 
@@ -670,6 +669,8 @@ fn recording_attachment_rejects_relinking_and_artifact_ownership() {
 #[test]
 fn recording_link_ids_are_validated_before_any_schema_write() {
     let store = store();
+    let version = schema_version(&store);
+    let changes = store.conn.total_changes();
     for invalid in ["", "../escape", "space here", "bad/identity", "nöté"] {
         assert!(store.attach_note_recording(invalid, RECORDING_A).is_err());
     }
@@ -705,7 +706,9 @@ fn recording_link_ids_are_validated_before_any_schema_write() {
             "{invalid:?}"
         );
     }
-    assert!(!super::super::shared::has_table(&store.conn, "notes").unwrap());
+    assert_eq!(schema_version(&store), version);
+    assert_eq!(store.conn.total_changes(), changes);
+    assert!(store.list_notes().unwrap().is_empty());
     assert!(!super::super::shared::has_table(&store.conn, "note_recordings").unwrap());
 }
 

@@ -26,7 +26,7 @@ fn command_window(cx: &mut TestAppContext) -> (gpui::WindowHandle<Shell>, i64, t
                 .success()
         );
     }
-    let store = vorkspace_core::store::Store::open(&root.path().join("state.db")).unwrap();
+    let store = vorkspace_core::store::Store::test(&root.path().join("state.db")).unwrap();
     let project = root.path().to_string_lossy().into_owned();
     let summary = store.create("codex", &project).unwrap();
     let caller = summary.id;
@@ -282,10 +282,7 @@ fn operator_workspace_commands_use_the_authenticated_dispatch_and_saved_receipts
         true
     );
 }
-fn rollback_window(
-    cx: &mut TestAppContext,
-    shared: bool,
-) -> (gpui::WindowHandle<Shell>, i64, tempfile::TempDir) {
+fn rollback_window(cx: &mut TestAppContext) -> (gpui::WindowHandle<Shell>, i64, tempfile::TempDir) {
     let root = tempfile::tempdir().unwrap();
     let project = root.path().join("project");
     std::fs::create_dir(&project).unwrap();
@@ -313,12 +310,7 @@ fn rollback_window(
         );
     }
     let path = root.path().join("state.db");
-    let store = if shared {
-        vorkspace_core::store::Store::open_vorkspace(&path)
-    } else {
-        vorkspace_core::store::Store::open(&path)
-    }
-    .unwrap();
+    let store = { vorkspace_core::store::Store::test(&path) }.unwrap();
     let project = project.to_string_lossy().into_owned();
     let summary = store.create("codex", &project).unwrap();
     let caller = summary.id;
@@ -360,33 +352,30 @@ fn failed_install(
             let project = shell.workspace.project.clone();
             let input = json!({"prompt":"/plan Unaccepted child request","draft":draft,"workspaceMode":"worktree","placement":"right"});
             let mut launch = vorkspace_core::bot::launch::Launch::parse(&input,"codex",&project,&project,Settings::default(),true).unwrap();
-            let (summary, shared, original) = {
+            let (summary, original) = {
                 let mut store = locked(&shell.store).unwrap();
                 let summary = launch.create(&mut store,&project).unwrap();
                 store.save_started_link(summary.id,caller).unwrap();
-                let original = if store.uses_vorkspace_schema() { store.persisted_session_id(summary.id).unwrap() } else { summary.id.to_string() };
-                (summary,store.uses_vorkspace_schema(),original)
+                let original = { store.persisted_session_id(summary.id).unwrap() };
+                (summary,original)
             };
             let id = summary.id;
             let tree = std::path::PathBuf::from(launch.settings.worktree_cwd.as_ref().unwrap());
             if dirty { std::fs::write(tree.join("newer-user-work.txt"),"Preserve this new work").unwrap(); }
             let connection = rusqlite::Connection::open(root.join("state.db")).unwrap();
-            if shared && draft {
+            if draft {
                 connection.execute_batch("CREATE TABLE IF NOT EXISTS composer_drafts(session_id TEXT PRIMARY KEY,cwd TEXT NOT NULL,revision INTEGER NOT NULL,payload_json TEXT NOT NULL,deleted INTEGER NOT NULL DEFAULT 0,updated_at INTEGER NOT NULL);").unwrap();
             }
-            let trigger = if shared {
+            let trigger = {
                 if draft {
                     format!("CREATE TRIGGER reject_app_input BEFORE INSERT ON composer_drafts WHEN NEW.session_id='{original}' BEGIN SELECT RAISE(ABORT,'injected composer failure'); END;")
                 } else {
                     format!("CREATE TRIGGER reject_app_input BEFORE UPDATE OF queued_messages_json ON sessions WHEN NEW.id='{original}' BEGIN SELECT RAISE(ABORT,'injected queue failure'); END;")
                 }
-            } else {
-                let key = if draft { "composer" } else { "follow-up" };
-                format!("CREATE TRIGGER reject_app_input BEFORE INSERT ON native_settings WHEN NEW.key='{key}:{id}' BEGIN SELECT RAISE(ABORT,'injected input failure'); END;")
             };
             connection.execute_batch(&trigger).unwrap();
             if refuse_delete {
-                let (table,target) = if shared { ("sessions",original.clone()) } else { ("native_sessions",id.to_string()) };
+                let (table,target) = { ("sessions",original.clone()) };
                 connection.execute_batch(&format!("CREATE TRIGGER reject_app_delete BEFORE DELETE ON {table} WHEN OLD.id='{target}' BEGIN SELECT RAISE(ABORT,'injected cleanup failure'); END;")).unwrap();
             }
             let panes = shell.active_leaves();
@@ -426,9 +415,9 @@ fn failed_install(
 }
 #[gpui::test]
 fn app_install_write_failures_remove_only_the_unaccepted_child(cx: &mut TestAppContext) {
-    for shared in [false, true] {
+    {
         for draft in [false, true] {
-            let (window, caller, root) = rollback_window(cx, shared);
+            let (window, caller, root) = rollback_window(cx);
             let (id, tree, _) =
                 failed_install(window, caller, root.path(), draft, false, false, cx);
             cx.run_until_parked();
@@ -445,9 +434,7 @@ fn app_install_write_failures_remove_only_the_unaccepted_child(cx: &mut TestAppC
                     );
                     assert!(store.setting(&format!("agent:{id}")).unwrap().is_none());
                     assert!(store.setting(&format!("follow-up:{id}")).unwrap().is_none());
-                    if !shared {
-                        assert!(store.composer_draft(id).unwrap().is_none());
-                    }
+
                     assert!(store.composer_recoveries(id).unwrap().is_empty());
                     assert!(!shell.sessions.contains_key(&id));
                     assert_eq!(
@@ -473,7 +460,7 @@ fn operator_preparation_link_failure_rolls_back_before_settling_the_request(
     cx: &mut TestAppContext,
 ) {
     for workspace in ["current", "worktree", "existing"] {
-        let (window, caller, root) = rollback_window(cx, false);
+        let (window, caller, root) = rollback_window(cx);
         let project = root.path().join("project");
         let mut input = json!({"prompt":"Unaccepted request","draft":true});
         if workspace == "existing" {
@@ -500,7 +487,13 @@ fn operator_preparation_link_failure_rolls_back_before_settling_the_request(
             .update(cx, |shell, _, cx| shell.directory.read(cx).rows.clone())
             .unwrap();
         let connection = rusqlite::Connection::open(root.path().join("state.db")).unwrap();
-        connection.execute_batch("CREATE TRIGGER reject_started_link BEFORE INSERT ON native_settings WHEN NEW.key LIKE 'started-by:%' BEGIN SELECT RAISE(ABORT,'injected started link failure'); END;").unwrap();
+        window
+            .update(cx, |shell, _, _| {
+                locked(&shell.store)
+                    .unwrap()
+                    .fail_setting_for_test(Some(("started-by:", "injected started link failure")))
+            })
+            .unwrap();
         let error = command(
             window,
             caller,
@@ -544,8 +537,13 @@ fn operator_preparation_link_failure_rolls_back_before_settling_the_request(
         assert_eq!(
             connection
                 .query_row(
-                    "SELECT count(*) FROM native_settings WHERE key LIKE 'agent:%' AND key <> ?1",
-                    [format!("agent:{caller}")],
+                    "SELECT count(*) FROM native_agent_settings WHERE session_id <> ?1",
+                    [window
+                        .update(cx, |shell, _, _| locked(&shell.store)
+                            .unwrap()
+                            .persisted_session_id(caller)
+                            .unwrap())
+                        .unwrap()],
                     |row| row.get::<_, i64>(0)
                 )
                 .unwrap(),
@@ -571,12 +569,14 @@ fn operator_preparation_link_failure_rolls_back_before_settling_the_request(
                 "Retain existing work"
             );
         }
-        connection
-            .execute_batch("DROP TRIGGER reject_started_link;")
+        window
+            .update(cx, |shell, _, _| {
+                locked(&shell.store).unwrap().fail_setting_for_test(None)
+            })
             .unwrap();
         // A saved failure stays a failure after reopen and after the disk
         // fault is gone: retrying cannot allocate a replacement worker.
-        let reopened = vorkspace_core::store::Store::open(&root.path().join("state.db")).unwrap();
+        let reopened = vorkspace_core::store::Store::test(&root.path().join("state.db")).unwrap();
         assert!(
             matches!(reopened.admit_app_command(caller,"failed-preparation","sessions.start",&input).unwrap(),vorkspace_core::store::AppCommandAdmission::Completed(Err(saved)) if saved==error)
         );
@@ -606,10 +606,24 @@ fn operator_preparation_link_failure_rolls_back_before_settling_the_request(
 }
 #[gpui::test]
 fn operator_preparation_cleanup_failure_keeps_the_session_and_worktree(cx: &mut TestAppContext) {
-    let (window, caller, root) = rollback_window(cx, false);
+    let (window, caller, root) = rollback_window(cx);
     let connection = rusqlite::Connection::open(root.path().join("state.db")).unwrap();
-    connection.execute_batch(&format!("CREATE TRIGGER reject_started_link BEFORE INSERT ON native_settings WHEN NEW.key LIKE 'started-by:%' BEGIN SELECT RAISE(ABORT,'injected started link failure'); END;
-            CREATE TRIGGER reject_child_delete BEFORE DELETE ON native_sessions WHEN OLD.id <> {caller} BEGIN SELECT RAISE(ABORT,'injected cleanup failure'); END;")).unwrap();
+    let caller_original = window
+        .update(cx, |shell, _, _| {
+            locked(&shell.store)
+                .unwrap()
+                .persisted_session_id(caller)
+                .unwrap()
+        })
+        .unwrap();
+    window
+        .update(cx, |shell, _, _| {
+            locked(&shell.store)
+                .unwrap()
+                .fail_setting_for_test(Some(("started-by:", "injected started link failure")))
+        })
+        .unwrap();
+    connection.execute_batch(&format!("CREATE TRIGGER reject_child_delete BEFORE DELETE ON sessions WHEN OLD.id <> '{caller_original}' BEGIN SELECT RAISE(ABORT,'injected cleanup failure'); END;")).unwrap();
     let input = json!({"prompt":"Unaccepted request","draft":true,"workspaceMode":"worktree"});
     let error = command(
         window,
@@ -664,7 +678,12 @@ fn operator_preparation_cleanup_failure_keeps_the_session_and_worktree(cx: &mut 
         2
     );
     connection
-        .execute_batch("DROP TRIGGER reject_started_link; DROP TRIGGER reject_child_delete;")
+        .execute_batch("DROP TRIGGER reject_child_delete;")
+        .unwrap();
+    window
+        .update(cx, |shell, _, _| {
+            locked(&shell.store).unwrap().fail_setting_for_test(None)
+        })
         .unwrap();
     assert_eq!(
         command(
@@ -682,7 +701,7 @@ fn operator_preparation_cleanup_failure_keeps_the_session_and_worktree(cx: &mut 
 }
 #[gpui::test]
 fn app_install_failure_preserves_dirty_created_worktree_and_reports_it(cx: &mut TestAppContext) {
-    let (window, caller, root) = rollback_window(cx, true);
+    let (window, caller, root) = rollback_window(cx);
     let (id, tree, error) = failed_install(window, caller, root.path(), true, true, false, cx);
     assert!(error.contains("preserved"), "{error}");
     assert!(error.contains(tree.to_str().unwrap()), "{error}");
@@ -707,7 +726,7 @@ fn app_install_failure_preserves_dirty_created_worktree_and_reports_it(cx: &mut 
 fn app_install_cleanup_failure_preserves_the_stored_session_and_its_worktree(
     cx: &mut TestAppContext,
 ) {
-    let (window, caller, root) = rollback_window(cx, true);
+    let (window, caller, root) = rollback_window(cx);
     let (id, tree, error) = failed_install(window, caller, root.path(), false, false, true, cx);
     assert!(error.contains("could not be removed"), "{error}");
     assert!(error.contains("injected cleanup failure"), "{error}");
@@ -728,7 +747,7 @@ fn app_install_cleanup_failure_preserves_the_stored_session_and_its_worktree(
 }
 #[gpui::test]
 fn app_install_keeps_a_child_opened_by_a_newer_owner(cx: &mut TestAppContext) {
-    let (window, caller, root) = rollback_window(cx, true);
+    let (window, caller, root) = rollback_window(cx);
     let (id, tree) = window
         .update(cx, |shell, window, cx| {
             let project = shell.workspace.project.clone();
@@ -1235,7 +1254,7 @@ fn app_acceptance_keeps_the_prompt_durable_before_the_provider_worker_runs(
             message
         })
         .unwrap();
-    let reopened = vorkspace_core::store::Store::open(&root.path().join("state.db")).unwrap();
+    let reopened = vorkspace_core::store::Store::test(&root.path().join("state.db")).unwrap();
     let queue = reopened.follow_ups(child).unwrap();
     assert!(queue.paused);
     assert_eq!(queue.messages, vec![message]);
@@ -1272,7 +1291,7 @@ fn app_send_cannot_acknowledge_a_prompt_its_stale_queue_did_not_save(cx: &mut Te
             })
         })
         .unwrap();
-    let second = vorkspace_core::store::Store::open(&root.path().join("state.db")).unwrap();
+    let second = vorkspace_core::store::Store::test(&root.path().join("state.db")).unwrap();
     let mut newer = second.follow_ups(child).unwrap();
     newer.revision = 100;
     newer.messages.push(vorkspace_core::follow_up::Message {

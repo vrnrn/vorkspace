@@ -10,8 +10,8 @@ pub(super) fn ensure_schema(conn: &Connection) -> Result<(), String> {
 }
 
 impl Store {
-    pub(in crate::store) fn shared_agent(&self, id: i64) -> Result<Option<Settings>, String> {
-        let Some(mut settings) = self.shared_agent_preferences(id)? else {
+    pub fn agent_settings(&self, id: i64) -> Result<Option<Settings>, String> {
+        let Some(mut settings) = self.agent_preferences(id)? else {
             return Ok(None);
         };
         // Desktop blocks are authoritative. Native-only legacy metadata remains
@@ -23,10 +23,8 @@ impl Store {
     }
     /// Scalar preferences and native settings; historical receipts are added
     /// only for full agent reads, never while saving composer preferences.
-    pub(in crate::store) fn shared_agent_preferences(
-        &self,
-        id: i64,
-    ) -> Result<Option<Settings>, String> {
+    /// Read preferences without projecting saved turn metadata from the transcript.
+    pub fn agent_preferences(&self, id: i64) -> Result<Option<Settings>, String> {
         self.shared_agent_configuration(id)
             .map(|configuration| configuration.map(|(_, settings)| settings))
     }
@@ -102,7 +100,7 @@ impl Store {
         let mut controls: HashMap<String, String> = parse(&controls)?;
         let native = match native {
             Some(raw) => Some(raw),
-            None => self.shared_setting(&format!("agent:{id}"))?,
+            None => self.setting(&format!("agent:{id}"))?,
         };
         let mut settings: Settings = native
             .map(|raw| parse(&raw))
@@ -122,7 +120,7 @@ impl Store {
         {
             if let Some(defaults) = self
                 .desktop_preferences()
-                .and_then(|preferences| preferences.session_defaults(&provider, &project))
+                .session_defaults(&provider, &project)
             {
                 settings.model = defaults.model;
                 controls = defaults.model_settings;
@@ -156,22 +154,15 @@ impl Store {
             settings,
         )))
     }
-    pub(in crate::store) fn shared_save_agent(
-        &self,
-        id: i64,
-        settings: &Settings,
-    ) -> Result<(), String> {
+    pub fn save_agent_settings(&self, id: i64, settings: &Settings) -> Result<(), String> {
         self.shared_save_turns(id, &settings.turns, None)?;
-        self.shared_save_agent_preferences(id, settings)
+        self.save_agent_preferences(id, settings)
     }
     /// Preference-only updates for validated operations which already preserve
     /// their source transcript inside a surrounding transaction (rewind and
     /// worktree cleanup). These must not re-save or re-index turn receipts.
-    pub(in crate::store) fn shared_save_agent_preferences(
-        &self,
-        id: i64,
-        settings: &Settings,
-    ) -> Result<(), String> {
+    /// Save an edit to `agent_preferences` without rewriting transcript receipts.
+    pub fn save_agent_preferences(&self, id: i64, settings: &Settings) -> Result<(), String> {
         self.shared_writable()?;
         let tx = self
             .conn
@@ -183,7 +174,7 @@ impl Store {
                 ))
             })
             .transpose()?;
-        let current = self.shared_agent_preferences(id)?.unwrap_or_default();
+        let current = self.agent_preferences(id)?.unwrap_or_default();
         let mut controls = current.model_settings;
         controls.extend(settings.model_settings.clone());
         let effort_key = [

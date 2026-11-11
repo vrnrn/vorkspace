@@ -1188,7 +1188,7 @@ mod minion_ui_tests {
         vorkspace_ui::clock::use_test_clock(cx);
         let directory = tempfile::tempdir().unwrap();
         let store = Arc::new(Mutex::new(
-            Store::open(&directory.path().join("ui.sqlite")).unwrap(),
+            Store::test(&directory.path().join("ui.sqlite")).unwrap(),
         ));
         let cwd = directory.path().to_string_lossy().to_string();
         let (active, retired) = {

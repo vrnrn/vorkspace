@@ -612,7 +612,7 @@ mod tests {
     #[gpui::test]
     fn silent_reply_can_be_selected_and_copied_but_not_edited(cx: &mut TestAppContext) {
         let store = Arc::new(std::sync::Mutex::new(
-            vorkspace_core::store::Store::open_vorkspace(std::path::Path::new(":memory:")).unwrap(),
+            vorkspace_core::store::Store::test(std::path::Path::new(":memory:")).unwrap(),
         ));
         let window = cx.update(|cx| {
             crate::input::bind(cx);

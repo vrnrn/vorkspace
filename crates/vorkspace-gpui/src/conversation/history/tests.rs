@@ -8,7 +8,7 @@ fn managed_reuse_waits_for_the_cold_composer_and_history(cx: &mut TestAppContext
     use crate::conversation::composer_features::ManagedAvailability;
 
     let project = tempfile::tempdir().unwrap();
-    let store = Store::open(Path::new(":memory:")).unwrap();
+    let store = Store::test(Path::new(":memory:")).unwrap();
     let path = project.path().to_str().unwrap();
     let occupied = store.create("codex", path).unwrap();
     let empty = store.create("codex", path).unwrap();
@@ -362,7 +362,7 @@ fn partial_history_restores_before_queued_mutation(cx: &mut TestAppContext) {
 fn history_eviction_keeps_live_state_and_pins_drafts_running_and_failed_saves(
     cx: &mut TestAppContext,
 ) {
-    let store = Store::open(Path::new(":memory:")).unwrap();
+    let store = Store::test(Path::new(":memory:")).unwrap();
     let session = store.create("codex", "/project").unwrap();
     let chat = cx.new(|cx| Conversation::new(session, Arc::new(Mutex::new(store)), cx));
     chat.update(cx, |chat, cx| {
@@ -416,7 +416,7 @@ fn history_eviction_keeps_live_state_and_pins_drafts_running_and_failed_saves(
 fn hidden_mutations_wait_for_history_without_changing_settings_or_receipts(
     cx: &mut TestAppContext,
 ) {
-    let store = Store::open(Path::new(":memory:")).unwrap();
+    let store = Store::test(Path::new(":memory:")).unwrap();
     let session = store.create("codex", "/project").unwrap();
     let chat = cx.new(|cx| Conversation::new(session, Arc::new(Mutex::new(store)), cx));
     chat.update(cx, |chat, cx| {
@@ -511,7 +511,7 @@ fn hidden_mutations_wait_for_history_without_changing_settings_or_receipts(
 fn restored_external_prompt_keeps_its_files_separate_from_new_composer_files(
     cx: &mut TestAppContext,
 ) {
-    let store = Store::open(Path::new(":memory:")).unwrap();
+    let store = Store::test(Path::new(":memory:")).unwrap();
     let session = store.create("codex", "/project").unwrap();
     let chat = cx.new(|cx| Conversation::new(session, Arc::new(Mutex::new(store)), cx));
     chat.update(cx, |chat, cx| {

@@ -474,9 +474,7 @@ impl Store {
         if !generated_recording_id(recording_id) {
             return Err("Invalid recording ID".into());
         }
-        if self.shared.is_some() {
-            self.shared_writable()?;
-        }
+        self.shared_writable()?;
         let tx = Transaction::new_unchecked(&self.conn, TransactionBehavior::Immediate)
             .map_err(|e| e.to_string())?;
         ensure_notes_table(&tx).map_err(|e| e.to_string())?;
@@ -496,9 +494,7 @@ impl Store {
         if !generated && !legacy_recording_id(recording_id) {
             return Err("Invalid recording ID".into());
         }
-        if self.shared.is_some() {
-            self.shared_writable()?;
-        }
+        self.shared_writable()?;
         let tx = Transaction::new_unchecked(&self.conn, TransactionBehavior::Immediate)
             .map_err(|e| e.to_string())?;
         ensure_notes_table(&tx).map_err(|e| e.to_string())?;
@@ -586,10 +582,8 @@ impl Store {
         self.prepare_note_upsert(note)?;
         let tx = Transaction::new_unchecked(&self.conn, TransactionBehavior::Immediate)
             .map_err(|e| e.to_string())?;
-        let mut current = get_content(&tx, &note.id, "note").map_err(|e| e.to_string())?;
-        if current.is_none() && self.shared.is_none() && note.id.starts_with("gpui-note-") {
-            current = self.get_note(&note.id)?;
-        }
+        let current = get_content(&tx, &note.id, "note").map_err(|e| e.to_string())?;
+
         if current.as_ref() != expected {
             return Ok(None);
         }
@@ -708,9 +702,7 @@ impl Store {
         {
             valid_id(id)?;
         }
-        if self.shared.is_some() {
-            self.shared_writable()?;
-        }
+        self.shared_writable()?;
         ensure_notes_table(&self.conn).map_err(|e| e.to_string())
     }
 
@@ -725,10 +717,8 @@ impl Store {
         self.prepare_note_upsert(&note)?;
         let tx = Transaction::new_unchecked(&self.conn, TransactionBehavior::Immediate)
             .map_err(|e| e.to_string())?;
-        let mut current = get_content(&tx, &note.id, "note").map_err(|e| e.to_string())?;
-        if current.is_none() && self.shared.is_none() && note.id.starts_with("gpui-note-") {
-            current = self.get_note(&note.id)?;
-        }
+        let current = get_content(&tx, &note.id, "note").map_err(|e| e.to_string())?;
+
         if current.as_ref() != Some(expected) {
             return Err(
                 "The note changed before it could be saved. Read it again and retry.".into(),
@@ -768,21 +758,17 @@ impl Store {
         expected: Option<Option<&Note>>,
     ) -> Result<bool, String> {
         valid_id(id)?;
-        if self.shared.is_some() {
-            self.shared_writable()?;
-        }
+        self.shared_writable()?;
         let tx = Transaction::new_unchecked(&self.conn, TransactionBehavior::Immediate)
             .map_err(|e| e.to_string())?;
         if let Some(expected) = expected {
-            let mut current = if super::shared::has_table(&tx, "notes")? {
+            let current = if super::shared::has_table(&tx, "notes")? {
                 ensure_notes_table(&tx).map_err(|e| e.to_string())?;
                 get_content(&tx, id, "note").map_err(|e| e.to_string())?
             } else {
                 None
             };
-            if current.is_none() && self.shared.is_none() && id.starts_with("gpui-note-") {
-                current = self.get_note(id)?;
-            }
+
             if current.as_ref() != expected {
                 return Ok(false);
             }
@@ -800,15 +786,7 @@ impl Store {
             ensure_notes_table(&tx).map_err(|e| e.to_string())?;
             delete_note(&tx, id).map_err(|e| e.to_string())?;
         }
-        if self.shared.is_none() {
-            if let Some(id) = id.strip_prefix("gpui-note-") {
-                tx.execute(
-                    "DELETE FROM native_settings WHERE key=?1",
-                    [format!("note:{id}")],
-                )
-                .map_err(|e| e.to_string())?;
-            }
-        }
+
         tx.commit().map_err(|e| e.to_string())?;
         // A deleted row stays deleted even if best-effort asset cleanup fails.
         if let Some(root) = self.data_dir() {
@@ -848,9 +826,7 @@ impl Store {
         // The legacy facade also edits older note rows carrying an artifact
         // subtype. Preserve it instead of reclassifying or duplicating the row.
         if existing.is_some() && super::shared::has_table(&self.conn, "notes")? {
-            if self.shared.is_some() {
-                self.shared_writable()?;
-            }
+            self.shared_writable()?;
             ensure_notes_table(&self.conn).map_err(|e| e.to_string())?;
             let subtype: Option<String> = self
                 .conn
@@ -877,9 +853,7 @@ impl Store {
         new_note: Option<&NoteUpsert>,
     ) -> Result<NoteImageAsset, String> {
         valid_id(note_id)?;
-        if self.shared.is_some() {
-            self.shared_writable()?;
-        }
+        self.shared_writable()?;
         let missing = self.get_note(note_id)?.is_none();
         if missing && new_note.is_none_or(|note| note.id != note_id) {
             return Err("Note no longer exists".into());

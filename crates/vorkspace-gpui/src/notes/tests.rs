@@ -3,7 +3,7 @@ use gpui::{TestAppContext, VisualTestContext};
 
 fn store() -> Database {
     std::sync::Arc::new(std::sync::Mutex::new(
-        vorkspace_core::store::Store::open(std::path::Path::new(":memory:")).unwrap(),
+        vorkspace_core::store::Store::test(std::path::Path::new(":memory:")).unwrap(),
     ))
 }
 
@@ -256,7 +256,7 @@ fn failed_note_save_keeps_the_pinned_editor_for_retry(cx: &mut TestAppContext) {
     let root = tempfile::tempdir().unwrap();
     let path = root.path().join("notes.db");
     let store = std::sync::Arc::new(std::sync::Mutex::new(
-        vorkspace_core::store::Store::open(&path).unwrap(),
+        vorkspace_core::store::Store::test(&path).unwrap(),
     ));
     locked(&store)
         .unwrap()
@@ -679,7 +679,7 @@ fn a_new_note_can_start_with_an_image_and_reopen(cx: &mut TestAppContext) {
     let root = tempfile::tempdir().unwrap();
     let path = root.path().join("notes.db");
     let store = std::sync::Arc::new(std::sync::Mutex::new(
-        vorkspace_core::store::Store::open(&path).unwrap(),
+        vorkspace_core::store::Store::test(&path).unwrap(),
     ));
     let image = root.path().join("first.svg");
     std::fs::write(
@@ -711,7 +711,7 @@ fn a_new_note_can_start_with_an_image_and_reopen(cx: &mut TestAppContext) {
             notes.flush(cx);
         })
         .unwrap();
-    let reopened = vorkspace_core::store::Store::open(&path).unwrap();
+    let reopened = vorkspace_core::store::Store::test(&path).unwrap();
     let saved = reopened.get_note(&id).unwrap().unwrap();
     assert_eq!(saved.body.matches("![").count(), 1);
     assert!(saved.body.contains("/note-assets/"));

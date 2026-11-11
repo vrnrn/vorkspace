@@ -10,13 +10,25 @@ pub(super) struct CardRevision {
 }
 
 impl Store {
-    pub(in crate::store) fn shared_refresh_bot_card(
+    pub fn refresh_bot_card(
         &self,
         session: i64,
-        id: &str,
         expected: &Value,
         desired: &Value,
     ) -> Result<Option<Row>, String> {
+        let id = expected["id"]
+            .as_str()
+            .filter(|id| !id.is_empty())
+            .ok_or("Card refresh requires a durable identity")?;
+        if !expected.is_object() || !desired.is_object() || desired["id"] != expected["id"] {
+            return Err("Card refresh cannot change its identity".into());
+        }
+        for key in ["type", "sessionId", "documentId", "repo", "number"] {
+            if expected.get(key) != desired.get(key) {
+                return Err("Card refresh cannot change its reference".into());
+            }
+        }
+
         self.shared_writable()?;
         self.shared_history_schema()?;
         let original = self.persisted_session_id(session)?;
@@ -90,7 +102,7 @@ impl Store {
         // Only advance a guard that covered the exact pre-commit history. If an
         // external writer changed anything, a stale generic writer must remain
         // refused until explicit reload. A card-local CAS cannot bless its tail.
-        let shared = self.shared.as_ref().unwrap();
+        let shared = &self.shared;
         let mut snapshots = shared.snapshots.borrow_mut();
         let mut indices = shared.incremental.borrow_mut();
         let mut local = shared.card_revisions.borrow_mut();
@@ -167,7 +179,7 @@ impl Store {
         session: i64,
         rows: &[Row],
     ) -> Result<(), String> {
-        let refreshed = self.shared.as_ref().unwrap().refreshed_cards.borrow();
+        let refreshed = self.shared.refreshed_cards.borrow();
         let Some(cards) = refreshed.get(&session) else {
             return Ok(());
         };
@@ -190,7 +202,7 @@ impl Store {
         expected: &HistoryRevision,
         blocks: &[Value],
     ) -> Option<bool> {
-        let local = self.shared.as_ref().unwrap().card_revisions.borrow();
+        let local = self.shared.card_revisions.borrow();
         let ledger = local
             .get(&session)
             .filter(|ledger| &ledger.base == expected)?;

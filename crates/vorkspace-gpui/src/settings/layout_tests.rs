@@ -359,7 +359,7 @@ fn discovered_catalog_follows_the_selected_account_and_keeps_profiles_separate(
     use vorkspace_core::provider::Kind;
     let directory = tempfile::tempdir().unwrap();
     let store = std::sync::Arc::new(std::sync::Mutex::new(
-        vorkspace_core::store::Store::open(&directory.path().join("native.sqlite")).unwrap(),
+        vorkspace_core::store::Store::test(&directory.path().join("native.sqlite")).unwrap(),
     ));
     cx.update(|cx| crate::accounts::install(store, cx));
     let window = window(Section::Providers, cx);
@@ -439,7 +439,7 @@ fn cost_monitoring_link_setting_appears_only_for_aws_bedrock(cx: &mut TestAppCon
     use vorkspace_core::{provider::Kind, usage::Snapshot};
     let directory = tempfile::tempdir().unwrap();
     let store = std::sync::Arc::new(std::sync::Mutex::new(
-        vorkspace_core::store::Store::open(&directory.path().join("native.sqlite")).unwrap(),
+        vorkspace_core::store::Store::test(&directory.path().join("native.sqlite")).unwrap(),
     ));
     cx.update(|cx| crate::accounts::install(store, cx));
     let window = window(Section::Providers, cx);

@@ -21,7 +21,7 @@ fn native_notes_capture() {
     let output = PathBuf::from(std::env::var_os("VORKSPACE_PAGES_SCREEN_DIR").unwrap());
     assert!(output.is_absolute() && output.is_dir());
     let root = tempfile::tempdir().unwrap();
-    let store = Store::open(&root.path().join("notes.db")).unwrap();
+    let store = Store::test(&root.path().join("notes.db")).unwrap();
     let meetings = vorkspace_meetings::Meetings::open(root.path()).unwrap();
     let recording_id = meetings.prepare("Release planning").unwrap();
     let mut owner =

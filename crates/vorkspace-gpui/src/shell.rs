@@ -2436,7 +2436,7 @@ impl Shell {
                 let mut settings = session_loading::new_session_settings(
                     store
                         .desktop_preferences()
-                        .and_then(|preferences| preferences.session_defaults(kind.id(), &cwd)),
+                        .session_defaults(kind.id(), &cwd),
                     model,
                 );
                 settings.access = access;

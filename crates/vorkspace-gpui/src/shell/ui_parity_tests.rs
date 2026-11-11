@@ -87,7 +87,7 @@ fn ui_parity_capture() {
     let project = project.to_str().unwrap();
     init_project(project);
     let store = Arc::new(Mutex::new(
-        Store::open(std::path::Path::new(":memory:")).unwrap(),
+        Store::test(std::path::Path::new(":memory:")).unwrap(),
     ));
     let session = {
         let mut store = locked(&store).unwrap();

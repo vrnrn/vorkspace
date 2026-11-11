@@ -4,7 +4,7 @@ use std::{fs, os::unix::fs::PermissionsExt, time::Instant};
 fn fixture() -> (tempfile::TempDir, Arc<Service>) {
     let root = tempfile::tempdir().unwrap();
     let store = Arc::new(Mutex::new(
-        Store::open(&root.path().join("native.sqlite")).unwrap(),
+        Store::test(&root.path().join("native.sqlite")).unwrap(),
     ));
     let (service, _) = Service::new(store, root.path().join("codebase")).unwrap();
     (root, service)

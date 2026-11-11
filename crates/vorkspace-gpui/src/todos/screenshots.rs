@@ -23,7 +23,7 @@ impl Render for Surface {
 fn native_todos_capture() {
     let output = PathBuf::from(std::env::var_os("VORKSPACE_PAGES_SCREEN_DIR").unwrap());
     assert!(output.is_absolute() && output.is_dir());
-    let store = Store::open(Path::new(":memory:")).unwrap();
+    let store = Store::test(Path::new(":memory:")).unwrap();
     let board = TodoBoard::Project("/work/fixtures/release-platform".into());
     let prerequisite = store
         .add_todo(&board, "Review the release checklist", TodoStatus::Todo)

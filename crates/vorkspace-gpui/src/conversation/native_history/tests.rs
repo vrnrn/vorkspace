@@ -2,7 +2,7 @@ use super::*;
 use vorkspace_core::{agent::BotContext, bot::Bot, store::Store};
 
 fn fixture(cx: &mut Context<Conversation>) -> Conversation {
-    let store = Store::open(Path::new(":memory:")).unwrap();
+    let store = Store::test(Path::new(":memory:")).unwrap();
     let summary = store
         .create("codex", "/tmp/native-recovery-fixture")
         .unwrap();

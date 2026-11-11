@@ -1005,7 +1005,7 @@ mod tests {
     use std::path::Path;
 
     fn store() -> Store {
-        Store::open(Path::new(":memory:")).unwrap()
+        Store::test(Path::new(":memory:")).unwrap()
     }
 
     fn titles(store: &Store, board: &TodoBoard, status: TodoStatus) -> Vec<String> {
@@ -1182,7 +1182,7 @@ mod tests {
         let path = directory.path().join("todos.sqlite");
         let board = TodoBoard::Project("/p".into());
         let id = {
-            let store = Store::open(&path).unwrap();
+            let store = Store::test(&path).unwrap();
             let item = store
                 .add_todo_with_details(
                     &board,
@@ -1200,7 +1200,7 @@ mod tests {
             store.uncertain_todo_publish(&board, &item.id).unwrap();
             item.id
         };
-        let store = Store::open(&path).unwrap();
+        let store = Store::test(&path).unwrap();
         let item = store.get_todo(&board, &id).unwrap().unwrap();
         assert_eq!(item.status, TodoStatus::InReview);
         assert_eq!(item.description, "Description");
@@ -1223,8 +1223,8 @@ mod tests {
         use serde_json::json;
         let directory = tempfile::tempdir().unwrap();
         let path = directory.path().join("todos.sqlite");
-        let publisher = Store::open(&path).unwrap();
-        let editor = Store::open(&path).unwrap();
+        let publisher = Store::test(&path).unwrap();
+        let editor = Store::test(&path).unwrap();
         let board = TodoBoard::Project("/publication".into());
         let original = publisher
             .add_todo(&board, "Draft", TodoStatus::Todo)
@@ -1364,7 +1364,7 @@ mod tests {
         let other = TodoBoard::Project("/other-checkout".into());
         let id = "github:acme/app#7";
         {
-            let store = Store::open(&path).unwrap();
+            let store = Store::test(&path).unwrap();
             let mut snapshot = store
                 .add_todo(&board, "Remote issue", TodoStatus::Todo)
                 .unwrap();
@@ -1393,7 +1393,7 @@ mod tests {
                 .uncertain_remote_todo_edit(&board, id, &attempt)
                 .unwrap();
         }
-        let store = Store::open(&path).unwrap();
+        let store = Store::test(&path).unwrap();
         let saved = store.pending_remote_todo_edits(&board).unwrap();
         assert_eq!(saved.len(), 1);
         assert_eq!(saved[0].id, id);
@@ -1406,7 +1406,7 @@ mod tests {
             TodoSync::Uncertain
         );
         let original = &saved[0].pending_edit.as_ref().unwrap().attempt_id;
-        let other_store = Store::open(&path).unwrap();
+        let other_store = Store::test(&path).unwrap();
         let mut other_snapshot = saved[0].clone();
         other_snapshot.id = "github:ACME/App#7".into();
         other_snapshot.issue.as_mut().unwrap().repo = "ACME/App".into();

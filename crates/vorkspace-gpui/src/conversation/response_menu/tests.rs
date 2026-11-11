@@ -20,7 +20,7 @@ fn saved_model_ids_compare_across_claude_context_and_catalog_formats() {
 }
 
 fn conversation(cx: &mut TestAppContext) -> WindowHandle<Conversation> {
-    let store = Store::open(Path::new(":memory:")).unwrap();
+    let store = Store::test(Path::new(":memory:")).unwrap();
     let summary = store.create("claude", "/work/response-picker").unwrap();
     let window = cx.update(|cx| {
         input::bind(cx);

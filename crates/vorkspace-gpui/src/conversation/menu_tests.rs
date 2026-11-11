@@ -217,7 +217,7 @@ fn observed_head_belongs_to_the_effective_checkout(cx: &mut TestAppContext) {
     use crate::git_status::GitHeadChanged;
     use vorkspace_core::scm::LocalHead;
 
-    let store = Store::open(Path::new(":memory:")).unwrap();
+    let store = Store::test(Path::new(":memory:")).unwrap();
     let summary = store.create("codex", "/work/head-projection").unwrap();
     let main = summary.cwd.clone();
     let linked = format!("{main}-linked");
@@ -272,7 +272,7 @@ fn new_tab_shows_its_folders_branch_at_once_and_no_loading_status(cx: &mut TestA
             ..Default::default()
         },
     );
-    let store = Store::open(Path::new(":memory:")).unwrap();
+    let store = Store::test(Path::new(":memory:")).unwrap();
     let summary = store.create("codex", "/work/remembered").unwrap();
     let store = Arc::new(Mutex::new(store));
     let window = cx.update(|cx| {
@@ -309,7 +309,7 @@ fn new_tab_shows_its_folders_branch_at_once_and_no_loading_status(cx: &mut TestA
 
 #[gpui::test]
 fn picked_access_becomes_the_default_for_new_chats(cx: &mut TestAppContext) {
-    let store = Store::open(Path::new(":memory:")).unwrap();
+    let store = Store::test(Path::new(":memory:")).unwrap();
     let first = store.create("codex", "/work").unwrap();
     let second = store.create("codex", "/work").unwrap();
     let store = Arc::new(Mutex::new(store));
@@ -363,7 +363,7 @@ fn effort_choices_survive_provider_switches_and_new_projects(cx: &mut TestAppCon
             assert_eq!(restored.provider_efforts["claude"], "medium");
             assert_eq!(restored.provider_efforts["codex"], "xhigh");
             assert_eq!(restored.default_access.as_deref(), Some("auto"));
-            let store = Store::open(Path::new(":memory:")).unwrap();
+            let store = Store::test(Path::new(":memory:")).unwrap();
             let summary = store.create("codex", "/different/project").unwrap();
             let next = cx.new(|cx| Conversation::new(summary, Arc::new(Mutex::new(store)), cx));
             assert_eq!(next.read(cx).settings.effort.as_deref(), Some("xhigh"));
@@ -373,7 +373,7 @@ fn effort_choices_survive_provider_switches_and_new_projects(cx: &mut TestAppCon
 }
 
 fn conversation(cx: &mut TestAppContext) -> WindowHandle<Conversation> {
-    let store = Store::open(Path::new(":memory:")).unwrap();
+    let store = Store::test(Path::new(":memory:")).unwrap();
     let summary = store.create("claude", "/work/vorkspace").unwrap();
     let store = Arc::new(Mutex::new(store));
     let window = cx.update(|cx| {
@@ -449,7 +449,7 @@ fn workspace_existing_worktrees_open_as_a_submenu_and_preserve_the_draft(cx: &mu
             ..Default::default()
         },
     );
-    let store = Store::open(Path::new(":memory:")).unwrap();
+    let store = Store::test(Path::new(":memory:")).unwrap();
     let summary = store.create("claude", cwd).unwrap();
     let store = Arc::new(Mutex::new(store));
     let window = cx.update(|cx| {

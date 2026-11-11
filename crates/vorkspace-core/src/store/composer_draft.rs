@@ -121,27 +121,19 @@ impl Store {
             .map_err(|error| error.to_string())
     }
 
-    fn composer_version(&self, id: i64, source: String) -> Result<Option<ComposerVersion>, String> {
-        if self.shared.is_some() {
-            self.read_composer_row(&source, "session_id,revision,deleted", |row| {
-                Ok(ComposerVersion {
-                    source: row.get(0)?,
-                    revision: row.get::<_, i64>(1)?.max(0) as u64,
-                    deleted: row.get(2)?,
-                })
+    fn composer_version(&self, source: String) -> Result<Option<ComposerVersion>, String> {
+        self.read_composer_row(&source, "session_id,revision,deleted", |row| {
+            Ok(ComposerVersion {
+                source: row.get(0)?,
+                revision: row.get::<_, i64>(1)?.max(0) as u64,
+                deleted: row.get(2)?,
             })
-        } else {
-            Ok(self.composer_draft(id)?.map(|draft| ComposerVersion {
-                source,
-                revision: draft.revision,
-                deleted: draft.deleted,
-            }))
-        }
+        })
     }
 
     pub fn composer_origin(&self, id: i64, revision: u64) -> Result<ComposerOrigin, String> {
         let version = self
-            .composer_version(id, self.persisted_session_id(id)?)?
+            .composer_version(self.persisted_session_id(id)?)?
             .filter(|version| !version.deleted && version.revision == revision)
             .ok_or(DRAFT_CHANGED)?;
         Ok(ComposerOrigin {
@@ -170,7 +162,7 @@ impl Store {
         {
             return Ok(true);
         }
-        let Some(version) = self.composer_version(origin.session, source)? else {
+        let Some(version) = self.composer_version(source)? else {
             return Ok(false);
         };
         Ok(version.deleted
@@ -192,7 +184,7 @@ impl Store {
             return Err("Composer submission belongs to another conversation".into());
         }
         let version = self
-            .composer_version(id, source)?
+            .composer_version(source)?
             .filter(|version| {
                 version.revision >= origin.revision && version.source == origin.source
             })
@@ -221,7 +213,7 @@ impl Store {
                 )
                 .map_err(|error| error.to_string())?;
         }
-        if self.shared.is_some() {
+        {
             transaction
                 .execute(
                     "UPDATE composer_drafts SET deleted=1,updated_at=?1
@@ -230,20 +222,6 @@ impl Store {
                         crate::time::now_ms().min(i64::MAX as u64) as i64,
                         origin.source,
                         revision
-                    ],
-                )
-                .map_err(|error| error.to_string())?;
-        } else if let Some(mut draft) = self
-            .composer_draft(id)?
-            .filter(|draft| draft.revision == origin.revision && !draft.deleted)
-        {
-            draft.deleted = true;
-            transaction
-                .execute(
-                    "UPDATE native_settings SET value=?1 WHERE key=?2",
-                    params![
-                        serde_json::to_string(&draft).map_err(|error| error.to_string())?,
-                        format!("composer:{id}")
                     ],
                 )
                 .map_err(|error| error.to_string())?;
@@ -324,7 +302,7 @@ impl Store {
         .map_err(|error| error.to_string())?;
         let source = self.persisted_session_id(origin.session)?;
         let version = self
-            .composer_version(origin.session, source)?
+            .composer_version(source)?
             .filter(|version| {
                 version.source == origin.source && version.revision == origin.revision
             })
@@ -359,14 +337,6 @@ impl Store {
         Ok(())
     }
     pub fn composer_draft(&self, id: i64) -> Result<Option<ComposerDraft>, String> {
-        if self.shared.is_none() {
-            let draft: Option<ComposerDraft> = self
-                .setting(&format!("composer:{id}"))?
-                .map(|raw| serde_json::from_str(&raw).map_err(|e| e.to_string()))
-                .transpose()?;
-
-            return Ok(draft);
-        }
         if !shared::has_table(&self.conn, "composer_drafts")? {
             return Ok(None);
         }
@@ -438,22 +408,7 @@ impl Store {
             })
             .transpose()
             .map_err(|error| error.to_string())?;
-        if self.shared.is_none() {
-            if self.composer_draft(id)?.map_or(0, |d| d.revision) != expected {
-                return Err(
-                    "Composer draft changed in another window; your input was preserved".into(),
-                );
-            }
-            self.save_setting(
-                &format!("composer:{id}"),
-                &serde_json::to_string(&ComposerDraft {
-                    revision,
-                    payload: payload.clone(),
-                    deleted,
-                })
-                .map_err(|e| e.to_string())?,
-            )?;
-        } else {
+        {
             // New stores create the same ordinary draft table on first save. No
             // existing row is copied, converted or rewritten during an upgrade.
             ensure_draft_schema(&self.conn)?;

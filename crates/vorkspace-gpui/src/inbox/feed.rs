@@ -464,7 +464,7 @@ mod tests {
     fn one_poll_serves_both_roots_and_a_closed_scope_cannot_publish(cx: &mut TestAppContext) {
         cx.update(|cx| {
             let store = Arc::new(Mutex::new(
-                vorkspace_core::store::Store::open(std::path::Path::new(":memory:")).unwrap(),
+                vorkspace_core::store::Store::test(std::path::Path::new(":memory:")).unwrap(),
             ));
             let a = cx.new(|_| ());
             let b = cx.new(|_| ());
@@ -530,7 +530,7 @@ mod tests {
     fn connection_claim_and_publication_fence_the_previous_poll(cx: &mut TestAppContext) {
         cx.update(|cx| {
             let store = Arc::new(Mutex::new(
-                vorkspace_core::store::Store::open(std::path::Path::new(":memory:")).unwrap(),
+                vorkspace_core::store::Store::test(std::path::Path::new(":memory:")).unwrap(),
             ));
             let root = cx.new(|_| ());
             let feed = cx.new(|cx| InboxFeed::new(&store, PathBuf::from("/fixtures"), cx));

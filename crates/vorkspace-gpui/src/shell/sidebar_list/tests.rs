@@ -379,7 +379,7 @@ fn sidebar_settings_native_capture() {
     let output = std::path::PathBuf::from(std::env::var_os("VOKKY_SIDEBAR_CAPTURE_DIR").unwrap());
     assert!(output.is_absolute() && output.is_dir());
     let store = Arc::new(Mutex::new(
-        vorkspace_core::store::Store::open(std::path::Path::new(":memory:")).unwrap(),
+        vorkspace_core::store::Store::test(std::path::Path::new(":memory:")).unwrap(),
     ));
     let session = locked(&store)
         .unwrap()

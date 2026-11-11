@@ -168,7 +168,7 @@ mod tests {
     use super::*;
 
     fn database() -> (Database, Session) {
-        let store = vorkspace_core::store::Store::open(std::path::Path::new(":memory:")).unwrap();
+        let store = vorkspace_core::store::Store::test(std::path::Path::new(":memory:")).unwrap();
         let session = store.create("codex", "/fixture").unwrap();
         (Arc::new(Mutex::new(store)), session)
     }

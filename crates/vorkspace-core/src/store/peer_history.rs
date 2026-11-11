@@ -20,10 +20,7 @@ impl Store {
         let limit = limit.clamp(1, 100);
         let per_message = max_chars.clamp(100, 100_000) / limit;
         let before = before.unwrap_or(i64::MAX as u64).min(i64::MAX as u64) as i64;
-        let (query, source) = if self.shared.is_none() {
-            ("SELECT row_ix,role,CASE WHEN role IN ('user','assistant') THEN substr(body,1,?4) END,0
-              FROM native_rows WHERE session_id=?1 AND row_ix<?2 ORDER BY row_ix DESC LIMIT ?3".to_owned(), session.to_string())
-        } else {
+        let (query, source) = {
             let source = self.persisted_session_id(session)?;
             let (table, position, payload, predicate) =
                 if let Some(tables) = self.shared_bot_tables(&source)? {
@@ -77,20 +74,13 @@ impl Store {
             )
         };
         let mut statement = self.conn.prepare(&query).map_err(|e| e.to_string())?;
-        let mut records = if self.shared.is_some() {
+        let mut records = {
             statement.query(params![
                 source,
                 before,
                 limit as i64,
                 (per_message + 1) as i64,
                 BLOCK_BYTES
-            ])
-        } else {
-            statement.query(params![
-                session,
-                before,
-                limit as i64,
-                (per_message + 1) as i64
             ])
         }
         .map_err(|e| e.to_string())?;

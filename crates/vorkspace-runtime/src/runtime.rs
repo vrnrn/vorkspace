@@ -97,10 +97,7 @@ fn run_turn_using(
     let mut transcript = Transcript::default();
     let mut history_loaded = false;
     let recovery_id = vorkspace_core::bot::new_id();
-    let shared = locked(&store)
-        .map(|s| s.uses_vorkspace_schema())
-        .unwrap_or(false);
-    let mut pending = PendingSave::new(shared, std::time::Instant::now());
+    let mut pending = PendingSave::new(std::time::Instant::now());
     let mut submissions = submissions::Submissions::new(store.clone(), summary.id);
     let mut provider_completion_confirmed = false;
     pending.own_context(
@@ -1466,7 +1463,7 @@ mod unsupported_history_tests {
         for provider in [
             "cursor", "grok", "opencode", "fx", "hermes", "devin", "unknown",
         ] {
-            let mut store = Store::open(std::path::Path::new(":memory:")).unwrap();
+            let mut store = Store::test(std::path::Path::new(":memory:")).unwrap();
             let session = store.create("codex", "/history").unwrap();
             store.change_provider(session.id, provider).unwrap();
             store.provider_id(session.id, "original-thread").unwrap();
@@ -1483,6 +1480,8 @@ mod unsupported_history_tests {
                 sent_at: Some(123),
             }];
             store.write_rows(session.id, 0, &rows).unwrap();
+            let saved_settings =
+                serde_json::to_value(store.agent_settings(session.id).unwrap().unwrap()).unwrap();
             let summary = store.sessions().unwrap().remove(0);
             let store = Arc::new(Mutex::new(store));
             let (_, controls) = std::sync::mpsc::channel();
@@ -1514,7 +1513,7 @@ mod unsupported_history_tests {
             );
             assert_eq!(
                 serde_json::to_value(store.agent_settings(session.id).unwrap().unwrap()).unwrap(),
-                serde_json::to_value(settings).unwrap()
+                saved_settings
             );
             assert!(store.local_submissions(session.id).unwrap().is_empty());
         }

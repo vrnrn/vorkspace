@@ -4,7 +4,7 @@ use std::path::Path;
 
 #[test]
 fn native_peer_pages_bound_rows_text_and_skip_private_payloads() {
-    let mut store = Store::open(Path::new(":memory:")).unwrap();
+    let mut store = Store::test(Path::new(":memory:")).unwrap();
     let id = store.create("codex", "/project").unwrap().id;
     let mut rows = Vec::new();
     for i in 0..300 {
@@ -13,13 +13,18 @@ fn native_peer_pages_bound_rows_text_and_skip_private_payloads() {
             text: if i % 2 == 0 {
                 format!("{i}:{}", "🦀".repeat(100))
             } else {
-                "not valid tool JSON".into()
+                serde_json::to_string(&crate::tool::ToolCall {
+                    output: "Private tool payload".into(),
+                    ..crate::tool::ToolCall::new(&format!("tool-{i}"), "Read")
+                })
+                .unwrap()
             },
             first: true,
             sent_at: None,
         });
     }
     store.write_rows(id, 0, &rows).unwrap();
+    let saved = store.shared_blocks(id).unwrap();
     let page = store.peer_history(id, None, 10, 100).unwrap();
     assert_eq!(page["before"], 290);
     assert_eq!(page["hasMore"], true);
@@ -34,13 +39,13 @@ fn native_peer_pages_bound_rows_text_and_skip_private_payloads() {
         .unwrap();
     assert_eq!(next["before"], 280);
     assert!(!next["messages"].to_string().contains("290:"));
-    assert_eq!(store.load(id).unwrap().rows, rows);
+    assert_eq!(store.shared_blocks(id).unwrap(), saved);
 }
 
 #[test]
 fn desktop_peer_pages_read_only_the_selected_blocks_and_preserve_their_owner() {
     for indexed in [false, true] {
-        let store = Store::open_vorkspace(Path::new(":memory:")).unwrap();
+        let store = Store::test(Path::new(":memory:")).unwrap();
         let id = store.create("codex", "/project").unwrap().id;
         let source = store.persisted_session_id(id).unwrap();
         let blocks = vec![
@@ -110,7 +115,7 @@ fn desktop_peer_pages_read_only_the_selected_blocks_and_preserve_their_owner() {
 
 #[test]
 fn desktop_peer_excerpt_preserves_public_plan_and_fallback_prose_projection() {
-    let store = Store::open_vorkspace(Path::new(":memory:")).unwrap();
+    let store = Store::test(Path::new(":memory:")).unwrap();
     let id = store.create("codex", "/project").unwrap().id;
     let source = store.persisted_session_id(id).unwrap();
     let blocks = json!([
@@ -142,7 +147,7 @@ fn desktop_peer_excerpt_preserves_public_plan_and_fallback_prose_projection() {
 
 #[test]
 fn oversized_legacy_history_fails_without_loading_or_rewriting_it() {
-    let store = Store::open_vorkspace(Path::new(":memory:")).unwrap();
+    let store = Store::test(Path::new(":memory:")).unwrap();
     let id = store.create("codex", "/project").unwrap().id;
     let source = store.persisted_session_id(id).unwrap();
     store

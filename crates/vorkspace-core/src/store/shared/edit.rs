@@ -30,12 +30,17 @@ impl Store {
         }
         Ok(())
     }
-    pub(in crate::store) fn shared_prepare_edit(
+    /// `expected` is the visible transcript; never recall an unloaded revision.
+    pub fn prepare_edit_last_turn(
         &self,
         id: i64,
         expected: &[Row],
         turn_id: Option<&str>,
     ) -> Result<EditSnapshot, String> {
+        if let Some(reason) = self.edit_recovery_reason(id)? {
+            return Err(reason);
+        }
+
         self.shared_writable()?;
         let session = self
             .bot_session(id)?
@@ -147,12 +152,14 @@ impl Store {
             account_id: settings.account.id,
             cwd: settings.worktree_cwd.unwrap_or(session.cwd),
             rows,
-            blocks: Some(blocks),
+            blocks,
             block_start: first,
             provider: session.provider,
         })
     }
-    pub(in crate::store) fn shared_finish_edit(
+    /// Call only after the provider confirms. This is a compare-and-swap,
+    /// preserving an independently changed conversation instead of deleting it.
+    pub fn finish_edit_last_turn(
         &self,
         claim: &mut EditClaim,
         provider_id: &str,
@@ -162,11 +169,7 @@ impl Store {
         let tx = self.edit_transaction()?;
         self.validate_edit_last_turn(id, edit)?;
         claim.confirm(&tx)?;
-        let blocks = edit
-            .blocks
-            .as_ref()
-            .ok_or("Missing source revision for edit")?;
-        let next = &blocks[..edit.block_start];
+        let next = &edit.blocks[..edit.block_start];
         self.shared_store_blocks(id, next)?;
         self.shared_patch(
             id,
@@ -185,13 +188,11 @@ impl Store {
             settings.turns.retain(|&row, _| row < edit.start);
             // The validated prefix already retains its original rich turn
             // receipts. Save only the trimmed sidecar/preferences in this tx.
-            self.shared_save_agent_preferences(id, &settings)?;
+            self.save_agent_preferences(id, &settings)?;
         }
         self.save_context_usage(id, &Default::default())?;
         sql(tx.commit())?;
         self.shared
-            .as_ref()
-            .unwrap()
             .snapshots
             .borrow_mut()
             .insert(id, HistoryRevision::of(next));
@@ -206,7 +207,7 @@ mod tests {
     use crate::store::edit::dispatched_edit;
 
     fn fixture(blocks: Value) -> (Store, i64) {
-        let store = Store::open_vorkspace(Path::new(":memory:")).unwrap();
+        let store = Store::test(Path::new(":memory:")).unwrap();
         let session = store.create("codex", "/project").unwrap();
         store.provider_id(session.id, "thread").unwrap();
         store

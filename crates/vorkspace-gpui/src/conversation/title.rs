@@ -156,7 +156,7 @@ mod tests {
         cx: &mut gpui::TestAppContext,
     ) {
         let store = Arc::new(std::sync::Mutex::new(
-            vorkspace_core::store::Store::open(Path::new(":memory:")).unwrap(),
+            vorkspace_core::store::Store::test(Path::new(":memory:")).unwrap(),
         ));
         let summary = locked(&store).unwrap().create("codex", "/tmp").unwrap();
         let id = summary.id;

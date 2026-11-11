@@ -54,7 +54,7 @@ impl Store {
             return Ok("0".into());
         }
         let root = format!("EXISTS(SELECT 1 FROM bot_transcripts WHERE session_id={session})");
-        if self.shared.as_ref().unwrap().earlier_bot_tables.is_none() {
+        if self.shared.earlier_bot_tables.is_none() {
             return Ok(root);
         }
         let finalized = has_table(&self.conn, "schema_migrations")?
@@ -96,7 +96,7 @@ impl Store {
         if self.current_bot_owner(original)? {
             return Ok(Some(BotTables::current()));
         }
-        if let Some(earlier) = &self.shared.as_ref().unwrap().earlier_bot_tables {
+        if let Some(earlier) = &self.shared.earlier_bot_tables {
             if self.bot_owner_exists(earlier, original)? {
                 return Ok(Some(earlier.clone()));
             }
@@ -109,7 +109,7 @@ impl Store {
         Ok(None)
     }
     pub(in crate::store) fn shared_earlier_bot_field(&self, current: &str) -> Option<String> {
-        let tables = self.shared.as_ref()?.earlier_bot_tables.as_ref()?;
+        let tables = self.shared.earlier_bot_tables.as_ref()?;
         let prefix = tables.blocks.strip_suffix("_blocks")?;
         Some(format!("{prefix}{}", current.strip_prefix("bot")?))
     }

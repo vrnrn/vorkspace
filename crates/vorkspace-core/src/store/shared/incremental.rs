@@ -120,42 +120,24 @@ impl Store {
         account: &str,
         expected_provider_id: Option<&str>,
     ) -> Result<bool, String> {
-        if self.shared.is_some() {
-            self.shared_writable()?;
-            let fields = ["context_used", "context_window"]
-                .into_iter()
-                .enumerate()
-                .filter(|(_, name)| self.shared.as_ref().unwrap().columns.contains(*name))
-                .map(|(index, name)| format!(",{name}=?{}", index + 2))
-                .collect::<String>();
-            let account_column = self.shared_field("provider_account_id", "NULL");
-            let changed = sql(self.conn.execute(
-                &format!(
-                    "UPDATE sessions SET title=title{fields}
+        self.shared_writable()?;
+        let fields = ["context_used", "context_window"]
+            .into_iter()
+            .enumerate()
+            .filter(|(_, name)| self.shared.columns.contains(*name))
+            .map(|(index, name)| format!(",{name}=?{}", index + 2))
+            .collect::<String>();
+        let account_column = self.shared_field("provider_account_id", "NULL");
+        let changed = sql(self.conn.execute(
+            &format!(
+                "UPDATE sessions SET title=title{fields}
                 WHERE id=?1 AND harness=?4 AND COALESCE({account_column},?6)=?5
                   AND provider_session_id IS ?7"
-                ),
-                params![
-                    self.persisted_session_id(id)?,
-                    usage.used.min(i64::MAX as u64) as i64,
-                    usage.window.map(|n| n.min(i64::MAX as u64) as i64),
-                    provider,
-                    account,
-                    crate::accounts::DEFAULT,
-                    expected_provider_id
-                ],
-            ))?;
-            return Ok(changed != 0);
-        }
-        let changed = sql(self.conn.execute("INSERT INTO native_settings(key,value)
-            SELECT ?1,?2 WHERE EXISTS(SELECT 1 FROM native_sessions s JOIN native_settings a ON a.key='agent:'||s.id
-            WHERE s.id=?3 AND s.provider=?4 AND COALESCE(json_extract(a.value,'$.account.id'),?6)=?5
-              AND s.provider_id IS ?7)
-            ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+            ),
             params![
-                format!("context:{id}"),
-                encode(usage)?,
-                id,
+                self.persisted_session_id(id)?,
+                usage.used.min(i64::MAX as u64) as i64,
+                usage.window.map(|n| n.min(i64::MAX as u64) as i64),
                 provider,
                 account,
                 crate::accounts::DEFAULT,
@@ -192,7 +174,7 @@ impl Store {
                 .unwrap_or_else(|| expected.matches(blocks))),
             HistoryRevision::Invalidated => Ok(false),
             HistoryRevision::Stored(revision) => {
-                let shared = self.shared.as_ref().unwrap();
+                let shared = &self.shared;
                 let indices = shared.incremental.borrow();
                 let Some(index) = indices.get(&id).filter(|index| index.revision == *revision)
                 else {
@@ -219,7 +201,7 @@ impl Store {
         id: i64,
     ) -> Result<Option<(i64, i64)>, String> {
         let schema = self.shared_schema_version()?;
-        if self.shared.as_ref().unwrap().history_schema.get() != Some(schema) {
+        if self.shared.history_schema.get() != Some(schema) {
             return Ok(None);
         }
         Ok(Some((
@@ -237,8 +219,6 @@ impl Store {
         match expected {
             HistoryRevision::Stored(revision) => self
                 .shared
-                .as_ref()
-                .unwrap()
                 .incremental
                 .borrow()
                 .get(&id)
@@ -248,7 +228,7 @@ impl Store {
     }
 
     pub(super) fn shared_validate_history(&self, id: i64, blocks: &[Value]) -> Result<(), String> {
-        if let Some(expected) = self.shared.as_ref().unwrap().snapshots.borrow().get(&id) {
+        if let Some(expected) = self.shared.snapshots.borrow().get(&id) {
             if !self.shared_history_matches(id, expected, blocks)? {
                 return Err(CHANGED.into());
             }
@@ -261,7 +241,7 @@ impl Store {
         id: i64,
         blocks: &[Value],
     ) -> Result<bool, String> {
-        if let Some(expected) = self.shared.as_ref().unwrap().snapshots.borrow().get(&id) {
+        if let Some(expected) = self.shared.snapshots.borrow().get(&id) {
             if !self.shared_history_matches(id, expected, blocks)? {
                 if !self.shared_history_fast_forwards(id, expected, blocks) {
                     return Err(CHANGED.into());
@@ -273,14 +253,8 @@ impl Store {
     }
 
     pub(in crate::store) fn shared_has_user_message(&self) -> Result<String, String> {
-        if self
-            .shared
-            .as_ref()
-            .unwrap()
-            .columns
-            .contains("has_user_message")
-        {
-            if let Some(tables) = &self.shared.as_ref().unwrap().earlier_bot_tables {
+        if self.shared.columns.contains("has_user_message") {
+            if let Some(tables) = &self.shared.earlier_bot_tables {
                 let current = self.current_bot_owner_predicate("sessions.id")?;
                 return Ok(format!(
                     "CASE WHEN EXISTS(SELECT 1 FROM {roots} WHERE session_id=sessions.id) AND NOT({current}) THEN EXISTS(SELECT 1 FROM {blocks} WHERE session_id=sessions.id AND is_user=1) ELSE has_user_message END",
@@ -294,7 +268,7 @@ impl Store {
         if has_table(&self.conn, "bot_transcripts")? {
             source.push_str(&format!("WHEN {} THEN EXISTS(SELECT 1 FROM bot_blocks WHERE session_id=sessions.id AND is_user=1) ",self.current_bot_owner_predicate("sessions.id")?));
         }
-        if let Some(tables) = &self.shared.as_ref().unwrap().earlier_bot_tables {
+        if let Some(tables) = &self.shared.earlier_bot_tables {
             source.push_str(&format!("WHEN EXISTS(SELECT 1 FROM {roots} WHERE session_id=sessions.id) THEN EXISTS(SELECT 1 FROM {blocks} WHERE session_id=sessions.id AND is_user=1) ",roots=tables.transcripts,blocks=tables.blocks));
         }
         if has_table(&self.conn, "bot_transcripts")? {
@@ -315,7 +289,7 @@ impl Store {
     /// inside one coordinated transaction. Existing normalized rows and their identities stay put.
     pub(in crate::store) fn shared_history_schema(&self) -> Result<(), String> {
         let schema = self.shared_schema_version()?;
-        if self.shared.as_ref().unwrap().history_schema.get() == Some(schema) {
+        if self.shared.history_schema.get() == Some(schema) {
             return Ok(());
         }
         let tx = sql(rusqlite::Transaction::new_unchecked(
@@ -375,7 +349,7 @@ impl Store {
             ),
             ("bot_transcripts".to_owned(), "session_id", "1"),
         ];
-        if let Some(tables) = &self.shared.as_ref().unwrap().earlier_bot_tables {
+        if let Some(tables) = &self.shared.earlier_bot_tables {
             guarded.push((tables.blocks.clone(),"session_id","OLD.block_json IS NOT NEW.block_json OR OLD.seq IS NOT NEW.seq OR OLD.block_id IS NOT NEW.block_id"));
             guarded.push((tables.transcripts.clone(), "session_id", "1"));
         }
@@ -402,11 +376,7 @@ impl Store {
         // Read the cookie while the transaction still owns its DDL.
         let schema = self.shared_schema_version()?;
         sql(tx.commit())?;
-        self.shared
-            .as_ref()
-            .unwrap()
-            .history_schema
-            .set(Some(schema));
+        self.shared.history_schema.set(Some(schema));
         Ok(())
     }
 
@@ -468,7 +438,7 @@ impl Store {
         if keys.windows(2).any(|keys| keys[0] >= keys[1]) {
             return Err("Stored conversation positions are not unique and increasing; its data was preserved".into());
         }
-        if self.shared.as_ref().unwrap().history_schema.get() != Some(schema) {
+        if self.shared.history_schema.get() != Some(schema) {
             // DDL raced setup. Publish only the canonical digest for this write.
             return Ok(None);
         }
@@ -502,14 +472,13 @@ impl Store {
         rows: &[Row],
         writer: Option<&mut TurnHistory>,
     ) -> Result<bool, String> {
-        let indices = self.shared.as_ref().unwrap().incremental.borrow();
+        let indices = self.shared.incremental.borrow();
         let Some(index) = indices.get(&id) else {
             return Ok(false);
         };
         // A full-history owner (edits, drafts or turn metadata) replaces the
         // digest on commit. Its next delta rebuilds the compact index once.
-        if self.shared.as_ref().unwrap().snapshots.borrow().get(&id)
-            != Some(&HistoryRevision::Stored(index.revision))
+        if self.shared.snapshots.borrow().get(&id) != Some(&HistoryRevision::Stored(index.revision))
         {
             return Ok(false);
         }
@@ -627,15 +596,13 @@ impl Store {
             writer.committed(Some((index.schema, revision)), offset, writer_rows);
         }
         drop(indices);
-        let mut indices = self.shared.as_ref().unwrap().incremental.borrow_mut();
+        let mut indices = self.shared.incremental.borrow_mut();
         let index = indices.get_mut(&id).unwrap();
         index.entries.truncate(from);
         index.entries.extend(entries);
         index.rows = row_offset;
         index.revision = revision;
         self.shared
-            .as_ref()
-            .unwrap()
             .snapshots
             .borrow_mut()
             .insert(id, HistoryRevision::Stored(revision));
@@ -667,7 +634,7 @@ impl Store {
         ).optional())?;
         let base_revision = self.history_revision(original)?;
         let schema = self.shared_schema_version()?;
-        let indices = self.shared.as_ref().unwrap().incremental.borrow();
+        let indices = self.shared.incremental.borrow();
         let mut append = indices
             .get(&id)
             .filter(|index| {
@@ -716,7 +683,7 @@ impl Store {
     }
 
     pub(super) fn shared_publish_indexed_append(&self, id: i64, append: Option<HistoryAppend>) {
-        let mut indices = self.shared.as_ref().unwrap().incremental.borrow_mut();
+        let mut indices = self.shared.incremental.borrow_mut();
         if let Some(append) = append {
             let index = indices.get_mut(&id).unwrap();
             index.entries.extend(append.entries);

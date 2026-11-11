@@ -10,11 +10,7 @@ fn saved(store: &Store, native: &str, desktop: &str) -> Option<Value> {
         .ok()
         .flatten()
         .and_then(|raw| serde_json::from_str(&raw).ok())
-        .or_else(|| {
-            store
-                .desktop_preferences()
-                .and_then(|prefs| prefs.json(desktop))
-        })
+        .or_else(|| store.desktop_preferences().json(desktop))
 }
 
 impl JiraFilter {
@@ -109,7 +105,7 @@ impl crate::inbox::ViewState {
             state.normalize_source();
             return state;
         }
-        let desktop = store.desktop_preferences().cloned().unwrap_or_default();
+        let desktop = store.desktop_preferences();
         let mut state = Self::default();
         if let Some(source) = desktop
             .get("vorkspace.inboxSource")
@@ -157,7 +153,7 @@ impl Connectors {
         let saved = native.or_else(|| {
             store
                 .desktop_preferences()
-                .and_then(|preferences| preferences.json("vorkspace.inboxConnectors.v1"))
+                .json("vorkspace.inboxConnectors.v1")
         });
         let mut connectors = Self::default();
         for provider in PROVIDERS {
@@ -200,8 +196,9 @@ mod tests {
                 json!({"jira":" jira-bot ","gitlab":"gitlab-bot","linear":"removed-bot"}),
             ),
         ]));
-        let store =
-            Store::open_vorkspace_with_preferences_for_test(&path, preferences.clone()).unwrap();
+        let store = Store::test(&path)
+            .map(|store| store.with_test_preferences(preferences.clone()))
+            .unwrap();
         store
             .save_setting("native-inbox-state", r#"{"source":"jira"}"#)
             .unwrap();
@@ -217,7 +214,9 @@ mod tests {
         bots.set("jira", "").unwrap();
         bots.save(&store).unwrap();
         drop(store);
-        let store = Store::open_vorkspace_with_preferences_for_test(&path, preferences).unwrap();
+        let store = Store::test(&path)
+            .map(|store| store.with_test_preferences(preferences))
+            .unwrap();
         let state = crate::inbox::ViewState::load(&store);
         assert_eq!(state.jira_filter.mode, "project");
         assert_eq!(state.jira_filter.jql, "filter = 12345");

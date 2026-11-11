@@ -1,7 +1,7 @@
 //! Queue acceptance is strict; delayed presentation saves may skip older revisions.
 use super::{ComposerOrigin, Store};
 use crate::follow_up::State;
-use rusqlite::{Transaction, TransactionBehavior};
+use rusqlite::Transaction;
 
 #[derive(Clone, Copy)]
 pub(super) enum FollowUpWrite<'a> {
@@ -66,38 +66,6 @@ impl Store {
         self.write_follow_ups(session, state, FollowUpWrite::Deferred)
     }
 
-    fn write_follow_ups(
-        &self,
-        session: i64,
-        state: &State,
-        write: FollowUpWrite<'_>,
-    ) -> Result<(), String> {
-        if self.uses_vorkspace_schema() && session >= 0 {
-            return self.shared_write_follow_ups(session, state, write);
-        }
-        let tx = Transaction::new_unchecked(&self.conn, TransactionBehavior::Immediate)
-            .map_err(|error| error.to_string())?;
-        let key = format!("follow-up:{session}");
-        let previous = self
-            .setting(&key)?
-            .map(|raw| {
-                serde_json::from_str::<State>(&raw)
-                    .map_err(|error| format!("Cannot verify the saved queue: {error}"))
-            })
-            .transpose()?;
-        if let Some(previous) = previous {
-            if !write.check_revision(previous.revision, state.revision)? {
-                return Ok(());
-            }
-        }
-        self.transfer_follow_up(&tx, session, state, write)?;
-        self.save_setting(
-            &key,
-            &serde_json::to_string(state).map_err(|error| error.to_string())?,
-        )?;
-        tx.commit().map_err(|error| error.to_string())
-    }
-
     pub(super) fn transfer_follow_up(
         &self,
         tx: &Transaction<'_>,
@@ -139,45 +107,13 @@ impl Store {
             }
         }
     }
-
-    pub fn follow_ups(&self, session: i64) -> Result<State, String> {
-        if self.uses_vorkspace_schema() && session >= 0 {
-            return self.shared_follow_ups(session);
-        }
-        let mut state: State = self
-            .setting(&format!("follow-up:{session}"))?
-            .map(|text| serde_json::from_str(&text).map_err(|e| e.to_string()))
-            .transpose()?
-            .unwrap_or_default();
-        let mut remaining = Vec::new();
-        for message in state.messages {
-            if self
-                .setting(&format!("bot-delivered:{session}:{}", message.id))?
-                .is_none()
-            {
-                remaining.push(message);
-            }
-        }
-        state.messages = remaining;
-        if let Some(draft) = &state.draft {
-            if self
-                .setting(&format!("bot-delivered:{session}:{}", draft.id))?
-                .is_some()
-            {
-                state.draft = None;
-            }
-        }
-        // Recovery is always explicit, as in React's deserializeSession.
-        state.paused = !state.messages.is_empty();
-        Ok(state)
-    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::follow_up::Message;
-    use std::path::Path;
+
     #[test]
     fn bot_draft_origin_queue_and_revision_commit_together() {
         use serde_json::json;
@@ -235,70 +171,62 @@ mod tests {
     }
     #[test]
     fn strict_admission_rejects_another_connections_newer_queue() {
-        for open in [
-            Store::open as fn(&Path) -> Result<Store, String>,
-            Store::open_vorkspace,
-        ] {
-            let root = tempfile::tempdir().unwrap();
-            let path = root.path().join("db");
-            let first = open(&path).unwrap();
-            let session = first.create("codex", "/project").unwrap().id;
-            let stale = first.follow_ups(session).unwrap();
-            let second = open(&path).unwrap();
-            let mut newer = second.follow_ups(session).unwrap();
-            newer.revision = 100;
-            newer.messages.push(Message {
-                id: "other-owner".into(),
-                text: "Keep the newer message".into(),
-                ..Default::default()
-            });
-            second.save_follow_ups(session, &newer).unwrap();
-            let mut attempted = stale;
-            attempted.revision += 1;
-            attempted.messages.push(Message {
-                id: "not-admitted".into(),
-                text: "Do not falsely accept".into(),
-                ..Default::default()
-            });
-            assert!(first
-                .accept_follow_ups(session, &attempted)
-                .unwrap_err()
-                .contains("queue changed"));
-            assert_eq!(first.follow_ups(session).unwrap().messages, newer.messages);
-            drop(first);
-            drop(second);
-            assert_eq!(
-                open(&path).unwrap().follow_ups(session).unwrap().messages,
-                newer.messages
-            );
-        }
+        let open = Store::test;
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().join("db");
+        let first = open(&path).unwrap();
+        let session = first.create("codex", "/project").unwrap().id;
+        let stale = first.follow_ups(session).unwrap();
+        let second = open(&path).unwrap();
+        let mut newer = second.follow_ups(session).unwrap();
+        newer.revision = 100;
+        newer.messages.push(Message {
+            id: "other-owner".into(),
+            text: "Keep the newer message".into(),
+            ..Default::default()
+        });
+        second.save_follow_ups(session, &newer).unwrap();
+        let mut attempted = stale;
+        attempted.revision += 1;
+        attempted.messages.push(Message {
+            id: "not-admitted".into(),
+            text: "Do not falsely accept".into(),
+            ..Default::default()
+        });
+        assert!(first
+            .accept_follow_ups(session, &attempted)
+            .unwrap_err()
+            .contains("queue changed"));
+        assert_eq!(first.follow_ups(session).unwrap().messages, newer.messages);
+        drop(first);
+        drop(second);
+        assert_eq!(
+            open(&path).unwrap().follow_ups(session).unwrap().messages,
+            newer.messages
+        );
     }
     #[test]
     fn delayed_async_saves_still_skip_but_synchronous_admission_cannot_skip() {
-        for open in [
-            Store::open as fn(&Path) -> Result<Store, String>,
-            Store::open_vorkspace,
-        ] {
-            let root = tempfile::tempdir().unwrap();
-            let path = root.path().join("db");
-            let store = open(&path).unwrap();
-            let session = store.create("codex", "/project").unwrap().id;
-            let mut state = store.follow_ups(session).unwrap();
-            state.revision = 10;
-            state.messages.push(Message {
-                id: "saved".into(),
-                text: "Keep saved".into(),
-                ..Default::default()
-            });
-            store.save_follow_ups(session, &state).unwrap();
-            let stale = State {
-                revision: 1,
-                ..Default::default()
-            };
-            store.save_follow_ups(session, &stale).unwrap();
-            assert!(store.accept_follow_ups(session, &stale).is_err());
-            assert!(store.accept_follow_ups(session, &state).is_err());
-            assert_eq!(store.follow_ups(session).unwrap().messages, state.messages);
-        }
+        let open = Store::test;
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().join("db");
+        let store = open(&path).unwrap();
+        let session = store.create("codex", "/project").unwrap().id;
+        let mut state = store.follow_ups(session).unwrap();
+        state.revision = 10;
+        state.messages.push(Message {
+            id: "saved".into(),
+            text: "Keep saved".into(),
+            ..Default::default()
+        });
+        store.save_follow_ups(session, &state).unwrap();
+        let stale = State {
+            revision: 1,
+            ..Default::default()
+        };
+        store.save_follow_ups(session, &stale).unwrap();
+        assert!(store.accept_follow_ups(session, &stale).is_err());
+        assert!(store.accept_follow_ups(session, &state).is_err());
+        assert_eq!(store.follow_ups(session).unwrap().messages, state.messages);
     }
 }

@@ -52,11 +52,11 @@ fn saved_peer_messages_are_visible_separate_turns_without_exposing_envelopes(
 
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("peer-history.db");
-    let mut store = Store::open(&path).unwrap();
+    let mut store = Store::test(&path).unwrap();
     let session = store.create("codex", "/project").unwrap().id;
     store.write_rows(session, 0, &transcript.rows).unwrap();
     drop(store);
-    let saved = Store::open(&path).unwrap().load(session).unwrap().rows;
+    let saved = Store::test(&path).unwrap().load(session).unwrap().rows;
     assert_eq!(saved, transcript.rows);
 
     let view = cx.new(|_| TranscriptView::new());

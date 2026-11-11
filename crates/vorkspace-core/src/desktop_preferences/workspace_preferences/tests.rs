@@ -321,9 +321,9 @@ fn sidebar_preferences_survive_actual_store_save_close_and_reopen() {
         ("vorkspace.projectSidebarTabs.v1", r#"{"/work":"files"}"#),
         ("vorkspace.projectRailPinned", r#"["/work"]"#),
     ]));
-    let store =
-        crate::store::Store::open_vorkspace_with_preferences_for_test(&path, preferences.clone())
-            .unwrap();
+    let store = crate::store::Store::test(&path)
+        .map(|store| store.with_test_preferences(preferences.clone()))
+        .unwrap();
     let session = store.create("codex", "/work").unwrap();
     let persisted_session = store.persisted_session_id(session.id).unwrap();
     let mut workspace: Value = serde_json::from_str(&store.ui_state().unwrap().unwrap()).unwrap();
@@ -335,8 +335,9 @@ fn sidebar_preferences_survive_actual_store_save_close_and_reopen() {
     store.save_ui_state(&workspace.to_string()).unwrap();
     drop(store);
 
-    let reopened =
-        crate::store::Store::open_vorkspace_with_preferences_for_test(&path, preferences).unwrap();
+    let reopened = crate::store::Store::test(&path)
+        .map(|store| store.with_test_preferences(preferences))
+        .unwrap();
     let actual: Value = serde_json::from_str(&reopened.ui_state().unwrap().unwrap()).unwrap();
     assert_eq!(actual, workspace);
     assert_eq!(

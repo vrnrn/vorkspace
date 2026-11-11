@@ -48,7 +48,7 @@ fn subscription_pointer_and_keyboard_activation_refresh_the_selected_account(
     cx.update(bind);
     let directory = tempfile::tempdir().unwrap();
     let store = std::sync::Arc::new(std::sync::Mutex::new(
-        vorkspace_core::store::Store::open(&directory.path().join("native.sqlite")).unwrap(),
+        vorkspace_core::store::Store::test(&directory.path().join("native.sqlite")).unwrap(),
     ));
     let keys = cx.update(|cx| {
         crate::accounts::install(store, cx);
@@ -142,7 +142,7 @@ fn subscriptions_keep_account_usage_separate_from_the_active_conversation(
     cx.update(bind);
     let directory = tempfile::tempdir().unwrap();
     let store = std::sync::Arc::new(std::sync::Mutex::new(
-        vorkspace_core::store::Store::open(&directory.path().join("native.sqlite")).unwrap(),
+        vorkspace_core::store::Store::test(&directory.path().join("native.sqlite")).unwrap(),
     ));
     let work = cx.update(|cx| {
         crate::accounts::install(store, cx);

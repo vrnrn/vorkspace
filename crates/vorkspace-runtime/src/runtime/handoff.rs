@@ -137,19 +137,10 @@ mod tests {
 
     #[test]
     fn a_retained_handoff_survives_failed_start_and_is_consumed_only_after_acceptance() {
-        for (shared, provider) in [
-            (false, "codex"),
-            (true, "codex"),
-            (false, "omp"),
-            (true, "omp"),
-        ] {
+        for provider in ["codex", "omp"] {
             let directory = tempfile::tempdir().unwrap();
             let root = directory.path();
-            let open = if shared {
-                Store::open_vorkspace
-            } else {
-                Store::open
-            };
+            let open = { Store::test };
             let store = open(&root.join("sessions.db")).unwrap();
             let summary = store.create(provider, root.to_str().unwrap()).unwrap();
             let mut settings = Settings {

@@ -434,7 +434,7 @@ fn failed_discard_or_delete_retains_the_selected_note_through_saving(cx: &mut Te
         let second = recorded(&meetings, "Second");
         summarized(&meetings, &second);
         let store = Arc::new(Mutex::new(
-            vorkspace_core::store::Store::open(&root.path().join("notes.db")).unwrap(),
+            vorkspace_core::store::Store::test(&root.path().join("notes.db")).unwrap(),
         ));
         let first_note = store
             .lock()

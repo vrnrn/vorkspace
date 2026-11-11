@@ -72,12 +72,7 @@ impl Store {
         let Some(current) = self.bot_session(expected.id)? else {
             return Ok(false);
         };
-        let settings = if self.shared.is_some() {
-            self.shared_agent_preferences(expected.id)?
-        } else {
-            self.agent_settings(expected.id)?
-        }
-        .unwrap_or_default();
+        let settings = { self.agent_preferences(expected.id)? }.unwrap_or_default();
         Ok(current.provider == expected.provider
             && current.provider_id == expected.provider_id
             && current.cwd == expected.cwd
@@ -109,16 +104,13 @@ impl Store {
     }
 
     pub fn load_turn_history(&self, id: i64) -> Result<(Transcript, Option<TurnHistory>), String> {
-        if self.shared.is_none() {
-            return Ok((self.load(id)?, None));
-        }
         self.shared_history_schema()?;
         let tx = self
             .conn
             .unchecked_transaction()
             .map_err(|e| e.to_string())?;
         let version = self.shared_turn_version(id)?;
-        let transcript = self.shared_load(id)?;
+        let transcript = self.load(id)?;
         tx.commit().map_err(|e| e.to_string())?;
         let writer = TurnHistory {
             session: id,
@@ -161,26 +153,9 @@ impl Store {
         if writer.as_ref().is_some_and(|writer| writer.session != id) {
             return Err("Turn history belongs to another conversation".into());
         }
-        if self.shared.is_some() {
-            return self.shared_save_turns(id, &[(at, info)].into(), writer);
+        {
+            self.shared_save_turns(id, &[(at, info)].into(), writer)
         }
-        if writer.is_some() {
-            return Err("Turn history is unavailable for this conversation".into());
-        }
-        let tx = self
-            .conn
-            .is_autocommit()
-            .then(|| self.agent_configuration_transaction())
-            .transpose()?;
-        let mut settings = self.agent_settings(id)?.unwrap_or_default();
-        #[cfg(test)]
-        tests::pause_receipt_read();
-        settings.turns.insert(at, info);
-        self.save_agent_settings(id, &settings)?;
-        if let Some(tx) = tx {
-            tx.commit().map_err(|error| error.to_string())?;
-        }
-        Ok(true)
     }
 
     /// Publish the competing version without changing the winner's transcript,
@@ -220,7 +195,8 @@ impl Store {
             expected.map(|(binding, _)| binding),
             expected.map(|(_, rev)| rev),
         ) {
-            if let Some(shared) = &self.shared {
+            {
+                let shared = &self.shared;
                 let mut all = shared.pending_turn_recoveries.borrow_mut();
                 let versions = all.entry(id).or_default();
                 if !versions.iter().any(|pending| pending.version.id == attempt) {
@@ -241,9 +217,7 @@ impl Store {
     }
 
     pub fn retry_turn_overlap(&self, id: i64, attempt: &str) -> Result<(), String> {
-        let Some(shared) = &self.shared else {
-            return Err("This recovery is unavailable".into());
-        };
+        let shared = &self.shared;
         let mut all = shared.pending_turn_recoveries.borrow_mut();
         let versions = all.get_mut(&id).ok_or("This recovery is unavailable")?;
         let at = versions
@@ -313,18 +287,14 @@ impl Store {
     pub fn recovered_turns(&self, id: i64) -> Result<Vec<RecoveredTurn>, String> {
         let mut pending = self
             .shared
-            .as_ref()
-            .and_then(|shared| {
-                shared
-                    .pending_turn_recoveries
-                    .borrow()
-                    .get(&id)
-                    .map(|entries| {
-                        entries
-                            .iter()
-                            .map(|entry| entry.version.clone())
-                            .collect::<Vec<_>>()
-                    })
+            .pending_turn_recoveries
+            .borrow()
+            .get(&id)
+            .map(|entries| {
+                entries
+                    .iter()
+                    .map(|entry| entry.version.clone())
+                    .collect::<Vec<_>>()
             })
             .unwrap_or_default();
         let saved = self.saved_turn_recoveries(id);
@@ -343,8 +313,7 @@ impl Store {
     }
 
     fn saved_turn_recoveries(&self, id: i64) -> Result<Vec<RecoveredTurn>, String> {
-        if self.shared.is_none() || !shared::has_table(&self.conn, "conversation_turn_recoveries")?
-        {
+        if !shared::has_table(&self.conn, "conversation_turn_recoveries")? {
             return Ok(Vec::new());
         }
         let mut query = self.conn.prepare(
@@ -364,7 +333,8 @@ impl Store {
     }
 
     pub fn read_recovered_turn(&self, id: i64, attempt: &str) -> Result<Option<Vec<Row>>, String> {
-        if let Some(shared) = &self.shared {
+        {
+            let shared = &self.shared;
             let all = shared.pending_turn_recoveries.borrow();
             if let Some(pending) = all
                 .get(&id)
@@ -373,8 +343,7 @@ impl Store {
                 return Ok(Some(pending.rows.clone()));
             }
         }
-        if self.shared.is_none() || !shared::has_table(&self.conn, "conversation_turn_recoveries")?
-        {
+        if !shared::has_table(&self.conn, "conversation_turn_recoveries")? {
             return Ok(None);
         }
         let raw: Option<String> = self.conn.query_row(
@@ -410,80 +379,6 @@ pub fn recovery_text(rows: &[Row]) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::{cell::RefCell, sync::mpsc, time::Duration};
-
-    thread_local! {
-        static RECEIPT_READ: RefCell<Option<(mpsc::Sender<()>, mpsc::Receiver<()>)>> = const { RefCell::new(None) };
-    }
-
-    pub(super) fn pause_receipt_read() {
-        RECEIPT_READ.with(|gate| {
-            if let Some((ready, resume)) = gate.borrow_mut().take() {
-                ready.send(()).unwrap();
-                resume.recv_timeout(Duration::from_secs(15)).unwrap();
-            }
-        });
-    }
-
-    #[test]
-    fn legacy_receipts_serialize_with_independent_preference_writers_and_failed_saves() {
-        let directory = tempfile::tempdir().unwrap();
-        let path = directory.path().join("legacy.db");
-        let peer = Store::open(&path).unwrap();
-        let id = peer.create("codex", "/project").unwrap().id;
-        let preferences = crate::agent::Settings {
-            revision: 42,
-            model: Some("next-turn-model".into()),
-            ..Default::default()
-        };
-        let (ready, reached) = mpsc::channel();
-        let (resume, released) = mpsc::channel();
-        let worker_path = path.clone();
-        let worker = std::thread::spawn(move || {
-            let store = Store::open(&worker_path).unwrap();
-            RECEIPT_READ.set(Some((ready, released)));
-            store
-                .save_turn_info(
-                    id,
-                    1,
-                    crate::agent::TurnInfo {
-                        model: "admitted-model".into(),
-                        ..Default::default()
-                    },
-                    None,
-                )
-                .unwrap()
-        });
-        reached.recv_timeout(Duration::from_secs(15)).unwrap();
-        peer.conn.busy_timeout(Duration::ZERO).unwrap();
-        let blocked = peer.save_agent_preferences(id, &preferences);
-        resume.send(()).unwrap();
-        assert!(worker.join().unwrap());
-        assert!(blocked.is_err());
-        peer.save_agent_preferences(id, &preferences).unwrap();
-        let saved = peer.agent_settings(id).unwrap().unwrap();
-        assert_eq!(saved.revision, 42);
-        assert_eq!(saved.model.as_deref(), Some("next-turn-model"));
-        assert_eq!(saved.turns[&1].model, "admitted-model");
-
-        peer.conn.execute_batch("CREATE TRIGGER reject_receipt BEFORE UPDATE ON native_settings WHEN NEW.key LIKE 'agent:%' BEGIN SELECT RAISE(ABORT,'receipt save rejected'); END;").unwrap();
-        assert!(peer
-            .save_turn_info(id, 2, crate::agent::TurnInfo::default(), None)
-            .is_err());
-        peer.conn
-            .execute_batch("DROP TRIGGER reject_receipt")
-            .unwrap();
-        let reopened = Store::open(&path).unwrap();
-        reopened.save_agent_preferences(id, &preferences).unwrap();
-        let saved = reopened.agent_settings(id).unwrap().unwrap();
-        assert_eq!(saved.model, preferences.model);
-        assert_eq!(saved.turns.len(), 1);
-        assert!(peer
-            .save_turn_info(id, 2, crate::agent::TurnInfo::default(), None)
-            .unwrap());
-        peer.configure_agent(id, "codex", &preferences).unwrap();
-        assert_eq!(peer.agent_settings(id).unwrap().unwrap().turns.len(), 2);
-    }
 
     #[test]
     fn a_view_reload_cannot_bless_an_overlapping_turn_and_both_versions_survive() {

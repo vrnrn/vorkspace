@@ -4,20 +4,14 @@ use std::sync::{Arc, Barrier};
 use std::thread;
 
 fn saved_owner(conn: &Connection) {
-    conn.execute_batch("CREATE TABLE IF NOT EXISTS sessions (id TEXT PRIMARY KEY);")
-        .unwrap();
-    conn.execute(
-        "INSERT INTO sessions(id) VALUES (?1)",
-        ["chat/example.中国"],
-    )
-    .unwrap();
+    conn.execute("INSERT INTO sessions(id,cwd,harness,model,runtime_mode,title,created_at,updated_at) VALUES(?1,'/repo','codex','codex:default','supervised','Fixture',0,0)", ["chat/example.中国"]).unwrap();
 }
 
-fn db() -> Connection {
-    let conn = Connection::open_in_memory().unwrap();
-    ensure_table(&conn).unwrap();
-    saved_owner(&conn);
-    conn
+fn db() -> Store {
+    let store = Store::test(std::path::Path::new(":memory:")).unwrap();
+    ensure_table(&store.conn).unwrap();
+    saved_owner(&store.conn);
+    store
 }
 fn input(id: &str) -> SubmissionInput {
     SubmissionInput {
@@ -32,24 +26,24 @@ fn input(id: &str) -> SubmissionInput {
 #[test]
 fn a_missing_session_owner_cannot_create_an_unreachable_receipt() {
     let conn = db();
-    conn.execute("DELETE FROM sessions", []).unwrap();
-    assert!(reserve(&conn, input("orphan"), "sessions")
+    conn.conn.execute("DELETE FROM sessions", []).unwrap();
+    assert!(reserve(&conn.conn, input("orphan"))
         .unwrap_err()
         .contains("has not been saved"));
-    assert!(get(&conn, "orphan").unwrap().is_none());
-    assert!(dispatch(&conn, "orphan").is_err());
+    assert!(get(&conn.conn, "orphan").unwrap().is_none());
+    assert!(dispatch(&conn.conn, "orphan").is_err());
 }
 
 #[test]
 fn matching_ids_share_one_reservation_and_only_one_dispatch_claim() {
     let conn = db();
-    let first = reserve(&conn, input("same"), "sessions").unwrap();
+    let first = reserve(&conn.conn, input("same")).unwrap();
     assert!(first.created);
-    assert!(!reserve(&conn, input("same"), "sessions").unwrap().created);
-    assert!(dispatch(&conn, "same").unwrap().claimed);
-    assert!(!dispatch(&conn, "same").unwrap().claimed);
-    settle(&conn, "same", "completed", None).unwrap();
-    let duplicate = reserve(&conn, input("same"), "sessions").unwrap();
+    assert!(!reserve(&conn.conn, input("same")).unwrap().created);
+    assert!(dispatch(&conn.conn, "same").unwrap().claimed);
+    assert!(!dispatch(&conn.conn, "same").unwrap().claimed);
+    settle(&conn.conn, "same", "completed", None).unwrap();
+    let duplicate = reserve(&conn.conn, input("same")).unwrap();
     assert!(!duplicate.created);
     assert_eq!(duplicate.receipt.outcome.as_deref(), Some("completed"));
 }
@@ -57,7 +51,7 @@ fn matching_ids_share_one_reservation_and_only_one_dispatch_claim() {
 #[test]
 fn changed_payload_attachments_or_scope_never_reuses_an_id() {
     let conn = db();
-    reserve(&conn, input("same"), "sessions").unwrap();
+    reserve(&conn.conn, input("same")).unwrap();
     for field in ["payload", "attachments", "session", "turn"] {
         let mut changed = input("same");
         match field {
@@ -70,7 +64,7 @@ fn changed_payload_attachments_or_scope_never_reuses_an_id() {
             }
             _ => unreachable!(),
         }
-        assert!(reserve(&conn, changed, "sessions")
+        assert!(reserve(&conn.conn, changed)
             .unwrap_err()
             .contains("different scope or content"));
     }
@@ -79,9 +73,9 @@ fn changed_payload_attachments_or_scope_never_reuses_an_id() {
 #[test]
 fn concurrent_connections_reserve_only_one_owner() {
     let path = std::env::temp_dir().join(format!("local-submission-{}.db", uuid::Uuid::new_v4()));
-    let first = Connection::open(&path).unwrap();
-    ensure_table(&first).unwrap();
-    saved_owner(&first);
+    let first = Store::test(&path).unwrap();
+    ensure_table(&first.conn).unwrap();
+    saved_owner(&first.conn);
     drop(first);
     let barrier = Arc::new(Barrier::new(2));
     let threads: Vec<_> = (0..2)
@@ -89,13 +83,12 @@ fn concurrent_connections_reserve_only_one_owner() {
             let path = path.clone();
             let barrier = barrier.clone();
             thread::spawn(move || {
-                let conn = Connection::open(path).unwrap();
-                conn.busy_timeout(std::time::Duration::from_secs(5))
+                let conn = Store::test(&path).unwrap();
+                conn.conn
+                    .busy_timeout(std::time::Duration::from_secs(5))
                     .unwrap();
                 barrier.wait();
-                reserve(&conn, input("concurrent"), "sessions")
-                    .unwrap()
-                    .created
+                reserve(&conn.conn, input("concurrent")).unwrap().created
             })
         })
         .collect();
@@ -114,25 +107,25 @@ fn reopen_marks_both_crash_boundaries_uncertain_and_preserves_live_owners() {
         "local-submission-reopen-{}.db",
         uuid::Uuid::new_v4()
     ));
-    let conn = Connection::open(&path).unwrap();
-    ensure_table(&conn).unwrap();
-    saved_owner(&conn);
+    let conn = Store::test(&path).unwrap();
+    ensure_table(&conn.conn).unwrap();
+    saved_owner(&conn.conn);
     for id in ["before", "after", "live-owner", "this-owner"] {
-        reserve(&conn, input(id), "sessions").unwrap();
+        reserve(&conn.conn, input(id)).unwrap();
     }
-    dispatch(&conn, "after").unwrap();
-    conn.execute("UPDATE local_submissions SET owner_instance='dead',owner_pid=2147483647 WHERE attempt_id IN ('before','after')", []).unwrap();
-    conn.execute("UPDATE local_submissions SET owner_instance='another-live-instance' WHERE attempt_id='live-owner'", []).unwrap();
+    dispatch(&conn.conn, "after").unwrap();
+    conn.conn.execute("UPDATE local_submissions SET owner_instance='dead',owner_pid=2147483647 WHERE attempt_id IN ('before','after')", []).unwrap();
+    conn.conn.execute("UPDATE local_submissions SET owner_instance='another-live-instance' WHERE attempt_id='live-owner'", []).unwrap();
     drop(conn);
-    let conn = Connection::open(&path).unwrap();
-    ensure_table(&conn).unwrap();
-    recover_unresolved(&conn, None).unwrap();
+    let conn = Store::test(&path).unwrap();
+    ensure_table(&conn.conn).unwrap();
+    recover_unresolved(&conn.conn, None).unwrap();
     for id in ["before", "after"] {
-        assert_eq!(get(&conn, id).unwrap().unwrap().phase, "uncertain");
-        assert!(!dispatch(&conn, id).unwrap().claimed);
+        assert_eq!(get(&conn.conn, id).unwrap().unwrap().phase, "uncertain");
+        assert!(!dispatch(&conn.conn, id).unwrap().claimed);
     }
     for id in ["live-owner", "this-owner"] {
-        assert_eq!(get(&conn, id).unwrap().unwrap().phase, "reserved");
+        assert_eq!(get(&conn.conn, id).unwrap().unwrap().phase, "reserved");
     }
     drop(conn);
     std::fs::remove_file(path).unwrap();
@@ -141,25 +134,25 @@ fn reopen_marks_both_crash_boundaries_uncertain_and_preserves_live_owners() {
 #[test]
 fn deletion_keeps_identity_tombstones_and_defeats_delayed_new_reservations() {
     let conn = db();
-    reserve(&conn, input("old"), "sessions").unwrap();
-    delete_session(&conn, "chat/example.中国").unwrap();
-    assert!(!dispatch(&conn, "old").unwrap().claimed);
-    assert!(reserve(&conn, input("delayed"), "sessions").is_err());
+    reserve(&conn.conn, input("old")).unwrap();
+    delete_session(&conn.conn, "chat/example.中国").unwrap();
+    assert!(!dispatch(&conn.conn, "old").unwrap().claimed);
+    assert!(reserve(&conn.conn, input("delayed")).is_err());
     let mut moved = input("old");
     moved.session_id = "other".into();
-    assert!(reserve(&conn, moved, "sessions").is_err());
-    assert!(get(&conn, "old").unwrap().unwrap().user_turn.is_none());
+    assert!(reserve(&conn.conn, moved).is_err());
+    assert!(get(&conn.conn, "old").unwrap().unwrap().user_turn.is_none());
 }
 
 #[test]
 fn reservation_store_errors_leave_no_dispatchable_attempt() {
     let conn = db();
-    conn.execute_batch("CREATE TRIGGER fail_insert BEFORE INSERT ON local_submissions BEGIN SELECT RAISE(ABORT, 'disk failed'); END;").unwrap();
-    assert!(reserve(&conn, input("error"), "sessions")
+    conn.conn.execute_batch("CREATE TRIGGER fail_insert BEFORE INSERT ON local_submissions BEGIN SELECT RAISE(ABORT, 'disk failed'); END;").unwrap();
+    assert!(reserve(&conn.conn, input("error"))
         .unwrap_err()
         .contains("disk failed"));
-    assert!(get(&conn, "error").unwrap().is_none());
-    assert!(dispatch(&conn, "error").is_err());
+    assert!(get(&conn.conn, "error").unwrap().is_none());
+    assert!(dispatch(&conn.conn, "error").is_err());
 }
 
 #[test]
@@ -169,7 +162,7 @@ fn recovery_snapshot_strips_live_bytes_and_rejects_mismatched_identity() {
     value.user_turn = Some(
         json!({"id":"safe","role":"user","text":"hello","internal":true,"credential":"private","attachments":[{"id":"image","kind":"image","name":"a.png","mimeType":"image/png","size":4,"data":"base64","previewUrl":"blob:private","path":"data:private"}]}),
     );
-    let safe = reserve(&conn, value, "sessions")
+    let safe = reserve(&conn.conn, value)
         .unwrap()
         .receipt
         .user_turn
@@ -180,76 +173,60 @@ fn recovery_snapshot_strips_live_bytes_and_rejects_mismatched_identity() {
     assert!(safe["attachments"][0].get("path").is_none());
     let mut bad = input("bad");
     bad.user_turn = Some(json!({"id":"different","role":"user","text":"hello"}));
-    assert!(reserve(&conn, bad, "sessions").is_err());
+    assert!(reserve(&conn.conn, bad).is_err());
 }
 #[test]
 fn real_store_uses_original_session_identity_and_reads_do_not_create_tables() {
-    for shared in [true, false] {
-        let directory = tempfile::tempdir().unwrap();
-        let path = directory.path().join("sessions.db");
-        let mut store = if shared {
-            Store::open_vorkspace(&path)
-        } else {
-            Store::open(&path)
-        }
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("sessions.db");
+    let mut store = { Store::test(&path) }.unwrap();
+    let session = store.create("codex", "/project").unwrap();
+    assert!(store.local_submissions(session.id).unwrap().is_empty());
+    store.recover_local_submissions().unwrap();
+    assert!(!super::super::shared::has_table(&store.conn, "local_submissions").unwrap());
+    let reserved = store
+        .reserve_local_submission(session.id, input("durable"))
         .unwrap();
-        let session = store.create("codex", "/project").unwrap();
-        assert!(store.local_submissions(session.id).unwrap().is_empty());
-        store.recover_local_submissions().unwrap();
-        assert!(!super::super::shared::has_table(&store.conn, "local_submissions").unwrap());
-        let reserved = store
-            .reserve_local_submission(session.id, input("durable"))
-            .unwrap();
-        let source = if shared {
-            store.persisted_session_id(session.id).unwrap()
-        } else {
-            session.id.to_string()
-        };
-        assert_eq!(reserved.receipt.session_id, source);
-        assert!(store.dispatch_local_submission("durable").unwrap().claimed);
-        store
-            .conn
-            .execute(
-                "UPDATE local_submissions SET owner_instance='dead',owner_pid=2147483647",
-                [],
-            )
-            .unwrap();
-        drop(store);
-        store = if shared {
-            Store::open_vorkspace(&path)
-        } else {
-            Store::open(&path)
-        }
+    let source = store.persisted_session_id(session.id).unwrap();
+    assert_eq!(reserved.receipt.session_id, source);
+    assert!(store.dispatch_local_submission("durable").unwrap().claimed);
+    store
+        .conn
+        .execute(
+            "UPDATE local_submissions SET owner_instance='dead',owner_pid=2147483647",
+            [],
+        )
         .unwrap();
-        store.recover_local_submissions().unwrap();
-        let receipts = store.local_submissions(session.id).unwrap();
-        assert_eq!(receipts[0].phase, "uncertain");
-        assert!(!store.dispatch_local_submission("durable").unwrap().claimed);
-        assert_eq!(receipts[0].user_turn.as_ref().unwrap()["text"], "hello");
-        store.delete(session.id).unwrap();
-        assert!(store
-            .reserve_local_submission(session.id, input("late"))
-            .is_err());
-        assert!(get(&store.conn, "durable")
-            .unwrap()
-            .unwrap()
-            .user_turn
-            .is_none());
-    }
+    drop(store);
+    store = { Store::test(&path) }.unwrap();
+    store.recover_local_submissions().unwrap();
+    let receipts = store.local_submissions(session.id).unwrap();
+    assert_eq!(receipts[0].phase, "uncertain");
+    assert!(!store.dispatch_local_submission("durable").unwrap().claimed);
+    assert_eq!(receipts[0].user_turn.as_ref().unwrap()["text"], "hello");
+    store.delete(session.id).unwrap();
+    assert!(store
+        .reserve_local_submission(session.id, input("late"))
+        .is_err());
+    assert!(get(&store.conn, "durable")
+        .unwrap()
+        .unwrap()
+        .user_turn
+        .is_none());
 }
 #[test]
-fn failed_native_delete_rolls_back_receipts_and_session_together() {
+fn failed_delete_rolls_back_receipts_and_session_together() {
     let directory = tempfile::tempdir().unwrap();
     let path = directory.path().join("native.db");
-    let mut store = Store::open(&path).unwrap();
+    let mut store = Store::test(&path).unwrap();
     let session = store.create("codex", "/project").unwrap().id;
     store
         .reserve_local_submission(session, input("kept"))
         .unwrap();
-    store.conn.execute_batch("CREATE TRIGGER refuse_delete BEFORE DELETE ON native_sessions BEGIN SELECT RAISE(ABORT,'delete denied'); END").unwrap();
+    store.conn.execute_batch("CREATE TRIGGER refuse_delete BEFORE DELETE ON sessions BEGIN SELECT RAISE(ABORT,'delete denied'); END").unwrap();
     assert!(store.delete(session).unwrap_err().contains("delete denied"));
     drop(store);
-    let store = Store::open(&path).unwrap();
+    let store = Store::test(&path).unwrap();
     let receipt = &store.local_submissions(session).unwrap()[0];
     assert_eq!(receipt.phase, "reserved");
     assert!(receipt.user_turn.is_some());
@@ -268,33 +245,36 @@ fn a_post_insert_read_error_rolls_back_the_entire_reservation() {
     let conn = db();
     let inserted = Arc::new(AtomicBool::new(false));
     let flag = inserted.clone();
-    conn.update_hook(Some(move |action: Action, _: &str, table: &str, _: i64| {
-        if action == Action::SQLITE_INSERT && table == "local_submissions" {
-            flag.store(true, Ordering::SeqCst);
-        }
-    }))
-    .unwrap();
-    let flag = inserted.clone();
-    conn.authorizer(Some(move |context: AuthContext<'_>| {
-        if matches!(
-            context.action,
-            AuthAction::Read {
-                table_name: "local_submissions",
-                ..
+    conn.conn
+        .update_hook(Some(move |action: Action, _: &str, table: &str, _: i64| {
+            if action == Action::SQLITE_INSERT && table == "local_submissions" {
+                flag.store(true, Ordering::SeqCst);
             }
-        ) && flag.load(Ordering::SeqCst)
-        {
-            Authorization::Deny
-        } else {
-            Authorization::Allow
-        }
-    }))
-    .unwrap();
-    assert!(reserve(&conn, input("post-insert"), "sessions").is_err());
-    assert!(inserted.load(Ordering::SeqCst));
-    conn.authorizer(None::<fn(AuthContext<'_>) -> Authorization>)
+        }))
         .unwrap();
-    assert!(get(&conn, "post-insert").unwrap().is_none());
+    let flag = inserted.clone();
+    conn.conn
+        .authorizer(Some(move |context: AuthContext<'_>| {
+            if matches!(
+                context.action,
+                AuthAction::Read {
+                    table_name: "local_submissions",
+                    ..
+                }
+            ) && flag.load(Ordering::SeqCst)
+            {
+                Authorization::Deny
+            } else {
+                Authorization::Allow
+            }
+        }))
+        .unwrap();
+    assert!(reserve(&conn.conn, input("post-insert")).is_err());
+    assert!(inserted.load(Ordering::SeqCst));
+    conn.conn
+        .authorizer(None::<fn(AuthContext<'_>) -> Authorization>)
+        .unwrap();
+    assert!(get(&conn.conn, "post-insert").unwrap().is_none());
 }
 #[test]
 fn a_finished_worker_recovers_in_the_same_process_after_transient_settlement_failure() {

@@ -53,7 +53,7 @@ fn banked_claims_are_serialized_per_account_and_refresh_the_right_cache(
     cx: &mut gpui::TestAppContext,
 ) {
     let store = Arc::new(std::sync::Mutex::new(
-        vorkspace_core::store::Store::open(Path::new(":memory:")).unwrap(),
+        vorkspace_core::store::Store::test(Path::new(":memory:")).unwrap(),
     ));
     let center = cx.new(|cx| Accounts::new(PathBuf::from("/fixture"), Book::default(), store, cx));
     let calls = Arc::new(AtomicUsize::new(0));
@@ -150,7 +150,7 @@ fn banked_claim_errors_preserve_credits_and_invalidated_replies_stay_discarded(
     cx: &mut gpui::TestAppContext,
 ) {
     let store = Arc::new(std::sync::Mutex::new(
-        vorkspace_core::store::Store::open(Path::new(":memory:")).unwrap(),
+        vorkspace_core::store::Store::test(Path::new(":memory:")).unwrap(),
     ));
     let center = cx.new(|cx| Accounts::new(PathBuf::from("/fixture"), Book::default(), store, cx));
     let key = Key::new(Kind::Codex, Profile::default(), None);

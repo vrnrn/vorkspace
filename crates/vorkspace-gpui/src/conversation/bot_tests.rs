@@ -36,7 +36,7 @@ fn chat(cx: &mut TestAppContext) -> WindowHandle<Conversation> {
     cx.update(|cx| {
         vorkspace_ui::clock::use_test_clock(cx);
         input::bind(cx);
-        let store = Store::open(Path::new(":memory:")).unwrap();
+        let store = Store::test(Path::new(":memory:")).unwrap();
         let summary = store.create("codex", "/private/tmp/bot-queue-ui").unwrap();
         cx.open_window(Default::default(), |_, cx| {
             cx.new(|cx| {
@@ -164,7 +164,7 @@ fn successive_draft_edits_survive_an_intermediate_delivery_receipt(cx: &mut Test
     let path = dir.path().join("draft-versions.sqlite");
     let attachment = dir.path().join("attachment.txt");
     std::fs::write(&attachment, "saved attachment").unwrap();
-    let store = Store::open(&path).unwrap();
+    let store = Store::test(&path).unwrap();
     let summary = store.create("codex", "/tmp").unwrap();
     let session = summary.id;
     let mut roster = vorkspace_core::bot::Roster::default();
@@ -232,7 +232,7 @@ fn successive_draft_edits_survive_an_intermediate_delivery_receipt(cx: &mut Test
 
     // The second connection queues exactly the intermediate snapshot while
     // the first window keeps the same editor open.
-    let mut other = Store::open(&path).unwrap();
+    let mut other = Store::test(&path).unwrap();
     let stale_state = other.follow_ups(session).unwrap();
     let intermediate = stale_state.draft.as_ref().unwrap().clone();
     assert_eq!(intermediate.text, "Intermediate");
@@ -274,10 +274,9 @@ fn successive_draft_edits_survive_an_intermediate_delivery_receipt(cx: &mut Test
     .unwrap();
     assert_eq!(marker["id"], predecessor.id);
     assert_eq!(marker["nextId"], final_draft.id);
-    assert_eq!(
-        final_draft.replaces_draft_id.as_deref(),
-        Some(predecessor.id.as_str())
-    );
+    // Replacement lineage is durable in the origin marker; this field is
+    // used while writing the draft and is not part of its stored block.
+    assert!(final_draft.replaces_draft_id.is_none());
     assert_eq!(final_draft.attachments.len(), 1);
     assert_eq!(
         std::fs::read(&final_draft.attachments[0]).unwrap(),
@@ -308,14 +307,16 @@ fn successive_draft_edits_survive_an_intermediate_delivery_receipt(cx: &mut Test
     other
         .write_rows_with_message(session, 0, &transcript.rows, Some(&queued.id))
         .unwrap();
+    let mut live_draft = final_draft.clone();
+    live_draft.replaces_draft_id = Some(predecessor.id);
     window
         .update(visual, |view, _, cx| {
             view.bot_draft_outbox_saved(&queued, cx);
-            assert_eq!(view.follow_ups.state.draft.as_ref(), Some(&final_draft));
+            assert_eq!(view.follow_ups.state.draft.as_ref(), Some(&live_draft));
         })
         .unwrap();
     drop(other);
-    let reopened = Store::open(&path).unwrap();
+    let reopened = Store::test(&path).unwrap();
     assert!(
         reopened
             .setting(&format!("bot-delivered:{session}:{}", intermediate.id))
@@ -462,7 +463,7 @@ fn saved_bot_draft_survives_reopen_and_transfers_the_same_attachment_and_identit
     image::RgbaImage::from_pixel(100, 80, image::Rgba([255, 255, 255, 255]))
         .save(&source)
         .unwrap();
-    let store = Store::open(&path).unwrap();
+    let store = Store::test(&path).unwrap();
     let summary = store.create("codex", "/private/tmp/bot-draft").unwrap();
     let session = summary.id;
     let window = cx.update(|cx| {
@@ -547,7 +548,7 @@ fn saved_bot_draft_survives_reopen_and_transfers_the_same_attachment_and_identit
         .unwrap();
     drop(owner);
     std::fs::write(&source, "changed bytes").unwrap();
-    let store = Store::open(&path).unwrap();
+    let store = Store::test(&path).unwrap();
     let summary = store
         .sessions()
         .unwrap()
@@ -673,7 +674,7 @@ fn saved_bot_draft_survives_reopen_and_transfers_the_same_attachment_and_identit
 fn older_outbox_ack_cannot_remove_an_edited_draft_from_another_connection(cx: &mut TestAppContext) {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("ownership.sqlite");
-    let store = Store::open(&path).unwrap();
+    let store = Store::test(&path).unwrap();
     let summary = store.create("codex", "/tmp").unwrap();
     let id = summary.id;
     let window = cx.update(|cx| {
@@ -696,7 +697,7 @@ fn older_outbox_ack_cannot_remove_an_edited_draft_from_another_connection(cx: &m
             view.follow_ups.state.draft.clone().unwrap()
         })
         .unwrap();
-    let other = Store::open(&path).unwrap();
+    let other = Store::test(&path).unwrap();
     let mut newer = other.follow_ups(id).unwrap();
     newer.revision += 1;
     newer.draft.as_mut().unwrap().id = "edited-version".into();
@@ -722,8 +723,8 @@ fn restart_consumes_only_the_composer_revision_that_became_a_saved_bot_draft(
     cx: &mut TestAppContext,
 ) {
     for (open, newer) in [
-        (Store::open as fn(&Path) -> Result<Store, String>, false),
-        (Store::open, true),
+        (Store::test as fn(&Path) -> Result<Store, String>, false),
+        (Store::test, true),
         (Store::open_vorkspace, false),
         (Store::open_vorkspace, true),
     ] {
@@ -822,7 +823,7 @@ fn native_bot_draft_and_add_menu_capture() {
             cx.set_global(prefs);
             input::bind(cx);
         });
-        let store = Store::open(Path::new(":memory:")).unwrap();
+        let store = Store::test(Path::new(":memory:")).unwrap();
         let summary = store.create("codex", "/tmp").unwrap();
         let captured_chat = Rc::new(RefCell::new(None));
         let captured = captured_chat.clone();

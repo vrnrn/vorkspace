@@ -56,7 +56,8 @@ mod tests {
             "vorkspace.inboxConnectors.v1",
             json!({"github":false,"gitlab":true,"jira":false,"linear":true,"azuredevops":true}),
         )]));
-        let store = Store::open_vorkspace_with_preferences_for_test(&database, preferences.clone())
+        let store = Store::test(&database)
+            .map(|store| store.with_test_preferences(preferences.clone()))
             .unwrap();
         // A native 1.0 view-state file must not mask the older connector switches.
         store
@@ -76,8 +77,9 @@ mod tests {
         state.connectors.set("gitlab", false).unwrap();
         state.connectors.save(&store).unwrap();
         drop(store);
-        let reopened =
-            Store::open_vorkspace_with_preferences_for_test(&database, preferences).unwrap();
+        let reopened = Store::test(&database)
+            .map(|store| store.with_test_preferences(preferences))
+            .unwrap();
         let state = ViewState::load(&reopened);
         assert!(state.connectors.enabled_providers().next().is_none());
         assert_eq!(state.source, "");

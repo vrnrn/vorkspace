@@ -276,7 +276,7 @@ mod tests {
 
     fn store() -> Database {
         std::sync::Arc::new(std::sync::Mutex::new(
-            vorkspace_core::store::Store::open(std::path::Path::new(":memory:")).unwrap(),
+            vorkspace_core::store::Store::test(std::path::Path::new(":memory:")).unwrap(),
         ))
     }
 

@@ -123,7 +123,7 @@ fn pages_are_ordered_and_snapshot_bound_across_edits_and_retries() {
 
 #[test]
 fn unsupported_histories_and_invalid_page_sizes_fail_closed() {
-    let store = Store::open_vorkspace(Path::new(":memory:")).unwrap();
+    let store = Store::test(Path::new(":memory:")).unwrap();
     let id = store.create("codex", "/project").unwrap().id;
     assert!(store.indexed_history_page(id, None, 10).unwrap().is_none());
     assert!(store.indexed_history_page(id, None, 0).is_err());

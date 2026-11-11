@@ -3,15 +3,11 @@ use vorkspace_core::follow_up::{Message, State};
 
 #[test]
 fn an_ordinary_context_flush_preserves_an_independently_replaced_thread() {
-    for shared in [false, true] {
+    {
         for source_thread in [None, Some("admitted-thread")] {
             let directory = tempfile::tempdir().unwrap();
             let path = directory.path().join("context.db");
-            let open = if shared {
-                Store::open_vorkspace
-            } else {
-                Store::open
-            };
+            let open = { Store::test };
             let owner = open(&path).unwrap();
             let id = owner.create("codex", "/fixture").unwrap().id;
             owner
@@ -23,7 +19,7 @@ fn an_ordinary_context_flush_preserves_an_independently_replaced_thread() {
             let peer = open(&path).unwrap();
             let database = Arc::new(Mutex::new(owner));
             let now = Instant::now();
-            let mut pending = PendingSave::new(shared, now);
+            let mut pending = PendingSave::new(now);
             pending.own_context("codex", vorkspace_core::accounts::DEFAULT, source_thread);
             let current = vorkspace_core::context::Usage {
                 used: 8000,
@@ -60,7 +56,7 @@ fn an_ordinary_context_flush_preserves_an_independently_replaced_thread() {
 }
 
 fn conversation() -> (Database, i64, Transcript) {
-    let mut store = Store::open_vorkspace(std::path::Path::new(":memory:")).unwrap();
+    let mut store = Store::test(std::path::Path::new(":memory:")).unwrap();
     let session = store.create("codex", "/project").unwrap();
     let mut transcript = Transcript::default();
     transcript.begin("user");
@@ -74,7 +70,7 @@ fn conversation() -> (Database, i64, Transcript) {
 fn token_batches_coalesce_but_final_stop_flush_preserves_all_pending_rows() {
     let (store, id, mut transcript) = conversation();
     let now = Instant::now();
-    let mut pending = PendingSave::new(true, now);
+    let mut pending = PendingSave::new(now);
     for text in ["One ", "two ", "three"] {
         pending.changed(transcript.append(text));
     }
@@ -117,7 +113,7 @@ fn accepted_queue_message_flushes_prior_tokens_and_its_receipt_atomically() {
         )
         .unwrap();
     let now = Instant::now();
-    let mut pending = PendingSave::new(true, now);
+    let mut pending = PendingSave::new(now);
     pending.changed(transcript.append("Still streaming"));
     let from = transcript.begin("user");
     transcript.append("Next");
@@ -133,14 +129,6 @@ fn accepted_queue_message_flushes_prior_tokens_and_its_receipt_atomically() {
             .unwrap(),
         Some("1".into())
     );
-}
-
-#[test]
-fn legacy_row_store_keeps_incremental_save_behavior() {
-    let now = Instant::now();
-    let mut pending = PendingSave::new(false, now);
-    pending.changed(0);
-    assert!(pending.due(false, now));
 }
 
 #[test]
@@ -289,7 +277,7 @@ fn worktree_creation_follows_message_acceptance_and_reports_the_checkout_in_the_
             String::from_utf8_lossy(&result.stderr)
         );
     }
-    let store = Store::open(std::path::Path::new(":memory:")).unwrap();
+    let store = Store::test(std::path::Path::new(":memory:")).unwrap();
     let summary = store.create("codex", repo.to_str().unwrap()).unwrap();
     let id = summary.id;
     let store = Arc::new(Mutex::new(store));
@@ -379,7 +367,7 @@ fn first_turn_with_setup(command: &str) -> (String, Vec<Update>, std::path::Path
             command.to_owned(),
         )]),
     );
-    let store = Store::open(&root.join("fixture.db")).unwrap();
+    let store = Store::test(&root.join("fixture.db")).unwrap();
     let summary = store.create("codex", repo.to_str().unwrap()).unwrap();
     let store = Arc::new(Mutex::new(store));
     let (tx, rx) = async_channel::bounded(8);
@@ -453,7 +441,7 @@ for line in sys.stdin:
     std::fs::set_permissions(&binary, std::fs::Permissions::from_mode(0o700)).unwrap();
 
     let turn = |attachments| {
-        let store = Store::open(&repo.parent().unwrap().join("fixture.db")).unwrap();
+        let store = Store::test(&repo.parent().unwrap().join("fixture.db")).unwrap();
         let summary = store.create("codex", repo.to_str().unwrap()).unwrap();
         let (tx, rx) = async_channel::unbounded();
         let (_control, controls) = std::sync::mpsc::channel();

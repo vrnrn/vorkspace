@@ -297,18 +297,13 @@ fn sanitize_user_turn(
 }
 
 #[cfg(test)]
-fn reserve(
-    conn: &Connection,
-    input: SubmissionInput,
-    session_table: &str,
-) -> Result<SubmissionReservation, String> {
-    reserve_checked(conn, input, session_table, || Ok(()))
+fn reserve(conn: &Connection, input: SubmissionInput) -> Result<SubmissionReservation, String> {
+    reserve_checked(conn, input, || Ok(()))
 }
 
 fn reserve_checked(
     conn: &Connection,
     input: SubmissionInput,
-    session_table: &str,
     check: impl FnOnce() -> Result<(), String>,
 ) -> Result<SubmissionReservation, String> {
     for value in [&input.attempt_id, &input.user_turn_id] {
@@ -333,11 +328,6 @@ fn reserve_checked(
         .map(|turn| sanitize_user_turn(turn, &input.user_turn_id))
         .transpose()?;
     let signature = format!("{:x}", Sha256::digest(input.payload_json.as_bytes()));
-    let owner_table = match session_table {
-        "sessions" => "sessions",
-        "native_sessions" => "native_sessions",
-        _ => return Err("Invalid local submission owner table".into()),
-    };
     let tx = Transaction::new_unchecked(conn, TransactionBehavior::Immediate)
         .map_err(|e| e.to_string())?;
     check()?;
@@ -355,10 +345,10 @@ fn reserve_checked(
     if competing_operation {
         return Err("A local provider operation is already active in this conversation.".into());
     }
-    let insert = format!("INSERT INTO local_submissions (attempt_id,user_turn_id,session_id,signature,phase,owner_pid,owner_instance,created_at,updated_at,user_turn_json) SELECT ?1,?2,?3,?4,'reserved',?5,?6,?7,?7,?8 WHERE NOT EXISTS (SELECT 1 FROM local_submission_deleted_sessions WHERE session_id=?3) AND EXISTS(SELECT 1 FROM {owner_table} WHERE id=?3) AND NOT EXISTS(SELECT 1 FROM local_submissions WHERE session_id=?3 AND user_turn_id=?2 AND (phase IN ('reserved','dispatching','uncertain') OR outcome='completed')) ON CONFLICT(attempt_id) DO NOTHING");
+    let insert = "INSERT INTO local_submissions (attempt_id,user_turn_id,session_id,signature,phase,owner_pid,owner_instance,created_at,updated_at,user_turn_json) SELECT ?1,?2,?3,?4,'reserved',?5,?6,?7,?7,?8 WHERE NOT EXISTS (SELECT 1 FROM local_submission_deleted_sessions WHERE session_id=?3) AND EXISTS(SELECT 1 FROM sessions WHERE id=?3) AND NOT EXISTS(SELECT 1 FROM local_submissions WHERE session_id=?3 AND user_turn_id=?2 AND (phase IN ('reserved','dispatching','uncertain') OR outcome='completed')) ON CONFLICT(attempt_id) DO NOTHING";
     let created = tx
         .execute(
-            &insert,
+            insert,
             params![
                 input.attempt_id,
                 input.user_turn_id,
@@ -488,24 +478,13 @@ impl Store {
         mut input: SubmissionInput,
         check: impl FnOnce() -> Result<(), String>,
     ) -> Result<SubmissionReservation, String> {
-        if self.shared.is_some() {
-            self.shared_writable()?;
-        }
+        self.shared_writable()?;
         input.session_id = self.submission_source_id(session)?;
-        let table = if self.shared.is_some() {
-            "sessions"
-        } else {
-            "native_sessions"
-        };
         ensure_table(&self.conn).map_err(|e| e.to_string())?;
-        reserve_checked(&self.conn, input, table, check)
+        reserve_checked(&self.conn, input, check)
     }
     fn submission_source_id(&self, session: i64) -> Result<String, String> {
-        if self.shared.is_some() {
-            self.persisted_session_id(session)
-        } else {
-            Ok(session.to_string())
-        }
+        self.persisted_session_id(session)
     }
     pub fn dispatch_local_submission(&self, attempt: &str) -> Result<SubmissionClaim, String> {
         dispatch(&self.conn, attempt)
@@ -571,9 +550,7 @@ impl Store {
     /// Dismissing a notice records review, never proof of external completion.
     /// Its uncertainty and stable-message tombstone continue to forbid replay.
     pub fn acknowledge_local_submission(&self, session: i64, attempt: &str) -> Result<(), String> {
-        if self.shared.is_some() {
-            self.shared_writable()?;
-        }
+        self.shared_writable()?;
         let source = self.submission_source_id(session)?;
         self.conn.execute("UPDATE local_submissions SET outcome='reviewed',updated_at=?1 WHERE session_id=?2 AND attempt_id=?3 AND phase='uncertain'",params![now(),source,attempt]).map_err(|e|e.to_string())?;
         Ok(())

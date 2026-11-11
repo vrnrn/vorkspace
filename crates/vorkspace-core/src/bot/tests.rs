@@ -51,7 +51,7 @@ fn setup_does_not_create_an_identity_until_a_nonblank_name_is_confirmed() {
 #[test]
 fn identity_projects_order_and_hidden_sessions_survive_restart() {
     let temp = tempfile::tempdir().unwrap();
-    let db = Store::open(&temp.path().join("native.sqlite")).unwrap();
+    let db = Store::test(&temp.path().join("native.sqlite")).unwrap();
     let mut roster = Roster::default();
     let a = roster
         .create(named(
@@ -199,7 +199,7 @@ fn schedules_are_strictly_future_and_reject_invalid_fields() {
 fn delivery_receipt_is_saved_with_the_user_message() {
     let temp = tempfile::tempdir().unwrap();
     let path = temp.path().join("native.sqlite");
-    let mut db = Store::open(&path).unwrap();
+    let mut db = Store::test(&path).unwrap();
     let session = db.create("codex", "/project").unwrap();
     let row = Row {
         role: "user".into(),
@@ -210,7 +210,7 @@ fn delivery_receipt_is_saved_with_the_user_message() {
     db.write_rows_with_message(session.id, 0, std::slice::from_ref(&row), Some("message-1"))
         .unwrap();
     drop(db);
-    let db = Store::open(&path).unwrap();
+    let db = Store::test(&path).unwrap();
     assert_eq!(db.load(session.id).unwrap().rows, vec![row]);
     assert_eq!(
         db.setting(&format!("bot-delivered:{}:message-1", session.id))
@@ -223,7 +223,7 @@ fn delivery_receipt_is_saved_with_the_user_message() {
 #[test]
 fn confirmed_setup_configuration_survives_reopen_until_a_session_takes_ownership() {
     let directory = tempfile::tempdir().unwrap();
-    let db = Store::open(&directory.path().join("native.sqlite")).unwrap();
+    let db = Store::test(&directory.path().join("native.sqlite")).unwrap();
     let mut roster = Roster::default();
     let mut bot = named(&roster, "Ada", Vec::new());
     bot.initial_configuration = Some(Box::new(InitialConfiguration {
@@ -240,7 +240,7 @@ fn confirmed_setup_configuration_survives_reopen_until_a_session_takes_ownership
     roster.create(bot).unwrap();
     roster.save(&db).unwrap();
     drop(db);
-    let db = Store::open(&directory.path().join("native.sqlite")).unwrap();
+    let db = Store::test(&directory.path().join("native.sqlite")).unwrap();
     let roster = Roster::load(&db).unwrap();
     let bot = roster.get(&id).unwrap();
     assert_eq!(bot.name, "Ada");
@@ -476,10 +476,8 @@ fn dispatch_claim_is_unique_across_processes_and_survives_restart() {
 #[test]
 fn claim_rejects_changed_or_missing_outbox_and_rolls_back_on_failure() {
     let dir = tempfile::tempdir().unwrap();
-    for open in [
-        Store::open as fn(&Path) -> Result<Store, String>,
-        Store::open_vorkspace,
-    ] {
+    {
+        let open = Store::test;
         let path = dir.path().join(new_id());
         let store = open(&path).unwrap();
         let message = Message {

@@ -4,7 +4,7 @@ use std::sync::Mutex;
 use vorkspace_core::store::Store;
 
 fn conversation(cx: &mut TestAppContext) -> WindowHandle<Conversation> {
-    let store = Store::open(Path::new(":memory:")).unwrap();
+    let store = Store::test(Path::new(":memory:")).unwrap();
     let summary = store.create("codex", "/tmp").unwrap();
     let window = cx.update(|cx| {
         input::bind(cx);
@@ -280,7 +280,16 @@ fn busy_sends_keep_their_order_attachments_and_edits_until_accepted(cx: &mut Tes
         panic!("expected steering");
     };
     assert_eq!(message.text, "edited 🙂\nwith detail");
-    assert_eq!(message.attachments, [attachment]);
+    let saved = window
+        .update(cx, |view, _, _| {
+            view.follow_ups.state.messages[0].attachments.clone()
+        })
+        .unwrap();
+    assert_eq!(message.attachments, saved);
+    assert_eq!(saved.len(), 1);
+    assert_eq!(saved[0].file_name(), attachment.file_name());
+    assert_eq!(std::fs::read(&saved[0]).unwrap(), b"queue attachment");
+    assert_eq!(std::fs::read(&attachment).unwrap(), b"queue attachment");
     window
         .update(cx, |view, _, cx| {
             assert_eq!(
@@ -476,7 +485,15 @@ fn draft_commands_save_without_starting_an_agent_and_remove_restores_a_blank(
                 .unwrap()
                 .follow_ups(view.summary.id)
                 .unwrap();
-            assert_eq!(saved.draft.unwrap().attachments, [attachment]);
+            let paths = saved.draft.unwrap().attachments;
+            assert_eq!(paths.len(), 1);
+            assert_eq!(paths[0].file_name(), attachment.file_name());
+            assert!(paths[0].starts_with(locked(&view.store).unwrap().data_dir().unwrap()));
+            assert_eq!(std::fs::read(&paths[0]).unwrap(), b"saved draft attachment");
+            assert_eq!(
+                std::fs::read(&attachment).unwrap(),
+                b"saved draft attachment"
+            );
             view.input
                 .update(cx, |i, cx| i.set_text("my next message".into(), cx));
             view.draft_action(false, cx);

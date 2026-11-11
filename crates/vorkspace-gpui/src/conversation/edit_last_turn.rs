@@ -342,13 +342,11 @@ impl Conversation {
                 let store = locked(&store)?;
                 match store.admit_edit_rewind(id, edit.clone()) {
                     Ok(claim) => claim,
-                    Err(EditAdmissionError::Changed(_)) if store.uses_vorkspace_schema() => {
+                    Err(EditAdmissionError::Changed(_)) => {
                         store.preserve_turn_overlap(id, &attempt, &competing.rows, None)?;
                         return Ok(EditOutcome::Recovered);
                     }
-                    Err(
-                        EditAdmissionError::Changed(error) | EditAdmissionError::Unavailable(error),
-                    ) => {
+                    Err(EditAdmissionError::Unavailable(error)) => {
                         return Err(EditFailure::Retry(error));
                     }
                 }
@@ -375,7 +373,6 @@ impl Conversation {
             let store = locked(&store).map_err(EditFailure::Recovery)?;
             match store.finish_edit_last_turn(&mut claim, &binding) {
                 Ok(()) => Ok(EditOutcome::Rewound(edit, binding)),
-                Err(error) if !store.uses_vorkspace_schema() => Err(EditFailure::Recovery(error)),
                 Err(_) => {
                     store
                         .preserve_turn_overlap(id, &attempt, &competing.rows, None)
@@ -534,7 +531,7 @@ mod tests {
 
     #[gpui::test]
     fn cancelled_recall_preserves_history_and_native_provider_binding(cx: &mut TestAppContext) {
-        let mut store = Store::open(Path::new(":memory:")).unwrap();
+        let mut store = Store::test(Path::new(":memory:")).unwrap();
         let mut session = store.create("codex", "/project").unwrap();
         store.provider_id(session.id, "thread").unwrap();
         session.provider_id = Some("thread".into());
@@ -569,7 +566,7 @@ mod tests {
     }
     #[gpui::test]
     fn newer_composer_and_saved_draft_survive_interrupted_edit_recovery(cx: &mut TestAppContext) {
-        let store = Store::open(Path::new(":memory:")).unwrap();
+        let store = Store::test(Path::new(":memory:")).unwrap();
         let session = store.create("codex", "/project").unwrap();
         let chat = cx.new(|cx| Conversation::new(session, Arc::new(Mutex::new(store)), cx));
         chat.update(cx, |chat, cx| {
@@ -595,7 +592,7 @@ mod tests {
     }
     #[gpui::test]
     fn local_commands_and_cancel_never_remove_recalled_history(cx: &mut TestAppContext) {
-        let mut store = Store::open(Path::new(":memory:")).unwrap();
+        let mut store = Store::test(Path::new(":memory:")).unwrap();
         let mut session = store.create("codex", "/project").unwrap();
         store.provider_id(session.id, "thread").unwrap();
         session.provider_id = Some("thread".into());
@@ -636,7 +633,7 @@ mod tests {
     fn persisted_recovery_guard_preserves_a_new_composer_before_normal_send(
         cx: &mut TestAppContext,
     ) {
-        let mut store = Store::open(Path::new(":memory:")).unwrap();
+        let mut store = Store::test(Path::new(":memory:")).unwrap();
         let mut session = store.create("pi", "/project").unwrap();
         store.provider_id(session.id, "original").unwrap();
         session.provider_id = Some("original".into());

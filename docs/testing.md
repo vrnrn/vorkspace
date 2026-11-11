@@ -14,6 +14,8 @@ bash scripts/desktop/bundle-native-macos.sh native-dev target "$(node -p 'JSON.p
 
 Tooling checks also guard the repository itself. `module-cycles.test.mjs` keeps top-level modules depending in one direction, and `docs.test.mjs` fails if a document names an `npm run` script or `-p` crate that doesn't exist, or if a guide loses its plain-English companion.
 
+Store fixtures use `Store::test` with the desktop schema. A caller-owned temporary path supports close/reopen checks; the `:memory:` fixture marker creates an owned temporary directory for the database and settings sidecar. The helper supplies empty desktop preferences, so fixtures do not inherit personal settings. Screenshot fixtures and the native benchmark use the same helper. Tests of database validation and historical formats also exercise the production read and open entry points directly against temporary files.
+
 The clipboard lifecycle tests start `vorkspace-helper` with private sockets, so they stay separate from a running app. They hold ⌘⇧C briefly if the shortcut is available and report it as taken otherwise.
 
 `ui_parity_capture` is an ignored test that renders desktop surfaces in dark and light through the headless Metal renderer into `VORKSPACE_UI_PARITY_DIR`, so captures from two trees can be compared byte for byte. The capture isn't fully isolated from the machine: a live notice, such as a harness update, can appear in it.

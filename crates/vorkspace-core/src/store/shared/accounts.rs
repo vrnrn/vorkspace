@@ -3,7 +3,7 @@ use crate::accounts::{Account, Book, DesktopOverrides, DEFAULT};
 
 impl Store {
     fn shared_desktop_accounts(&self) -> Option<Book> {
-        let preferences = self.desktop_preferences()?;
+        let preferences = self.desktop_preferences();
         if !preferences.is_available() {
             return None;
         }
@@ -17,10 +17,10 @@ impl Store {
         )
     }
 
-    pub(in crate::store) fn shared_accounts(&self) -> Result<Book, String> {
+    pub fn provider_accounts(&self) -> Result<Book, String> {
         if let Some(mut desktop) = self.shared_desktop_accounts() {
-            *self.shared.as_ref().unwrap().account_source.borrow_mut() = Some(desktop.clone());
-            if let Some(raw) = self.shared_setting("provider-account-overrides")? {
+            *self.shared.account_source.borrow_mut() = Some(desktop.clone());
+            if let Some(raw) = self.setting("provider-account-overrides")? {
                 desktop.apply_desktop_overrides(parse::<DesktopOverrides>(&raw)?);
             }
             // The desktop registry is authoritative. Old profile folders can
@@ -29,7 +29,7 @@ impl Store {
         }
 
         let mut book: Book = self
-            .shared_setting("provider-accounts")?
+            .setting("provider-accounts")?
             .map(|raw| parse(&raw))
             .transpose()?
             .unwrap_or_default();
@@ -73,23 +73,22 @@ impl Store {
         Ok(book)
     }
 
-    pub(in crate::store) fn shared_save_accounts(&self, book: &Book) -> Result<(), String> {
+    pub fn save_provider_accounts(&self, book: &Book) -> Result<(), String> {
         let source = self
             .shared
-            .as_ref()
-            .unwrap()
             .account_source
             .borrow()
             .clone()
             .or_else(|| self.shared_desktop_accounts());
-        if let Some(source) = source {
-            self.shared_save_setting(
+        let (key, value) = if let Some(source) = source {
+            (
                 "provider-account-overrides",
-                &encode(&book.desktop_overrides(&source))?,
+                encode(&book.desktop_overrides(&source))?,
             )
         } else {
-            self.shared_save_setting("provider-accounts", &encode(book)?)
-        }
+            ("provider-accounts", encode(book)?)
+        };
+        self.update_settings(|_| Ok(((), vec![(key.into(), value)])))
     }
 }
 

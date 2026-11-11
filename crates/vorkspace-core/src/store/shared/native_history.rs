@@ -126,7 +126,7 @@ impl Store {
         id: i64,
         append: Option<incremental::HistoryAppend>,
     ) {
-        let shared = self.shared.as_ref().unwrap();
+        let shared = &self.shared;
         shared
             .snapshots
             .borrow_mut()

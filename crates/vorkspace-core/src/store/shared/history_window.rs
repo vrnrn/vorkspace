@@ -29,7 +29,11 @@ pub struct IndexedHistoryPage {
 }
 
 impl Store {
-    pub(in crate::store) fn shared_indexed_history_page(
+    /// Read a snapshot-bound page of indexed Bot history. Blob and ordinary
+    /// histories return None and retain their existing loading path.
+    /// Use `write_indexed_history_page` for page-relative writes; `write_rows`
+    /// requires a complete transcript and a separate revision guard.
+    pub fn indexed_history_page(
         &self,
         id: i64,
         cursor: Option<&IndexedHistoryCursor>,
@@ -172,7 +176,9 @@ impl Store {
         }))
     }
 
-    pub(in crate::store) fn shared_write_indexed_history_page(
+    /// Merge a page-relative edit or tail append against the exact snapshot
+    /// that produced the page. Older pages cannot append into newer history.
+    pub fn write_indexed_history_page(
         &self,
         id: i64,
         page: &IndexedHistoryPage,
@@ -204,7 +210,7 @@ impl Store {
         sql(tx.commit())?;
         // Existing complete-history readers must reload after this independent
         // write rather than inheriting a revision they never observed.
-        let shared = self.shared.as_ref().unwrap();
+        let shared = &self.shared;
         shared
             .snapshots
             .borrow_mut()

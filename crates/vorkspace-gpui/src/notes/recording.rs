@@ -181,7 +181,7 @@ mod tests {
     fn fixture() -> (tempfile::TempDir, Database, Meetings) {
         let root = tempfile::tempdir().unwrap();
         let store = Arc::new(Mutex::new(
-            Store::open(&root.path().join("notes.db")).unwrap(),
+            Store::test(&root.path().join("notes.db")).unwrap(),
         ));
         let meetings = Meetings::open(root.path()).unwrap();
         (root, store, meetings)
@@ -242,7 +242,7 @@ mod tests {
         );
         drop(store);
         let reopened = Arc::new(Mutex::new(
-            Store::open(&root.path().join("notes.db")).unwrap(),
+            Store::test(&root.path().join("notes.db")).unwrap(),
         ));
         for _ in 0..2 {
             let (notes, links) = load(&reopened).unwrap();

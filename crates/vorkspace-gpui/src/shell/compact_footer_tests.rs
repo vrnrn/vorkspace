@@ -48,7 +48,7 @@ fn accounts(multiple: bool, cx: &mut App) -> Vec<Key> {
 fn shell(cx: &mut TestAppContext) -> (tempfile::TempDir, WindowHandle<Shell>) {
     let directory = tempfile::tempdir().unwrap();
     let store = Arc::new(Mutex::new(
-        Store::open(&directory.path().join("native.sqlite")).unwrap(),
+        Store::test(&directory.path().join("native.sqlite")).unwrap(),
     ));
     cx.update(|cx| {
         crate::shell::bind_keys(cx);
@@ -386,7 +386,7 @@ fn native_compact_footer_capture() {
     assert!(output.is_absolute() && output.is_dir());
     let directory = tempfile::tempdir().unwrap();
     let store = Arc::new(Mutex::new(
-        Store::open(&directory.path().join("native.sqlite")).unwrap(),
+        Store::test(&directory.path().join("native.sqlite")).unwrap(),
     ));
     let mut cx = gpui::HeadlessAppContext::with_platform(
         Arc::new(gpui_apple::AppleTextSystem::new()),
@@ -477,7 +477,7 @@ fn native_sidebar_usage_capture() {
     assert!(output.is_absolute() && output.is_dir());
     let directory = tempfile::tempdir().unwrap();
     let store = Arc::new(Mutex::new(
-        Store::open(&directory.path().join("native.sqlite")).unwrap(),
+        Store::test(&directory.path().join("native.sqlite")).unwrap(),
     ));
     let mut cx = gpui::HeadlessAppContext::with_platform(
         Arc::new(gpui_apple::AppleTextSystem::new()),

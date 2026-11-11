@@ -11,17 +11,11 @@ impl Store {
     fn groups_from(&self, cwd: &str, saved: Option<&str>) -> Result<Groups, String> {
         if let Some(saved) = saved {
             let decoded = serde_json::from_str(saved);
-            return if self.shared.is_some() {
-                decoded.map_err(|error| error.to_string())
-            } else {
-                Ok(decoded.unwrap_or_default())
-            };
+            return decoded.map_err(|error| error.to_string());
         }
         Ok(self
             .desktop_preferences()
-            .and_then(|preferences| {
-                preferences.groups(cwd, |id| self.resolve_existing_session_id(id))
-            })
+            .groups(cwd, |id| self.resolve_existing_session_id(id))
             .unwrap_or_default())
     }
 
@@ -51,14 +45,12 @@ impl Store {
         if sessions.is_empty() {
             return Ok(());
         }
-        let tx = if self.shared.is_some() {
+        let tx = {
             self.shared_writable()?;
             Some(
                 Transaction::new_unchecked(&self.conn, TransactionBehavior::Immediate)
                     .map_err(|error| error.to_string())?,
             )
-        } else {
-            None
         };
         self.edit_groups(project, |groups| {
             for &id in sessions {

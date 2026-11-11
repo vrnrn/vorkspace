@@ -21,7 +21,7 @@ pub fn conversation(store: &Store) -> Result<Conversation, String> {
 }
 
 fn decode_conversation(store: &Store, native: Option<&str>) -> Result<Conversation, String> {
-    let raw = native.or_else(|| store.desktop_preferences().and_then(|p| p.get(KEY)));
+    let raw = native.or_else(|| store.desktop_preferences().get(KEY));
     match raw {
         None => Ok(Conversation {
             revision: "initial".into(),

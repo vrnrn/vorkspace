@@ -130,8 +130,7 @@ impl Shell {
                 return;
             }
             let _ = this.update_in(cx, |this, window, cx| {
-                // Numeric IDs may be reused after removal; never apply old consent
-                // to a replacement, even if the selection now looks identical.
+                // A changed conversation list invalidates the confirmed snapshot.
                 if this.session_removal_epoch != removal_epoch {
                     this.error = Some(
                         "The conversation list changed. Please confirm deletion again.".into(),

@@ -1,6 +1,5 @@
 //! Two-phase edit: capture a revision, then trim only after provider confirmation.
 use super::*;
-use crate::kind::Kind;
 use serde_json::Value;
 use std::path::PathBuf;
 
@@ -14,7 +13,7 @@ pub struct EditSnapshot {
     pub account_id: String,
     pub cwd: String,
     pub rows: Vec<Row>,
-    pub(super) blocks: Option<Vec<Value>>,
+    pub(super) blocks: Vec<Value>,
     pub(super) block_start: usize,
     pub(super) provider: String,
 }
@@ -68,96 +67,8 @@ pub(super) fn untracked_attachment_tail(prompt: &str) -> bool {
 }
 
 impl Store {
-    /// `expected` is the visible transcript; never recall an unloaded revision.
-    pub fn prepare_edit_last_turn(
-        &self,
-        id: i64,
-        expected: &[Row],
-        turn_id: Option<&str>,
-    ) -> Result<EditSnapshot, String> {
-        if let Some(reason) = self.edit_recovery_reason(id)? {
-            return Err(reason);
-        }
-        if self.shared.is_some() {
-            return self.shared_prepare_edit(id, expected, turn_id);
-        }
-        let session = self
-            .bot_session(id)?
-            .ok_or("Conversation no longer exists")?;
-        if !crate::kind::supports_rewind(Kind::from_id(&session.provider)) {
-            return Err("This provider does not support editing the last turn".into());
-        }
-        let rows = self.load(id)?.rows;
-        if rows != expected {
-            return Err("Conversation changed; reopen it before editing".into());
-        }
-        self.edit_queue_empty(id)?;
-        let latest = rows
-            .iter()
-            .rposition(|r| r.role == "user" && r.first)
-            .ok_or("No user message to edit")?;
-        let end = (latest + 1..rows.len())
-            .find(|&i| rows[i].first)
-            .unwrap_or(rows.len());
-        let provider_turn_id = turn_id
-            .filter(|id| !id.trim().is_empty())
-            .map(str::to_owned);
-        if session.provider == "codex" && provider_turn_id.is_none() {
-            return Err("Codex did not expose an exact user turn to edit".into());
-        }
-        let settings = self.agent_settings(id)?.unwrap_or_default();
-        let start = if session.provider == "codex" {
-            codex_turn_start(&rows, &settings, provider_turn_id.as_deref().unwrap())
-                .or_else(|| {
-                    (rows
-                        .iter()
-                        .filter(|row| row.role == "user" && row.first)
-                        .count()
-                        == 1)
-                        .then_some(latest)
-                })
-                .ok_or("Codex user-turn boundaries are unavailable; history was preserved")?
-        } else {
-            latest
-        };
-        let prompt: String = rows[latest..end].iter().map(|r| r.text.as_str()).collect();
-        let attachments = rows
-            .get(end)
-            .map(crate::transcript::attachments::paths)
-            .transpose()?
-            .unwrap_or_default();
-        if attachments.is_empty() && untracked_attachment_tail(&prompt) {
-            return Err("This message has attachment links without a saved attachment manifest and cannot be edited safely".into());
-        }
-        Ok(EditSnapshot {
-            start,
-            prompt,
-            attachments,
-            provider_turn_id,
-            provider_id: session.provider_id.ok_or("No provider session to edit")?,
-            account_id: settings.account.id,
-            cwd: settings.worktree_cwd.unwrap_or(session.cwd),
-            rows,
-            blocks: None,
-            block_start: 0,
-            provider: session.provider,
-        })
-    }
-    fn edit_queue_empty(&self, id: i64) -> Result<(), String> {
-        let queue = self.follow_ups(id)?;
-        if !queue.messages.is_empty() || queue.draft.is_some() {
-            return Err(
-                "Clear queued messages and saved drafts before editing the last message".into(),
-            );
-        }
-        Ok(())
-    }
     pub(super) fn edit_preferences(&self, id: i64) -> Result<crate::agent::Settings, String> {
-        let settings = if self.shared.is_some() {
-            self.shared_agent_preferences(id)?
-        } else {
-            self.agent_settings(id)?
-        };
+        let settings = self.agent_preferences(id)?;
         Ok(settings.unwrap_or_default())
     }
 
@@ -184,52 +95,7 @@ impl Store {
                     .into(),
             );
         }
-        if let Some(expected) = &edit.blocks {
-            return self.shared_validate_edit_rows(id, expected);
-        }
-        if self.load(id)?.rows != edit.rows {
-            return Err("Conversation changed; its history was preserved".into());
-        }
-        self.edit_queue_empty(id)
-    }
-    /// Call only after the provider confirms. This is a compare-and-swap,
-    /// preserving an independently changed conversation instead of deleting it.
-    pub fn finish_edit_last_turn(
-        &self,
-        claim: &mut EditClaim,
-        provider_id: &str,
-    ) -> Result<(), String> {
-        if self.shared.is_some() {
-            return self.shared_finish_edit(claim, provider_id);
-        }
-        let id = claim.session;
-        let edit = &claim.snapshot;
-        let start = i64::try_from(edit.start)
-            .map_err(|_| "Conversation row index exceeds SQLite's integer range".to_owned())?;
-        let updated_at = crate::time::now_ms().min(i64::MAX as u64) as i64;
-        let tx = self.edit_transaction()?;
-        self.validate_edit_last_turn(id, edit)?;
-        claim.confirm(&tx)?;
-        self.conn
-            .execute(
-                "DELETE FROM native_rows WHERE session_id=?1 AND row_ix>=?2",
-                params![id, start],
-            )
-            .map_err(|e| e.to_string())?;
-        self.conn
-            .execute(
-                "UPDATE native_sessions SET provider_id=?2,updated_at=?3 WHERE id=?1",
-                params![id, provider_id, updated_at],
-            )
-            .map_err(|e| e.to_string())?;
-        if let Some(mut settings) = self.agent_settings(id)? {
-            settings.turns.retain(|&row, _| row < edit.start);
-            self.save_agent_settings(id, &settings)?;
-        }
-        self.save_context_usage(id, &Default::default())?;
-        tx.commit().map_err(|e| e.to_string())?;
-        claim.close();
-        Ok(())
+        self.shared_validate_edit_rows(id, &edit.blocks)
     }
 }
 
@@ -246,7 +112,7 @@ pub(super) fn dispatched_edit(store: &Store, id: i64, edit: EditSnapshot) -> Edi
 mod tests {
     use super::*;
     fn fixture() -> (Store, i64, Vec<Row>) {
-        let mut store = Store::open(Path::new(":memory:")).unwrap();
+        let mut store = Store::test(Path::new(":memory:")).unwrap();
         let session = store.create("codex", "/project").unwrap();
         store.provider_id(session.id, "thread").unwrap();
         let mut transcript = Transcript::default();
@@ -370,7 +236,7 @@ mod tests {
     fn provider_confirmed_conflict_leaves_a_durable_recovery_guard_and_blocks_recall() {
         let directory = tempfile::tempdir().unwrap();
         let path = directory.path().join("native.db");
-        let mut store = Store::open(&path).unwrap();
+        let mut store = Store::test(&path).unwrap();
         let session = store.create("pi", "/project").unwrap();
         store.provider_id(session.id, "session").unwrap();
         let mut transcript = Transcript::default();
@@ -389,7 +255,7 @@ mod tests {
             Some(EditBarrier::RecoveryRequired)
         );
         drop(store);
-        let reopened = Store::open(&path).unwrap();
+        let reopened = Store::test(&path).unwrap();
         reopened.recover_local_submissions().unwrap();
         assert_eq!(
             reopened.edit_barrier(session.id).unwrap(),

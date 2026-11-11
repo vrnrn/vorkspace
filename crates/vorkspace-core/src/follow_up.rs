@@ -221,7 +221,7 @@ mod tests {
     }
     #[test]
     fn recovery_preserves_attachments_and_edits_but_never_replays_delivered_messages() {
-        let mut store = Store::open(std::path::Path::new(":memory:")).unwrap();
+        let mut store = Store::test(std::path::Path::new(":memory:")).unwrap();
         let session = store.create("codex", "/tmp").unwrap();
         let message = Message {
             id: "first".into(),

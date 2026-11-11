@@ -227,7 +227,7 @@ mod tests {
 
     #[test]
     fn desktop_identity_retains_uuid_session_configuration_and_appearance() {
-        let store = Store::open_vorkspace(Path::new(":memory:")).unwrap();
+        let store = Store::test(Path::new(":memory:")).unwrap();
         let session = store.create("codex", "/project").unwrap();
         let original = store.persisted_session_id(session.id).unwrap();
         let bot = desktop_bot(
@@ -255,7 +255,7 @@ mod tests {
 
     #[test]
     fn missing_desktop_session_never_becomes_an_unclaimed_new_bot() {
-        let store = Store::open_vorkspace(Path::new(":memory:")).unwrap();
+        let store = Store::test(Path::new(":memory:")).unwrap();
         let bot = desktop_bot(
             &store,
             &json!({"id":"saved-bot", "sessionId":"missing-uuid"}),

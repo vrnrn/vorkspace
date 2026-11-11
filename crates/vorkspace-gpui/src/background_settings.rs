@@ -838,7 +838,7 @@ mod tests {
         cx: &mut gpui::TestAppContext,
     ) {
         let store = Arc::new(Mutex::new(
-            Store::open(std::path::Path::new(":memory:")).unwrap(),
+            Store::test(std::path::Path::new(":memory:")).unwrap(),
         ));
         let dialog = cx.new(|cx| {
             BackgroundDialog::new(

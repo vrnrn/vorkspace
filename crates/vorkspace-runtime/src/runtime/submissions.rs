@@ -243,7 +243,7 @@ mod tests {
     use super::*;
     #[test]
     fn preflight_failure_is_retryable_but_dispatched_unknown_effects_never_replay() {
-        let db = Store::open_vorkspace(std::path::Path::new(":memory:")).unwrap();
+        let db = Store::test(std::path::Path::new(":memory:")).unwrap();
         let session = db.create("codex", "/project").unwrap().id;
         let store = Arc::new(Mutex::new(db));
         let settings = Settings {
@@ -301,7 +301,7 @@ mod tests {
     }
     #[test]
     fn failed_steer_keeps_its_recovery_metadata_and_blocks_the_stable_queue_identity() {
-        let db = Store::open_vorkspace(std::path::Path::new(":memory:")).unwrap();
+        let db = Store::test(std::path::Path::new(":memory:")).unwrap();
         let session = db.create("codex", "/project").unwrap().id;
         let store = Arc::new(Mutex::new(db));
         let message = vorkspace_core::follow_up::Message {

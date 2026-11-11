@@ -153,7 +153,7 @@ fn fluid_capture() {
     seed_project(&project_path);
     let project = project_path.to_str().unwrap();
     let fixture_db = scratch.path().join("fixtures.sqlite");
-    let store = Arc::new(Mutex::new(Store::open(&fixture_db).unwrap()));
+    let store = Arc::new(Mutex::new(Store::test(&fixture_db).unwrap()));
     {
         // A populated board, so To-dos shows its columns in use.
         use vorkspace_core::todos::{TodoBoard, TodoStatus};
@@ -363,7 +363,7 @@ fn fluid_capture() {
             if !first_run {
                 std::fs::copy(&fixture_db, &scene_db).unwrap();
             }
-            let store = Arc::new(Mutex::new(Store::open(&scene_db).unwrap()));
+            let store = Arc::new(Mutex::new(Store::test(&scene_db).unwrap()));
             let summaries = if first_run {
                 Vec::new()
             } else {

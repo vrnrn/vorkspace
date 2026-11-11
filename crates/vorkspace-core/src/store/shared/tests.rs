@@ -103,14 +103,7 @@ fn bot_claim_waiting_for_edit_or_detach_never_holds_the_sidecar_lock() {
         roster.save(&writer).unwrap();
         writer.save_setting("unrelated", "preserve").unwrap();
         let claimant = Store::open_vorkspace(&path).unwrap();
-        let sidecar = writer
-            .shared
-            .as_ref()
-            .unwrap()
-            .settings
-            .path()
-            .unwrap()
-            .to_owned();
+        let sidecar = writer.shared.settings.path().unwrap().to_owned();
 
         let (writer_ready_tx, writer_ready_rx) = mpsc::channel();
         let (writer_resume_tx, writer_resume_rx) = mpsc::channel();
@@ -138,7 +131,7 @@ fn bot_claim_waiting_for_edit_or_detach_never_holds_the_sidecar_lock() {
         let claim_thread = std::thread::spawn(move || {
             CLAIM_GATE.with(|gate| *gate.borrow_mut() = Some((claim_ready_tx, claim_resume_rx)));
             claimant.conn.busy_handler(Some(pause_busy_claim)).unwrap();
-            claimant.shared_claim_bot_message("bot", &claim_message, "owner")
+            claimant.claim_bot_message("bot", &claim_message, "owner")
         });
         claim_ready_rx
             .recv_timeout(Duration::from_secs(10))
@@ -248,7 +241,7 @@ fn claim_sidecar_failure_releases_sqlite_and_preserves_the_outbox() {
         ..Default::default()
     });
     roster.save(&store).unwrap();
-    let sidecar = store.shared.as_ref().unwrap().settings.path().unwrap();
+    let sidecar = store.shared.settings.path().unwrap();
     let lock_path = sidecar.with_file_name(format!(
         "{}.lock",
         sidecar.file_name().unwrap().to_string_lossy()
@@ -344,7 +337,7 @@ fn streamed_ordinary_load_retains_rich_payloads_across_append_and_reopen() {
             serde_json::to_value(project_turns(&source).unwrap()).unwrap()
         );
         assert_eq!(
-            store.shared.as_ref().unwrap().snapshots.borrow()[&id],
+            store.shared.snapshots.borrow()[&id],
             HistoryRevision::of(&source)
         );
         let from = loaded.begin("user");
@@ -368,7 +361,7 @@ fn streamed_ordinary_load_retains_rich_payloads_across_append_and_reopen() {
 
 #[test]
 fn preference_only_save_never_reads_history_or_discards_unknown_model_controls() {
-    let store = Store::open_vorkspace(Path::new(":memory:")).unwrap();
+    let store = Store::test(Path::new(":memory:")).unwrap();
     let id = store.create("codex", "/project").unwrap().id;
     let original = store.persisted_session_id(id).unwrap();
     store
@@ -385,7 +378,7 @@ fn preference_only_save_never_reads_history_or_discards_unknown_model_controls()
         effort: Some("high".into()),
         ..Default::default()
     };
-    store.shared_save_agent_preferences(id, &settings).unwrap();
+    store.save_agent_preferences(id, &settings).unwrap();
     let raw: String = store
         .conn
         .query_row(
@@ -410,7 +403,7 @@ fn preference_only_save_never_reads_history_or_discards_unknown_model_controls()
 
 #[test]
 fn streamed_indexed_bot_load_preserves_projection_and_revision_guards() {
-    let mut store = Store::open_vorkspace(Path::new(":memory:")).unwrap();
+    let mut store = Store::test(Path::new(":memory:")).unwrap();
     store
         .conn
         .execute_batch(include_str!("../../../tests/fixtures/bot-schema.sql"))
@@ -435,7 +428,7 @@ fn streamed_indexed_bot_load_preserves_projection_and_revision_guards() {
         let mut loaded = store.load(id).unwrap();
         assert_eq!(loaded.rows, blocks::project(&blocks).unwrap());
         assert_eq!(
-            store.shared.as_ref().unwrap().snapshots.borrow()[&id],
+            store.shared.snapshots.borrow()[&id],
             HistoryRevision::of(&blocks)
         );
         let from = loaded.begin("user");
@@ -506,7 +499,7 @@ fn indexed_bot_saved_and_unsaved_search_results_share_global_row_indices() {
     use crate::search::{self, Scope, Target};
     use std::sync::{atomic::AtomicBool, Arc};
 
-    let store = Store::open_vorkspace(Path::new(":memory:")).unwrap();
+    let store = Store::test(Path::new(":memory:")).unwrap();
     store
         .conn
         .execute_batch(include_str!("../../../tests/fixtures/bot-schema.sql"))
@@ -629,7 +622,7 @@ fn desktop_sidebar_recovers_only_hidden_launches_of_listed_callers_without_histo
 
 #[test]
 fn desktop_workspace_snapshot_restores_existing_ids_and_keeps_native_override() {
-    let store = Store::open_vorkspace(Path::new(":memory:")).unwrap();
+    let store = Store::test(Path::new(":memory:")).unwrap();
     let session = store.create("codex", "/project").unwrap();
     let original = store.persisted_session_id(session.id).unwrap();
     let source = json!({"projectCwd":"/project","activeTabId":"saved-tab","tabs":[
@@ -667,8 +660,8 @@ fn search_connections_share_the_same_read_only_preference_snapshot() {
     let store = Store::open_vorkspace(&directory.path().join("vorkspace.db")).unwrap();
     let reader = store.search_reader().unwrap().unwrap();
     assert!(std::ptr::eq(
-        store.desktop_preferences().unwrap(),
-        reader.desktop_preferences().unwrap()
+        store.desktop_preferences(),
+        reader.desktop_preferences()
     ));
     assert!(reader.create("codex", "/project").is_err());
 }
@@ -703,7 +696,7 @@ fn original_desktop_schema_opens_without_schema_or_history_migration() {
 
 #[test]
 fn indexed_bot_history_stays_in_its_desktop_tables_with_block_ids_intact() {
-    let store = Store::open_vorkspace(Path::new(":memory:")).unwrap();
+    let store = Store::test(Path::new(":memory:")).unwrap();
     let (id, source) = saved(&store, json!([]));
     store
         .conn
@@ -805,7 +798,7 @@ fn saved(store: &Store, blocks: Value) -> (i64, String) {
 
 #[test]
 fn desktop_model_and_effort_decode_and_round_trip_without_rewriting_the_title() {
-    let store = Store::open_vorkspace(Path::new(":memory:")).unwrap();
+    let store = Store::test(Path::new(":memory:")).unwrap();
     let (id, source) = saved(&store, json!([]));
     store.conn.execute(
         "UPDATE sessions SET model='codex:gpt-6.1-sol',model_settings=?2,title='codex · Fix sidebar' WHERE id=?1",
@@ -1044,7 +1037,7 @@ fn stale_rich_history_rejects_draft_save_with_bounded_hashing_and_recovers_on_re
 
 #[test]
 fn configuring_the_same_provider_preserves_its_resume_id() {
-    let store = Store::open_vorkspace(Path::new(":memory:")).unwrap();
+    let store = Store::test(Path::new(":memory:")).unwrap();
     let (id, _) = saved(&store, json!([]));
     let settings = store.agent_settings(id).unwrap().unwrap();
     store.configure_agent(id, "codex", &settings).unwrap();
@@ -1066,7 +1059,7 @@ fn configuring_the_same_provider_preserves_its_resume_id() {
 
 #[test]
 fn preference_edits_keep_turn_metadata_in_the_saved_transcript() {
-    let store = Store::open_vorkspace(Path::new(":memory:")).unwrap();
+    let store = Store::test(Path::new(":memory:")).unwrap();
     let blocks = json!([
         {"id":"prompt","role":"user","text":"Work","turnModel":{"harness":"codex","id":"codex:saved","name":"Saved model"}},
         {"id":"reply","role":"assistant","text":"Done"}
@@ -1089,7 +1082,7 @@ fn preference_edits_keep_turn_metadata_in_the_saved_transcript() {
 
 #[test]
 fn local_history_load_merges_saved_receipts_and_keeps_rows_when_preferences_fail() {
-    let store = Store::open_vorkspace(Path::new(":memory:")).unwrap();
+    let store = Store::test(Path::new(":memory:")).unwrap();
     let (id, _) = saved(
         &store,
         json!([
@@ -1125,7 +1118,7 @@ fn local_history_load_merges_saved_receipts_and_keeps_rows_when_preferences_fail
 #[test]
 fn queue_io_does_not_materialize_or_rehash_indexed_history() {
     use crate::follow_up::Message;
-    let mut store = Store::open_vorkspace(std::path::Path::new(":memory:")).unwrap();
+    let mut store = Store::test(std::path::Path::new(":memory:")).unwrap();
     let session = store.create("codex", "/project").unwrap();
     let mut history = Transcript::default();
     for index in 0..256 {
@@ -1459,7 +1452,7 @@ fn history_revision_ignores_object_key_order_and_source_whitespace() {
 
 #[test]
 fn equivalent_desktop_json_can_be_saved_without_losing_rich_source_fields() {
-    let mut store = Store::open_vorkspace(Path::new(":memory:")).unwrap();
+    let mut store = Store::test(Path::new(":memory:")).unwrap();
     let (id, original) = saved(
         &store,
         json!([{"id":"u","role":"user","text":"Original","future":{"x":42}}]),
@@ -1480,7 +1473,7 @@ fn equivalent_desktop_json_can_be_saved_without_losing_rich_source_fields() {
         store.shared_blocks(id).unwrap()[0]["future"],
         json!({"x":42})
     );
-    assert_eq!(store.shared.as_ref().unwrap().snapshots.borrow().len(), 1);
+    assert_eq!(store.shared.snapshots.borrow().len(), 1);
 }
 
 #[test]
@@ -1500,7 +1493,7 @@ fn history_revision_keeps_numeric_types_and_normalizes_float_zero() {
 
 #[test]
 fn existing_side_questions_import_their_exact_source_bound_without_writes() {
-    let store = Store::open_vorkspace(Path::new(":memory:")).unwrap();
+    let store = Store::test(Path::new(":memory:")).unwrap();
     let thread = json!({
         "id":"saved-side", "sourceEndBlockId":"answer", "createdAt":30, "updatedAt":40,
         "status":"error", "harness":"claude", "model":"claude:claude-opus-4-6",
@@ -1571,7 +1564,7 @@ fn existing_side_questions_import_their_exact_source_bound_without_writes() {
 
 #[test]
 fn desktop_turn_receipts_restore_exact_model_timing_metrics_and_projected_offsets() {
-    let store = Store::open_vorkspace(Path::new(":memory:")).unwrap();
+    let store = Store::test(Path::new(":memory:")).unwrap();
     let source = json!([
         {"id":"hidden","role":"system","text":"","future":true},
         {"id":"first","role":"user","text":"Saved prompt","sentAt":90,"startedAt":100,
@@ -1658,7 +1651,7 @@ fn desktop_turn_receipts_restore_exact_model_timing_metrics_and_projected_offset
 
 #[test]
 fn fresh_native_turn_receipts_persist_source_fields_without_changing_saved_provenance() {
-    let mut store = Store::open_vorkspace(Path::new(":memory:")).unwrap();
+    let mut store = Store::test(Path::new(":memory:")).unwrap();
     let session = store.create("codex", "/project").unwrap();
     let mut transcript = Transcript::default();
     let prompt = transcript.begin("user");
@@ -1723,7 +1716,7 @@ fn fresh_native_turn_receipts_persist_source_fields_without_changing_saved_prove
 
 #[test]
 fn indexed_bot_turn_receipts_restore_and_save_in_the_original_block_table() {
-    let mut store = Store::open_vorkspace(Path::new(":memory:")).unwrap();
+    let mut store = Store::test(Path::new(":memory:")).unwrap();
     let (id, original) = saved(&store, json!([]));
     store
         .conn
@@ -1788,7 +1781,7 @@ fn indexed_bot_turn_receipts_restore_and_save_in_the_original_block_table() {
 
 #[test]
 fn fresh_receipt_preserves_the_matching_desktop_model_id_spelling() {
-    let mut store = Store::open_vorkspace(Path::new(":memory:")).unwrap();
+    let mut store = Store::test(Path::new(":memory:")).unwrap();
     let (id, original) = saved(&store, json!([]));
     store
         .conn
@@ -1842,7 +1835,7 @@ fn first_app_command_preserves_an_active_scalar_history_guard_and_append() {
     history.append("Saved partial answer");
     store.write_rows(id, from, &history.rows[from..]).unwrap();
     assert!(matches!(
-        store.shared.as_ref().unwrap().snapshots.borrow()[&id],
+        store.shared.snapshots.borrow()[&id],
         HistoryRevision::Stored(_)
     ));
     let schema: i64 = store
@@ -1915,7 +1908,7 @@ fn app_command_schema_coordination_revalidates_unchanged_history() {
     history.append("Durable original");
     store.write_rows(id, from, &history.rows[from..]).unwrap();
     assert!(matches!(
-        store.shared.as_ref().unwrap().snapshots.borrow()[&id],
+        store.shared.snapshots.borrow()[&id],
         HistoryRevision::Stored(_)
     ));
     Connection::open(&path)
@@ -2023,14 +2016,7 @@ fn failed_sidecar_removal_reports_committed_deletion_and_can_finish_cleanup() {
     store
         .save_setting(&key, "preserve until cleanup succeeds")
         .unwrap();
-    let sidecar = store
-        .shared
-        .as_ref()
-        .unwrap()
-        .settings
-        .path()
-        .unwrap()
-        .to_owned();
+    let sidecar = store.shared.settings.path().unwrap().to_owned();
     let backup = root.path().join("saved-extras.json");
     std::fs::rename(&sidecar, &backup).unwrap();
     std::fs::create_dir(&sidecar).unwrap();

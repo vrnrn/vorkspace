@@ -294,7 +294,7 @@ fn an_old_dropped_sender_cannot_release_a_successor_turn(cx: &mut TestAppContext
 }
 
 fn conversation(cx: &mut TestAppContext) -> WindowHandle<Conversation> {
-    let store = Store::open(Path::new(":memory:")).unwrap();
+    let store = Store::test(Path::new(":memory:")).unwrap();
     // Fail after saving the turn, without ever launching a real provider.
     let summary = store
         .create("codex", "/missing/optimistic-send-project")

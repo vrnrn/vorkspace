@@ -40,7 +40,7 @@ fn native_history_append_preserves_rich_prefix_and_extends_indexed_boundaries() 
         for warm in [false, true] {
             let directory = tempfile::tempdir().unwrap();
             let root = directory.path();
-            let (mut store, session, source, path) = native::fixture(root, true, "codex");
+            let (mut store, session, source, path) = native::fixture(root, "codex");
             let id = session.id;
             let original = store.persisted_session_id(id).unwrap();
             if bot {
@@ -584,7 +584,7 @@ fn explicit_empty_or_malformed_blob_replacement_never_resurrects_normalized_hist
 
 #[test]
 fn first_normalization_failure_retains_the_complete_legacy_source_for_retry() {
-    let mut store = Store::open_vorkspace(Path::new(":memory:")).unwrap();
+    let mut store = Store::test(Path::new(":memory:")).unwrap();
     store
         .conn
         .execute_batch(include_str!(
@@ -747,44 +747,38 @@ fn altered_trigger_cannot_make_opaque_edits_look_like_unchanged_history() {
 
 #[test]
 fn context_owner_predicate_skips_history_and_rechecks_provider_and_account_at_storage() {
-    for shared in [false, true] {
-        let store = if shared {
-            Store::open_vorkspace(Path::new(":memory:")).unwrap()
-        } else {
-            Store::open(Path::new(":memory:")).unwrap()
-        };
-        let id = store.create("codex", "/project").unwrap().id;
-        let mut settings = Settings::default();
-        settings.account.id = "selected-account".into();
-        store.save_agent_settings(id, &settings).unwrap();
-        if shared {
-            store
-                .conn
-                .execute(
-                    "UPDATE sessions SET blocks_json='unavailable history' WHERE id=?1",
-                    [store.persisted_session_id(id).unwrap()],
-                )
-                .unwrap();
-        }
-        let current = crate::context::Usage {
-            used: 12,
-            window: Some(100),
-        };
-        assert!(store
-            .save_context_usage_if_owner(id, &current, "codex", "selected-account", None)
-            .unwrap());
-        let superseded = crate::context::Usage {
-            used: 99,
-            window: Some(100),
-        };
-        assert!(!store
-            .save_context_usage_if_owner(id, &superseded, "claude", "selected-account", None)
-            .unwrap());
-        assert!(!store
-            .save_context_usage_if_owner(id, &superseded, "codex", "old-account", None)
-            .unwrap());
-        assert_eq!(store.context_usage(id).unwrap().unwrap().used, 12);
+    let store = Store::test(Path::new(":memory:")).unwrap();
+    let id = store.create("codex", "/project").unwrap().id;
+    let mut settings = Settings::default();
+    settings.account.id = "selected-account".into();
+    store.save_agent_settings(id, &settings).unwrap();
+    {
+        store
+            .conn
+            .execute(
+                "UPDATE sessions SET blocks_json='unavailable history' WHERE id=?1",
+                [store.persisted_session_id(id).unwrap()],
+            )
+            .unwrap();
     }
+    let current = crate::context::Usage {
+        used: 12,
+        window: Some(100),
+    };
+    assert!(store
+        .save_context_usage_if_owner(id, &current, "codex", "selected-account", None)
+        .unwrap());
+    let superseded = crate::context::Usage {
+        used: 99,
+        window: Some(100),
+    };
+    assert!(!store
+        .save_context_usage_if_owner(id, &superseded, "claude", "selected-account", None)
+        .unwrap());
+    assert!(!store
+        .save_context_usage_if_owner(id, &superseded, "codex", "old-account", None)
+        .unwrap());
+    assert_eq!(store.context_usage(id).unwrap().unwrap().used, 12);
 }
 #[test]
 fn normalized_legacy_schema_keeps_scalar_presence_without_history_payload_reads() {
@@ -816,6 +810,6 @@ fn normalized_legacy_schema_keeps_scalar_presence_without_history_payload_reads(
     assert!(store.bot_session(id).unwrap().unwrap().has_messages);
     // Preference reads use the same scalar helper and must not seed a
     // blank-session default over a conversation that actually has history.
-    store.shared_agent_preferences(id).unwrap();
+    store.agent_preferences(id).unwrap();
     assert!(HISTORY_READ_BYTES.with(|count| count.get()) < 16_000);
 }

@@ -204,7 +204,7 @@ mod tests {
         cx: &mut gpui::TestAppContext,
     ) {
         let store = Arc::new(std::sync::Mutex::new(
-            vorkspace_core::store::Store::open(std::path::Path::new(":memory:")).unwrap(),
+            vorkspace_core::store::Store::test(std::path::Path::new(":memory:")).unwrap(),
         ));
         let summary = runtime::locked(&store)
             .unwrap()
@@ -279,7 +279,7 @@ mod tests {
     #[gpui::test]
     fn a_detached_observer_retires_without_retaining_a_runtime_run(cx: &mut gpui::TestAppContext) {
         let store = Arc::new(std::sync::Mutex::new(
-            vorkspace_core::store::Store::open(std::path::Path::new(":memory:")).unwrap(),
+            vorkspace_core::store::Store::test(std::path::Path::new(":memory:")).unwrap(),
         ));
         let summary = runtime::locked(&store)
             .unwrap()

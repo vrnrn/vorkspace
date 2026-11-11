@@ -23,7 +23,7 @@ fn a_title_change_updates_the_catalog_without_revisiting_chat_visibility(cx: &mu
 
 #[gpui::test]
 fn whole_project_sidebar_keeps_seven_today_sessions_across_worktrees_lazy(cx: &mut TestAppContext) {
-    let store = Store::open_vorkspace(std::path::Path::new(":memory:")).unwrap();
+    let store = Store::test(std::path::Path::new(":memory:")).unwrap();
     let mut summaries = Vec::new();
     let mut main = HashSet::new();
     let mut feature = HashSet::new();
@@ -141,7 +141,7 @@ fn remembered_controls_survive_the_mapped_native_model_default() {
 
 #[gpui::test]
 fn restoring_large_history_materializes_only_visible_chats(cx: &mut TestAppContext) {
-    let store = Store::open(std::path::Path::new(":memory:")).unwrap();
+    let store = Store::test(std::path::Path::new(":memory:")).unwrap();
     let mut summaries = Vec::new();
     for i in 0..1200 {
         let cwd = if i < 1000 {

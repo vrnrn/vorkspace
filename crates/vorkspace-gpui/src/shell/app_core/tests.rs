@@ -25,7 +25,7 @@ fn two_windows_with(
     let dir = tempfile::tempdir().unwrap();
     let project = dir.path().join("project").to_string_lossy().into_owned();
     std::fs::create_dir_all(&project).unwrap();
-    let store = Store::open(&dir.path().join("native.sqlite")).unwrap();
+    let store = Store::test(&dir.path().join("native.sqlite")).unwrap();
     seed(&store, &project);
     let session = store.create("codex", &project).unwrap();
     let id = session.id;

@@ -33,7 +33,7 @@ fn update(index: usize, finished: bool) -> Update {
 }
 
 fn conversation(cx: &mut TestAppContext) -> WindowHandle<Conversation> {
-    let store = Store::open(Path::new(":memory:")).unwrap();
+    let store = Store::test(Path::new(":memory:")).unwrap();
     let summary = store.create("codex", "/missing/receiver-fixture").unwrap();
     let window = cx.update(|cx| {
         input::bind(cx);

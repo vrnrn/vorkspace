@@ -34,7 +34,7 @@ fn tile_window(
                 cx.new(|cx| BoardTile {
                     board: cx.new(|cx| {
                         let store: Database = std::sync::Arc::new(std::sync::Mutex::new(
-                            vorkspace_core::store::Store::open(std::path::Path::new(":memory:"))
+                            vorkspace_core::store::Store::test(std::path::Path::new(":memory:"))
                                 .unwrap(),
                         ));
                         let mut view = TodoBoardView::new(store, columns, cx);
@@ -257,7 +257,7 @@ fn task_details_overlay_preserves_the_board_and_keeps_edit_actions_visible(
 
 fn board_window(cx: &mut TestAppContext) -> (gpui::WindowHandle<TodoBoardView>, Database) {
     let store: Database = std::sync::Arc::new(std::sync::Mutex::new(
-        vorkspace_core::store::Store::open(std::path::Path::new(":memory:")).unwrap(),
+        vorkspace_core::store::Store::test(std::path::Path::new(":memory:")).unwrap(),
     ));
     let window = cx.update(|cx| {
         crate::input::bind(cx);

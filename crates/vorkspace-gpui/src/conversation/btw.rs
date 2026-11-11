@@ -1203,7 +1203,7 @@ mod tests {
         cx: &mut gpui::TestAppContext,
     ) {
         let store = Arc::new(std::sync::Mutex::new(
-            vorkspace_core::store::Store::open(Path::new(":memory:")).unwrap(),
+            vorkspace_core::store::Store::test(Path::new(":memory:")).unwrap(),
         ));
         let session = locked(&store)
             .unwrap()
@@ -1305,7 +1305,7 @@ mod tests {
         cx: &mut gpui::TestAppContext,
     ) {
         let view = cx.update(|cx| {
-            let store = vorkspace_core::store::Store::open(Path::new(":memory:")).unwrap();
+            let store = vorkspace_core::store::Store::test(Path::new(":memory:")).unwrap();
             let session = store.create("codex", "/project").unwrap();
             let parent = cx.new(input::Input::side_question);
             cx.new(|cx| {

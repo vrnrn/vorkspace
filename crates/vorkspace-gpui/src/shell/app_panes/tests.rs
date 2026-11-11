@@ -278,7 +278,7 @@ fn native_mixed_workspace_capture() {
     vorkspace_ui::clock::use_test_clock(&cx);
     for (label, width) in [("wide", 1440.), ("compact", 1080.)] {
         let store = Arc::new(Mutex::new(
-            vorkspace_core::store::Store::open(std::path::Path::new(":memory:")).unwrap(),
+            vorkspace_core::store::Store::test(std::path::Path::new(":memory:")).unwrap(),
         ));
         let session = locked(&store)
             .unwrap()

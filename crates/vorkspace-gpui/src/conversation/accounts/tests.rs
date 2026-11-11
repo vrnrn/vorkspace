@@ -5,7 +5,7 @@ fn bot_usage_notice_renders_model_recovery_without_duplicate_hover_styles(
     cx: &mut gpui::TestAppContext,
 ) {
     let store = Arc::new(std::sync::Mutex::new(
-        vorkspace_core::store::Store::open(Path::new(":memory:")).unwrap(),
+        vorkspace_core::store::Store::test(Path::new(":memory:")).unwrap(),
     ));
     let summary = locked(&store).unwrap().create("codex", "/fixture").unwrap();
     let view = cx.new(|cx| Conversation::new(summary, store, cx));
@@ -21,7 +21,7 @@ fn account_recovery_uses_the_terminal_limit_without_reviving_an_older_failure(
 ) {
     use vorkspace_core::transcript::Row;
     let store = Arc::new(std::sync::Mutex::new(
-        vorkspace_core::store::Store::open(Path::new(":memory:")).unwrap(),
+        vorkspace_core::store::Store::test(Path::new(":memory:")).unwrap(),
     ));
     let summary = locked(&store)
         .unwrap()
@@ -65,7 +65,7 @@ fn claude_limit_code_opens_recovery_and_preserves_the_reported_reset(
     cx: &mut gpui::TestAppContext,
 ) {
     let store = Arc::new(std::sync::Mutex::new(
-        vorkspace_core::store::Store::open(Path::new(":memory:")).unwrap(),
+        vorkspace_core::store::Store::test(Path::new(":memory:")).unwrap(),
     ));
     let summary = locked(&store)
         .unwrap()
@@ -90,7 +90,7 @@ fn claude_limit_code_opens_recovery_and_preserves_the_reported_reset(
 #[gpui::test]
 fn usage_banner_matches_the_composer_and_can_arm_cancel_and_dismiss(cx: &mut gpui::TestAppContext) {
     let store = Arc::new(std::sync::Mutex::new(
-        vorkspace_core::store::Store::open(Path::new(":memory:")).unwrap(),
+        vorkspace_core::store::Store::test(Path::new(":memory:")).unwrap(),
     ));
     let mut summary = locked(&store)
         .unwrap()
@@ -202,7 +202,7 @@ fn failed_account_transfer_preserves_the_original_account_and_resume_binding(
 ) {
     let directory = tempfile::tempdir().unwrap();
     let store = Arc::new(std::sync::Mutex::new(
-        vorkspace_core::store::Store::open(Path::new(":memory:")).unwrap(),
+        vorkspace_core::store::Store::test(Path::new(":memory:")).unwrap(),
     ));
     let mut summary = locked(&store).unwrap().create("codex", "/fixture").unwrap();
     locked(&store)
@@ -257,7 +257,7 @@ fn subscription_limits_persist_and_release_a_bot_only_once_when_armed(
     cx: &mut gpui::TestAppContext,
 ) {
     let store = Arc::new(std::sync::Mutex::new(
-        vorkspace_core::store::Store::open(Path::new(":memory:")).unwrap(),
+        vorkspace_core::store::Store::test(Path::new(":memory:")).unwrap(),
     ));
     let summary = locked(&store).unwrap().create("codex", "/fixture").unwrap();
     let id = summary.id;

@@ -57,7 +57,7 @@ impl Store {
                 .optional())?;
         }
         if raw.is_none() {
-            raw = self.shared_setting(&format!("follow-up:{id}"))?;
+            raw = self.setting(&format!("follow-up:{id}"))?;
         }
         raw.map(|raw| parse::<QueueRevision>(&raw))
             .transpose()
@@ -84,7 +84,7 @@ impl Store {
         sql(self.conn.query_row(&query, [source], |row| row.get(0)))
     }
 
-    pub(crate) fn shared_follow_ups(&self, id: i64) -> Result<State, String> {
+    pub fn follow_ups(&self, id: i64) -> Result<State, String> {
         let transaction = self
             .conn
             .is_autocommit()
@@ -117,7 +117,7 @@ impl Store {
         if !candidates.is_empty() {
             let mut delivered = self.shared_message_receipts(&source, &candidates)?;
             let prefix = format!("bot-delivered:{id}:");
-            self.shared.as_ref().unwrap().settings.read(|settings| {
+            self.shared.settings.read(|settings| {
                 for candidate in candidates {
                     if settings.contains_key(&format!("{prefix}{candidate}")) {
                         delivered.insert(candidate.to_owned());
@@ -135,12 +135,7 @@ impl Store {
         if let Some(transaction) = transaction {
             sql(transaction.commit())?;
         }
-        self.shared
-            .as_ref()
-            .unwrap()
-            .queues
-            .borrow_mut()
-            .insert(id, raw);
+        self.shared.queues.borrow_mut().insert(id, raw);
         Ok(State {
             revision,
             // Recovery requires an explicit resume even if an older writer
@@ -150,7 +145,7 @@ impl Store {
             draft,
         })
     }
-    pub(in crate::store) fn shared_write_follow_ups(
+    pub(in crate::store) fn write_follow_ups(
         &self,
         id: i64,
         state: &State,
@@ -176,8 +171,6 @@ impl Store {
         ))?;
         if self
             .shared
-            .as_ref()
-            .unwrap()
             .queues
             .borrow()
             .get(&id)
@@ -221,7 +214,7 @@ impl Store {
         };
         sql(tx.execute("INSERT INTO native_follow_up_metadata(session_id,state_json) VALUES(?1,?2) ON CONFLICT(session_id) DO UPDATE SET state_json=excluded.state_json", params![source, encode(&metadata)?]))?;
         sql(tx.commit())?;
-        let shared = self.shared.as_ref().unwrap();
+        let shared = &self.shared;
         if let Some(history) = history {
             shared.snapshots.borrow_mut().insert(id, history);
         }

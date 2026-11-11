@@ -1,13 +1,13 @@
 use super::*;
 
 #[gpui::test]
-fn a_partial_pin_failure_reconciles_both_windows_with_durable_values(
+fn a_failed_pin_transaction_reconciles_both_windows_with_durable_values(
     cx: &mut gpui::TestAppContext,
 ) {
     let directory = tempfile::tempdir().unwrap();
     let project = directory.path().to_str().unwrap();
     let file = directory.path().join("history.db");
-    let store = vorkspace_core::store::Store::open(&file).unwrap();
+    let store = vorkspace_core::store::Store::test(&file).unwrap();
     let first = store.create("codex", project).unwrap();
     let second = store.create("codex", project).unwrap();
     let ids = [first.id, second.id];
@@ -33,9 +33,12 @@ fn a_partial_pin_failure_reconciles_both_windows_with_durable_values(
     let inject = rusqlite::Connection::open(file).unwrap();
     inject
         .execute_batch(&format!(
-            "CREATE TRIGGER reject_pin BEFORE UPDATE OF pinned ON native_sessions
-         WHEN OLD.id={} BEGIN SELECT RAISE(ABORT,'injected pin failure'); END;",
-            second.id
+            "CREATE TRIGGER reject_pin BEFORE UPDATE OF pinned ON sessions
+         WHEN OLD.id='{}' BEGIN SELECT RAISE(ABORT,'injected pin failure'); END;",
+            locked(&store)
+                .unwrap()
+                .persisted_session_id(second.id)
+                .unwrap()
         ))
         .unwrap();
     source
@@ -48,7 +51,7 @@ fn a_partial_pin_failure_reconciles_both_windows_with_durable_values(
     for window in [source, peer] {
         window
             .update(cx, |shell, _, cx| {
-                assert!(shell.session_metadata(first.id, cx).summary.pinned);
+                assert!(!shell.session_metadata(first.id, cx).summary.pinned);
                 assert!(!shell.session_metadata(second.id, cx).summary.pinned);
             })
             .unwrap();
@@ -222,6 +225,9 @@ fn delete_rechecks_detached_panes_after_confirmation(cx: &mut TestAppContext) {
 #[gpui::test]
 fn bulk_delete_keeps_guarded_session_and_deletes_the_other(cx: &mut TestAppContext) {
     let (window, a, b) = setup(cx);
+    // Deletion visits handles in numeric order. Attempt the guarded owner
+    // before deleting its detached pane, regardless of the UUID hashes.
+    let (a, b) = (a.min(b), a.max(b));
     window
         .update(cx, |shell, w, cx| {
             shell.workspace.review_owners.insert(b, a);

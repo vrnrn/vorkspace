@@ -155,11 +155,9 @@ fn earlier_feature_keys_restore_in_place_and_keep_native_edits_after_reopen() {
         "cmd-b"
     );
     assert_eq!(preferences.get("vorkspace.settingsSection"), Some("bots"));
-    let store = crate::store::Store::open_vorkspace_with_preferences_for_test(
-        &database,
-        preferences.clone(),
-    )
-    .unwrap();
+    let store = crate::store::Store::test(&database)
+        .map(|store| store.with_test_preferences(preferences.clone()))
+        .unwrap();
     let mut roster = crate::bot::Roster::load(&store).unwrap();
     assert_eq!(roster.bots[0].session_id, Some(session.id));
     assert_eq!(
@@ -169,9 +167,9 @@ fn earlier_feature_keys_restore_in_place_and_keep_native_edits_after_reopen() {
     roster.bots[0].name = "After".into();
     roster.save(&store).unwrap();
     drop(store);
-    let reopened =
-        crate::store::Store::open_vorkspace_with_preferences_for_test(&database, preferences)
-            .unwrap();
+    let reopened = crate::store::Store::test(&database)
+        .map(|store| store.with_test_preferences(preferences))
+        .unwrap();
     assert_eq!(
         crate::bot::Roster::load(&reopened).unwrap().bots[0].name,
         "After"

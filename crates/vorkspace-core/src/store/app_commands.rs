@@ -88,7 +88,7 @@ impl Store {
         if protected {
             return Err("Bot, habit and hidden sessions are protected from app commands".into());
         }
-        if self.shared.is_some() {
+        {
             let legacy_launch = if let Some(parent) = self.shared_app_launch_caller(target)? {
                 roster
                     .of_session(parent)
@@ -166,11 +166,7 @@ impl Store {
         self.delete_checked(target, Some((caller, project)))
     }
     fn app_caller_identity(&self, caller: i64) -> Result<String, String> {
-        if self.shared.is_some() {
-            self.persisted_session_id(caller)
-        } else {
-            Ok(caller.to_string())
-        }
+        self.persisted_session_id(caller)
     }
     pub fn app_command_known(&self, caller: i64, request: &str) -> Result<bool, String> {
         if !super::shared::has_table(&self.conn, "app_command_receipts")? {
@@ -187,24 +183,18 @@ impl Store {
         input: &Value,
     ) -> Result<AppCommandAdmission, String> {
         validate(request, action, input)?;
-        if self.shared.is_some() {
+        {
             self.shared_writable()?;
             // Receipt DDL belongs to the same explicit-write schema owner as
             // history guards. Adding it after scalar snapshots would invalidate
             // active conversations as though an external writer changed schema.
             self.shared_history_schema()?;
-        } else {
-            ensure(&self.conn)?;
         }
         let caller = self.app_caller_identity(caller)?;
         let signature = fingerprint(action, input);
         let tx = Transaction::new_unchecked(&self.conn, TransactionBehavior::Immediate)
             .map_err(|e| e.to_string())?;
-        let table = if self.shared.is_some() {
-            "sessions"
-        } else {
-            "native_sessions"
-        };
+        let table = "sessions";
         let created=tx.execute(&format!("INSERT INTO app_command_receipts(caller_session_id,request_id,fingerprint,phase,created_at,updated_at)
             SELECT ?1,?2,?3,'admitted',?4,?4 WHERE EXISTS(SELECT 1 FROM {table} WHERE id=?1)
             ON CONFLICT(caller_session_id,request_id) DO NOTHING"),params![caller,request,signature,crate::time::now_ms().min(i64::MAX as u64) as i64]).map_err(|e|e.to_string())? ==1;

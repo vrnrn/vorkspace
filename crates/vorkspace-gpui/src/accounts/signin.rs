@@ -175,7 +175,7 @@ mod tests {
     #[gpui::test]
     fn settings_add_signin_stays_inline_after_completion(cx: &mut gpui::TestAppContext) {
         let store = Arc::new(std::sync::Mutex::new(
-            vorkspace_core::store::Store::open(Path::new(":memory:")).unwrap(),
+            vorkspace_core::store::Store::test(Path::new(":memory:")).unwrap(),
         ));
         let view =
             cx.new(|cx| Accounts::new(PathBuf::from("/fixture"), Book::default(), store, cx));
@@ -200,7 +200,7 @@ mod tests {
     #[gpui::test]
     fn footer_signin_never_opens_a_modal_or_steals_window_focus(cx: &mut gpui::TestAppContext) {
         let store = Arc::new(std::sync::Mutex::new(
-            vorkspace_core::store::Store::open(Path::new(":memory:")).unwrap(),
+            vorkspace_core::store::Store::test(Path::new(":memory:")).unwrap(),
         ));
         let window = cx.update(|cx| {
             cx.open_window(Default::default(), |_, cx| {

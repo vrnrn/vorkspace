@@ -3,7 +3,7 @@ use serde_json::json;
 use vorkspace_core::{store::Store, transcript::Transcript};
 
 fn fixture() -> (Database, i64, Value) {
-    let mut store = Store::open(std::path::Path::new(":memory:")).unwrap();
+    let mut store = Store::test(std::path::Path::new(":memory:")).unwrap();
     let id = store.create("codex", "/synthetic-card-project").unwrap().id;
     let value = json!({"id":"card","type":"pr","repo":"synthetic/repo","number":1,"title":"Old"});
     let row = Row {
