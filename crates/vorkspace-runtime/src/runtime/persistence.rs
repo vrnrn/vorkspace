@@ -10,11 +10,15 @@ pub(super) struct PendingSave {
     context_dirty: bool,
     last_flush: Instant,
     interval: Duration,
-    context_owner: Option<(String, String)>,
-    /// Only Bots bind usage to a specific native thread, including detachment.
-    bot_context_owner: Option<Option<String>>,
+    context_owner: Option<ContextOwner>,
     pub(super) writer: Option<vorkspace_core::store::TurnHistory>,
     pub(super) overlap: bool,
+}
+
+struct ContextOwner {
+    provider: String,
+    account: String,
+    thread: Option<String>,
 }
 
 impl PendingSave {
@@ -29,18 +33,23 @@ impl PendingSave {
                 Duration::ZERO
             },
             context_owner: None,
-            bot_context_owner: None,
             writer: None,
             overlap: false,
         }
     }
 
-    pub(super) fn own_context(&mut self, provider: &str, account: &str) {
-        self.context_owner = Some((provider.into(), account.into()));
+    pub(super) fn own_context(&mut self, provider: &str, account: &str, thread: Option<&str>) {
+        self.context_owner = Some(ContextOwner {
+            provider: provider.into(),
+            account: account.into(),
+            thread: thread.map(str::to_owned),
+        });
     }
 
-    pub(super) fn own_bot_context(&mut self, provider_id: Option<&str>) {
-        self.bot_context_owner = Some(provider_id.map(str::to_owned));
+    pub(super) fn own_context_thread(&mut self, thread: Option<&str>) {
+        if let Some(owner) = &mut self.context_owner {
+            owner.thread = thread.map(str::to_owned);
+        }
     }
 
     pub(super) fn changed(&mut self, row: usize) {
@@ -72,18 +81,14 @@ impl PendingSave {
             self.write(&mut store, session, from, &transcript.rows[from..], None)?;
         }
         if self.context_dirty {
-            if let Some((provider, account)) = &self.context_owner {
-                if let Some(native_id) = &self.bot_context_owner {
-                    store.save_bot_context_usage_if_owner(
-                        session,
-                        context,
-                        provider,
-                        account,
-                        native_id.as_deref(),
-                    )?;
-                } else {
-                    store.save_context_usage_if_owner(session, context, provider, account)?;
-                }
+            if let Some(owner) = &self.context_owner {
+                store.save_context_usage_if_owner(
+                    session,
+                    context,
+                    &owner.provider,
+                    &owner.account,
+                    owner.thread.as_deref(),
+                )?;
             } else {
                 store.save_context_usage(session, context)?;
             }

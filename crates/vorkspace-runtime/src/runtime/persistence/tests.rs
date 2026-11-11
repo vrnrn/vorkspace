@@ -1,6 +1,64 @@
 use super::*;
 use vorkspace_core::follow_up::{Message, State};
 
+#[test]
+fn an_ordinary_context_flush_preserves_an_independently_replaced_thread() {
+    for shared in [false, true] {
+        for source_thread in [None, Some("admitted-thread")] {
+            let directory = tempfile::tempdir().unwrap();
+            let path = directory.path().join("context.db");
+            let open = if shared {
+                Store::open_vorkspace
+            } else {
+                Store::open
+            };
+            let owner = open(&path).unwrap();
+            let id = owner.create("codex", "/fixture").unwrap().id;
+            owner
+                .save_agent_preferences(id, &Settings::default())
+                .unwrap();
+            if let Some(thread) = source_thread {
+                owner.provider_id(id, thread).unwrap();
+            }
+            let peer = open(&path).unwrap();
+            let database = Arc::new(Mutex::new(owner));
+            let now = Instant::now();
+            let mut pending = PendingSave::new(shared, now);
+            pending.own_context("codex", vorkspace_core::accounts::DEFAULT, source_thread);
+            let current = vorkspace_core::context::Usage {
+                used: 8000,
+                window: Some(10000),
+            };
+            let stale = vorkspace_core::context::Usage {
+                used: 9000,
+                window: Some(10000),
+            };
+            peer.provider_id(id, "replacement-thread").unwrap();
+            peer.save_context_usage(id, &current).unwrap();
+            pending.context_changed();
+            pending
+                .flush(&database, id, &Transcript::default(), &stale, now)
+                .unwrap();
+            assert_eq!(peer.context_usage(id).unwrap(), Some(current));
+
+            pending.own_context_thread(Some("superseded-observation"));
+            pending.context_changed();
+            pending
+                .flush(&database, id, &Transcript::default(), &stale, now)
+                .unwrap();
+            assert_eq!(peer.context_usage(id).unwrap(), Some(current));
+
+            peer.provider_id(id, "current-observation").unwrap();
+            pending.own_context_thread(Some("current-observation"));
+            pending.context_changed();
+            pending
+                .flush(&database, id, &Transcript::default(), &stale, now)
+                .unwrap();
+            assert_eq!(peer.context_usage(id).unwrap(), Some(stale));
+        }
+    }
+}
+
 fn conversation() -> (Database, i64, Transcript) {
     let mut store = Store::open_vorkspace(std::path::Path::new(":memory:")).unwrap();
     let session = store.create("codex", "/project").unwrap();

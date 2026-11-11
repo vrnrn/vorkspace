@@ -771,17 +771,17 @@ fn context_owner_predicate_skips_history_and_rechecks_provider_and_account_at_st
             window: Some(100),
         };
         assert!(store
-            .save_context_usage_if_owner(id, &current, "codex", "selected-account")
+            .save_context_usage_if_owner(id, &current, "codex", "selected-account", None)
             .unwrap());
         let superseded = crate::context::Usage {
             used: 99,
             window: Some(100),
         };
         assert!(!store
-            .save_context_usage_if_owner(id, &superseded, "claude", "selected-account")
+            .save_context_usage_if_owner(id, &superseded, "claude", "selected-account", None)
             .unwrap());
         assert!(!store
-            .save_context_usage_if_owner(id, &superseded, "codex", "old-account")
+            .save_context_usage_if_owner(id, &superseded, "codex", "old-account", None)
             .unwrap());
         assert_eq!(store.context_usage(id).unwrap().unwrap().used, 12);
     }

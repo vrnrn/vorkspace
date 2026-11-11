@@ -390,7 +390,7 @@ mod tests {
                 window: Some(272_000),
             };
             assert!(store
-                .save_bot_context_usage_if_owner(
+                .save_context_usage_if_owner(
                     session.id,
                     &replacement_usage,
                     "codex",
@@ -400,7 +400,7 @@ mod tests {
                 .unwrap());
             for stale in [Some("original"), None] {
                 let saved = store
-                    .save_bot_context_usage_if_owner(session.id, &usage, "codex", "selected", stale)
+                    .save_context_usage_if_owner(session.id, &usage, "codex", "selected", stale)
                     .unwrap();
                 assert!(!saved);
                 assert_eq!(
@@ -418,7 +418,7 @@ mod tests {
                 )
                 .unwrap());
             assert!(!store
-                .save_bot_context_usage_if_owner(
+                .save_context_usage_if_owner(
                     session.id,
                     &replacement_usage,
                     "codex",

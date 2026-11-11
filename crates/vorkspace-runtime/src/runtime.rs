@@ -108,7 +108,11 @@ fn run_turn_using(
     let mut pending = PendingSave::new(shared, std::time::Instant::now());
     let mut submissions = submissions::Submissions::new(store.clone(), summary.id);
     let mut provider_completion_confirmed = false;
-    pending.own_context(&summary.provider, &source_account);
+    pending.own_context(
+        &summary.provider,
+        &source_account,
+        summary.provider_id.as_deref(),
+    );
     let mut initial_delivery = None;
     let mut accepted_messages = Vec::new();
     let mut provider_id = summary.provider_id.clone();
@@ -206,7 +210,7 @@ fn run_turn_using(
                 if provider_reset {
                     binding = ProviderBinding::Set(provider_id.clone());
                 }
-                pending.own_bot_context(provider_id.as_deref());
+                pending.own_context_thread(provider_id.as_deref());
                 context = store.context_usage(summary.id)?.unwrap_or_default();
                 (transcript, pending.writer) = store.load_turn_history(summary.id)?;
                 settings.turns = saved.turns;
@@ -246,7 +250,7 @@ fn run_turn_using(
                 }
                 provider_id = None;
                 binding = ProviderBinding::Set(None);
-                pending.own_bot_context(None);
+                pending.own_context_thread(None);
                 context = vorkspace_core::context::Usage::default();
                 provider_reset = true;
                 if let Some(previous) = previous {
@@ -780,9 +784,7 @@ fn run_turn_using(
                                     }
                                 }
                                 provider_id = Some(id.clone());
-                                if bot_home.is_some() {
-                                    pending.own_bot_context(Some(&id));
-                                }
+                                pending.own_context_thread(Some(&id));
                             }
                         }
                         Event::Model(id) => model = Some(id),

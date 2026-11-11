@@ -423,10 +423,17 @@ impl Conversation {
             let store = self.store.clone();
             let id = self.summary.id;
             let account = self.settings.account.id.clone();
+            let thread = self.summary.provider_id.clone();
             cx.background_executor()
                 .spawn(async move {
                     let _ = locked(&store).and_then(|s| {
-                        s.save_context_usage_if_owner(id, &context, provider, &account)
+                        s.save_context_usage_if_owner(
+                            id,
+                            &context,
+                            provider,
+                            &account,
+                            thread.as_deref(),
+                        )
                     });
                 })
                 .detach();
