@@ -433,7 +433,7 @@ impl Conversation {
         let saved = store.composer_draft(self.summary.id)?;
         let records = store.composer_recoveries(self.summary.id)?;
         let mut matches = records.into_iter().filter(|record| {
-            record.payload["botSubmission"].is_object()
+            bot::SubmissionOptions::read(&record.payload).is_some()
                 && saved
                     .as_ref()
                     .is_some_and(|draft| same_submission_input(&record.payload, &draft.payload))
@@ -640,12 +640,13 @@ impl Conversation {
             completion.restore_mcp_tags(&payload["mcpTags"], cx)
         });
         self.composer_draft.restoring = false;
-        if self.settings.bot.is_some() && payload["botSubmission"].is_object() {
-            let mode = payload["botSubmission"]["mode"].as_str();
+        if self.settings.bot.is_some()
+            && let Some(options) = bot::SubmissionOptions::read(payload)
+        {
             // Editor hydration can finish before the session's settings load.
             // Restoring a composer choice must not publish partial settings.
-            turn_flow::apply_turn_mode(&mut self.settings, mode);
-            self.bot_ui.queue = payload["botSubmission"]["queue"].as_bool().unwrap_or(false);
+            turn_flow::apply_turn_mode(&mut self.settings, options.mode.as_deref());
+            self.bot_ui.queue = options.queue;
         }
     }
     fn resolve_composer_recovery(&mut self, recovered: bool, cx: &mut Context<Self>) {
@@ -678,7 +679,7 @@ impl Conversation {
             let draft={
                 let store=locked(&state.store)?;
                 let latest=store.composer_draft(state.id)?;
-                let retain_submission = choice.payload["botSubmission"].is_object()
+                let retain_submission = bot::SubmissionOptions::read(&choice.payload).is_some()
                     && (recovered || latest.as_ref().is_some_and(|draft| same_submission_input(&choice.payload, &draft.payload)));
                 let (payload,revision)=if recovered {
                     let revision=store.save_composer_draft(state.id,latest.as_ref().map_or(0,|d|d.revision),&choice.payload)?;

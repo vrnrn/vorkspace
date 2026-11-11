@@ -6,7 +6,31 @@ use vorkspace_ui::radius;
 #[cfg(test)]
 #[path = "bot_tests.rs"]
 mod tests;
-type DirectSubmission = (String, String, Vec<PathBuf>, std::ops::Range<usize>, bool);
+pub(super) struct DirectSubmission {
+    pub(super) id: String,
+    pub(super) text: String,
+    pub(super) attachments: Vec<PathBuf>,
+    pub(super) selection: std::ops::Range<usize>,
+    pub(super) retry: bool,
+}
+
+#[derive(Default, serde::Serialize)]
+pub(super) struct SubmissionOptions {
+    pub(super) mode: Option<String>,
+    pub(super) queue: bool,
+}
+impl SubmissionOptions {
+    pub(super) fn read(payload: &serde_json::Value) -> Option<Self> {
+        let fields = &payload["botSubmission"];
+        fields.is_object().then(|| Self {
+            mode: fields["mode"].as_str().map(str::to_owned),
+            queue: fields["queue"].as_bool().unwrap_or(false),
+        })
+    }
+    pub(super) fn write(&self, payload: &mut serde_json::Value) {
+        payload["botSubmission"] = serde_json::json!(self);
+    }
+}
 #[derive(Default)]
 pub(super) struct ChatState {
     /// Standalone Bot chats opt into identity decoration; others keep None.
@@ -79,12 +103,12 @@ impl Conversation {
             .bot_ui
             .direct_sending
             .as_ref()
-            .is_some_and(|pending| &pending.0 == id)
+            .is_some_and(|pending| &pending.id == id)
         {
-            let (owner, text, attachments, _selection, _) =
-                self.bot_ui.direct_sending.take().unwrap();
-            let unchanged =
-                self.input.read(cx).content.as_ref() == text && self.attachments == attachments;
+            let pending = self.bot_ui.direct_sending.take().unwrap();
+            let _selection = pending.selection;
+            let unchanged = self.input.read(cx).content.as_ref() == pending.text
+                && self.attachments == pending.attachments;
             if unchanged {
                 self.input
                     .update(cx, |input, cx| input.set_text(String::new(), cx));
@@ -94,7 +118,7 @@ impl Conversation {
             // durable link between the old input and its outbox identity.
             self.capture_composer(cx);
             let result = self.composer_draft.flush().and_then(|()| {
-                locked(&self.store)?.clear_composer_recovery(self.summary.id, &owner)
+                locked(&self.store)?.clear_composer_recovery(self.summary.id, &pending.id)
             });
             if let Err(error) = result {
                 self.status = format!(
@@ -102,7 +126,7 @@ impl Conversation {
                 );
                 self.composer_draft.error = Some(self.status.clone());
             } else {
-                self.composer_draft.forget_recovery(&owner);
+                self.composer_draft.forget_recovery(&pending.id);
             }
             self.bot_ui.draft_error = None;
             cx.notify();
@@ -200,10 +224,10 @@ impl Conversation {
             .bot_ui
             .direct_sending
             .as_ref()
-            .is_some_and(|pending| pending.0 == id)
+            .is_some_and(|pending| pending.id == id)
         {
             if let Some(pending) = self.bot_ui.direct_sending.as_mut() {
-                pending.4 = true;
+                pending.retry = true;
             }
             self.status = format!(
                 "Could not queue message: {error}. Your composer was preserved; send the same input to retry."

@@ -1580,7 +1580,7 @@ fn bot_plus_offers_upload_and_queue_and_queue_applies_to_one_message(cx: &mut Te
             view.send(cx);
             assert!(!view.bot_ui.queue, "queueing applies to one message");
             assert_eq!(view.input.read(cx).content, "Unsent draft");
-            let id = view.bot_ui.direct_sending.as_ref().unwrap().0.clone();
+            let id = view.bot_ui.direct_sending.as_ref().unwrap().id.clone();
             view.bot_draft_outbox_saved(&message(&id, "Unsent draft", false), cx);
             view.input
                 .update(cx, |input, cx| input.set_text("Next".into(), cx));
@@ -1612,7 +1612,7 @@ fn direct_bot_send_retains_recovery_until_outbox_ack_and_reuses_retry_identity(
             view.send(cx);
             assert_eq!(view.input.read(cx).content, "Keep this message");
             let pending = view.bot_ui.direct_sending.as_ref().unwrap();
-            assert!(!pending.4);
+            assert!(!pending.retry);
             let db = locked(&view.store).unwrap();
             assert_eq!(
                 db.composer_recoveries(view.summary.id).unwrap()[0].payload["text"],
@@ -1621,16 +1621,16 @@ fn direct_bot_send_retains_recovery_until_outbox_ack_and_reuses_retry_identity(
             let recovery = db.composer_recoveries(view.summary.id).unwrap();
             assert_eq!(recovery[0].payload["botSubmission"]["mode"], "plan");
             assert_eq!(recovery[0].payload["botSubmission"]["queue"], true);
-            pending.0.clone()
+            pending.id.clone()
         })
         .unwrap();
     window
         .update(cx, |view, _, cx| {
             view.bot_draft_outbox_failed(&id, "disk failure", cx);
             assert_eq!(view.input.read(cx).content, "Keep this message");
-            assert!(view.bot_ui.direct_sending.as_ref().unwrap().4);
+            assert!(view.bot_ui.direct_sending.as_ref().unwrap().retry);
             view.send(cx);
-            assert_eq!(view.bot_ui.direct_sending.as_ref().unwrap().0, id);
+            assert_eq!(view.bot_ui.direct_sending.as_ref().unwrap().id, id);
             view.input
                 .update(cx, |input, cx| input.select_utf16(0..0, cx));
             view.bot_draft_outbox_saved(&message(&id, "Keep this message", false), cx);
@@ -1771,7 +1771,7 @@ fn failed_composer_clear_keeps_the_submission_recovery(cx: &mut TestAppContext) 
         chat.input
             .update(cx, |input, cx| input.set_text("Pending".into(), cx));
         chat.send(cx);
-        chat.bot_ui.direct_sending.as_ref().unwrap().0.clone()
+        chat.bot_ui.direct_sending.as_ref().unwrap().id.clone()
     });
     let other = Store::open_vorkspace(&path).unwrap();
     let saved = other.composer_draft(id).unwrap().unwrap();

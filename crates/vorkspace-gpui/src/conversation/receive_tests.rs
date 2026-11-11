@@ -225,10 +225,13 @@ fn start_receiver(
             view.begin_turn(cx);
             view.receive_turn_updates(
                 rx,
-                view.submission_generation,
-                view.summary.provider.clone(),
-                view.settings.account.id.clone(),
-                None,
+                turn_projection::TurnProjection::new(
+                    view.submission_generation,
+                    view.summary.provider.clone(),
+                    view.settings.account.id.clone(),
+                    view.summary.provider_id.clone(),
+                    None,
+                ),
                 cx,
             );
         })
@@ -533,10 +536,13 @@ impl Conversation {
         let (tx, rx) = async_channel::bounded(8);
         self.receive_turn_updates(
             rx,
-            self.submission_generation,
-            self.summary.provider.clone(),
-            self.settings.account.id.clone(),
-            None,
+            turn_projection::TurnProjection::new(
+                self.submission_generation,
+                self.summary.provider.clone(),
+                self.settings.account.id.clone(),
+                self.summary.provider_id.clone(),
+                None,
+            ),
             cx,
         );
         cx.emit(SessionChanged::Loaded);

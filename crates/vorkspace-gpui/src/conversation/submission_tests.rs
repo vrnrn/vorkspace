@@ -186,10 +186,7 @@ fn dropped_sender_releases_the_current_ui_and_pauses_queue_without_replay(cx: &m
                 let generation = view.submission_generation;
                 view.receive_turn_updates(
                     rx,
-                    generation,
-                    view.summary.provider.clone(),
-                    view.settings.account.id.clone(),
-                    None,
+                    turn_projection::TurnProjection::new(generation, view.summary.provider.clone(), view.settings.account.id.clone(), view.summary.provider_id.clone(), None),
                     cx,
                 );
                 if stop_before_close {
@@ -262,10 +259,13 @@ fn an_old_dropped_sender_cannot_release_a_successor_turn(cx: &mut TestAppContext
             view.begin_turn(cx);
             view.receive_turn_updates(
                 rx,
-                view.submission_generation,
-                view.summary.provider.clone(),
-                view.settings.account.id.clone(),
-                None,
+                turn_projection::TurnProjection::new(
+                    view.submission_generation,
+                    view.summary.provider.clone(),
+                    view.settings.account.id.clone(),
+                    view.summary.provider_id.clone(),
+                    None,
+                ),
                 cx,
             );
             view.begin_turn(cx);
