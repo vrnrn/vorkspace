@@ -55,6 +55,45 @@ impl Execution {
 }
 
 impl Service {
+    /// Fresh session data and its dispatch receipt share the Store writer.
+    /// An interrupted commit can never leave a session outside run recovery.
+    pub(crate) fn prepare_session(
+        &self,
+        conn: &Connection,
+        database: &Path,
+        expected: &AutomationRun,
+        now: i64,
+        prepare: impl FnOnce() -> Result<(crate::session::Session, String), String>,
+    ) -> Result<(crate::session::Session, AutomationRun), String> {
+        if self.execution.is_none() {
+            return Err("This process does not own automation execution.".into());
+        }
+        if self.execution_path.is_none() || lock_path(database)? != self.execution_path {
+            return Err("The automation and session databases do not match.".into());
+        }
+        let tx = rusqlite::Transaction::new_unchecked(conn, TransactionBehavior::Immediate)
+            .map_err(|error| error.to_string())?;
+        let mut run = get_run(&tx, &expected.id)?;
+        if run.automation_id != expected.automation_id
+            || run.session_id != expected.session_id
+            || !matches!(run.status.as_str(), "preparing" | "running")
+        {
+            return Err("The automation run changed before session preparation.".into());
+        }
+        let mut automation = get(&tx, &run.automation_id)?.ok_or("Automation not found.")?;
+        let (session, persisted) = prepare()?;
+        validate_id(&persisted, "session")?;
+        run.status = "running".into();
+        run.session_id = Some(persisted);
+        run.started_at.get_or_insert(now);
+        run.error = None;
+        apply_run_summary(&mut automation, &run);
+        write_automation(&tx, &automation)?;
+        write_run(&tx, &run)?;
+        tx.commit().map_err(|error| error.to_string())?;
+        Ok((session, run))
+    }
+
     fn ensure_execution(&mut self, now: i64) -> Result<bool, String> {
         if self.execution.is_some() {
             return Ok(true);

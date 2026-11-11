@@ -4,7 +4,7 @@ use crate::conversation::composer_features::ManagedAvailability;
 use vorkspace_core::{
     accounts::Profile,
     agent::Settings,
-    automations::{self, Automation, DueAutomationRun, Service},
+    automations::{self, Automation, AutomationRun, DueAutomationRun, Service},
     files::path_key,
 };
 
@@ -38,6 +38,7 @@ struct NewSession {
     summary: Session,
     settings: Settings,
     install: crate::session_install::Install,
+    run: AutomationRun,
 }
 
 struct PreparedRun {
@@ -404,54 +405,49 @@ impl Shell {
             )
         });
         let store = self.store.clone();
-        let title = (launch.due.run.trigger != "event").then(|| automation.name.clone());
-        let project = automation.cwd.clone();
-        let checkout = requested_worktree(automation).map(str::to_owned);
-        let provider = automation.harness.clone();
+        let service = self.automation_state.service.clone();
         let work = cx.background_executor().spawn(async move {
-            if Kind::parse(&provider).is_none() {
-                return Err("The automation's agent is unavailable".into());
-            }
-            if !std::path::Path::new(&project).is_dir() {
-                return Err("The automation's project folder is unavailable".into());
-            }
-            if checkout
-                .as_deref()
-                .is_some_and(|path| !std::path::Path::new(path).is_dir())
-            {
-                return Err("The automation's worktree is unavailable".into());
-            }
-            let Some((settings, mut install)) = fresh else {
-                return Ok(None);
-            };
-            let mut store = locked(&store)?;
-            let mut summary = store.create(&provider, &project)?;
-            install.track(summary.id);
             let prepared = (|| {
-                if let Some(title) = title {
-                    store.title(summary.id, &title)?;
-                    summary.title = title;
+                let automation = &launch.due.automation;
+                if Kind::parse(&automation.harness).is_none() {
+                    return Err("The automation's agent is unavailable".into());
                 }
-                store.save_agent_settings(summary.id, &settings)
+                if !std::path::Path::new(&automation.cwd).is_dir() {
+                    return Err("The automation's project folder is unavailable".into());
+                }
+                if requested_worktree(automation)
+                    .is_some_and(|path| !std::path::Path::new(path).is_dir())
+                {
+                    return Err("The automation's worktree is unavailable".into());
+                }
+                let Some((settings, mut install)) = fresh else {
+                    return Ok(None);
+                };
+                let service = service.as_ref().ok_or("Automations became unavailable")?;
+                let service = service_lock(service)?;
+                let store = locked(&store)?;
+                let linked = automation_work_item(&launch.due.run);
+                let (summary, run) = store.create_automation_session(
+                    &service,
+                    &launch.due,
+                    &settings,
+                    linked.as_ref(),
+                    now(),
+                )?;
+                install.track(summary.id);
+                Ok::<_, String>(Some(NewSession {
+                    summary,
+                    settings,
+                    install,
+                    run,
+                }))
             })();
-            if let Err(error) = prepared {
-                return Err(discard_failed_session(
-                    &mut store,
-                    &mut install,
-                    summary.id,
-                    error,
-                ));
-            }
-            Ok::<_, String>(Some(NewSession {
-                summary,
-                settings,
-                install,
-            }))
+            (launch, prepared)
         });
         cx.spawn(async move |this, cx| {
-            let prepared = work.await;
-            let _ = this.update(cx, |this, cx| {
-                this.finish_automation_preparation(launch, reuse, prepared, cx);
+            let (launch, prepared) = work.await;
+            let _ = this.update_in(cx, |this, window, cx| {
+                this.finish_automation_preparation(launch, reuse, prepared, window, cx);
             });
         })
         .detach();
@@ -459,9 +455,10 @@ impl Shell {
 
     fn finish_automation_preparation(
         &mut self,
-        launch: Launch,
+        mut launch: Launch,
         reuse: Option<Candidate>,
         prepared: Result<Option<NewSession>, String>,
+        window: &mut Window,
         cx: &mut Context<Self>,
     ) {
         if let Some(candidate) = reuse {
@@ -476,7 +473,8 @@ impl Shell {
         };
         let automation = &launch.due.automation;
         let checkout = requested_worktree(automation);
-        let (summary, settings, mut install, view) = if let Some(created) = created {
+        let (summary, settings, install, view) = if let Some(created) = created {
+            launch.due.run = created.run;
             (
                 created.summary,
                 created.settings,
@@ -533,32 +531,18 @@ impl Shell {
                 return;
             }
             Ok(None) => {
-                let error = self.discard_uninstalled_automation(
-                    id,
-                    install.as_mut(),
+                self.automation_launch_failed(
+                    launch,
                     "The automation session changed before it could start".into(),
+                    cx,
                 );
-                self.automation_launch_failed(launch, error, cx);
                 return;
             }
             Err(error) => {
-                let error = self.discard_uninstalled_automation(id, install.as_mut(), error);
                 self.automation_launch_failed(launch, error, cx);
                 return;
             }
         };
-        let Some(service) = self.automation_state.service.clone() else {
-            let error = self.discard_uninstalled_automation(
-                id,
-                install.as_mut(),
-                "Automations became unavailable before submission".into(),
-            );
-            self.automation_launch_failed(launch, error, cx);
-            return;
-        };
-        if let Some(candidate) = reuse {
-            self.automation_state.reserved.insert(candidate.id);
-        }
         let prepared = PreparedRun {
             summary,
             settings,
@@ -566,6 +550,21 @@ impl Shell {
             view,
             reuse,
         };
+        if prepared.install.is_some() {
+            self.submit_prepared_automation(launch, prepared, window, cx);
+            return;
+        }
+        let Some(service) = self.automation_state.service.clone() else {
+            self.automation_launch_failed(
+                launch,
+                "Automations became unavailable before submission".into(),
+                cx,
+            );
+            return;
+        };
+        if let Some(candidate) = reuse {
+            self.automation_state.reserved.insert(candidate.id);
+        }
         let run_id = launch.due.run.id.clone();
         let work = cx.background_executor().spawn(async move {
             service_lock(&service)?.update_run(&run_id, "running", Some(persisted), None, now())
@@ -573,19 +572,17 @@ impl Shell {
         cx.spawn(async move |this, cx| {
             let result = work.await;
             let _ = this.update_in(cx, |this, window, cx| {
-                let mut prepared = prepared;
-                if let Err(error) = result {
-                    if let Some(candidate) = prepared.reuse {
-                        this.automation_state.reserved.remove(&candidate.id);
+                let run = match result {
+                    Ok(run) => run,
+                    Err(error) => {
+                        if let Some(candidate) = prepared.reuse {
+                            this.automation_state.reserved.remove(&candidate.id);
+                        }
+                        this.automation_launch_failed(launch, error, cx);
+                        return;
                     }
-                    let error = this.discard_uninstalled_automation(
-                        prepared.summary.id,
-                        prepared.install.as_mut(),
-                        error,
-                    );
-                    this.automation_launch_failed(launch, error, cx);
-                    return;
-                }
+                };
+                launch.due.run = run;
                 this.submit_prepared_automation(launch, prepared, window, cx);
             });
         })
@@ -595,7 +592,7 @@ impl Shell {
     fn submit_prepared_automation(
         &mut self,
         launch: Launch,
-        mut prepared: PreparedRun,
+        prepared: PreparedRun,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
@@ -623,7 +620,6 @@ impl Shell {
             self.verify_prepared_checkout(id, checkout, cx)
         };
         if let Err(error) = verified {
-            let error = self.discard_uninstalled_automation(id, prepared.install.as_mut(), error);
             self.automation_launch_failed(launch, error, cx);
             return;
         }
@@ -640,12 +636,11 @@ impl Shell {
             view
         };
         let Some(view) = installed else {
-            let error = self.discard_uninstalled_automation(
-                id,
-                install.as_mut(),
+            self.automation_launch_failed(
+                launch,
                 "Could not install the automation session".into(),
+                cx,
             );
-            self.automation_launch_failed(launch, error, cx);
             return;
         };
         if let Some(linked) = automation_work_item(&launch.due.run) {
@@ -694,23 +689,6 @@ impl Shell {
             cx.notify();
         }
         self.update_automation_run(launch.due.run.id, "failed", None, Some(error), cx);
-    }
-
-    fn discard_uninstalled_automation(
-        &self,
-        id: i64,
-        install: Option<&mut crate::session_install::Install>,
-        error: String,
-    ) -> String {
-        let Some(install) = install else {
-            return error;
-        };
-        match locked(&self.store) {
-            Ok(mut store) => discard_failed_session(&mut store, install, id, error),
-            Err(cleanup) => {
-                format!("{error}. Could not remove prepared session: {cleanup}")
-            }
-        }
     }
 
     pub(super) fn automation_session_changed(&mut self, id: i64, cx: &mut Context<Self>) {
@@ -813,18 +791,6 @@ impl Shell {
                 }
             });
         }));
-    }
-}
-
-fn discard_failed_session(
-    store: &mut vorkspace_core::store::Store,
-    install: &mut crate::session_install::Install,
-    id: i64,
-    error: String,
-) -> String {
-    match install.discard(store, id) {
-        Ok(()) => error,
-        Err(cleanup) => format!("{error}. Could not remove prepared session: {cleanup}"),
     }
 }
 

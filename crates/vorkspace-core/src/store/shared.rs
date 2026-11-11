@@ -503,6 +503,11 @@ impl Store {
         ids.insert(key, id.into());
         Ok(key)
     }
+    pub(super) fn shared_forget_uncommitted_identity(&self, id: i64) {
+        if let Some(shared) = &self.shared {
+            shared.ids.borrow_mut().remove(&id);
+        }
+    }
     pub(super) fn shared_writable(&self) -> Result<(), String> {
         if self.shared.as_ref().unwrap().read_only {
             Err("This vorkspace store is read-only".into())

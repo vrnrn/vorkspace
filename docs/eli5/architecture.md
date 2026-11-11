@@ -48,7 +48,7 @@ Open **View → Running Work** to see the app’s local agents. A Stop click is 
 
 If the app cannot read process usage, it still lists the agents it knows about and lets you stop them. Missing CPU and memory readings are labeled unavailable.
 
-Each database has one app instance in charge of running automations. Another instance can queue a request. The app saves which conversation owns the run before it sends the prompt. After a restart, unfinished setup can resume. A reply interrupted after sending stays recorded as interrupted.
+Each database has one app instance in charge of running automations. Another instance can queue a request. A new conversation, its settings and its run record save together before the prompt is sent. After a restart, setup that never saved can resume. Once a conversation is prepared, an interrupted run stays recorded with that conversation so you can inspect it. A setup error also keeps the prepared conversation available.
 
 When a Bot receives a message, the app sends that message's attachments and options with its own reply. Your composer and chat settings stay ready for your next message.
 
