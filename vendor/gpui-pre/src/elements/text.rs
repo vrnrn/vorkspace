@@ -1166,7 +1166,7 @@ pub struct InteractiveTextState {
     long_press_tooltip_active: Rc<Cell<bool>>,
 }
 
-/// InteractiveTest is a wrapper around StyledText that adds mouse interactions.
+/// Adds range-based pointer behavior to styled text.
 impl InteractiveText {
     /// Creates a new InteractiveText from the given text.
     pub fn new(id: impl Into<ElementId>, text: StyledText) -> Self {
@@ -1179,6 +1179,12 @@ impl InteractiveText {
             tooltip_id: None,
             clickable_ranges: Vec::new(),
         }
+    }
+
+    /// Display a pointing-hand cursor over these shaped text ranges.
+    pub fn with_link_cursors(mut self, ranges: Vec<Range<usize>>) -> Self {
+        self.clickable_ranges = ranges;
+        self
     }
 
     /// on_click is called when the user clicks on one of the given ranges, passing the index of
@@ -1222,7 +1228,7 @@ impl InteractiveText {
 
 impl Element for InteractiveText {
     type RequestLayoutState = ();
-    type PrepaintState = (Hitbox, Vec<Hitbox>);
+    type PrepaintState = (Option<Hitbox>, Vec<Hitbox>);
 
     fn id(&self) -> Option<ElementId> {
         Some(self.element_id.clone())
@@ -1259,44 +1265,39 @@ impl Element for InteractiveText {
         window: &mut Window,
         cx: &mut App,
     ) -> Self::PrepaintState {
-        window.with_optional_element_state::<InteractiveTextState, _>(
-            global_id,
-            |interactive_state, window| {
-                let mut interactive_state = interactive_state
-                    .map(|interactive_state| interactive_state.unwrap_or_default());
-
-                if let Some(interactive_state) = interactive_state.as_mut() {
-                    if self.tooltip_builder.is_some() {
-                        self.tooltip_id =
-                            set_tooltip_on_window(&interactive_state.active_tooltip, window);
-                    } else {
-                        // If there is no longer a tooltip builder, remove the active tooltip.
-                        interactive_state.long_press_tooltip_active.set(false);
-                        interactive_state.active_tooltip.take();
+        self.text
+            .prepaint(None, inspector_id, bounds, state, window, cx);
+        let has_pointer_handlers = self.click_listener.is_some()
+            || self.hover_listener.is_some()
+            || self.tooltip_builder.is_some();
+        let hitbox = has_pointer_handlers.then(|| {
+            window.with_optional_element_state::<InteractiveTextState, _>(
+                global_id,
+                |interactive_state, window| {
+                    let mut interactive_state =
+                        interactive_state.map(|state| state.unwrap_or_default());
+                    if let Some(state) = interactive_state.as_mut() {
+                        if self.tooltip_builder.is_some() {
+                            self.tooltip_id = set_tooltip_on_window(&state.active_tooltip, window);
+                        } else {
+                            state.long_press_tooltip_active.set(false);
+                            state.active_tooltip.take();
+                        }
                     }
-                }
-
-                self.text
-                    .prepaint(None, inspector_id, bounds, state, window, cx);
-                let hitbox = window.insert_hitbox(bounds, HitboxBehavior::Normal);
-
-                let mut link_hitboxes = Vec::new();
-                if !self.clickable_ranges.is_empty() {
-                    let layout = self.text.layout();
-                    for range in &self.clickable_ranges {
-                        let start = range.start.min(self.text.text.len());
-                        let end = range.end.min(self.text.text.len());
-                        // Link cursors follow the shaped text, not the full-width
-                        // continuation used when painting a selection.
-                        layout.for_each_range_bounds(start..end, false, |rect| {
-                            link_hitboxes.push(window.insert_hitbox(rect, HitboxBehavior::Normal));
-                        });
-                    }
-                }
-
-                ((hitbox, link_hitboxes), interactive_state)
-            },
-        )
+                    ((), interactive_state)
+                },
+            );
+            window.insert_hitbox(bounds, HitboxBehavior::Normal)
+        });
+        let mut link_hitboxes = Vec::new();
+        for range in &self.clickable_ranges {
+            let start = range.start.min(self.text.text.len());
+            let end = range.end.min(self.text.text.len());
+            self.text.layout().for_each_range_bounds(start..end, false, |rect| {
+                link_hitboxes.push(window.insert_hitbox(rect, HitboxBehavior::Normal));
+            });
+        }
+        (hitbox, link_hitboxes)
     }
 
     fn paint(
@@ -1312,6 +1313,11 @@ impl Element for InteractiveText {
         for link_hitbox in link_hitboxes {
             window.set_cursor_style(crate::CursorStyle::PointingHand, link_hitbox);
         }
+        let Some(hitbox) = hitbox else {
+            self.text
+                .paint(None, inspector_id, bounds, &mut (), &mut (), window, cx);
+            return;
+        };
         let current_view = window.current_view();
         let text_layout = self.text.layout().clone();
         window.with_element_state::<InteractiveTextState, _>(
@@ -1361,25 +1367,23 @@ impl Element for InteractiveText {
                     }
                 }
 
-                window.on_mouse_event({
-                    let mut hover_listener = self.hover_listener.take();
+                if let Some(hover_listener) = self.hover_listener.take() {
                     let hitbox = hitbox.clone();
                     let text_layout = text_layout.clone();
                     let hovered_index = interactive_state.hovered_index.clone();
-                    move |event: &MouseMoveEvent, phase, window, cx| {
-                        if phase == DispatchPhase::Bubble && hitbox.is_hovered(window) {
-                            let current = hovered_index.get();
-                            let updated = text_layout.index_for_position(event.position).ok();
-                            if current != updated {
-                                hovered_index.set(updated);
-                                if let Some(hover_listener) = hover_listener.as_ref() {
-                                    hover_listener(updated, event.clone(), window, cx);
-                                }
-                                cx.notify(current_view);
-                            }
+                    window.on_mouse_event(move |event: &MouseMoveEvent, phase, window, cx| {
+                        if phase != DispatchPhase::Bubble {
+                            return;
                         }
-                    }
-                });
+                        let updated = hitbox.is_hovered(window)
+                            .then(|| text_layout.index_for_position(event.position).ok())
+                            .flatten();
+                        if hovered_index.replace(updated) != updated {
+                            hover_listener(updated, event.clone(), window, cx);
+                            cx.notify(current_view);
+                        }
+                    });
+                }
 
                 if let Some(tooltip_builder) = self.tooltip_builder.clone() {
                     let active_tooltip = interactive_state.active_tooltip.clone();

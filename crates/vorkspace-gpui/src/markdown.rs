@@ -453,7 +453,6 @@ fn inline_selected(
     let mut highlights = Vec::new();
     let mut fonts = Vec::new();
     let mut links = Vec::new();
-    let mut urls = Vec::new();
     let fade = fade.filter(|times| !times.is_empty());
     for run in runs {
         let start = text.len();
@@ -508,8 +507,7 @@ fn inline_selected(
             fonts.push((range.clone(), vorkspace_ui::fonts::MONO.into()));
         }
         if let Some(url) = &style.link {
-            links.push(range);
-            urls.push(url.clone());
+            links.push((range, url.clone()));
         }
     }
     let text: SharedString = text.into();
@@ -517,45 +515,48 @@ fn inline_selected(
         .with_highlights(highlights)
         .with_font_family_overrides(fonts);
     let layout = styled.layout().clone();
-    let clicked_selection = selection.clone();
-    let clicked_layout = layout.clone();
-    let menu_layout = layout.clone();
-    let clicked_links = links.clone();
-    let menu_links = links.clone();
-    let clicked_urls = urls.clone();
     let text_id: SharedString = format!("{id}-text").into();
-    let child = div()
-        .id(id)
-        .child(InteractiveText::new(text_id, styled).on_click(links, |_, _, _| {}))
-        .on_click(move |event, window, cx| {
-            if !activate_link(event, clicked_selection.as_ref()) {
-                return;
-            }
-            let Ok(byte) = clicked_layout.index_for_position(event.position()) else {
-                return;
-            };
-            if let Some(ix) = clicked_links.iter().position(|range| range.contains(&byte)) {
-                // A drag starting on another link must not activate this one.
-                if let ClickEvent::Mouse(mouse) = event {
-                    let Ok(down) = clicked_layout.index_for_position(mouse.down.position) else {
-                        return;
-                    };
-                    if !clicked_links[ix].contains(&down) {
+    let styled = InteractiveText::new(text_id, styled)
+        .with_link_cursors(links.iter().map(|(range, _)| range.clone()).collect());
+    let mut child = div().id(id).child(styled);
+    if !links.is_empty() {
+        let links: std::rc::Rc<[(Range<usize>, String)]> = links.into();
+        let clicked_links = links.clone();
+        let clicked_selection = selection.clone();
+        let clicked_layout = layout.clone();
+        let menu_layout = layout.clone();
+        child = child
+            .on_click(move |event, window, cx| {
+                if !activate_link(event, clicked_selection.as_ref()) {
+                    return;
+                }
+                let Ok(byte) = clicked_layout.index_for_position(event.position()) else {
+                    return;
+                };
+                if let Some((range, url)) = clicked_links
+                    .iter()
+                    .find(|(range, _)| range.contains(&byte))
+                {
+                    if let ClickEvent::Mouse(mouse) = event
+                        && !clicked_layout
+                            .index_for_position(mouse.down.position)
+                            .is_ok_and(|down| range.contains(&down))
+                    {
                         return;
                     }
+                    open_link(url, window, cx);
                 }
-                open_link(&clicked_urls[ix], window, cx);
-            }
-        })
-        .on_mouse_down(MouseButton::Right, move |event, window, cx| {
-            if let Ok(byte) = menu_layout.index_for_position(event.position)
-                && let Some(ix) = menu_links.iter().position(|range| range.contains(&byte))
-            {
-                link_menu(&urls[ix], event.position, window, cx);
-                cx.stop_propagation();
-            }
-        })
-        .into_any_element();
+            })
+            .on_mouse_down(MouseButton::Right, move |event, window, cx| {
+                if let Ok(byte) = menu_layout.index_for_position(event.position)
+                    && let Some((_, url)) = links.iter().find(|(range, _)| range.contains(&byte))
+                {
+                    link_menu(url, event.position, window, cx);
+                    cx.stop_propagation();
+                }
+            });
+    }
+    let child = child.into_any_element();
     if let Some(selection) = selection {
         selection.wrap(text, layout, child)
     } else {
