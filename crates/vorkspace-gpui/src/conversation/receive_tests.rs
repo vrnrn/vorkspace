@@ -51,6 +51,99 @@ fn conversation(cx: &mut TestAppContext) -> WindowHandle<Conversation> {
 }
 
 #[gpui::test]
+fn saved_provider_feedback_updates_the_projection_without_resaving_or_overriding_a_choice(
+    cx: &mut TestAppContext,
+) {
+    let window = conversation(cx);
+    let (store, id) = window
+        .update(cx, |view, _, cx| {
+            use vorkspace_core::agent::ConfigurationPatch;
+            use vorkspace_runtime::runtime::ProviderConfiguration;
+
+            view.settings.revision = 7;
+            view.summary.provider_id = Some("source-thread".into());
+            let id = view.summary.id;
+            let patch = ConfigurationPatch {
+                model: Some("observed-model".into()),
+                model_settings: [("fast".into(), "true".into())].into(),
+            };
+            {
+                let saved = locked(&view.store).unwrap();
+                saved.provider_id(id, "source-thread").unwrap();
+                saved.save_agent_preferences(id, &view.settings).unwrap();
+                assert!(
+                    saved
+                        .record_provider_configuration(
+                            vorkspace_core::store::ProviderSource {
+                                session: id,
+                                provider: &view.summary.provider,
+                                account: &view.settings.account.id,
+                                provider_id: Some("source-thread"),
+                                revision: 7,
+                            },
+                            &patch
+                        )
+                        .unwrap()
+                );
+            }
+            let configuration = ProviderConfiguration {
+                revision: 7,
+                provider_id: Some("source-thread".into()),
+                patch,
+            };
+            let mut projection = turn_projection::TurnProjection::new(
+                view.submission_generation,
+                view.summary.provider.clone(),
+                view.settings.account.id.clone(),
+                None,
+            );
+            projection.apply(
+                view,
+                Update {
+                    configuration: Some(configuration.clone()),
+                    status: "Ready".into(),
+                    ..Default::default()
+                },
+                cx,
+            );
+            assert_eq!(view.settings.revision, 7);
+            assert_eq!(view.model.as_deref(), Some("observed-model"));
+            assert!(view.settings.fast);
+
+            view.settings.revision = 8;
+            view.settings.model = Some("deliberate-model".into());
+            view.model = view.settings.model.clone();
+            view.settings.fast = false;
+            locked(&view.store)
+                .unwrap()
+                .configure_agent(id, &view.summary.provider, &view.settings)
+                .unwrap();
+            projection.apply(
+                view,
+                Update {
+                    configuration: Some(configuration),
+                    status: "Ready".into(),
+                    ..Default::default()
+                },
+                cx,
+            );
+            assert_eq!(view.model.as_deref(), Some("deliberate-model"));
+            assert!(!view.settings.fast);
+            (view.store.clone(), id)
+        })
+        .unwrap();
+    cx.run_until_parked();
+    let saved = locked(&store)
+        .unwrap()
+        .agent_preferences(id)
+        .unwrap()
+        .unwrap();
+    assert_eq!(saved.revision, 8);
+    assert_eq!(saved.model.as_deref(), Some("deliberate-model"));
+    assert!(!saved.fast);
+}
+
+#[gpui::test]
 fn a_stale_resource_stop_cannot_cancel_the_next_turn(cx: &mut TestAppContext) {
     let window = conversation(cx);
     window

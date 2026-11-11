@@ -1,5 +1,6 @@
 //! Session storage. Desktop launches use vorkspace's existing schema directly.
 mod agent_configuration;
+pub use agent_configuration::ProviderSource;
 mod app_commands;
 pub use app_commands::AppCommandAdmission;
 mod attachments;

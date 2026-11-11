@@ -195,6 +195,84 @@ pub struct ProviderSwitch {
     pub account: crate::accounts::Profile,
     pub provider_id: Option<String>,
 }
+
+/// Configuration learned from the running provider, separate from the user's next choice.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct ConfigurationPatch {
+    pub model: Option<String>,
+    pub model_settings: std::collections::HashMap<String, String>,
+}
+
+impl ConfigurationPatch {
+    pub fn merge(&mut self, next: Self) {
+        if next.model.is_some() {
+            self.model = next.model;
+        }
+        self.model_settings.extend(next.model_settings);
+    }
+
+    pub fn apply(&self, settings: &mut Settings) {
+        self.apply_fields(
+            &mut settings.model,
+            &mut settings.model_settings,
+            &mut settings.effort,
+            &mut settings.fast,
+            &mut settings.service_tier,
+            &mut settings.thinking,
+        );
+    }
+
+    pub fn apply_to_switch(&self, pending: &mut ProviderSwitch) {
+        self.apply_fields(
+            &mut pending.model,
+            &mut pending.model_settings,
+            &mut pending.effort,
+            &mut pending.fast,
+            &mut pending.service_tier,
+            &mut pending.thinking,
+        );
+    }
+
+    fn apply_fields(
+        &self,
+        model: &mut Option<String>,
+        model_settings: &mut std::collections::HashMap<String, String>,
+        effort: &mut Option<String>,
+        fast: &mut bool,
+        service_tier: &mut Option<String>,
+        thinking: &mut Option<bool>,
+    ) {
+        if let Some(next) = &self.model {
+            *model = Some(next.clone());
+        }
+        if let Some(next) = self
+            .model_settings
+            .get("fast")
+            .and_then(|value| value.parse().ok())
+        {
+            *fast = next;
+        }
+        if let Some(next) = self.model_settings.get("thinking") {
+            *thinking = next.parse().ok();
+        }
+        if let Some(next) = [
+            "effort",
+            "reasoning",
+            "reasoningEffort",
+            "reasoning_effort",
+            "variant",
+        ]
+        .into_iter()
+        .find_map(|key| self.model_settings.get(key))
+        {
+            *effort = (!next.is_empty()).then(|| next.clone());
+        }
+        if let Some(next) = self.model_settings.get("serviceTier") {
+            *service_tier = (!next.is_empty()).then(|| next.clone());
+        }
+        model_settings.extend(self.model_settings.clone());
+    }
+}
 #[derive(Clone, Debug)]
 pub struct BotContext {
     pub bot: crate::bot_model::Bot,

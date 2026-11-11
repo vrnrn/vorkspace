@@ -23,7 +23,8 @@ pub mod remote;
 mod submissions;
 mod updates;
 pub use updates::{
-    HistoryRecovery, TranscriptPatch, TurnOutcome, TurnSettlement, TurnTransition, Update,
+    HistoryRecovery, ProviderConfiguration, TranscriptPatch, TurnOutcome, TurnSettlement,
+    TurnTransition, Update,
 };
 #[cfg(test)]
 mod ticket_context_tests;
@@ -118,6 +119,7 @@ fn run_turn_using(
     let bot_home = settings.bot.clone();
     let mut visual_introduction = None;
     let mut prepared_handoff = None;
+    let mut observed_configuration = None;
     let mut handoff_accepted = false;
     let mut handoff_retired = false;
     // SessionReview's recorded turn: its project and id, once the baseline is taken.
@@ -606,8 +608,7 @@ fn run_turn_using(
                 let mut changed_id = None;
                 let mut changed_provider_reset = false;
                 let mut model = None;
-                let mut config_model = None;
-                let mut config_settings = None;
+                let mut configuration = None;
                 let mut context_changed = false;
                 let mut metrics = None;
                 let mut approvals = Vec::new();
@@ -797,36 +798,29 @@ fn run_turn_using(
                             model: changed_model,
                             model_settings,
                         } => {
-                            let store = locked(&store)?;
-                            let mut settings =
-                                store.agent_preferences(summary.id)?.unwrap_or_default();
-                            if let Some(pending) = settings.pending_provider_switch.as_mut()
-                                && pending.from == summary.provider
-                                && pending.account.id == source_account
-                            {
-                                if let Some(id) = &changed_model {
-                                    pending.model = Some(id.clone());
-                                }
-                                pending.model_settings.extend(model_settings.clone());
-                                store.save_agent_preferences(summary.id, &settings)?;
-                            } else if settings.account.id == source_account
-                                && store
-                                    .bot_session(summary.id)?
-                                    .is_some_and(|session| session.provider == summary.provider)
-                            {
-                                if let Some(id) = &changed_model {
-                                    settings.model = Some(id.clone());
-                                }
-                                settings.model_settings.extend(model_settings.clone());
-                                store.save_agent_preferences(summary.id, &settings)?;
-                            }
                             if changed_model.is_some() {
                                 model = changed_model.clone();
-                                config_model = changed_model;
                             }
-                            config_settings
-                                .get_or_insert_with(std::collections::HashMap::new)
-                                .extend(model_settings);
+                            let patch = vorkspace_core::agent::ConfigurationPatch {
+                                model: changed_model,
+                                model_settings,
+                            };
+                            let source = vorkspace_core::store::ProviderSource {
+                                session: summary.id,
+                                provider: &summary.provider,
+                                account: &source_account,
+                                provider_id: provider_id.as_deref(),
+                                revision: settings.revision,
+                            };
+                            if locked(&store)?.record_provider_configuration(source, &patch)? {
+                                let saved = ProviderConfiguration {
+                                    revision: settings.revision,
+                                    provider_id: provider_id.clone(),
+                                    patch,
+                                };
+                                saved.clone().merge_into(&mut observed_configuration);
+                                saved.merge_into(&mut configuration);
+                            }
                         }
                         Event::Interjection {
                             text,
@@ -923,8 +917,7 @@ fn run_turn_using(
                             provider_id: changed_id,
                             provider_reset: changed_provider_reset,
                             model,
-                            config_model,
-                            config_settings,
+                            configuration,
                             context: context_changed.then_some(context),
                             metrics,
                             approvals,
@@ -1226,6 +1219,7 @@ fn run_turn_using(
         provider_turn_id: settled_provider_turn_id.filter(|_| bot_snapshot),
         provider_id: if pending.overlap { None } else { provider_id },
         provider_reset: provider_reset && !pending.overlap,
+        configuration: observed_configuration.filter(|_| !pending.overlap),
         context: (provider_reset && !pending.overlap).then_some(context),
         transition: TurnTransition::Settled(TurnSettlement {
             outcome,

@@ -1,12 +1,55 @@
 //! A local provider and its saved thread binding change in one transaction.
 use super::{LocalAgentBinding, Store};
 use crate::{
-    agent::{Handoff, ProviderSwitch, Settings},
+    agent::{ConfigurationPatch, Handoff, ProviderSwitch, Settings},
     provider::Kind,
 };
 use rusqlite::{OptionalExtension, Transaction, TransactionBehavior};
 
+/// Identity of the configuration admitted by a local turn.
+pub struct ProviderSource<'a> {
+    pub session: i64,
+    pub provider: &'a str,
+    pub account: &'a str,
+    pub provider_id: Option<&'a str>,
+    pub revision: u64,
+}
+
 impl Store {
+    /// Provider feedback can update its selected or outgoing binding, never a newer choice.
+    pub fn record_provider_configuration(
+        &self,
+        source: ProviderSource<'_>,
+        patch: &ConfigurationPatch,
+    ) -> Result<bool, String> {
+        if source.session < 0 || self.remote_session(source.session)?.is_some() {
+            return Err("Remote configuration belongs to the Host".into());
+        }
+        let tx = self.agent_configuration_transaction()?;
+        let Some(binding) = self.local_agent_binding(source.session)? else {
+            return Ok(false);
+        };
+        let mut settings = self.agent_preferences(source.session)?.unwrap_or_default();
+        if let Some(pending) = settings.pending_provider_switch.as_mut().filter(|pending| {
+            pending.from == source.provider
+                && pending.account.id == source.account
+                && pending.provider_id.as_deref() == source.provider_id
+        }) {
+            patch.apply_to_switch(pending);
+        } else if binding.provider == source.provider
+            && binding.provider_id.as_deref() == source.provider_id
+            && settings.account.id == source.account
+            && settings.revision == source.revision
+        {
+            patch.apply(&mut settings);
+        } else {
+            return Ok(false);
+        }
+        self.save_agent_preferences(source.session, &settings)?;
+        tx.commit().map_err(|error| error.to_string())?;
+        Ok(true)
+    }
+
     pub fn configure_agent(
         &self,
         id: i64,
@@ -183,6 +226,146 @@ impl Store {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn provider_feedback_preserves_new_choices_and_updates_the_exact_outgoing_source() {
+        for shared in [false, true] {
+            let directory = tempfile::tempdir().unwrap();
+            let path = directory.path().join("agent.db");
+            let open = if shared {
+                Store::open_vorkspace
+            } else {
+                Store::open
+            };
+            let store = open(&path).unwrap();
+            let id = store.create("omp", "/project").unwrap().id;
+            store.provider_id(id, "source-thread").unwrap();
+            let settings = Settings {
+                revision: 3,
+                thinking: Some(false),
+                ..Default::default()
+            };
+            store.save_agent_preferences(id, &settings).unwrap();
+            let source = || ProviderSource {
+                session: id,
+                provider: "omp",
+                account: crate::accounts::DEFAULT,
+                provider_id: Some("source-thread"),
+                revision: 3,
+            };
+            let patch = ConfigurationPatch {
+                model: Some("fixture/observed".into()),
+                model_settings: [
+                    ("fast".into(), "true".into()),
+                    ("thinking".into(), "high".into()),
+                    ("reasoningEffort".into(), "medium".into()),
+                    ("serviceTier".into(), "fast".into()),
+                ]
+                .into(),
+            };
+            assert!(store
+                .record_provider_configuration(source(), &patch)
+                .unwrap());
+            let peer = open(&path).unwrap();
+            let observed = peer.agent_preferences(id).unwrap().unwrap();
+            assert_eq!(observed.revision, 3);
+            assert_eq!(observed.model.as_deref(), Some("fixture/observed"));
+            assert!(observed.fast);
+            assert_eq!(observed.model_settings["fast"], "true");
+            assert_eq!(observed.model_settings["thinking"], "high");
+            assert_eq!(observed.effort.as_deref(), Some("medium"));
+            assert_eq!(observed.service_tier.as_deref(), Some("fast"));
+            assert!(observed.thinking.is_none());
+
+            let mut newer = observed;
+            newer.revision = 4;
+            newer.model = Some("fixture/deliberate".into());
+            peer.save_agent_preferences(id, &newer).unwrap();
+            assert!(!store
+                .record_provider_configuration(source(), &patch)
+                .unwrap());
+            assert_eq!(
+                peer.agent_preferences(id).unwrap().unwrap().model,
+                newer.model
+            );
+            let changed_account = ProviderSource {
+                account: "replacement",
+                revision: 4,
+                ..source()
+            };
+            assert!(!store
+                .record_provider_configuration(changed_account, &patch)
+                .unwrap());
+            let changed_thread = ProviderSource {
+                provider_id: Some("replacement-thread"),
+                revision: 4,
+                ..source()
+            };
+            assert!(!store
+                .record_provider_configuration(changed_thread, &patch)
+                .unwrap());
+
+            let next = Settings {
+                revision: 5,
+                model: Some("next-model".into()),
+                pending_provider_switch: Some(ProviderSwitch {
+                    from: "omp".into(),
+                    account: newer.account.clone(),
+                    ..Default::default()
+                }),
+                ..Default::default()
+            };
+            peer.select_local_provider(id, "omp", Kind::Claude, next)
+                .unwrap();
+            assert!(store
+                .record_provider_configuration(source(), &patch)
+                .unwrap());
+            let selected = peer.agent_preferences(id).unwrap().unwrap();
+            assert_eq!(selected.model.as_deref(), Some("next-model"));
+            assert!(!selected.fast);
+            assert_eq!(selected.revision, 5);
+            let pending = selected.pending_provider_switch.unwrap();
+            assert_eq!(pending.provider_id.as_deref(), Some("source-thread"));
+            assert_eq!(pending.model.as_deref(), Some("fixture/observed"));
+            assert!(pending.fast);
+            assert_eq!(pending.model_settings["thinking"], "high");
+        }
+    }
+
+    #[test]
+    fn a_failed_provider_observation_rolls_back_scalar_and_native_preferences() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("agent.db");
+        let store = Store::open_vorkspace(&path).unwrap();
+        let id = store.create("omp", "/project").unwrap().id;
+        let settings = Settings {
+            revision: 3,
+            ..Default::default()
+        };
+        store.save_agent_preferences(id, &settings).unwrap();
+        store.conn.execute_batch("CREATE TRIGGER fail_observation BEFORE INSERT ON native_agent_settings BEGIN SELECT RAISE(ABORT, 'fixture failure'); END;").unwrap();
+        let patch = ConfigurationPatch {
+            model: Some("fixture/rejected".into()),
+            model_settings: [("fast".into(), "true".into())].into(),
+        };
+        assert!(store
+            .record_provider_configuration(
+                ProviderSource {
+                    session: id,
+                    provider: "omp",
+                    account: crate::accounts::DEFAULT,
+                    provider_id: None,
+                    revision: 3,
+                },
+                &patch
+            )
+            .is_err());
+        let peer = Store::open_vorkspace(&path).unwrap();
+        let saved = peer.agent_preferences(id).unwrap().unwrap();
+        assert_eq!(saved.model, settings.model);
+        assert_eq!(saved.fast, settings.fast);
+        assert_eq!(saved.revision, settings.revision);
+    }
 
     fn selection(from: Kind, revision: u64) -> Settings {
         Settings {

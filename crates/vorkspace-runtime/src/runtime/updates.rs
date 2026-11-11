@@ -17,8 +17,7 @@ pub struct Update {
     pub provider_id: Option<String>,
     pub provider_reset: bool,
     pub model: Option<String>,
-    pub config_model: Option<String>,
-    pub config_settings: Option<std::collections::HashMap<String, String>>,
+    pub configuration: Option<ProviderConfiguration>,
     pub context: Option<vorkspace_core::context::Usage>,
     pub metrics: Option<vorkspace_core::agent::TurnMetrics>,
     pub approvals: Vec<Approval>,
@@ -27,6 +26,27 @@ pub struct Update {
     pub questions_resolved: Vec<String>,
     pub handoff: Option<Option<vorkspace_core::agent::Handoff>>,
     pub status: String,
+}
+
+/// A saved provider observation and the local choice it is allowed to refresh.
+#[derive(Clone)]
+pub struct ProviderConfiguration {
+    pub revision: u64,
+    pub provider_id: Option<String>,
+    pub patch: vorkspace_core::agent::ConfigurationPatch,
+}
+
+impl ProviderConfiguration {
+    pub(super) fn merge_into(self, saved: &mut Option<Self>) {
+        if let Some(previous) = saved
+            && previous.revision == self.revision
+            && previous.provider_id == self.provider_id
+        {
+            previous.patch.merge(self.patch);
+        } else {
+            *saved = Some(self);
+        }
+    }
 }
 
 #[derive(Default)]

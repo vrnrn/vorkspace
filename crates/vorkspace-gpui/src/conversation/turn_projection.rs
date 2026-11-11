@@ -139,27 +139,20 @@ impl TurnProjection {
             this.settings.pending_provider_switch = None;
             this.settings.handoff = handoff;
         }
-        if let Some(model) = update.config_model {
+        if let Some(configuration) = update.configuration {
             if let Some(pending) = this.settings.pending_provider_switch.as_mut()
                 && pending.from == source_provider
                 && pending.account.id == source_account
+                && pending.provider_id == configuration.provider_id
             {
-                pending.model = Some(model);
-            } else if source_selected {
-                this.model = Some(model.clone());
-                this.settings.model = Some(model);
-            }
-        }
-        if let Some(settings) = update.config_settings {
-            if let Some(pending) = this.settings.pending_provider_switch.as_mut()
-                && pending.from == source_provider
-                && pending.account.id == source_account
+                configuration.patch.apply_to_switch(pending);
+            } else if source_selected
+                && this.settings.revision == configuration.revision
+                && this.summary.provider_id == configuration.provider_id
             {
-                pending.model_settings.extend(settings);
-            } else if source_selected {
-                this.settings.model_settings.extend(settings);
+                configuration.patch.apply(&mut this.settings);
+                this.model = this.settings.model.clone();
             }
-            this.save_settings(cx);
         }
         if let Some(model) = update.model {
             self.turn_model_id = Some(model.clone());
