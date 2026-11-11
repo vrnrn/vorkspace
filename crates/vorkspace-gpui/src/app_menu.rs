@@ -34,7 +34,12 @@ fn workspace_fallback<A: Action>(cx: &mut App) {
                 {
                     return;
                 }
-                let focus = modal.clone().unwrap_or_else(|| shell.menu_focus());
+                // AppKit can deliver a menu action after deactivation. Keep
+                // the retained editor target used by ordinary key dispatch.
+                let focus = modal
+                    .clone()
+                    .or_else(|| window.focused(cx))
+                    .unwrap_or_else(|| shell.menu_focus());
                 if !window.is_action_available_in(action.as_ref(), &focus) {
                     return;
                 }
@@ -170,6 +175,14 @@ pub(crate) fn init(cx: &mut App) {
         shell::FocusPaneUp,
         shell::FocusPaneDown,
         shell::OpenAppearance,
+        editor::Find,
+        editor::Replace,
+        editor::Format,
+        editor::ToggleWordWrap,
+        input::FoldCode,
+        input::UnfoldCode,
+        input::FoldAll,
+        input::UnfoldAll,
         image_lightbox::ZoomIn,
         image_lightbox::ZoomOut,
         image_lightbox::ResetZoom,

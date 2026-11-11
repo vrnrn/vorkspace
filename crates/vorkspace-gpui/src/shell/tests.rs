@@ -3267,6 +3267,71 @@ fn explorer_files_share_the_review_pane_and_dirty_close_can_cancel_or_save(
 }
 
 #[gpui::test]
+fn native_editor_menu_uses_retained_focus_and_respects_a_management_modal(cx: &mut TestAppContext) {
+    cx.update(|cx| {
+        vorkspace_ui::clock::use_test_clock(cx);
+        crate::app_menu::init(cx);
+    });
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("menu.json");
+    let source = "{\"emoji\":\"🙂\",\"items\":[1,2]}";
+    std::fs::write(&path, source).unwrap();
+    let (window, _, id) = window(cx);
+    let visual = &mut gpui::VisualTestContext::from_window(window.into(), cx);
+    window
+        .update(visual, |shell, window, cx| {
+            shell.open(id, window, cx);
+            shell.open_review(
+                crate::git_tools::review::ReviewTab::File {
+                    cwd: directory.path().to_string_lossy().into_owned(),
+                    path: path.to_string_lossy().into_owned(),
+                },
+                window,
+                cx,
+            );
+        })
+        .unwrap();
+    visual.run_until_parked();
+    let editor = window
+        .update(visual, |shell, window, cx| {
+            let editor = shell.reviews[&id].read(cx).active_editor().unwrap();
+            window.focus(&editor.read(cx).input.read(cx).focus_handle(cx), cx);
+            editor
+        })
+        .unwrap();
+    visual.deactivate_window();
+    visual.cx.update(|cx| {
+        assert!(cx.active_window().is_none());
+        cx.dispatch_action(&crate::file_tools::file_editor::Format);
+    });
+    visual.run_until_parked();
+    editor.read_with(visual, |editor, cx| {
+        assert_eq!(
+            editor.input.read(cx).content.as_ref(),
+            "{ \"emoji\": \"🙂\", \"items\": [1, 2] }\n"
+        );
+    });
+    window
+        .update(visual, |shell, window, cx| {
+            let input = editor.read(cx).input.clone();
+            input.update(cx, |input, cx| input.set_text(source.into(), cx));
+            shell.open_vorkspace_dialog(None, window, cx);
+            assert!(shell.management_modal_focus(cx).is_some());
+        })
+        .unwrap();
+    visual.run_until_parked();
+    visual.deactivate_window();
+    visual
+        .cx
+        .update(|cx| cx.dispatch_action(&crate::file_tools::file_editor::Format));
+    visual.run_until_parked();
+    editor.read_with(visual, |editor, cx| {
+        assert_eq!(editor.input.read(cx).content.as_ref(), source)
+    });
+    assert_eq!(std::fs::read_to_string(&path).unwrap(), source);
+}
+
+#[gpui::test]
 fn panes_split_resize_and_take_drops_from_panes_tabs_and_the_sidebar(cx: &mut TestAppContext) {
     use gpui::{Modifiers, point};
     let (window, a, b) = window(cx);
