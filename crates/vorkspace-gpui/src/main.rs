@@ -19,6 +19,8 @@ mod diagrams;
 mod file_link;
 mod file_tools;
 mod fixtures;
+#[cfg(test)]
+mod framework_tests;
 mod git_status;
 mod git_tools;
 mod image_lightbox;
