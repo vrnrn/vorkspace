@@ -1,4 +1,4 @@
-//! Automation tables, created with the rest of the database.
+//! Automation tables shared by scheduling and atomic session preparation.
 use rusqlite::Connection;
 
 pub(crate) const RECOVERABLE_RUN: &str = "CASE WHEN json_valid(run_json)

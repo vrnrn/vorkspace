@@ -1,5 +1,6 @@
 //! Persisted automations, scheduling, event deduplication, and run history.
 mod schedule;
+pub(crate) mod schema;
 mod service;
 pub use schedule::{event_label, next_run_at, WEEKDAYS};
 pub use service::{DefinitionRevision, Service};

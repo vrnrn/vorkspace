@@ -4,7 +4,6 @@ pub use agent_configuration::ProviderSource;
 mod app_commands;
 pub use app_commands::AppCommandAdmission;
 mod attachments;
-pub(crate) mod automations_schema;
 mod bot_desktop;
 pub(crate) mod bot_state;
 pub use bot_state::describe_worktrees;

@@ -336,7 +336,7 @@ impl Store {
         sql(super::super::notes::ensure_notes_table(&tx))?;
         sql(super::super::todos::ensure_schema(&tx))?;
         // Prepare automation DDL only; its service still owns run/claim backfill.
-        sql(super::super::automations_schema::ensure_schema(&tx))?;
+        sql(crate::automations::schema::ensure_schema(&tx))?;
         sql(tx.execute_batch(
             "CREATE TABLE IF NOT EXISTS session_history_revisions(
                 session_id TEXT PRIMARY KEY REFERENCES sessions(id) ON DELETE CASCADE,

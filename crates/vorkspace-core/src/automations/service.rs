@@ -4,7 +4,7 @@ use super::{
     validate_id, validate_upsert, Automation, AutomationEventClaim, AutomationRun,
     AutomationUpsert, DueAutomationRun, MAX_PROMPT,
 };
-use crate::store::automations_schema::{ensure_schema, RECOVERABLE_RUN};
+use super::schema::{ensure_schema, RECOVERABLE_RUN};
 use rusqlite::{params, params_from_iter, Connection, OptionalExtension, TransactionBehavior};
 use std::path::Path;
 
