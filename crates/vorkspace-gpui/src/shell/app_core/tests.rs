@@ -226,6 +226,17 @@ fn two_windows_prepare_one_backing_conversation_even_if_the_first_closes(cx: &mu
 #[gpui::test]
 fn one_window_fires_scheduled_work_and_hands_it_on_when_closed(cx: &mut TestAppContext) {
     let (a, b, _, _dir) = two_windows(cx);
+    let service = a
+        .read_with(cx, |shell, _| shell.automation_state.service.clone())
+        .unwrap()
+        .unwrap();
+    b.read_with(cx, |shell, _| {
+        assert!(Arc::ptr_eq(
+            &service,
+            shell.automation_state.service.as_ref().unwrap()
+        ));
+    })
+    .unwrap();
     assert!(
         a.update(cx, |shell, _, cx| shell.holds_scheduler(cx))
             .unwrap()

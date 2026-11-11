@@ -52,7 +52,6 @@ pub(super) struct State {
     waiting_for_reuse: HashMap<i64, WaitingForReuse>,
     writes: Option<gpui::Task<()>>,
     events_polling: bool,
-    pub session_automations: HashMap<i64, String>,
 }
 
 fn now() -> i64 {
@@ -81,45 +80,51 @@ impl Shell {
             return;
         }
         self.automation_state.opening = true;
-        let store = self.store.clone();
-        let work = cx.background_executor().spawn(async move {
-            let path = locked(&store)?.database_path().to_path_buf();
-            let service = Service::open(&path).map(|service| Arc::new(Mutex::new(service)))?;
-            let sessions = locked(&store)?.automation_session_ids()?;
-            Ok::<_, String>((service, sessions))
-        });
+        let core = self.app_core.clone().expect("registered workspace window");
+        if let Some(service) = core.update(cx, |core, cx| core.request_automation_service(cx)) {
+            self.automation_service_ready(Ok(service), cx);
+        }
+    }
+
+    pub(super) fn automation_service_ready(
+        &mut self,
+        result: Result<ServiceHandle, String>,
+        cx: &mut Context<Self>,
+    ) {
+        if self.automation_state.service.is_some() {
+            return;
+        }
+        let requested = std::mem::take(&mut self.automation_state.opening);
+        match result {
+            Ok(service) => self.automation_state.service = Some(service),
+            Err(error) => {
+                if requested {
+                    self.error = Some(format!("Could not open automations: {error}"));
+                    cx.notify();
+                }
+                return;
+            }
+        }
         cx.spawn(async move |this, cx| {
-            let result = work.await;
             let _ = this.update_in(cx, |this, window, cx| {
-                this.automation_state.opening = false;
-                match result {
-                    Ok((service, sessions)) => {
-                        this.automation_state.session_automations = sessions;
-                        this.automation_state.service = Some(service);
-                        if !cfg!(test) && this.holds_scheduler(cx) {
-                            this.ensure_background_inbox(window, cx);
-                        }
-                        this.poll_automations(cx);
-                        if this
-                            .automation_state
-                            .open_requested
-                            .take()
-                            .is_some_and(|revision| revision == this.navigation_revision)
-                        {
-                            this.open_automations(window, cx);
-                        } else if this.navigation_revision == 0
-                            && this.active_app_view.is_none()
-                            && this.settings.is_none()
-                        {
-                            let saved = this.workspace.scope_focus.get(&this.tab_scope()).cloned();
-                            if let Some(tab @ TitleTab::App(_)) = saved {
-                                this.open_title_tab(&tab, window, cx);
-                            }
-                        }
-                    }
-                    Err(error) => {
-                        this.error = Some(format!("Could not open automations: {error}"));
-                        cx.notify();
+                if !cfg!(test) && this.holds_scheduler(cx) {
+                    this.ensure_background_inbox(window, cx);
+                }
+                this.poll_automations(cx);
+                if this
+                    .automation_state
+                    .open_requested
+                    .take()
+                    .is_some_and(|revision| revision == this.navigation_revision)
+                {
+                    this.open_automations(window, cx);
+                } else if this.navigation_revision == 0
+                    && this.active_app_view.is_none()
+                    && this.settings.is_none()
+                {
+                    let saved = this.workspace.scope_focus.get(&this.tab_scope()).cloned();
+                    if let Some(tab @ TitleTab::App(_)) = saved {
+                        this.open_title_tab(&tab, window, cx);
                     }
                 }
             });
@@ -538,9 +543,6 @@ impl Shell {
         }
         let due = launch.due;
         self.automation_state.pending.remove(&due.run.id);
-        self.automation_state
-            .session_automations
-            .insert(id, due.automation.id);
         self.automation_state.running.insert(
             id,
             Running {

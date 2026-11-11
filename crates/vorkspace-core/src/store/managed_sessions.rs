@@ -3,7 +3,6 @@ use super::Store;
 use crate::{files::path_key, session_groups::WorkItem};
 use rusqlite::{OptionalExtension, Transaction, TransactionBehavior};
 use serde_json::Value;
-use std::collections::HashMap;
 
 impl Store {
     /// A prepared run may link only the exact local checkout it inspected.
@@ -78,32 +77,6 @@ impl Store {
         tx.commit().map_err(|error| error.to_string())?;
         Ok(true)
     }
-
-    pub fn automation_session_ids(&self) -> Result<HashMap<i64, String>, String> {
-        if self.shared.is_none() {
-            return Ok(self
-                .settings_with_prefix("automation:")?
-                .into_iter()
-                .collect());
-        }
-        let field = self.shared_field("automation_id", "NULL");
-        let mut query = self
-            .conn
-            .prepare(&format!(
-                "SELECT id,{field} FROM sessions WHERE {field} IS NOT NULL"
-            ))
-            .map_err(|error| error.to_string())?;
-        let rows = query
-            .query_map([], |row| {
-                Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
-            })
-            .map_err(|error| error.to_string())?;
-        rows.map(|row| {
-            let (id, automation) = row.map_err(|error| error.to_string())?;
-            Ok((self.shared_register(&id)?, automation))
-        })
-        .collect()
-    }
 }
 
 #[cfg(test)]
@@ -135,14 +108,6 @@ mod tests {
                 None,
             )
             .unwrap());
-        assert_eq!(
-            store
-                .automation_session_ids()
-                .unwrap()
-                .get(&session.id)
-                .map(String::as_str),
-            Some("automation-one")
-        );
         let persisted = store.persisted_session_id(session.id).unwrap();
         let raw: String = store
             .conn

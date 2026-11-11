@@ -109,6 +109,8 @@ pub(crate) struct AppCore {
     notification_clicks: Option<gpui::Task<()>>,
     pub(super) automation_cutoff: i64,
     pub(super) automation_recovered: bool,
+    automation_service: Option<super::automation_runs::ServiceHandle>,
+    automation_opening: Option<gpui::Task<()>>,
     automation_events: HashMap<String, vorkspace_core::inbox::Item>,
     dock_badges: HashMap<u64, usize>,
     idle_protection: HashMap<u64, HashSet<i64>>,
@@ -256,6 +258,8 @@ impl AppCore {
                 notification_clicks: None,
                 automation_cutoff: vorkspace_core::time::now_ms().min(i64::MAX as u64) as i64,
                 automation_recovered: false,
+                automation_service: None,
+                automation_opening: None,
                 automation_events,
                 dock_badges: HashMap::new(),
                 idle_protection: HashMap::new(),
@@ -506,6 +510,12 @@ impl Shell {
         }));
         self.observe_session_catalog(&core, cx);
         self.observe_reminders(&core, cx);
+        self.observations.push(cx.subscribe(
+            &core,
+            |this, _, ready: &scheduler::AutomationServiceReady, cx| {
+                this.automation_service_ready(ready.0.clone(), cx);
+            },
+        ));
         self.observations.push(cx.subscribe(
             &core,
             |this, _, event: &super::remote_sessions::RemoteCatalog, cx| {

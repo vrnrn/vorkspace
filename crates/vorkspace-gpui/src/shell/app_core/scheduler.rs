@@ -1,7 +1,37 @@
 //! Scheduler ownership and durable connector retries across window handoffs.
+use super::super::automation_runs::ServiceHandle;
 use super::*;
 
+pub(super) struct AutomationServiceReady(pub Result<ServiceHandle, String>);
+impl EventEmitter<AutomationServiceReady> for AppCore {}
+
 impl AppCore {
+    pub(in crate::shell) fn request_automation_service(
+        &mut self,
+        cx: &mut Context<Self>,
+    ) -> Option<ServiceHandle> {
+        if let Some(service) = &self.automation_service {
+            return Some(service.clone());
+        }
+        if self.automation_opening.is_none() {
+            let store = self.store.clone();
+            let work = cx.background_executor().spawn(async move {
+                let path = locked(&store)?.database_path().to_path_buf();
+                let service = vorkspace_core::automations::Service::open(&path)?;
+                Ok::<_, String>(Arc::new(Mutex::new(service)))
+            });
+            self.automation_opening = Some(cx.spawn(async move |core, cx| {
+                let result = work.await;
+                let _ = core.update(cx, |core, cx| {
+                    core.automation_opening = None;
+                    core.automation_service = result.as_ref().ok().cloned();
+                    cx.emit(AutomationServiceReady(result));
+                });
+            }));
+        }
+        None
+    }
+
     /// The requesting window takes a vacant or stale scheduler lease.
     fn claim_scheduler(&mut self, shell: &WeakEntity<Shell>) -> bool {
         match &self.scheduler {
