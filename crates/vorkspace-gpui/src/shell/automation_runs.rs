@@ -154,31 +154,25 @@ impl Shell {
         let cutoff = core.read(cx).automation_cutoff;
         let work = cx.background_executor().spawn(async move {
             let mut service = service_lock(&service)?;
-            let has_events = service.list()?.iter().any(|automation| {
-                automation.enabled
-                    && automation.triggers.as_ref().is_some_and(|triggers| {
-                        triggers.iter().any(|trigger| trigger.kind != "time")
-                    })
-            });
             let mut runs = if recover {
                 service.recover(cutoff, now())?
             } else {
                 Vec::new()
             };
             runs.extend(service.claim_due(now())?);
-            Ok::<_, String>((runs, has_events))
+            Ok::<_, String>(runs)
         });
         cx.spawn(async move |this, cx| {
             let result = work.await;
             let _ = this.update_in(cx, |this, window, cx| {
                 this.automation_state.polling = false;
                 match result {
-                    Ok((runs, has_events)) => {
+                    Ok(runs) => {
                         core.update(cx, |core, _| core.automation_recovered = true);
                         for run in runs {
                             this.launch_automation(run, false, cx);
                         }
-                        if has_events {
+                        if !cfg!(test) && this.inbox.is_none() {
                             this.ensure_background_inbox(window, cx);
                         }
                         this.drain_inbox_automation_events(cx);
