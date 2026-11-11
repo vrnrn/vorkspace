@@ -474,14 +474,14 @@ impl TaskStatistics {
             let to_replace = self
                 .longest_poll_times
                 .iter()
-                .position_min_by_key(|task| task.since_spawn())
+                .position_min_by_key(TaskTiming::poll_duration)
                 .expect("guarded by the comparison with nth_longest_yield_time");
             self.longest_poll_times[to_replace] = task;
 
             self.poll_time_to_beat = self
                 .longest_poll_times
                 .iter()
-                .map(|task| task.since_spawn())
+                .map(TaskTiming::poll_duration)
                 .min()
                 .expect("never empty");
         }
