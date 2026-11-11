@@ -181,13 +181,25 @@ impl BackgroundDialog {
         .detach();
     }
     fn set_opacity(&mut self, empty: bool, value: f32, cx: &mut Context<Self>) {
+        let previous = (
+            self.background.empty_opacity,
+            self.background.session_opacity,
+        );
         let value = (value * 100.).round() / 100.;
         if empty {
             self.background.empty_opacity = value;
         } else {
             self.background.session_opacity = value;
         }
-        self.save(cx);
+        self.background.normalize();
+        if previous
+            != (
+                self.background.empty_opacity,
+                self.background.session_opacity,
+            )
+        {
+            self.save(cx);
+        }
     }
     pub(crate) fn measured_height(&self) -> Option<f32> {
         self.bounds.get().map(|bounds| bounds.size.height.as_f32())
@@ -812,5 +824,62 @@ impl Render for BackgroundDialog {
                     }),
             )
             .children(self.effect_popup(cx))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::{cell::RefCell, rc::Rc, sync::Arc, sync::Mutex};
+    use vorkspace_core::store::Store;
+
+    #[gpui::test]
+    fn opacity_emits_only_changed_normalized_values_for_each_surface(
+        cx: &mut gpui::TestAppContext,
+    ) {
+        let store = Arc::new(Mutex::new(
+            Store::open(std::path::Path::new(":memory:")).unwrap(),
+        ));
+        let dialog = cx.new(|cx| {
+            BackgroundDialog::new(
+                Owner::Vorkspace {
+                    id: "fixture".into(),
+                    label: "Fixture".into(),
+                },
+                Some(Background {
+                    path: "/fixture/background.png".into(),
+                    ..Default::default()
+                }),
+                store,
+                cx,
+            )
+        });
+        let changes = Rc::new(RefCell::new(Vec::new()));
+        let events = changes.clone();
+        let _subscription = cx.update(|cx| {
+            cx.subscribe(&dialog, move |_, event: &Event, _| {
+                if let Event::Changed(background) = event {
+                    events.borrow_mut().push(background.clone().unwrap());
+                }
+            })
+        });
+        for value in [0.241, 0.244, 0.30, 0.304, 0.99, 1.2, -0.1, -1.0] {
+            dialog.update(cx, |dialog, cx| dialog.set_opacity(true, value, cx));
+        }
+        for value in [0.35, 0.351, 0.349] {
+            dialog.update(cx, |dialog, cx| dialog.set_opacity(false, value, cx));
+        }
+        for _ in 0..2 {
+            dialog.update(cx, |dialog, cx| dialog.set_opacity(true, f32::NAN, cx));
+        }
+        cx.run_until_parked();
+        let changes = changes.borrow();
+        assert_eq!(changes.len(), 5);
+        assert_eq!(changes[0].empty_opacity, 0.30);
+        assert_eq!(changes[1].empty_opacity, 0.65);
+        assert_eq!(changes[2].empty_opacity, 0.05);
+        assert_eq!(changes[3].session_opacity, 0.35);
+        assert_eq!(changes[4].empty_opacity, 0.24);
+        assert_eq!(changes[4].session_opacity, 0.35);
     }
 }

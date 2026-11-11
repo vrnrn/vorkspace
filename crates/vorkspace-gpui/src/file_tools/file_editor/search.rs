@@ -136,8 +136,6 @@ impl FileEditor {
                 .await;
             let _ = this.update(cx, |this, cx| {
                 if !this.search_open || this.find_request(cx) != request {
-                    this.find_state = FindState::Empty;
-                    cx.notify();
                     return;
                 }
                 this.find_state = match result {

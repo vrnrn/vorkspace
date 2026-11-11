@@ -6,7 +6,7 @@ use crate::{
 };
 use gpui::{
     App, Context, Entity, FocusHandle, Focusable, FontWeight, Role, SharedString, Subscription,
-    Window, div, prelude::*, px,
+    Task, Window, div, prelude::*, px,
 };
 use std::collections::HashMap;
 use vorkspace_core::todos::TodoBoard;
@@ -60,6 +60,7 @@ pub(crate) struct TodosPage {
     assign_error: Option<String>,
     anchor: AnchorSlot,
     picker_open: bool,
+    counts_task: Option<Task<()>>,
     _subscriptions: Vec<Subscription>,
 }
 
@@ -91,6 +92,7 @@ impl TodosPage {
             assign_error: None,
             anchor: AnchorSlot::default(),
             picker_open: false,
+            counts_task: None,
             _subscriptions: subscriptions,
         };
         page.load_counts(cx);
@@ -150,7 +152,7 @@ impl TodosPage {
                 .collect::<Vec<_>>();
             Ok::<_, String>((counts, legacy))
         });
-        cx.spawn(async move |this, cx| {
+        self.counts_task = Some(cx.spawn(async move |this, cx| {
             if let Ok((counts, legacy)) = work.await {
                 let _ = this.update(cx, |this, cx| {
                     this.open_counts = counts;
@@ -158,8 +160,7 @@ impl TodosPage {
                     cx.notify();
                 });
             }
-        })
-        .detach();
+        }));
     }
 
     fn assign_legacy(&mut self, id: String, project: String, cx: &mut Context<Self>) {
