@@ -1,5 +1,6 @@
 //! GPUI port of AgentMarkdown.tsx and its .agent-markdown CSS.
 use vorkspace_ui::radius;
+mod accessibility;
 mod document;
 mod search;
 use crate::syntax::HighlightedDocument;
@@ -54,6 +55,7 @@ fn activate_link(event: &ClickEvent, selection: Option<&Selection>) -> bool {
             _ => true,
         }
 }
+use accessibility::{LinkedText, Links, append_link};
 use std::{
     borrow::Cow,
     hash::{DefaultHasher, Hash, Hasher},
@@ -507,14 +509,7 @@ fn inline_selected(
             fonts.push((range.clone(), vorkspace_ui::fonts::MONO.into()));
         }
         if let Some(url) = &style.link {
-            if let Some((previous, _)) = links
-                .last_mut()
-                .filter(|(previous, target)| previous.end == range.start && target == url)
-            {
-                previous.end = range.end;
-            } else {
-                links.push((range, url.clone()));
-            }
+            append_link(&mut links, range, url);
         }
     }
     let text: SharedString = text.into();
@@ -524,17 +519,22 @@ fn inline_selected(
     let layout = styled.layout().clone();
     let text_id: SharedString = format!("{id}-text").into();
     let styled = InteractiveText::new(text_id, styled);
-    let mut child = div().id(id);
-    if links.is_empty() {
-        child = child.child(styled);
+    let child = if links.is_empty() {
+        div().id(id).child(styled).into_any_element()
     } else {
-        let links: std::rc::Rc<[(Range<usize>, String)]> = links.into();
-        child = child.child(styled.with_links(links.clone(), open_link));
+        let links: Links = links.into();
         let clicked_links = links.clone();
+        let menu_links = links.clone();
         let clicked_selection = selection.clone();
         let clicked_layout = layout.clone();
         let menu_layout = layout.clone();
-        child = child
+        let child = div()
+            .id(id.clone())
+            .child(
+                styled
+                    .with_link_cursors(links.iter().map(|(range, _)| range.clone()).collect())
+                    .with_accessibility(false),
+            )
             .on_click(move |event, window, cx| {
                 if !activate_link(event, clicked_selection.as_ref()) {
                     return;
@@ -558,14 +558,17 @@ fn inline_selected(
             })
             .on_mouse_down(MouseButton::Right, move |event, window, cx| {
                 if let Ok(byte) = menu_layout.index_for_position(event.position)
-                    && let Some((_, url)) = links.iter().find(|(range, _)| range.contains(&byte))
+                    && let Some((_, url)) =
+                        menu_links.iter().find(|(range, _)| range.contains(&byte))
                 {
                     link_menu(url, event.position, window, cx);
                     cx.stop_propagation();
                 }
-            });
-    }
-    let child = child.into_any_element();
+            })
+            .into_any_element();
+        LinkedText::new(id, text.clone(), links, vec![(0, layout.clone())], child)
+            .into_any_element()
+    };
     if let Some(selection) = selection {
         selection.wrap(text, layout, child)
     } else {
@@ -585,6 +588,15 @@ fn rich_inline(
     infer_file_links: bool,
 ) -> AnyElement {
     let mut children = Vec::new();
+    let has_links = runs.iter().any(|run| {
+        if run.style.code {
+            code_link(run, infer_file_links).is_some()
+        } else {
+            run.style.link.is_some()
+        }
+    });
+    let mut links = Vec::new();
+    let mut fragments = Vec::new();
     let mut offset = 0;
     for (run_ix, run) in runs.iter().enumerate() {
         let style = &run.style;
@@ -593,6 +605,12 @@ fn rich_inline(
             let file = code_link(run, infer_file_links).is_some();
             let styled = StyledText::new(text.clone());
             let layout = styled.layout().clone();
+            if let Some(url) = code_link(run, infer_file_links) {
+                append_link(&mut links, offset..offset + text.len(), url);
+            }
+            if has_links {
+                fragments.push((offset, layout.clone()));
+            }
             let selected = selection.as_ref().map(|s| {
                 let selected = s.offset(offset);
                 if file {
@@ -629,9 +647,7 @@ fn rich_inline(
                     .when(file, |d| {
                         let path = code_link(run, infer_file_links).unwrap().to_owned();
                         let menu_path = path.clone();
-                        d.role(Role::Link)
-                            .aria_label(text.clone())
-                            .cursor(gpui::CursorStyle::PointingHand)
+                        d.cursor(gpui::CursorStyle::PointingHand)
                             .hover(|s| s.bg(vorkspace_ui::fluid::hover(0.13)))
                             .on_click(move |event, window, cx| {
                                 if activate_link(event, clicked_selection.as_ref()) {
@@ -649,6 +665,9 @@ fn rich_inline(
             );
             offset += run.text.len();
             continue;
+        }
+        if let Some(url) = &style.link {
+            append_link(&mut links, offset..offset + run.text.len(), url);
         }
         for (part_ix, part) in run.text.split_inclusive(char::is_whitespace).enumerate() {
             let text = part.trim_end_matches(char::is_whitespace);
@@ -687,6 +706,9 @@ fn rich_inline(
                 let styled =
                     StyledText::new(text.to_owned()).with_highlights([(0..text.len(), highlight)]);
                 let layout = styled.layout().clone();
+                if has_links {
+                    fragments.push((offset, layout.clone()));
+                }
                 let child = styled.into_any_element();
                 let selected = selection.as_ref().map(|s| {
                     let selected = s.offset(offset);
@@ -711,9 +733,7 @@ fn rich_inline(
                         .child(child)
                         .when_some(link, |d, url| {
                             let menu_url = url.clone();
-                            d.role(Role::Link)
-                                .aria_label(text.to_owned())
-                                .cursor(gpui::CursorStyle::PointingHand)
+                            d.cursor(gpui::CursorStyle::PointingHand)
                                 .on_click(move |event, window, cx| {
                                     if activate_link(event, clicked_selection.as_ref()) {
                                         open_link(&url, window, cx);
@@ -735,16 +755,25 @@ fn rich_inline(
             }
         }
     }
-    div()
-        .id(id)
-        .role(Role::Label)
-        .aria_label(runs.iter().map(|run| run.text.as_str()).collect::<String>())
+    let text: SharedString = runs
+        .iter()
+        .map(|run| run.text.as_str())
+        .collect::<String>()
+        .into();
+    let child = div()
+        .id(id.clone())
+        .when(!has_links, |d| d.role(Role::Label).aria_label(text.clone()))
         .w_full()
         .flex()
         .flex_wrap()
         .items_center()
         .children(children)
-        .into_any_element()
+        .into_any_element();
+    if has_links {
+        LinkedText::new(id, text, links.into(), fragments, child).into_any_element()
+    } else {
+        child
+    }
 }
 fn is_file_chip(text: &str) -> bool {
     !text.chars().any(char::is_whitespace)
@@ -1300,65 +1329,92 @@ mod file_link_tests {
         });
         let visual = &mut VisualTestContext::from_window(window.into(), cx);
         visual.activate_accessibility();
-        let mut identity = None;
-        for width in [210., 350., 210.] {
-            visual.simulate_resize(size(px(width), px(400.)));
-            visual.run_until_parked();
-            let node = window
-                .update(visual, |_, window, _| {
-                    let tree: serde_json::Value =
-                        serde_json::from_str(&window.debug_a11y_tree_json().unwrap()).unwrap();
-                    let nodes = tree["nodes"].as_object().unwrap();
-                    let paragraph = nodes
-                        .values()
-                        .find(|node| node["aria"]["role"] == "Paragraph")
-                        .unwrap();
-                    assert!(paragraph["aria"]["value"].is_null());
-                    let children: Vec<_> = paragraph["children"]
-                        .as_array()
-                        .unwrap()
-                        .iter()
-                        .map(|id| &nodes[id.as_str().unwrap()])
-                        .collect();
-                    let text: String = children
-                        .iter()
-                        .map(|node| {
-                            node["aria"]["value"]
-                                .as_str()
-                                .or_else(|| node["aria"]["label"].as_str())
-                                .unwrap()
-                        })
-                        .collect();
-                    assert_eq!(
-                        text,
-                        "Before long café source continues over several wrapped lines after"
-                    );
-                    let links: Vec<_> = children
-                        .into_iter()
-                        .filter(|node| node["aria"]["role"] == "Link")
-                        .collect();
-                    assert_eq!(links.len(), 1);
-                    assert_eq!(
-                        links[0]["aria"]["label"],
-                        "long café source continues over several wrapped lines"
-                    );
-                    gpui::accesskit::NodeId(
-                        links[0]["accesskit_id"].as_str().unwrap().parse().unwrap(),
-                    )
-                })
-                .unwrap();
-            assert_eq!(*identity.get_or_insert(node), node);
-            visual.simulate_accessibility_action(gpui::accesskit::ActionRequest {
-                action: gpui::AccessibleAction::Click,
-                target_tree: gpui::accesskit::TreeId::ROOT,
-                target_node: node,
-                data: None,
-            });
-            visual.run_until_parked();
+        for rich in [false, true] {
+            if rich {
+                window
+                    .update(visual, |view, _, cx| {
+                        let Part::Text { runs, .. } = &mut view.row.part else {
+                            panic!()
+                        };
+                        runs[0].text.insert(0, ' ');
+                        runs.insert(
+                            0,
+                            InlineRun {
+                                text: "snippet".into(),
+                                style: InlineStyle {
+                                    code: true,
+                                    ..Default::default()
+                                },
+                            },
+                        );
+                        cx.notify();
+                    })
+                    .unwrap();
+            }
+            let mut identity = None;
+            for width in [210., 350., 210.] {
+                visual.simulate_resize(size(px(width), px(400.)));
+                visual.run_until_parked();
+                let node = window
+                    .update(visual, |_, window, _| {
+                        let tree: serde_json::Value =
+                            serde_json::from_str(&window.debug_a11y_tree_json().unwrap()).unwrap();
+                        let nodes = tree["nodes"].as_object().unwrap();
+                        let paragraph = nodes
+                            .values()
+                            .find(|node| node["aria"]["role"] == "Paragraph")
+                            .unwrap();
+                        assert!(paragraph["aria"]["value"].is_null());
+                        let children: Vec<_> = paragraph["children"]
+                            .as_array()
+                            .unwrap()
+                            .iter()
+                            .map(|id| &nodes[id.as_str().unwrap()])
+                            .collect();
+                        let text: String = children
+                            .iter()
+                            .map(|node| {
+                                node["aria"]["value"]
+                                    .as_str()
+                                    .or_else(|| node["aria"]["label"].as_str())
+                                    .unwrap()
+                            })
+                            .collect();
+                        assert_eq!(
+                            text,
+                            if rich {
+                                "snippet Before long café source continues over several wrapped lines after"
+                            } else {
+                                "Before long café source continues over several wrapped lines after"
+                            }
+                        );
+                        let links: Vec<_> = children
+                            .into_iter()
+                            .filter(|node| node["aria"]["role"] == "Link")
+                            .collect();
+                        assert_eq!(links.len(), 1);
+                        assert_eq!(
+                            links[0]["aria"]["label"],
+                            "long café source continues over several wrapped lines"
+                        );
+                        gpui::accesskit::NodeId(
+                            links[0]["accesskit_id"].as_str().unwrap().parse().unwrap(),
+                        )
+                    })
+                    .unwrap();
+                assert_eq!(*identity.get_or_insert(node), node);
+                visual.simulate_accessibility_action(gpui::accesskit::ActionRequest {
+                    action: gpui::AccessibleAction::Click,
+                    target_tree: gpui::accesskit::TreeId::ROOT,
+                    target_node: node,
+                    data: None,
+                });
+                visual.run_until_parked();
+            }
         }
         assert_eq!(
             *opened.borrow(),
-            vec!["/fixture/source.rs:5:1"; 3],
+            vec!["/fixture/source.rs:5:1"; 6],
             "accessible activation dispatches the original target after each reflow"
         );
     }
