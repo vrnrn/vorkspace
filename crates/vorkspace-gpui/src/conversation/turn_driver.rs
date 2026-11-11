@@ -6,7 +6,7 @@ use std::{
     collections::HashMap,
     sync::{Arc, atomic::AtomicBool},
 };
-use vorkspace_core::{agent::Control, process::TurnToken, remote::Connections};
+use vorkspace_core::{agent::Control, process::TurnToken};
 use vorkspace_runtime::runtime::{self, Database, Update};
 
 struct Active {
@@ -103,7 +103,6 @@ impl Admission {
     pub(super) fn launch(
         self,
         input: runtime::TurnInput,
-        remote: Option<Arc<Connections>>,
         projection: TurnProjection,
         cx: &mut App,
     ) -> std::sync::mpsc::Sender<Control> {
@@ -115,7 +114,7 @@ impl Admission {
         cx.background_executor()
             .spawn(async move {
                 let _worker_alive = worker_alive;
-                worker.run(input, remote, control_rx, tx);
+                worker.run(input, control_rx, tx);
             })
             .detach();
         project(view, rx, projection, Some((projection_owner, done)), cx);

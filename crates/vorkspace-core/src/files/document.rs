@@ -17,9 +17,6 @@ pub struct LocalRevision {
 
 /// A cheap check for a local preview. The save path still compares exact bytes.
 pub fn local_revision(path: &Path) -> Option<LocalRevision> {
-    if crate::remote_workspace::is_remote(path) {
-        return None;
-    }
     use std::os::unix::fs::MetadataExt;
     let meta = std::fs::metadata(expand_home(path)).ok()?;
     meta.is_file().then(|| LocalRevision {
@@ -53,26 +50,8 @@ pub enum Document {
     Video {
         size: u64,
         modified: Option<std::time::SystemTime>,
-        /// Remote videos are downloaded within the host preview limit and
-        /// kept alive only while the native player needs their local bytes.
-        source: Option<std::sync::Arc<TemporaryMedia>>,
     },
     Unsupported(String),
-}
-
-#[derive(Debug)]
-pub struct TemporaryMedia {
-    path: PathBuf,
-}
-impl TemporaryMedia {
-    pub fn path(&self) -> &Path {
-        &self.path
-    }
-}
-impl Drop for TemporaryMedia {
-    fn drop(&mut self) {
-        let _ = std::fs::remove_file(&self.path);
-    }
 }
 
 fn private_temporary(path: &Path) -> Result<std::fs::File, String> {
@@ -93,23 +72,6 @@ fn open_file(path: &Path) -> std::io::Result<std::fs::File> {
 
 /// Resolve an editor link against its workspace without touching disk.
 pub fn resolve_path(path: &Path, cwd: &Path) -> PathBuf {
-    if crate::remote_workspace::is_remote(path) {
-        return path.to_path_buf();
-    }
-    if crate::remote_workspace::is_remote(cwd) {
-        if let Some(remote) = crate::remote_path::parse_remote_path(&cwd.to_string_lossy()) {
-            let path = path.to_string_lossy();
-            let host = if path.starts_with('/') || path.as_bytes().get(1) == Some(&b':') {
-                path.into_owned()
-            } else {
-                super::join_path(&remote.host_path, &path)
-            };
-            return PathBuf::from(crate::remote_path::remote_path(
-                &remote.environment_id,
-                &host,
-            ));
-        }
-    }
     let path = expand_home(path);
     let path = if path.is_absolute() {
         path
@@ -128,47 +90,6 @@ pub fn resolve_path(path: &Path, cwd: &Path) -> PathBuf {
 }
 
 pub fn read_document(path: &Path) -> Result<Document, String> {
-    if crate::remote_workspace::is_remote(path) {
-        let bytes = read_remote_bytes(path)?;
-        if is_video_path(path) {
-            #[derive(Deserialize)]
-            #[serde(rename_all = "camelCase")]
-            struct Modified {
-                mtime_ms: Option<u64>,
-            }
-            let stats: Vec<Modified> = crate::remote_workspace::command(
-                "stat_files",
-                serde_json::json!({"paths":[path]}),
-            )?;
-            let modified = stats
-                .first()
-                .and_then(|info| info.mtime_ms)
-                .and_then(|millis| {
-                    UNIX_EPOCH.checked_add(std::time::Duration::from_millis(millis))
-                });
-            let stamp = SystemTime::now()
-                .duration_since(UNIX_EPOCH)
-                .unwrap_or_default()
-                .as_nanos();
-            let extension = path
-                .extension()
-                .and_then(|value| value.to_str())
-                .unwrap_or("video");
-            let temporary = std::env::temp_dir().join(format!(
-                "vorkspace-video-{}-{stamp}.{extension}",
-                std::process::id()
-            ));
-            let mut file = private_temporary(&temporary)?;
-            let source = std::sync::Arc::new(TemporaryMedia { path: temporary });
-            file.write_all(&bytes).map_err(|error| error.to_string())?;
-            return Ok(Document::Video {
-                size: bytes.len() as u64,
-                modified,
-                source: Some(source),
-            });
-        }
-        return document_from_bytes(path, bytes, 1024 * 1024);
-    }
     let path = expand_home(path);
     let file = open_file(&path).map_err(|e| e.to_string())?;
     let meta = file.metadata().map_err(|e| e.to_string())?;
@@ -179,7 +100,6 @@ pub fn read_document(path: &Path) -> Result<Document, String> {
         return Ok(Document::Video {
             size: meta.len(),
             modified: meta.modified().ok(),
-            source: None,
         });
     }
     if meta.len() > MAX_PREVIEW_BYTES {
@@ -197,19 +117,6 @@ pub fn read_document(path: &Path) -> Result<Document, String> {
         ));
     }
     document_from_bytes(&path, bytes, MAX_TEXT_BYTES)
-}
-
-fn read_remote_bytes(path: &Path) -> Result<Vec<u8>, String> {
-    use base64::Engine;
-    let encoded: String =
-        crate::remote_workspace::command("read_binary_file", serde_json::json!({"path":path}))?;
-    let bytes = base64::engine::general_purpose::STANDARD
-        .decode(encoded)
-        .map_err(|error| format!("Invalid remote file content: {error}"))?;
-    if bytes.len() > 10 * 1024 * 1024 {
-        return Err("File is too large to preview (maximum 10 MB).".into());
-    }
-    Ok(bytes)
 }
 
 fn document_from_bytes(
@@ -340,11 +247,7 @@ pub fn save_document(path: &Path, document: &TextDocument, text: &str) -> Result
     if text.len() > MAX_TEXT_BYTES || text.split('\n').any(|line| line.len() > MAX_LINE_BYTES) {
         return Err("Text exceeds the editor size limit.".into());
     }
-    if crate::remote_workspace::is_remote(path) {
-        return save_remote_document(path, document, text, |args| {
-            crate::remote_workspace::run_remote_command("write_editor_text_file", args)
-        });
-    }
+
     let destination = std::fs::canonicalize(expand_home(path)).map_err(|e| e.to_string())?;
     if !matches_disk(&destination, &document.disk)? {
         return Err("The file changed on disk. Reload it before saving your edits.".into());
@@ -386,27 +289,6 @@ pub fn save_document(path: &Path, document: &TextDocument, text: &str) -> Result
         let _ = std::fs::remove_file(&temporary);
     }
     result
-}
-
-fn save_remote_document(
-    path: &Path,
-    document: &TextDocument,
-    text: &str,
-    write: impl FnOnce(serde_json::Value) -> Result<serde_json::Value, String>,
-) -> Result<Vec<u8>, String> {
-    use sha2::{Digest, Sha256};
-    let bytes = document.encode(text);
-    let content = std::str::from_utf8(&bytes).map_err(|_| "File is not valid UTF-8.")?;
-    let expected = format!("{:x}", Sha256::digest(&document.disk));
-    let result = write(serde_json::json!({"path":path,"content":content,"expectedHash":expected}))?;
-    if result["status"] == "conflict" {
-        return Err("The file changed on disk. Reload it before saving your edits.".into());
-    }
-    let saved = format!("{:x}", Sha256::digest(&bytes));
-    if result["status"] != "saved" || result["hash"].as_str() != Some(saved.as_str()) {
-        return Err("Invalid remote editor save response; reload the file before retrying.".into());
-    }
-    Ok(bytes)
 }
 
 fn matches_disk(path: &Path, expected: &[u8]) -> Result<bool, String> {
@@ -460,35 +342,6 @@ mod tests {
         );
     }
     #[test]
-    fn remote_links_resolve_inside_the_host_and_text_keeps_host_limits() {
-        let cwd = Path::new("remote://linux/home/code");
-        assert_eq!(
-            resolve_path(Path::new("../file.rs"), cwd),
-            Path::new("remote://linux/home/file.rs")
-        );
-        assert_eq!(
-            resolve_path(Path::new("/etc/file.rs"), cwd),
-            Path::new("remote://linux/etc/file.rs")
-        );
-        assert_eq!(
-            resolve_path(Path::new("remote://other/code/file.rs"), cwd),
-            Path::new("remote://other/code/file.rs")
-        );
-        assert!(matches!(
-            document_from_bytes(cwd, vec![b'a'; 1024 * 1024 + 1], 1024 * 1024).unwrap(),
-            Document::Unsupported(_)
-        ));
-        let Document::Text(document) = document_from_bytes(
-            Path::new("remote://linux/home/code/a.txt"),
-            b"\xef\xbb\xbfa\r\n".to_vec(),
-            1024 * 1024,
-        )
-        .unwrap() else {
-            panic!("expected text")
-        };
-        assert_eq!(document.encode("changed\n"), b"\xef\xbb\xbfchanged\r\n");
-    }
-    #[test]
     fn atomic_saves_preserve_crlf_bom_permissions_and_reject_external_changes() {
         let root = std::env::temp_dir().join(format!("vorkspace-document-{}", std::process::id()));
         std::fs::create_dir_all(&root).unwrap();
@@ -515,41 +368,6 @@ mod tests {
             .contains("changed on disk"));
         assert_eq!(std::fs::read_to_string(&path).unwrap(), "external");
         std::fs::remove_dir_all(root).unwrap();
-    }
-    #[test]
-    fn remote_saves_send_the_original_byte_hash_and_keep_conflicts_or_uncertainty_explicit() {
-        use sha2::{Digest, Sha256};
-        let path = Path::new("remote://machine/project/a.txt");
-        let Document::Text(document) =
-            document_from_bytes(path, b"\xef\xbb\xbfOld\r\n".to_vec(), 1024 * 1024).unwrap()
-        else {
-            panic!()
-        };
-        let saved=save_remote_document(path,&document,"New\n",|args|{
-            assert_eq!(args["expectedHash"],format!("{:x}",Sha256::digest(b"\xef\xbb\xbfOld\r\n")));
-            assert_eq!(args["content"],"\u{feff}New\r\n");
-            Ok(serde_json::json!({"status":"saved","hash":format!("{:x}",Sha256::digest("\u{feff}New\r\n".as_bytes()))}))
-        }).unwrap();
-        assert_eq!(saved, "\u{feff}New\r\n".as_bytes());
-        assert!(save_remote_document(path, &document, "Draft", |_| Ok(
-            serde_json::json!({"status":"conflict","hash":"external"})
-        ))
-        .unwrap_err()
-        .contains("changed on disk"));
-        assert!(save_remote_document(
-            path,
-            &document,
-            "Draft",
-            |_| Err("Host disconnected".into())
-        )
-        .unwrap_err()
-        .contains("Host disconnected"));
-        assert!(save_remote_document(path, &document, "Draft", |_| Ok(
-            serde_json::json!({"status":"saved","hash":"wrong"})
-        ))
-        .unwrap_err()
-        .contains("reload"));
-        assert_eq!(document.disk, b"\xef\xbb\xbfOld\r\n");
     }
     #[test]
     fn editor_saves_keep_each_line_ending_convention() {

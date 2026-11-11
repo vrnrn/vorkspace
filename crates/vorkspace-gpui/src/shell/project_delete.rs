@@ -25,7 +25,7 @@ fn scoped_session_records<'a>(
     path: &str,
     sessions: impl IntoIterator<Item = (&'a Session, Option<Option<&'a str>>)>,
 ) -> Result<Vec<i64>, String> {
-    if path.starts_with("remote://") || !std::path::Path::new(path).is_absolute() {
+    if !std::path::Path::new(path).is_absolute() {
         return Err("Only local projects with an absolute path can be deleted here.".into());
     }
     if std::path::Path::new(path).components().any(|c| {
@@ -57,9 +57,11 @@ fn scoped_session_records<'a>(
             if checkout.is_none() {
                 return Err("Worktree ownership is unavailable for a conversation; try again after it reloads.".into());
             }
-            if session.id < 0 || worktree.is_some_and(|p| vorkspace_core::files::path_key(p) != key)
-            {
-                return Err("A conversation belongs to a remote or separate worktree. Remove it separately first.".into());
+            if worktree.is_some_and(|p| vorkspace_core::files::path_key(p) != key) {
+                return Err(
+                    "A conversation belongs to a separate worktree. Remove it separately first."
+                        .into(),
+                );
             }
             ids.push(session.id);
         }

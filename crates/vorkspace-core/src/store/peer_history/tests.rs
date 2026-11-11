@@ -115,7 +115,6 @@ fn desktop_peer_excerpt_preserves_public_plan_and_fallback_prose_projection() {
     let source = store.persisted_session_id(id).unwrap();
     let blocks = json!([
         {"id":"plan","role":"plan","text":"A public plan"},
-        {"id":"remote-plan","role":"plan","nativeRemotePlan":true,"text":"UI metadata"},
         {"id":"fallback","role":"tasks","text":"Public fallback prose"},
         {"id":"tasks","role":"tasks","taskList":{"items":[]},"text":"Task UI"},
         {"id":"summary","role":"assistant","text":"Public summary","botCard":{"type":"document"}},

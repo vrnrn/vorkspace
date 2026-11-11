@@ -10,22 +10,13 @@ cargo build --locked -p vorkspace-gpui -p vorkspace-helper --profile native-dev
 bash scripts/desktop/bundle-native-macos.sh native-dev target "$(node -p 'JSON.parse(require("fs").readFileSync("package.json")).version')" dev-data
 ```
 
-`npm run check` covers host, Vox, build tooling, Rust formatting, Clippy, and every Rust test, including the vendored `block` crate. Rust tests run under `cargo-nextest` (`cargo install --locked cargo-nextest`), where each test owns a process, so GPUI global state stays isolated while the whole suite runs in parallel. `npm run check:fast` runs tooling, Vox, formatting, Clippy, and core unit tests for fast iteration without the GPUI suite. The core suite exercises Copilot streaming/authentication against a local peer and Vox start, resume, duplicate tool calls, cancellation, and transcript flush against a disposable Codex protocol peer. Browser audio tests cover pinned devices, late permission grants, playback, and media disposal. Asset generation validates editor analysis, highlighting, completion, search, and formatting in a JavaScript interpreter.
+`npm run check` covers Vox, build tooling, Rust formatting, Clippy, and every Rust test, including the vendored `block` crate. Rust tests run under `cargo-nextest` (`cargo install --locked cargo-nextest`), where each test owns a process, so GPUI global state stays isolated while the whole suite runs in parallel. `npm run check:fast` runs tooling, Vox, formatting, Clippy, and core unit tests for fast iteration without the GPUI suite. The core suite exercises Copilot streaming/authentication against a local peer and Vox start, resume, duplicate tool calls, cancellation, and transcript flush against a disposable Codex protocol peer. Browser audio tests cover pinned devices, late permission grants, playback, and media disposal. Asset generation validates editor analysis, highlighting, completion, search, and formatting in a JavaScript interpreter.
 
 Tooling checks also guard the repository itself. `module-cycles.test.mjs` keeps top-level modules depending in one direction, and `docs.test.mjs` fails if a document names an `npm run` script or `-p` crate that doesn't exist, or if a guide loses its plain-English companion.
 
 The clipboard lifecycle tests start `vorkspace-helper` with private sockets, so they stay separate from a running app. They hold ⌘⇧C briefly if the shortcut is available and report it as taken otherwise.
 
-For the real SSH transport, build a host package and run the disposable loopback test:
-
-```sh
-npm run host:package
-python3 scripts/checks/test-remote-ssh.py
-```
-
-It needs local OpenSSH `sshd`, creates temporary keys/configuration, and exercises native askpass, host persistence, and reconnection. It does not alter normal SSH configuration.
-
-`ui_parity_capture` is an ignored test that renders 17 surfaces in dark and light through the headless Metal renderer into `VORKSPACE_UI_PARITY_DIR`, so captures from two trees can be compared byte for byte. The capture isn't fully isolated from the machine: a live notice, such as a harness update, can appear in it.
+`ui_parity_capture` is an ignored test that renders desktop surfaces in dark and light through the headless Metal renderer into `VORKSPACE_UI_PARITY_DIR`, so captures from two trees can be compared byte for byte. The capture isn't fully isolated from the machine: a live notice, such as a harness update, can appear in it.
 
 GPUI tests marked ignored require their named platform resource or an explicit benchmark run. Inspect them with `cargo test -p vorkspace-gpui --profile native-dev -- --list`. A frame benchmark measures the specified CPU path; it does not prove GPU presentation rate.
 
@@ -42,7 +33,3 @@ Prepare update-enabled candidates as described in [updates](updates.md). Use dis
 Composer regression tests cover existing-row restore, UTF-16 selections, opaque attachment and MCP fields, changed MCP server identity, input during restore, quit before restore completes, revision tombstones, and conflicting writers with durable recovery and explicit resolution.
 
 Release-helper tests run with `npm run test:tooling`. Set `VORKSPACE_TEST_SPARKLE` to the downloaded SDK directory to include real Sparkle archive signing, signature rejection and dual-format package verification on macOS. Those tests use temporary keys and app bundles.
-
-## Synthetic measurements
-
-`node scripts/benchmarks/benchmark-host-startup.mjs --sessions 200 --chars 262144 --runs 7` measures startup against generated history in temporary data. Add `--baseline <commit>` to compare a historical JavaScript host: the benchmark exports that commit's complete host source before bundling it. Each sample starts a fresh Node process, and baseline/current order alternates. Component results do not establish end-to-end UI latency or GPU frame rate.

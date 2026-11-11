@@ -513,20 +513,10 @@ impl Automations {
         let profile = crate::accounts::get(cx)
             .map(|a| a.read(cx).selected(kind, &editor.draft.cwd))
             .unwrap_or_default();
-        let host = self
-            .database
-            .as_ref()
-            .and_then(|db| crate::pickers::HostModels::for_project(db, &editor.draft.cwd));
-        if editor.draft.cwd.starts_with("remote://") && host.is_none() {
-            return;
-        }
-        let work = cx.background_executor().spawn(async move {
-            if let Some(host) = host {
-                host.read()?.models_for(kind)
-            } else {
-                vorkspace_core::catalog::models_for(kind, &profile)
-            }
-        });
+
+        let work = cx
+            .background_executor()
+            .spawn(async move { vorkspace_core::catalog::models_for(kind, &profile) });
         cx.spawn(async move |this, cx| {
             let result = work.await;
             let _ = this.update(cx, |this, cx| {
@@ -605,9 +595,6 @@ impl Automations {
                 vorkspace_core::store::native_model(&editor.draft.model, &editor.draft.harness),
                 &editor.draft.cwd,
                 profile,
-                self.database
-                    .as_ref()
-                    .and_then(|db| crate::pickers::HostModels::for_project(db, &editor.draft.cwd)),
                 cx,
             )
         });
@@ -667,7 +654,6 @@ impl Automations {
                         this.load_controls(cx);
                     }
                     ProjectPicked::New => this.browse_project(cx),
-                    ProjectPicked::Remote => {}
                 }
                 window.focus(&this.focus, cx);
                 cx.notify();

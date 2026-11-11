@@ -39,11 +39,7 @@ impl Attachment {
                 .is_some_and(|path| vorkspace_core::composer::image_mime(path).is_some());
         let data = match value["data"].take() {
             serde_json::Value::String(data) if !data.is_empty() => Some(Arc::from(data)),
-            _ => path
-                .as_ref()
-                .and_then(|path| path.to_str())
-                .filter(|path| vorkspace_core::remote::attachments::is_attachment_source(path))
-                .map(Arc::from),
+            _ => None,
         };
         Self {
             name: name.into(),

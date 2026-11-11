@@ -143,11 +143,7 @@ impl FileEditor {
                         this.unsupported = None;
                         this.error = None;
                     }
-                    Document::Video {
-                        size,
-                        modified,
-                        source,
-                    } => {
+                    Document::Video { size, modified } => {
                         if this.dirty && !discard {
                             this.disk_changed = true;
                             cx.notify();
@@ -159,13 +155,7 @@ impl FileEditor {
                             .is_some_and(|m| m.read(cx).same_video(size, modified));
                         if !same || force || revision_changed {
                             this.media = Some(cx.new(|cx| {
-                                media::MediaPreview::video(
-                                    this.path.clone(),
-                                    size,
-                                    modified,
-                                    source,
-                                    cx,
-                                )
+                                media::MediaPreview::video(this.path.clone(), size, modified, cx)
                             }));
                         }
                         if let Some(media) = &this.media {

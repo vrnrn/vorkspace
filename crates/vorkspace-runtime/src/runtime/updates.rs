@@ -150,14 +150,4 @@ impl TranscriptPatch {
             | Self::BotSnapshot { rows, .. } => rows,
         }
     }
-
-    #[cfg(test)]
-    pub(super) fn into_rows(self) -> Vec<Row> {
-        match self {
-            Self::Unchanged => Vec::new(),
-            Self::Tail { rows, .. }
-            | Self::Snapshot { rows, .. }
-            | Self::BotSnapshot { rows, .. } => rows,
-        }
-    }
 }

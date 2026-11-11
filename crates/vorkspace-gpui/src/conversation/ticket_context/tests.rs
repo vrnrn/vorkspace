@@ -95,25 +95,6 @@ fn newer_typing_and_cancel_own_the_composer_before_lookup_completion(cx: &mut Te
     }
 }
 #[gpui::test]
-fn an_older_remote_host_cannot_consume_a_typed_ticket_reference(cx: &mut TestAppContext) {
-    let window = fixture(cx);
-    cx.run_until_parked();
-    window
-        .update(cx, |chat, _, cx| {
-            chat.summary.cwd = "remote://fixture/project".into();
-            chat.remote_state.online = true;
-            chat.input
-                .update(cx, |input, cx| input.set_text(REFERENCE.into(), cx));
-            chat.attachments.push("/missing/private.txt".into());
-            assert!(chat.prepare_ticket_context(cx));
-            assert!(chat.status.contains("Update the remote host"));
-            assert_eq!(chat.input.read(cx).content.as_str(), REFERENCE);
-            assert_eq!(chat.attachments.len(), 1);
-            assert!(!chat.responding() && chat.ticket_context.pending.is_none());
-        })
-        .unwrap();
-}
-#[gpui::test]
 fn editing_a_pending_lookup_clears_its_loading_indicator(cx: &mut TestAppContext) {
     let window = fixture(cx);
     cx.run_until_parked();
@@ -132,30 +113,6 @@ fn editing_a_pending_lookup_clears_its_loading_indicator(cx: &mut TestAppContext
             assert_eq!(chat.input.read(cx).content.as_str(), "New draft");
             assert_eq!(chat.status, "Ready");
             assert!(!chat.responding() && !chat.ticket_context.pending());
-        })
-        .unwrap();
-}
-#[gpui::test]
-fn unknown_remote_capabilities_wait_for_loading_without_consuming_the_draft(
-    cx: &mut TestAppContext,
-) {
-    let window = fixture(cx);
-    cx.run_until_parked();
-    window
-        .update(cx, |chat, _, cx| {
-            chat.summary.cwd = "remote://fixture/project".into();
-            chat.loaded = false;
-            chat.remote_state.online = false;
-            chat.input
-                .update(cx, |input, cx| input.set_text(REFERENCE.into(), cx));
-            chat.send(cx);
-            assert!(
-                chat.status
-                    .contains("Wait for this remote conversation to load")
-            );
-            assert!(!chat.status.contains("Update"));
-            assert_eq!(chat.input.read(cx).content.as_str(), REFERENCE);
-            assert!(!chat.responding() && chat.ticket_context.pending.is_none());
         })
         .unwrap();
 }

@@ -65,28 +65,6 @@ pub fn search_project(
     options: &SearchOptions,
     cancel: &AtomicBool,
 ) -> Result<SearchResult, String> {
-    if crate::files::remote::is_remote(root) {
-        if options.query.trim().is_empty() || cancel.load(Ordering::Acquire) {
-            return Ok(SearchResult {
-                matches: Vec::new(),
-                truncated: false,
-            });
-        }
-        let mut options = serde_json::to_value(options).map_err(|error| error.to_string())?;
-        options["cwd"] = serde_json::json!(root);
-        let result = crate::files::remote::command(
-            "search_project",
-            serde_json::json!({"options":options}),
-        )?;
-        return Ok(if cancel.load(Ordering::Acquire) {
-            SearchResult {
-                matches: Vec::new(),
-                truncated: false,
-            }
-        } else {
-            result
-        });
-    }
     let expanded = crate::shell_env::expand_home(root);
     let root = expanded.as_path();
     let query = options.query.trim();

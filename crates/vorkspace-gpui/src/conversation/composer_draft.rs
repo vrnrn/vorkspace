@@ -938,7 +938,7 @@ impl Conversation {
             )
         });
         let replaced_offer = offer.is_some() && !same_input;
-        if let Some(offer) = offer.filter(|_| replaced_offer && !self.is_remote()) {
+        if let Some(offer) = offer.filter(|_| replaced_offer) {
             state.displaced_offer = Some(offer.origin.clone());
         }
         state.pending = Some(payload);

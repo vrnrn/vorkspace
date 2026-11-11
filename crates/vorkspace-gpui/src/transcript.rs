@@ -31,7 +31,6 @@ mod outline;
 mod peers;
 pub(crate) use peers::peer_looks;
 pub(crate) mod phases;
-pub(crate) mod remote_plans;
 pub(crate) mod selection;
 pub(crate) mod tasks;
 mod tools;
@@ -132,7 +131,6 @@ struct Message {
 }
 #[derive(Clone)]
 enum Body {
-    RemotePlan(remote_plans::Plan),
     OlderHistory,
     SavedDraft,
     Markdown(MarkdownRow),
@@ -443,7 +441,6 @@ pub(crate) struct TranscriptView {
     pending: Vec<PendingMessage>,
     saved_draft: Option<vorkspace_core::follow_up::Message>,
     draft_edit: Option<drafts::DraftEdit>,
-    draft_editable: bool,
     draft_transfer: Option<bool>,
     /// Pending messages just taken, including any entrance still in flight.
     taken: Vec<TakenMessage>,
@@ -806,7 +803,6 @@ impl TranscriptView {
             pending: Vec::new(),
             saved_draft: None,
             draft_edit: None,
-            draft_editable: true,
             draft_transfer: None,
             taken: Vec::new(),
             pending_entrances: HashMap::new(),

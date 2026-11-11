@@ -169,12 +169,8 @@ impl SearchView {
         let work = cx.background_executor().spawn(async move {
             let mut files =
                 vorkspace_core::files::list_project_files_sync_cancellable(&root, Some(&flag))?;
-            if !vorkspace_core::remote_workspace::is_remote(Path::new(&root)) {
-                // git ls-files includes cached paths deleted from the working copy.
-                files.retain(|file| {
-                    !flag.load(Ordering::Acquire) && Path::new(&file.path).is_file()
-                });
-            }
+            // git ls-files includes cached paths deleted from the working copy.
+            files.retain(|file| !flag.load(Ordering::Acquire) && Path::new(&file.path).is_file());
             Ok::<_, String>(files)
         });
         cx.spawn(async move |this, cx| {

@@ -20,8 +20,6 @@ mod native_history;
 mod notifications;
 #[cfg(test)]
 pub(crate) mod receive_tests;
-mod remote;
-pub(crate) mod remote_plans;
 mod response_menu;
 mod response_transfer;
 mod responsive_toolbar;
@@ -198,8 +196,6 @@ pub(crate) struct Conversation {
     editing_last_turn: edit_last_turn::State,
     btw: Option<Entity<btw::Btw>>,
     pub(crate) summary: Session,
-    remote_state: remote::State,
-    remote_plans: remote_plans::State,
     store: Database,
     pub(crate) transcript: Entity<TranscriptView>,
     pub(crate) review: Entity<crate::git_tools::session_review::SessionReview>,
@@ -309,9 +305,7 @@ pub(crate) struct Conversation {
 impl Drop for Conversation {
     fn drop(&mut self) {
         let _ = self.composer_draft.flush();
-        if !self.summary.cwd.starts_with("remote://") {
-            self.cancel.store(true, Ordering::Relaxed);
-        }
+        self.cancel.store(true, Ordering::Relaxed);
         self.cancel_title_generation();
     }
 }
@@ -395,10 +389,6 @@ impl Conversation {
         } else {
             TurnState::Idle
         };
-    }
-    #[cfg(test)]
-    pub(crate) fn set_stopping_for_test(&mut self) {
-        self.turn_state = TurnState::Stopping;
     }
     #[cfg(test)]
     pub(crate) fn complete_turn_for_test(&mut self) {
@@ -617,8 +607,6 @@ impl Conversation {
             response_menu: None,
             response_request: None,
             summary,
-            remote_state: remote::State::default(),
-            remote_plans: remote_plans::State::default(),
         };
         conversation.load_composer(cx);
         conversation
@@ -723,13 +711,6 @@ impl Render for Conversation {
         }
         self.attachment_drop_target("session-chat", cx)
             .relative()
-            .capture_action(
-                cx.listener(|this, _: &vorkspace_ui::actions::DismissMenu, _, cx| {
-                    if this.close_remote_plan(cx) {
-                        cx.stop_propagation();
-                    }
-                }),
-            )
             .flex()
             .flex_col()
             .size_full()
@@ -760,7 +741,6 @@ impl Render for Conversation {
                 ),
             )
             .when_some(self.btw.as_ref(), |d, sheet| d.child(sheet.clone()))
-            .children(self.remote_plan_reader(cx))
             .into_any()
     }
 }

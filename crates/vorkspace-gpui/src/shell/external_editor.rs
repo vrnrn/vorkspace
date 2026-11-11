@@ -21,15 +21,11 @@ impl Shell {
         })
         .detach();
     }
-    pub(super) fn external_editor_menu(&self, path: &str) -> MenuAction {
+    pub(super) fn external_editor_menu(&self) -> MenuAction {
         let item = MenuAction::new("external-editor", "Open in editor").icon("app-window");
         let none =
             |label: &str| vec![MenuAction::new("external-editor:none", label).disabled(true)];
-        if path.starts_with("remote://") {
-            return item
-                .disabled(true)
-                .submenu(none("Remote folders stay on their host"));
-        }
+
         match &self.external_editors {
             None => item.disabled(true).submenu(none("Looking for editors…")),
             Some(editors) if editors.is_empty() => item.submenu(none("No supported editors found")),

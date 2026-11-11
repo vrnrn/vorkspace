@@ -12,9 +12,13 @@ fn failed_note_handoff_keeps_the_notes_pane_active(cx: &mut TestAppContext) {
                 .upsert_note(&vorkspace_core::notes::NoteUpsert {
                     id: "disconnected-note".into(),
                     title: "Keep reading".into(),
-                    source_cwd: Some("remote://unavailable/repo".into()),
+                    source_cwd: Some("/unavailable/repo".into()),
                     ..Default::default()
                 })
+                .unwrap();
+            locked(&shell.store)
+                .unwrap()
+                .begin_project_deletion(note.source_cwd.as_deref().unwrap())
                 .unwrap();
             shell.open_notes(window, cx);
             let active = shell.workspace.active;
@@ -32,7 +36,7 @@ fn failed_note_handoff_keeps_the_notes_pane_active(cx: &mut TestAppContext) {
                 shell
                     .error
                     .as_deref()
-                    .is_some_and(|error| error.contains("Open this folder"))
+                    .is_some_and(|error| error.contains("being deleted"))
             );
         })
         .unwrap();
@@ -94,135 +98,6 @@ fn codebase_navigation_keeps_the_selected_project_and_worktree(cx: &mut TestAppC
         })
         .unwrap();
     cx.run_until_parked();
-}
-
-#[gpui::test]
-fn remote_session_restores_beside_app_panes_and_uses_the_same_stack_limit(cx: &mut TestAppContext) {
-    use serde_json::json;
-    use vorkspace_core::store::Store;
-
-    let directory = tempfile::tempdir().unwrap();
-    let store = Store::open(&directory.path().join("native.sqlite")).unwrap();
-    let project = store
-        .remember_remote_project("offline-layout", &json!({"id":"repo", "cwd":"/host/repo"}))
-        .unwrap();
-    let session = store
-        .register_remote_summary(
-            &project,
-            &json!({"id":"chat","harness":"codex","title":"Remote chat","cwd":"/host/repo"}),
-        )
-        .unwrap();
-    let id = session.id;
-    assert!(id < 0);
-    let cwd = project.key;
-    let mut workspace = Workspace::default();
-    workspace.add_project(&cwd);
-    workspace.open(id);
-    let notes = workspace
-        .app_pane(AppPane::App(AppView::Notes), cwd.clone(), cwd.clone())
-        .unwrap();
-    let search = workspace
-        .app_pane(AppPane::Search, cwd.clone(), cwd.clone())
-        .unwrap();
-    workspace.split(notes, SplitDir::Down);
-    workspace.split(search, SplitDir::Down);
-    workspace.open(id);
-    workspace.project = "/local".into();
-    workspace
-        .scope_focus
-        .insert(format!("{cwd}\0{cwd}"), TitleTab::Workspace(id));
-    let saved = serde_json::to_string(&workspace).unwrap();
-    let store = Arc::new(Mutex::new(store));
-    let window = cx.update(|cx| {
-        cx.open_window(Default::default(), |_, cx| {
-            cx.new(|cx| {
-                let shell = Shell::new(store, vec![session], "/local".into(), Some(saved), cx);
-                if let Some(chat) = shell.sessions.get(&id) {
-                    // This fixture owns the pane identity and has no host connection.
-                    chat.update(cx, |chat, _| chat.mark_remote_snapshot_loaded_for_test());
-                }
-                shell
-            })
-        })
-        .unwrap()
-    });
-    cx.run_until_parked();
-    window
-        .update(cx, |shell, w, cx| {
-            assert_eq!(shell.workspace.project, cwd);
-            assert_eq!(shell.workspace.active, Some(id));
-            assert_eq!(shell.visible_tabs(cx), [TitleTab::Workspace(id)]);
-            assert!(shell.has_session_panes());
-            assert_eq!(shell.pane_title(id, cx), "Remote chat");
-            assert_eq!(shell.workspace.session_for_pane(id), Some(id));
-            assert_eq!(shell.workspace.session_for_pane(notes), None);
-            assert_eq!(shell.workspace.session_for_pane(search), None);
-            assert!(shell.sessions.contains_key(&id));
-            assert!(!shell.sessions.contains_key(&notes));
-            assert!(!shell.sessions.contains_key(&search));
-            assert_eq!(shell.workspace.layout(id).leaf_ids(), [id, notes, search]);
-            assert!(!shell.split_allowed(
-                &shell.workspace.layout(id),
-                id,
-                SplitDir::Down,
-                i64::MAX
-            ));
-            assert!(shell.placement_allowed(DragSource::Review(i64::MAX), id, Edge::Bottom));
-            shell.bot_manager().update(cx, |manager, cx| {
-                manager.create_named(vec![cwd.clone()], w, cx);
-                manager.dismiss_settings(w, cx);
-            });
-        })
-        .unwrap();
-    cx.run_until_parked();
-    window
-        .update(cx, |shell, w, cx| {
-            let caller = shell
-                .bot_manager()
-                .read(cx)
-                .chat()
-                .unwrap()
-                .read(cx)
-                .summary
-                .id;
-            let listed = shell
-                .app_workspace_action(caller, &cwd, "workspace.list", &json!({}), w, cx)
-                .unwrap();
-            let tab = listed["tabs"]
-                .as_array()
-                .unwrap()
-                .iter()
-                .find(|tab| tab["tabId"] == json!(id))
-                .unwrap();
-            assert_eq!(tab["panes"][0]["kind"], "session");
-            assert_eq!(tab["panes"][0]["sessionId"], json!(id));
-            let opened = shell
-                .app_workspace_action(
-                    caller,
-                    &cwd,
-                    "workspace.open",
-                    &json!({"kind":"session","sessionId":id.to_string()}),
-                    w,
-                    cx,
-                )
-                .unwrap();
-            assert_eq!(opened["paneId"], json!(id));
-            assert_eq!(shell.workspace.active, Some(id));
-            assert_eq!(
-                shell
-                    .app_workspace_action(
-                        caller,
-                        &cwd,
-                        "workspace.open",
-                        &json!({"kind":"session","sessionId":notes}),
-                        w,
-                        cx,
-                    )
-                    .unwrap_err(),
-                "Session is unavailable"
-            );
-        })
-        .unwrap();
 }
 
 #[gpui::test]

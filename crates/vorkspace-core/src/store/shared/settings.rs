@@ -1,5 +1,4 @@
 //! The settings sidecar is one atomic file shared by independent stores.
-use super::super::{remote::index::Index, RemoteSession, Store};
 use std::{
     cell::RefCell,
     collections::BTreeMap,
@@ -7,7 +6,6 @@ use std::{
     io::{BufWriter, ErrorKind, Read, Write},
     os::unix::fs::{MetadataExt, OpenOptionsExt},
     path::{Path, PathBuf},
-    sync::{Arc, OnceLock},
 };
 
 #[derive(PartialEq, Eq)]
@@ -36,12 +34,11 @@ impl Stamp {
 struct Snapshot {
     stamp: Option<Stamp>,
     values: BTreeMap<String, String>,
-    remote: Arc<OnceLock<Result<Index, String>>>,
 }
 
 pub(super) struct Sidecar {
     path: Option<PathBuf>,
-    snapshot: RefCell<Arc<Snapshot>>,
+    snapshot: RefCell<Snapshot>,
 }
 
 impl Sidecar {
@@ -102,17 +99,7 @@ impl Sidecar {
 
     fn replace(&self, stamp: Option<Stamp>, values: BTreeMap<String, String>) {
         let mut snapshot = self.snapshot.borrow_mut();
-        let remote =
-            if snapshot.remote.get().is_some() && Index::same_source(&snapshot.values, &values) {
-                snapshot.remote.clone()
-            } else {
-                Arc::default()
-            };
-        *snapshot = Arc::new(Snapshot {
-            stamp,
-            values,
-            remote,
-        });
+        *snapshot = Snapshot { stamp, values };
     }
 
     pub(super) fn read<T>(
@@ -121,23 +108,6 @@ impl Sidecar {
     ) -> Result<T, String> {
         self.refresh()?;
         Ok(read(&self.snapshot.borrow().values))
-    }
-
-    pub(super) fn remote_session(
-        &self,
-        store: &Store,
-        id: i64,
-    ) -> Result<Option<RemoteSession>, String> {
-        self.refresh()?;
-        // Legacy resolution can read other settings. Retain the immutable
-        // source without holding a RefCell borrow across that boundary.
-        let snapshot = self.snapshot.borrow().clone();
-        snapshot
-            .remote
-            .get_or_init(|| Index::build(&snapshot.values))
-            .as_ref()
-            .map_err(Clone::clone)?
-            .resolve(&snapshot.values, store, id)
     }
 
     /// Retain this stable sibling lock through the read, edit and publication.

@@ -20,11 +20,6 @@ impl Shell {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if cwd.starts_with("remote://") {
-            self.error = Some("Terminals are not available on remote projects.".into());
-            cx.notify();
-            return;
-        }
         if !cfg!(test)
             && !self.terminal_tabs.contains_key(&id)
             && !std::path::Path::new(&cwd).is_dir()

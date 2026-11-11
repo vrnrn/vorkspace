@@ -79,9 +79,7 @@ pub(super) fn run_using(
             .ok_or("Send a message before compacting this chat.")?;
         {
             let owner = locked(&store)?;
-            if owner.remote_session(id)?.is_some() {
-                return Err("Remote transcripts are owned by the host".into());
-            }
+
             if let Some(reason) = owner.edit_recovery_reason(id)? {
                 return Err(reason);
             }

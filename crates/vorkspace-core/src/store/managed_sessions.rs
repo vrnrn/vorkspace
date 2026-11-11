@@ -21,7 +21,7 @@ impl Store {
         now: i64,
     ) -> Result<(Session, AutomationRun), String> {
         let automation = &due.automation;
-        if automation.cwd.starts_with("remote://") || Kind::parse(&automation.harness).is_none() {
+        if Kind::parse(&automation.harness).is_none() {
             return Err("The automation requires an available local agent and project.".into());
         }
         if due.run.automation_id != automation.id {
@@ -75,7 +75,7 @@ impl Store {
         worktree: Option<&str>,
         item: Option<&WorkItem>,
     ) -> Result<bool, String> {
-        if id < 0 || project.starts_with("remote://") {
+        if id < 0 {
             return Ok(false);
         }
         let tx = self

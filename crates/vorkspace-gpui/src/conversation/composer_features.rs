@@ -83,11 +83,6 @@ impl Conversation {
             return;
         }
 
-        if self.is_remote() && matches!(id, "operator" | "orchestrator") {
-            self.status = "This mode is not available on remote projects.".into();
-            cx.notify();
-            return;
-        }
         if id != "draft" {
             self.follow_ups.draft_selected = false;
         }
@@ -567,8 +562,7 @@ impl Conversation {
     }
     pub(crate) fn managed_availability(&self, cx: &gpui::App) -> ManagedAvailability {
         let input = self.input.read(cx);
-        if self.is_remote()
-            || self.settings.bot.is_some()
+        if self.settings.bot.is_some()
             || self.user_read_only()
             || self.summary.archived
             || self.settings.worktree_removed

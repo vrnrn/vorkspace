@@ -407,7 +407,6 @@ impl TranscriptView {
             first_prose,
         };
         let body = match row.body {
-            Body::RemotePlan(plan) => self.remote_plan_card(&plan, cx),
             Body::Visual(document) => self.visual_row(message_start, document, cx),
             Body::Interjection(ref note) => self.interjection_row(note, message_start, cx),
             Body::BotCard(ref value) => {

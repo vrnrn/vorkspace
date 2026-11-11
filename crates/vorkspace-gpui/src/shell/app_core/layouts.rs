@@ -36,7 +36,6 @@ impl AppCore {
         let shared_changed = self.layouts.shared.as_deref() != Some(shared.as_ref());
         let state = serde_json::to_string(workspace).expect("serialize workspace");
         if !next.record(window, state, focused) && !shared_changed {
-            self.set_remote_scope(window, Some(&workspace.active_vorkspace), cx);
             return Ok((shared, preferences_reconciled));
         }
         if durable {
@@ -46,10 +45,8 @@ impl AppCore {
         if !durable {
             self.stage_layouts(cx);
         }
-        self.set_remote_scope(window, Some(&workspace.active_vorkspace), cx);
         if shared_changed {
             self.publish_preferences(&shared.preferences, false, cx);
-            self.reconcile_remote_projects(cx);
             cx.notify();
         }
         Ok((shared, preferences_reconciled))
@@ -57,7 +54,6 @@ impl AppCore {
 
     fn close_layout(&mut self, id: u64, cx: &mut Context<Self>) {
         self.keep_visible_agents(id, HashSet::new());
-        self.set_remote_scope(id, None, cx);
         if self.dock_badges.remove(&id).is_some() {
             crate::notifications::platform::set_dock_badge(self.dock_badges.values().sum());
         }

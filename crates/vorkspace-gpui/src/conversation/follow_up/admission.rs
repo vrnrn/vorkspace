@@ -112,7 +112,6 @@ impl Conversation {
                 || self.user_read_only()
                 || self.editing_last_turn.pending()
                 || self.settings.bot.is_some()
-                || self.is_remote()
             {
                 return Err("Wait for the conversation to finish changing and retry.".into());
             }
@@ -193,10 +192,6 @@ impl Conversation {
             return;
         }
 
-        if self.is_remote() {
-            self.remote_save_draft(cx);
-            return;
-        }
         if self.needs_history_restore() {
             self.defer_history_action(|this, cx| this.save_message_draft(cx), cx);
             return;

@@ -4,7 +4,7 @@ Install Rust through `rustup`, Zig 0.17.x, Node.js 24 or newer, and Xcode with t
 
 You can also use vorkspace to work on vorkspace itself: run `npm run build`, confirm it installed the new app, then choose **Restart vorkspace** or press `⌘⌥R`. Restart uses the app's normal shutdown and saved state, and waits for the old app to exit before opening the new one. It does not rebuild the code. Use the terminal's `r` to rebuild a development copy.
 
-Run `npm ci` and `npm run check` to install test tools and check the code. `npm run assets` rebuilds the editor and voice JavaScript helpers inside the native app. Editor code colors live with the native UI. On a Mac, `npm run build` makes `target/release/vorkspace.app`. It prepares the whole app before swapping it into Applications. Set `VORKSPACE_NO_INSTALL=1` to keep the build in its output folder. Publishing happens in the separate release workflow.
+Run `npm ci` and `npm run check` to install test tools and check the tooling, voice helpers, and Rust workspace. `npm run assets` rebuilds the editor and voice JavaScript helpers inside the native app. Editor code colors live with the native UI. On a Mac, `npm run build` makes `target/release/vorkspace.app`. It prepares the whole app before swapping it into Applications. Set `VORKSPACE_NO_INSTALL=1` to keep the build in its output folder. Publishing happens in the separate release workflow.
 
 The project selects a specific Rust compiler and its required tools automatically. Builds require macOS 26 throughout, and packaging checks both program files before signing the app.
 

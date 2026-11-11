@@ -166,18 +166,12 @@ impl Conversation {
             .transcript
             .update(cx, |view, cx| view.suspend_history(cx));
         self.history_unloaded = suspended;
-        if suspended && self.is_remote() {
-            self.release_remote_snapshot();
-        }
+
         suspended
     }
     /// Restore only the payload. A history cache miss must not replace live
     /// settings, queued state, composer text, attachments or provider controls.
     pub(super) fn reload_history(&mut self, cx: &mut Context<Self>) {
-        if self.is_remote() {
-            self.refresh_remote_snapshot(cx);
-            return;
-        }
         if self.history_loading() || !self.history_unloaded {
             return;
         }

@@ -47,19 +47,7 @@ impl Conversation {
             self.ticket_context.cancel();
             return false;
         }
-        if self.is_remote()
-            && !self
-                .remote_state
-                .capabilities
-                .contains("sessions.preparedText")
-        {
-            self.ticket_context.cancel();
-            self.status =
-                "Update the remote host before sending ticket context. Your draft was preserved."
-                    .into();
-            cx.notify();
-            return true;
-        }
+
         if self
             .ticket_context
             .ready

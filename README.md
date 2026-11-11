@@ -6,7 +6,7 @@
 
 A native GPUI workspace for working with coding agents, projects, conversations, files, terminals, and Bots.
 
-The desktop is Rust. Provider CLIs run as supervised child processes. A small JavaScript layer supports remote hosts, editor analysis and formatting, and WebRTC audio for Vox. Vox control and the desktop Copilot gateway run in Rust.
+The desktop is Rust. Provider CLIs run as supervised child processes. A small JavaScript layer supports editor analysis and formatting, and WebRTC audio for Vox. Vox control and the desktop Copilot gateway run in Rust.
 
 ## Run locally
 
@@ -33,17 +33,16 @@ npm run check
 - Native conversations, approvals, Stop, drafts, attachments, provider accounts, and saved session history.
 - Files, editor syntax and formatting, Git changes, worktrees, search, and terminal docks.
 - Persistent Bots, scheduled habits, notes, and agent-generated visuals.
-- SSH connections to a Node host that owns remote processes and durable sessions.
 - Optional Vox calls controlled by Rust with a private WebRTC audio page; microphone access starts only with a call.
 - Optional [dictation](docs/dictation.md) with Apple’s on-device speech engine, custom words and a native notch; its background helper survives application Quit.
 - [Recording in Notes](docs/meetings.md) captures microphone and system audio, keeps the transcript with the note, and can generate a separate AI summary. Built-in features are managed from [Connectors settings](docs/inbox.md).
 - macOS app packaging with optional Sparkle signing and update configuration.
 
-vorkspace requires macOS 26 or newer. Remote hosts can run on macOS or Linux.
+vorkspace requires macOS 26 or newer.
 
 See the [repository map](docs/repository.md) for source ownership and the [documentation index](docs/README.md) for all guides.
 
-Read [building](docs/building.md), [architecture](docs/architecture.md), [data continuity](docs/data-storage.md), [remote access](docs/remote-access.md), [Vox](docs/vox.md), and [release packaging](docs/updates.md). Each technical document has a matching plain-English version under `docs/eli5/`.
+Read [building](docs/building.md), [architecture](docs/architecture.md), [data continuity](docs/data-storage.md), [Vox](docs/vox.md), and [release packaging](docs/updates.md). Each technical document has a matching plain-English version under `docs/eli5/`.
 
 ## License
 

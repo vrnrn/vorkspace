@@ -24,9 +24,6 @@ impl Store {
         next_id: &str,
         reset_context: bool,
     ) -> Result<bool, String> {
-        if source.session < 0 || self.remote_session(source.session)?.is_some() {
-            return Err("Remote provider bindings belong to the Host".into());
-        }
         let tx = self.agent_configuration_transaction()?;
         let Some(binding) = self.local_agent_binding(source.session)? else {
             return Ok(false);
@@ -69,9 +66,6 @@ impl Store {
         source: ProviderSource<'_>,
         patch: &ConfigurationPatch,
     ) -> Result<bool, String> {
-        if source.session < 0 || self.remote_session(source.session)?.is_some() {
-            return Err("Remote configuration belongs to the Host".into());
-        }
         let tx = self.agent_configuration_transaction()?;
         let Some(binding) = self.local_agent_binding(source.session)? else {
             return Ok(false);
@@ -103,13 +97,6 @@ impl Store {
         provider: &str,
         settings: &Settings,
     ) -> Result<(), String> {
-        if let Some(remote) = self.remote_session(id)? {
-            if !self.agent_configuration_is_newer(id, settings)? {
-                self.change_remote_provider(&remote, provider)?;
-                self.save_agent_settings(id, settings)?;
-            }
-            return Ok(());
-        }
         if self.shared.is_some() && !settings.turns.is_empty() {
             if self.agent_configuration_is_newer(id, settings)? {
                 return Ok(());
@@ -134,9 +121,6 @@ impl Store {
         provider: Kind,
         mut next: Settings,
     ) -> Result<(Settings, Option<String>), String> {
-        if id < 0 || self.remote_session(id)?.is_some() {
-            return Err("Remote provider choices belong to the Host".into());
-        }
         let tx = self.agent_configuration_transaction()?;
         let current = self
             .local_agent_binding(id)?

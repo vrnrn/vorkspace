@@ -17,12 +17,6 @@ pub struct DesktopPreferences {
 }
 
 impl DesktopPreferences {
-    pub(crate) fn entries(&self) -> impl Iterator<Item = (&str, &str)> {
-        self.values
-            .iter()
-            .map(|(key, value)| (key.as_str(), value.as_str()))
-    }
-
     #[cfg(test)]
     pub(crate) fn from_values(values: &[(&str, Value)]) -> Self {
         Self {

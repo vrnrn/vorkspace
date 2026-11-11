@@ -20,8 +20,7 @@ impl Conversation {
         }
     }
     pub(super) fn needs_title(&self) -> bool {
-        !self.is_remote()
-            && self.settings.bot.is_none()
+        self.settings.bot.is_none()
             && self.summary.title
                 == format!(
                     "New {} session",

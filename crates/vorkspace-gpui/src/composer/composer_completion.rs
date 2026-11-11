@@ -273,9 +273,6 @@ impl Completion {
         self.highlight(cx);
     }
     pub(crate) fn prepare_prompt(&self, text: &str) -> String {
-        if self.cwd.starts_with("remote://") {
-            return text.to_owned();
-        }
         let text = vorkspace_core::provider::native_prompt(self.provider, text);
         let text = self
             .store
@@ -328,14 +325,6 @@ impl Completion {
         cx.notify();
     }
     fn sync(&mut self, cx: &mut Context<Self>) {
-        if self.cwd.starts_with("remote://") {
-            self.choices.clear();
-            self.token = None;
-            self.input.update(cx, |input, cx| {
-                input.highlight_composer_tokens(Vec::new(), cx)
-            });
-            return;
-        }
         let disabled = cx
             .try_global::<vorkspace_ui::preferences::Preferences>()
             .map(|p| p.disabled_skill_paths.clone())

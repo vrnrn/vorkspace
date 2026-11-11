@@ -124,10 +124,6 @@ impl Conversation {
         )
     }
     pub(crate) fn attach_account(&mut self, cx: &App) {
-        if self.is_remote() {
-            self.settings.account = Default::default();
-            return;
-        }
         if self.settings.account.id == vorkspace_core::accounts::DEFAULT {
             self.settings.account.root = None;
             return;

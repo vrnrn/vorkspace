@@ -1,4 +1,4 @@
-use super::{expand_home, git_output, remote_workspace};
+use super::{expand_home, git_output};
 use std::{
     ffi::OsStr,
     fs::{self, OpenOptions},
@@ -11,9 +11,6 @@ use std::{
 /// all three inputs so a branch change or index replacement can wake readers.
 /// An ordinary folder can become a checkout, so watch its directory as well.
 pub fn checkout_watch_paths(cwd: &Path) -> Option<Vec<PathBuf>> {
-    if remote_workspace::is_remote(cwd) {
-        return None;
-    }
     let cwd = expand_home(cwd);
     let resolve = |args: &[&str]| {
         let output = git_output(&cwd, args)?;

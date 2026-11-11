@@ -19,7 +19,6 @@ mod handoff;
 pub mod manual_compaction;
 pub mod native_history;
 mod persistence;
-pub mod remote;
 mod submissions;
 pub mod turns;
 mod updates;
@@ -71,10 +70,6 @@ fn run_turn(
     cancel: Arc<AtomicBool>,
     tx: async_channel::Sender<Update>,
 ) {
-    if input.summary.cwd.starts_with("remote://") {
-        remote::run(input, controls, store, cancel, tx);
-        return;
-    }
     run_turn_using(input, controls, store, cancel, tx, provider::resolve);
 }
 

@@ -44,8 +44,6 @@ pub(crate) struct ArchivedSession {
 /// What Settings shows about the workspace around it.
 #[derive(Clone, Debug, Default)]
 pub(crate) struct SettingsContext {
-    /// The desktop's shared remote connection and SSH setup service.
-    pub remote: Option<std::sync::Arc<vorkspace_core::remote::Connections>>,
     pub bots: Vec<BotSetting>,
     pub vox_error: Option<String>,
     pub vox_devices: Vec<(String, String)>,
@@ -69,11 +67,6 @@ pub(crate) struct SettingsContext {
 }
 impl PartialEq for SettingsContext {
     fn eq(&self, other: &Self) -> bool {
-        match (&self.remote, &other.remote) {
-            (Some(a), Some(b)) if !std::sync::Arc::ptr_eq(a, b) => return false,
-            (None, Some(_)) | (Some(_), None) => return false,
-            _ => {}
-        }
         self.vox_error == other.vox_error
             && self.vox_devices == other.vox_devices
             && self.bots == other.bots
@@ -277,11 +270,9 @@ pub(crate) struct SettingsView {
     worktree_sizes_task: Option<Task<()>>,
     selected_project: String,
     mcp_filter: String,
-    fields: HashMap<&'static str, Entity<Input>>,
     inbox: pages::InboxState,
     meeting_editor: Option<pages::connectors::MeetingEditor>,
     meeting_toggle_error: Option<String>,
-    connections: pages::ConnectionsState,
     skill_preview: Option<std::path::PathBuf>,
     skill_preview_text: Option<Result<std::sync::Arc<skill_document::DocumentData>, String>>,
     skill_preview_generation: u64,
@@ -473,11 +464,9 @@ impl SettingsView {
             worktree_sizes_task: None,
             selected_project,
             mcp_filter: "all".into(),
-            fields: HashMap::new(),
             inbox: pages::InboxState::default(),
             meeting_editor: None,
             meeting_toggle_error: None,
-            connections: pages::ConnectionsState::default(),
             skill_preview: None,
             skill_preview_text: None,
             skill_preview_generation: 0,
@@ -494,7 +483,6 @@ impl SettingsView {
             _subscriptions: subscriptions,
         };
         this.select_section(this.section, cx);
-        this.watch_connections(cx);
         if this.prefs.notifications {
             this.probe_notification_permission(false, cx);
         }
@@ -635,19 +623,10 @@ impl SettingsView {
             {
                 self.inbox.revision += 1;
             }
-            let remote_changed = match (&self.ctx.remote, &ctx.remote) {
-                (Some(a), Some(b)) => !std::sync::Arc::ptr_eq(a, b),
-                (None, None) => false,
-                _ => true,
-            };
             self.ctx = ctx;
             if navigation_changed {
                 self.select_section(self.section, cx);
                 self.search_active = 0;
-            }
-            if remote_changed {
-                self.leave_connections(cx);
-                self.watch_connections(cx);
             }
             cx.notify();
         }
@@ -711,9 +690,7 @@ impl SettingsView {
             }
             self.management = None;
             self.management_generation += 1;
-            self.leave_connections(cx);
             self.section = section;
-            self.watch_connections(cx);
             if Self::discovery_page(section) != previous_discovery {
                 self.refresh(cx);
             } else if matches!(section, Section::Providers | Section::Notes) {
@@ -733,9 +710,6 @@ impl SettingsView {
         cx: &mut Context<Self>,
     ) -> bool {
         if self.dismiss_notification_transient(window, cx) {
-            return true;
-        }
-        if self.dismiss_connections(cx) {
             return true;
         }
         if self.recording.take().is_some() {
@@ -1292,7 +1266,6 @@ impl Render for SettingsView {
             });
         }
         self.notification_window_state(window, cx);
-        self.connections_window_state(window, cx);
         let page = self.page(window, cx);
         let narrow = self
             .scroll

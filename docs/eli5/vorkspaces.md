@@ -1,6 +1,6 @@
 # Vorkspaces, in plain English
 
-A vorkspace is a bundle of the folders and Bots you use for one kind of work, like "Main" or "Side projects". The name at the top left of the window shows which one you are in. Click it to switch, or choose **Manage vorkspaces** to make, change or delete one.
+A vorkspace is a bundle of local project folders and Bots you use for one kind of work, like "Main" or "Side projects". The name at the top left of the window shows which one you are in. Click it to switch, or choose **Manage vorkspaces** to make, change or delete one.
 
 The same folder can be in more than one vorkspace, and its sessions show up in each. Taking a folder out of a vorkspace only hides it there; nothing is deleted. Bots belong to one vorkspace each: a Bot you create joins the vorkspace you are in, and adding it to another vorkspace moves it there. The first time you open this version, all your existing folders and Bots go into one vorkspace called Main.
 

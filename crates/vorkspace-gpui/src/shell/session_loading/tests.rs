@@ -267,31 +267,3 @@ fn inactive_history_cache_has_a_count_bound_and_reopens_evicted_history(cx: &mut
         })
         .unwrap();
 }
-
-#[gpui::test]
-fn session_metadata_responding_preserves_remote_running_and_stopping_state(
-    cx: &mut TestAppContext,
-) {
-    let (window, a, _) = super::super::tests::window(cx);
-    window
-        .update(cx, |shell, _, cx| {
-            assert!(!shell.session_metadata(a, cx).responding());
-            shell.sessions[&a].update(cx, |s, _| s.set_running_for_test(true));
-            assert!(shell.session_metadata(a, cx).responding());
-            shell.sessions[&a].update(cx, |s, _| s.set_stopping_for_test());
-            assert!(!shell.session_metadata(a, cx).responding());
-
-            let remote_summary = locked(&shell.store)
-                .unwrap()
-                .create("codex", "/work/project")
-                .unwrap();
-            let remote_id = remote_summary.id;
-            shell.seed_session_summary(remote_summary, cx);
-            assert!(!shell.session_metadata(remote_id, cx).responding());
-            shell.remote_marks.insert(remote_id, (true, false));
-            assert!(shell.session_metadata(remote_id, cx).responding());
-            shell.remote_marks.insert(remote_id, (false, false));
-            assert!(!shell.session_metadata(remote_id, cx).responding());
-        })
-        .unwrap();
-}

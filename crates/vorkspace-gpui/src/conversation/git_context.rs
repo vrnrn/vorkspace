@@ -57,7 +57,7 @@ impl Conversation {
     /// The review card follows the checkout and rereads its recorded turn.
     pub(crate) fn sync_review(&mut self, cx: &mut Context<Self>) {
         self.sync_tool_paths(cx);
-        if self.settings.bot.is_some() || self.is_remote() {
+        if self.settings.bot.is_some() {
             return;
         }
         let cwd = self.execution_cwd().to_owned();

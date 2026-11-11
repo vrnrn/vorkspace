@@ -1,6 +1,3 @@
-mod host_models;
-pub(crate) use host_models::HostModels;
-
 use vorkspace_ui::radius;
 // The pickers that open as flyouts beside a menu row: ModelPicker.tsx's
 // ModelFlyout and SearchableProjectPicker.tsx's ProjectPickerPopover. Each
@@ -140,18 +137,12 @@ struct ModelEntry {
 /// The model the next turn uses; `None` is the provider's default.
 pub(crate) struct ModelPicked(pub Kind, pub Option<String>);
 
-enum ModelScope {
-    Local(HashMap<Kind, Profile>),
-    Host(Option<HostModels>),
-}
-
 /// ModelFlyout: providers down a rail on the left, a search field over the
 /// selected provider's models on the right. Switching providers is available
 /// between turns.
 pub(crate) struct ModelList {
     provider: Kind,
-    scope: ModelScope,
-    remote_providers: Option<Vec<Kind>>,
+    profiles: HashMap<Kind, Profile>,
     current: Option<String>,
     catalogs: Vec<(Kind, ModelRows)>,
     errors: Vec<(Kind, String)>,
@@ -171,12 +162,9 @@ impl ModelList {
         current: Option<String>,
         project: &str,
         profile: Profile,
-        host: Option<HostModels>,
         cx: &mut Context<Self>,
     ) -> Self {
-        let scope = if project.starts_with("remote://") {
-            ModelScope::Host(host)
-        } else {
+        let profiles = {
             let mut profiles = crate::accounts::get(cx)
                 .map(|center| {
                     Kind::ALL
@@ -186,7 +174,7 @@ impl ModelList {
                 })
                 .unwrap_or_default();
             profiles.insert(provider, profile);
-            ModelScope::Local(profiles)
+            profiles
         };
         let search = search_field("Search models", "Search models", 0.4, cx);
         let changed = cx.subscribe(&search, |this, _, _: &input::Changed, cx| {
@@ -195,8 +183,7 @@ impl ModelList {
         });
         let mut list = Self {
             provider,
-            scope,
-            remote_providers: None,
+            profiles,
             current,
             catalogs: Vec::new(),
             errors: Vec::new(),
@@ -231,9 +218,6 @@ impl ModelList {
         list
     }
     pub(crate) fn hide_providers(mut self, hidden: Vec<String>) -> Self {
-        if self.is_remote() {
-            return self;
-        }
         if let ModelTab::Harness(kind) = self.tab
             && kind != self.provider
             && hidden.iter().any(|id| id == kind.id())
@@ -249,7 +233,7 @@ impl ModelList {
     }
 
     fn probe_installed(&mut self, cx: &mut Context<Self>) {
-        if cfg!(test) || self.is_remote() {
+        if cfg!(test) {
             return;
         }
         let work = cx.background_executor().spawn(async move {
@@ -266,11 +250,8 @@ impl ModelList {
     }
 
     fn apply_installation_probe(&mut self, missing: Vec<Kind>, cx: &mut Context<Self>) {
-        // A remote host owns its inventory. A completed local catalog also
-        // outranks an older filesystem probe that finished out of order.
-        if self.is_remote() {
-            return;
-        }
+        // A completed catalog outranks an older filesystem probe that finished out of order.
+
         for kind in missing {
             if !self.catalogs.iter().any(|(provider, _)| *provider == kind)
                 && !self.missing.contains(&kind)
@@ -292,30 +273,14 @@ impl ModelList {
 
     fn provider_visible(&self, kind: Kind) -> bool {
         kind == self.provider
-            || if self.is_remote() {
-                self.remote_providers
-                    .as_ref()
-                    .is_some_and(|providers| providers.contains(&kind))
-            } else {
-                !self.hidden.iter().any(|id| id == kind.id()) && !self.missing.contains(&kind)
-            }
-    }
-
-    fn is_remote(&self) -> bool {
-        matches!(&self.scope, ModelScope::Host(_))
+            || (!self.hidden.iter().any(|id| id == kind.id()) && !self.missing.contains(&kind))
     }
 
     fn discover(&mut self, kind: Kind, cx: &mut Context<Self>) {
         if cfg!(test) || self.loading.contains(&kind) {
             return;
         }
-        let profile = match &self.scope {
-            ModelScope::Local(profiles) => profiles.get(&kind).cloned().unwrap_or_default(),
-            ModelScope::Host(host) => {
-                self.discover_host(host.clone(), cx);
-                return;
-            }
-        };
+        let profile = self.profiles.get(&kind).cloned().unwrap_or_default();
         self.loading.push(kind);
         self.errors.retain(|(k, _)| *k != kind);
         let work = cx
@@ -343,53 +308,6 @@ impl ModelList {
                 if this.query(cx).is_empty() {
                     this.highlighted = this.current_index(cx);
                 }
-                cx.notify();
-            });
-        })
-        .detach();
-    }
-    fn discover_host(&mut self, host: Option<HostModels>, cx: &mut Context<Self>) {
-        self.loading = Kind::ALL.to_vec();
-        let work = cx.background_executor().spawn(async move {
-            host.ok_or_else(|| "Open this project on its machine to load models.".to_owned())?
-                .read()
-        });
-        cx.spawn(async move |this, cx| {
-            let result = work.await;
-            let _ = this.update(cx, |this, cx| {
-                this.loading.clear();
-                match result {
-                    Ok(catalog) => {
-                        this.missing = Kind::ALL
-                            .into_iter()
-                            .filter(|kind| !catalog.providers.contains(kind))
-                            .collect();
-                        this.remote_providers = Some(catalog.providers.clone());
-                        this.catalogs = catalog
-                            .models
-                            .iter()
-                            .map(|(&kind, rows)| (kind, rows.clone()))
-                            .collect();
-                        this.errors = catalog
-                            .errors
-                            .iter()
-                            .map(|(&kind, error)| (kind, error.clone()))
-                            .collect();
-                        if let ModelTab::Harness(selected) = this.tab
-                            && this.missing.contains(&selected)
-                            && selected != this.provider
-                        {
-                            this.tab = ModelTab::Harness(this.provider);
-                        }
-                    }
-                    Err(error) => {
-                        this.errors = Kind::ALL
-                            .into_iter()
-                            .map(|kind| (kind, error.clone()))
-                            .collect();
-                    }
-                }
-                this.highlighted = this.current_index(cx);
                 cx.notify();
             });
         })
@@ -475,7 +393,7 @@ impl ModelList {
                 })
                 .collect();
             entries.extend(additional);
-        } else if kind == Kind::Claude && !self.is_remote() {
+        } else if kind == Kind::Claude {
             // Stable CLI aliases remain usable while discovery is loading.
             let additional: Vec<_> = [("sonnet", "Sonnet"), ("opus", "Opus"), ("haiku", "Haiku")]
                 .into_iter()
@@ -526,13 +444,7 @@ impl ModelList {
             .collect()
     }
     fn enabled(&self, kind: Kind) -> bool {
-        (kind == self.provider || self.switch_allowed)
-            && !self.missing.contains(&kind)
-            && (!self.is_remote()
-                || self
-                    .remote_providers
-                    .as_ref()
-                    .is_some_and(|providers| providers.contains(&kind)))
+        (kind == self.provider || self.switch_allowed) && !self.missing.contains(&kind)
     }
     fn saved_model_name(&self, kind: Kind, id: Option<&str>) -> SharedString {
         self.catalogs
@@ -673,7 +585,7 @@ impl Render for ModelList {
                     .aria_selected(current)
                     .when(!entry.enabled, |d| {
                         d.aria_description(if self.missing.contains(&entry.kind) {
-                            if self.is_remote() { "Install this provider's CLI and sign in on the connected machine, then retry model discovery" } else { "Install this provider's CLI and sign in, then retry model discovery" }
+                            "Install this provider's CLI and sign in, then retry model discovery"
                         } else {
                             "Wait for the current turn to finish before switching providers"
                         })
@@ -848,7 +760,6 @@ impl Render for ModelList {
 pub(crate) enum ProjectPicked {
     Project(String),
     New,
-    Remote,
 }
 
 /// ProjectPickerPopover: a search field over the projects, the current one
@@ -857,7 +768,6 @@ pub(crate) struct ProjectPicker {
     projects: Vec<String>,
     current: String,
     active: usize,
-    allow_remote: bool,
     search: Entity<input::Input>,
     _changed: Subscription,
 }
@@ -878,17 +788,12 @@ impl ProjectPicker {
             projects,
             current: current.into(),
             active: 0,
-            allow_remote: false,
             search,
             _changed: changed,
         }
     }
     pub(crate) fn search_focus(&self, cx: &gpui::App) -> FocusHandle {
         self.search.focus_handle(cx)
-    }
-    pub(crate) fn allow_remote(mut self) -> Self {
-        self.allow_remote = true;
-        self
     }
     fn matches(&self, cx: &gpui::App) -> Vec<String> {
         let query = self.search.read(cx).content.to_lowercase();
@@ -966,13 +871,7 @@ impl Render for ProjectPicker {
                                     .text_color(content(1.))
                                     .into_any_element()
                             } else {
-                                if path.starts_with("remote://") {
-                                    icon("globe", 14.)
-                                        .text_color(content(0.6))
-                                        .into_any_element()
-                                } else {
-                                    crate::project_mark::project_icon(&path, 14.)
-                                }
+                                crate::project_mark::project_icon(&path, 14.)
                             }),
                     )
                     .child(
@@ -1104,34 +1003,7 @@ impl Render for ProjectPicker {
                             )
                             .child("New project")
                             .on_click(cx.listener(|_, _, _, cx| cx.emit(ProjectPicked::New))),
-                    )
-                    .when(self.allow_remote, |d| {
-                        d.child(
-                            div()
-                                .id("project-remote")
-                                .role(Role::Button)
-                                .map(vorkspace_ui::theme::tab_reachable)
-                                .aria_label("Open folder on a machine")
-                                .cursor(CursorStyle::Arrow)
-                                .h(px(36.))
-                                .px(px(10.))
-                                .gap(px(10.))
-                                .rounded(px(radius::CONTAINER))
-                                .flex()
-                                .items_center()
-                                .text_size(px(13.))
-                                .text_color(content(0.75))
-                                .hover(|s| {
-                                    s.bg(vorkspace_ui::fluid::hover(0.08))
-                                        .text_color(content(1.))
-                                })
-                                .child(icon("globe", 16.).text_color(content(0.75)))
-                                .child("Open folder on a machine…")
-                                .on_click(
-                                    cx.listener(|_, _, _, cx| cx.emit(ProjectPicked::Remote)),
-                                ),
-                        )
-                    }),
+                    ),
             )
     }
 }

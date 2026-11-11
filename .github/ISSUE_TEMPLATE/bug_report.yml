@@ -5,7 +5,7 @@ body:
   - type: markdown
     attributes:
       value: |
-        vorkspace runs on macOS. Remote hosts can run on macOS or Linux.
+        vorkspace runs on macOS.
 
   - type: input
     id: version

@@ -262,7 +262,6 @@ impl Shell {
                         &self.workspace.project,
                         cx,
                     )
-                    .allow_remote()
                 });
                 events.push(cx.subscribe_in(
                     &picker,
@@ -274,10 +273,6 @@ impl Shell {
                                 this.open_project_from_user(path.clone(), window, cx)
                             }
                             ProjectPicked::New => this.open_project(cx),
-                            ProjectPicked::Remote => {
-                                this.open_remote_project(window, cx);
-                                return;
-                            }
                         }
                         this.focus_active(window, cx);
                         this.invalidate_chrome(cx);
@@ -351,7 +346,7 @@ impl Shell {
                     MenuAction::new("reveal", REVEAL_LABEL)
                         .icon("folder-open")
                         .into(),
-                    self.external_editor_menu(path).into(),
+                    self.external_editor_menu().into(),
                     MenuItem::Separator,
                     self.project_notification_menu(path).into(),
                     MenuItem::Separator,
@@ -425,8 +420,6 @@ impl Shell {
                 // "Project settings" opens the project's menu beside its row.
                 if action == "settings" {
                     self.open_settings(crate::settings::Section::General, window, cx);
-                } else if action == "open-remote-project" {
-                    self.open_remote_project(window, cx);
                 } else if action == "project-settings" {
                     let at = row
                         .map_or_else(Point::default, |r| Point::new(r.right(), r.top() - px(8.)));
@@ -469,12 +462,7 @@ impl Shell {
                 } else if action == "delete" {
                     self.confirm_delete_project(path, window, cx);
                 } else if action == "reveal" {
-                    if path.starts_with("remote://") {
-                        self.error = Some("Remote folders stay on their host machine.".into());
-                        cx.notify();
-                    } else {
-                        cx.reveal_path(std::path::Path::new(&path));
-                    }
+                    cx.reveal_path(std::path::Path::new(&path));
                 } else if let Some(editor) = action.strip_prefix("external-editor:") {
                     self.open_in_external_editor(editor, &path, cx);
                 } else if action == "project-settings" {

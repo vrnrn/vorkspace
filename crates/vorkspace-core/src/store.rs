@@ -23,11 +23,6 @@ mod managed_sessions;
 mod notes;
 pub use notes::NoteRecording;
 mod peer_history;
-mod remote;
-mod remote_legacy;
-pub use crate::remote_path::RemoteProject;
-pub use remote::{RemoteHistory, RemoteListing, RemoteSession, RemoteUpload};
-pub(crate) use shared::handle as desktop_session_handle;
 mod session_folders;
 mod session_metadata;
 pub use session_metadata::{SessionMetadata, SessionSidebarMetadata};
@@ -128,8 +123,8 @@ impl Store {
         }
         Ok(())
     }
-    /// Read a snapshot-bound page of indexed Bot history. Blob, ordinary and
-    /// remote histories return None and retain their existing loading path.
+    /// Read a snapshot-bound page of indexed Bot history. Blob and ordinary
+    /// histories return None and retain their existing loading path.
     /// Use `write_indexed_history_page` for page-relative writes; `write_rows`
     /// requires a complete transcript and a separate revision guard.
     pub fn indexed_history_page(
@@ -138,7 +133,7 @@ impl Store {
         before: Option<&IndexedHistoryCursor>,
         page_turns: usize,
     ) -> Result<Option<IndexedHistoryPage>, String> {
-        if self.shared.is_none() || self.remote_session(session)?.is_some() {
+        if self.shared.is_none() {
             return Ok(None);
         }
         self.shared_indexed_history_page(session, before, page_turns)
@@ -152,7 +147,7 @@ impl Store {
         start: usize,
         rows: &[Row],
     ) -> Result<(), String> {
-        if self.shared.is_none() || self.remote_session(session)?.is_some() {
+        if self.shared.is_none() {
             return Err("Indexed Bot history is not available for this session".into());
         }
         self.shared_write_indexed_history_page(session, page, start, rows)
@@ -480,10 +475,6 @@ impl Store {
         id: i64,
         include_turns: bool,
     ) -> Result<Option<crate::agent::Settings>, String> {
-        if id < 0 || self.remote_session(id)?.is_some() {
-            let raw = self.setting(&remote::agent_key(id))?;
-            return self.read_remote_agent_settings(id, raw.as_deref(), include_turns);
-        }
         if self.shared.is_some() {
             return if include_turns {
                 self.shared_agent(id)
@@ -595,12 +586,6 @@ impl Store {
         id: i64,
         settings: &crate::agent::Settings,
     ) -> Result<(), String> {
-        if id < 0 || self.remote_session(id)?.is_some() {
-            return self.save_setting(
-                &remote::agent_key(id),
-                &serde_json::to_string(settings).map_err(|e| e.to_string())?,
-            );
-        }
         if self.shared.is_some() {
             return self.shared_save_agent(id, settings);
         }
@@ -615,12 +600,10 @@ impl Store {
         id: i64,
         preferences: &crate::agent::Settings,
     ) -> Result<(), String> {
-        if self.shared.is_some() && id >= 0 && self.remote_session(id)?.is_none() {
+        if self.shared.is_some() {
             return self.shared_save_agent_preferences(id, preferences);
         }
-        if id < 0 || self.remote_session(id)?.is_some() {
-            return self.save_agent_settings(id, preferences);
-        }
+
         let tx = self
             .conn
             .is_autocommit()
@@ -636,9 +619,6 @@ impl Store {
     }
 
     pub fn change_provider(&self, id: i64, provider: &str) -> Result<(), String> {
-        if let Some(remote) = self.remote_session(id)? {
-            return self.change_remote_provider(&remote, provider);
-        }
         if self.shared.is_some() {
             return self.shared_change_provider(id, provider);
         }
@@ -654,6 +634,17 @@ impl Store {
         self.conn.execute("INSERT INTO native_settings(key,value) VALUES('workspace',?1) ON CONFLICT(key) DO UPDATE SET value=excluded.value",[state]).map_err(|e|e.to_string())?;
         Ok(())
     }
+    pub fn sessions(&self) -> Result<Vec<Session>, String> {
+        let mut sessions = self.local_sessions()?;
+        sessions.sort_by_key(|session| {
+            (
+                std::cmp::Reverse(session.updated_at),
+                std::cmp::Reverse(session.id),
+            )
+        });
+        Ok(sessions)
+    }
+
     fn local_sessions(&self) -> Result<Vec<Session>, String> {
         if self.shared.is_some() {
             return self.shared_sessions();
@@ -770,7 +761,8 @@ impl Store {
             .map_err(|e| e.to_string())?;
         ids.collect::<Result<_, _>>().map_err(|e| e.to_string())
     }
-    fn local_create(&self, provider: &str, cwd: &str) -> Result<Session, String> {
+    pub fn create(&self, provider: &str, cwd: &str) -> Result<Session, String> {
+        self.check_project_creation(cwd)?;
         if self.shared.is_some() {
             return self.shared_create(provider, cwd);
         }
@@ -935,16 +927,6 @@ impl Store {
         }
     }
     pub fn load(&self, session: i64) -> Result<Transcript, String> {
-        if let Some(remote) = self.remote_session(session)? {
-            let Some(id) = remote.session_id.as_deref() else {
-                return Ok(Transcript::default());
-            };
-            let client = crate::remote::default_connections()?;
-            let machine = remote.machine(&client)?;
-            let snapshot = client.load_session(&machine.id, id)?;
-            return Self::project_remote_history(&snapshot, &remote.project.environment_id, id)
-                .map(|(history, _)| history);
-        }
         if self.shared.is_some() {
             return self.shared_load(session);
         }
@@ -953,9 +935,6 @@ impl Store {
     }
 
     pub fn load_local_history(&self, session: i64) -> Result<LoadedHistory, String> {
-        if self.remote_session(session)?.is_some() {
-            return Err("Remote history is owned by the host".into());
-        }
         let tx = self
             .conn
             .unchecked_transaction()
@@ -1050,9 +1029,6 @@ impl Store {
         rows: &[Row],
         message_id: Option<&str>,
     ) -> Result<(), String> {
-        if self.remote_session(session)?.is_some() {
-            return Err("Remote transcripts are owned by the host".into());
-        }
         if self.shared.is_some() {
             return self
                 .shared_write_rows(session, start, rows, message_id, None)
@@ -1096,9 +1072,6 @@ impl Store {
     }
     /// Archiving preserves the transcript, provider context and configuration.
     pub fn set_archived(&self, id: i64, archived: bool) -> Result<(), String> {
-        if self.remote_session(id)?.is_some() {
-            return self.patch_remote_session(id, serde_json::json!({"archived": archived}));
-        }
         if self.shared.is_some() {
             return self.shared_patch(id, &[("archived", serde_json::json!(archived))]);
         }
@@ -1112,22 +1085,6 @@ impl Store {
         Ok(())
     }
     pub fn set_pinned(&self, ids: &[i64], pinned: bool) -> Result<(), String> {
-        let any_remote = ids
-            .iter()
-            .map(|id| self.remote_session(*id).map(|remote| remote.is_some()))
-            .collect::<Result<Vec<_>, _>>()?
-            .into_iter()
-            .any(|remote| remote);
-        if any_remote {
-            for id in ids {
-                if self.remote_session(*id)?.is_some() {
-                    self.patch_remote_session(*id, serde_json::json!({"pinned": pinned}))?;
-                } else {
-                    self.set_pinned(&[*id], pinned)?;
-                }
-            }
-            return Ok(());
-        }
         if self.shared.is_some() {
             return self.shared_pins(ids, pinned);
         }
@@ -1147,9 +1104,6 @@ impl Store {
         id: i64,
         item: Option<&crate::session_groups::WorkItem>,
     ) -> Result<(), String> {
-        if self.remote_session(id)?.is_some() {
-            return self.patch_remote_session(id, serde_json::json!({"linkedWorkItem": item}));
-        }
         if self.shared.is_some() {
             return self.shared_patch(
                 id,
@@ -1296,9 +1250,7 @@ impl Store {
         if let Some((caller, project)) = app {
             self.check_app_target(caller, id, project)?;
         }
-        if self.remote_session(id)?.is_some() {
-            return self.delete_remote_session(id);
-        }
+
         if self.shared.is_some() {
             return self.shared_delete_checked(id, app);
         }
@@ -1466,9 +1418,6 @@ impl Store {
         Ok(())
     }
     pub fn title(&self, id: i64, title: &str) -> Result<(), String> {
-        if self.remote_session(id)?.is_some() {
-            return self.patch_remote_session(id, serde_json::json!({"title": title}));
-        }
         if self.shared.is_some() {
             return self.shared_patch(id, &[("title", serde_json::json!(title))]);
         }

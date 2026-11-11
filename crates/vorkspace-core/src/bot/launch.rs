@@ -46,12 +46,7 @@ impl CreatedWorktree {
     pub fn rollback(self) -> Result<(), String> {
         let preserved =
             |error: String| format!("Created worktree {} was preserved: {error}", self.path);
-        if crate::files::remote::is_remote(Path::new(&self.project)) {
-            return Err(preserved(
-                "the host has no safe removal operation; inspect it before requesting a new launch"
-                    .into(),
-            ));
-        }
+
         let worktrees = crate::git::worktrees(Path::new(&self.project)).map_err(preserved)?;
         let tree = worktrees
             .iter()
@@ -210,22 +205,15 @@ impl Launch {
             }
             Workspace::Existing(cwd) => self.settings.worktree_cwd = Some(existing(project, cwd)?),
             Workspace::New(base) => {
-                if crate::files::remote::is_remote(Path::new(project)) {
-                    let snapshot = crate::git::snapshot(Path::new(project))?;
-                    if base != "HEAD" && !snapshot.branches.iter().any(|b| b.name == *base) {
-                        return Err("Choose HEAD or a listed branch for a remote worktree".into());
-                    }
-                } else {
-                    crate::git::git(
-                        Path::new(project),
-                        &[
-                            "rev-parse",
-                            "--verify",
-                            "--end-of-options",
-                            &format!("{base}^{{commit}}"),
-                        ],
-                    )?;
-                }
+                crate::git::git(
+                    Path::new(project),
+                    &[
+                        "rev-parse",
+                        "--verify",
+                        "--end-of-options",
+                        &format!("{base}^{{commit}}"),
+                    ],
+                )?;
                 self.settings.worktree_cwd = None;
             }
         }
@@ -250,9 +238,7 @@ fn existing(project: &str, cwd: &str) -> Result<String, String> {
             !tree.missing && crate::files::path_key(&tree.path) == crate::files::path_key(cwd)
         })
         .ok_or("Choose an existing worktree of the selected project")?;
-    if !crate::files::remote::is_remote(Path::new(&tree.path))
-        && !PathBuf::from(&tree.path).is_dir()
-    {
+    if !PathBuf::from(&tree.path).is_dir() {
         return Err("The selected worktree is unavailable".into());
     }
     Ok(tree.path.clone())

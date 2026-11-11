@@ -761,9 +761,6 @@ impl Shell {
     }
     /// A restored dock reopens its tabs as fresh shells once it is shown.
     pub(super) fn ensure_terminals(&mut self, project: &str, cx: &mut Context<Self>) {
-        if project.starts_with("remote://") {
-            return;
-        }
         let Some(dock) = self.workspace.docks.get(project) else {
             return;
         };
@@ -812,11 +809,6 @@ impl Shell {
     /// Terminal: New (cmd-`): another terminal in the project's dock, which
     /// opens if it was hidden.
     pub(super) fn new_terminal(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if self.workspace.project.starts_with("remote://") {
-            self.error = Some("Terminals are not available on remote projects.".into());
-            cx.notify();
-            return;
-        }
         let project = self.workspace.project.clone();
         let cwd = self.terminal_cwd(cx);
         let was_open = self
@@ -841,11 +833,6 @@ impl Shell {
     }
     /// Terminal: Toggle (cmd-j).
     pub(super) fn toggle_terminal(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if self.workspace.project.starts_with("remote://") {
-            self.error = Some("Terminals are not available on remote projects.".into());
-            cx.notify();
-            return;
-        }
         let project = self.workspace.project.clone();
         let Some(dock) = self
             .workspace

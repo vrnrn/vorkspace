@@ -22,13 +22,7 @@ impl Shell {
         cx: &mut Context<Self>,
     ) -> Result<Value, String> {
         let session_id = validate_voice_input(action, input)?;
-        let projects = self
-            .workspace
-            .projects
-            .iter()
-            .filter(|p| vorkspace_core::remote::parse_remote_path(p).is_none())
-            .cloned()
-            .collect::<Vec<_>>();
+        let projects = self.workspace.projects.clone();
         let bots = self
             .bots
             .as_ref()

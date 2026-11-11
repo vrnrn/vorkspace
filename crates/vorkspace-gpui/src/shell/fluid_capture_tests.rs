@@ -50,7 +50,6 @@ const SHOTS: &[(&str, Option<usize>, (f32, f32))] = &[
     ("settings-keybindings", None, (1390., 890.)),
     ("settings-providers", None, (1390., 890.)),
     ("settings-chat", None, (1390., 890.)),
-    ("settings-connections", None, (1390., 890.)),
     ("settings-mcp", None, (1390., 890.)),
     ("settings-skills", None, (1390., 890.)),
     ("settings-bots", None, (1390., 890.)),
@@ -469,7 +468,7 @@ fn fluid_capture() {
                     "settings-keybindings" => Section::Keybindings,
                     "settings-providers" => Section::Providers,
                     "settings-chat" => Section::Chat,
-                    "settings-connections" => Section::Connections,
+
                     "settings-mcp" => Section::Mcp,
                     "settings-skills" => Section::Skills,
                     "settings-bots" => Section::Bots,

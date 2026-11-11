@@ -269,22 +269,15 @@ impl TurnProjection {
         }
         if let Some(settlement) = settlement {
             let outcome = settlement.outcome;
-            if this.is_remote() {
-                this.remote_state.refreshing = false;
-                this.remote_state.awaiting_successor = outcome == TurnOutcome::Superseded;
-            }
+
             this.summary.updated_at = vorkspace_core::time::now_ms();
             this.turn_state = TurnState::Settled(outcome);
-            if this.is_remote() {
-                this.refresh_remote_snapshot(cx);
-            }
+
             this.preparing_worktree = false;
             if !stopping && let Some(limit) = settlement.usage_limit {
                 this.set_usage_limit(Some(limit), cx);
             }
-            if !this.is_remote() {
-                this.detect_usage_limit(cx);
-            }
+            this.detect_usage_limit(cx);
             this.review
                 .update(cx, |review, cx| review.set_busy(false, cx));
             this.follow_ups.ready = false;

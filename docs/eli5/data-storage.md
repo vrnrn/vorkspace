@@ -4,7 +4,7 @@ All runs open your existing desktop database, kept in your Mac's Application Sup
 
 Use `--check-data` to check a selected database without writing to it. Unsent messages, cursor selections, attachments and MCP tags reopen from the same saved draft. Edits are saved while typing and flushed when the view closes or the app quits. If two windows edit the same draft, neither silently overwrites the other. The conflicting input stays saved separately and appears with a preview when you reopen the chat, so you can choose which version to keep. Once you choose, that banner goes away. A Bot send can keep a saved receipt until it is safely queued, so a crash does not send the same message twice. Missing attachments stay recorded so sending cannot silently drop them. Vox also keeps its saved enabled, silent and microphone choices.
 
-Bot memories stay in the data folder where they were saved, even when an earlier version used a different folder name. The app keeps using that same saved owner when you edit it. Empty newer folders do not hide older memories, and remote history stays on the remote machine.
+Bot memories stay in the data folder where they were saved, even when an earlier version used a different folder name. The app keeps using that same saved owner when you edit it. Empty newer folders do not hide older memories.
 
 Adding a Bot opens a setup form with the name field ready to type. You must give it a name and press Create before it is saved. Cancel leaves no new Bot or chat behind. Its chosen model, permissions and soul stay saved while its chat is being prepared, including if the app closes during that preparation. Existing Bots keep their names and chats.
 
@@ -12,9 +12,7 @@ When an agent adds text, the app saves the changed part of the chat instead of c
 
 Before using this faster saving method, the app prepares the storage needed for queued messages, Bot drafts, delivery claims, local send records, notes, to-dos, and automations. If an unrelated database change happens, the next save checks the saved messages and continues when they match. Changes made by another writer still receive the usual protection. When the app opens, automations look up unfinished runs directly. The app also saves a record of old trigger events once so the same event cannot start another run.
 
-Saved tool details stay intact even when the screen shows only a short preview. If another window changes the same conversation during a local turn, the app reloads the saved conversation in place and keeps the competing version under **Recovered versions**. Your unsent draft stays in the composer. If saving the competing version fails, you can still copy it or retry while the app is open. A failed save leaves the previous saved chat and message receipts together. The remote host follows the same rules.
-
-After the remote host saves a chat in separate blocks, keep using host software that understands that format. Older host software that expects one large saved chat cannot open the converted data. Disconnecting your desktop does not affect the saved chat or stop the host.
+Saved tool details stay intact even when the screen shows only a short preview. If another window changes the same conversation during a local turn, the app reloads the saved conversation in place and keeps the competing version under **Recovered versions**. Your unsent draft stays in the composer. If saving the competing version fails, you can still copy it or retry while the app is open. A failed save leaves the previous saved chat and message receipts together.
 
 Before sending locally, the app saves a record of the message. If the connection breaks or the app stops, it does not assume the agent did nothing and send the message again. Unconfirmed messages stay available to review. You can explicitly put a copy back in an empty composer. Dismissing the notice does not permit an automatic repeat.
 

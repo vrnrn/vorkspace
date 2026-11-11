@@ -304,13 +304,6 @@ impl Store {
         Self::open_shared(path, true, None)
     }
     #[cfg(test)]
-    pub(crate) fn read_vorkspace_with_preferences_for_test(
-        path: &Path,
-        preferences: std::sync::Arc<crate::desktop_preferences::DesktopPreferences>,
-    ) -> Result<Self, String> {
-        Self::open_shared(path, true, Some(preferences))
-    }
-    #[cfg(test)]
     pub(crate) fn open_vorkspace_with_preferences_for_test(
         path: &Path,
         preferences: std::sync::Arc<crate::desktop_preferences::DesktopPreferences>,
@@ -454,15 +447,6 @@ impl Store {
     }
     /// UI handles are stable hashes; the database always retains its original IDs.
     pub fn persisted_session_id(&self, id: i64) -> Result<String, String> {
-        if id < 0 {
-            if let Some(remote) = self.remote_session(id)? {
-                return Ok(format!(
-                    "remote:{}:{}",
-                    remote.project.environment_id,
-                    remote.session_id.unwrap_or_else(|| id.to_string())
-                ));
-            }
-        }
         if let Some(shared) = &self.shared {
             shared
                 .ids
@@ -583,16 +567,6 @@ impl Store {
         }
         let shared = self.shared.as_ref().unwrap();
         shared.settings.read(|settings| settings.get(key).cloned())
-    }
-    pub(super) fn shared_remote_session(
-        &self,
-        id: i64,
-    ) -> Result<Option<super::RemoteSession>, String> {
-        self.shared
-            .as_ref()
-            .unwrap()
-            .settings
-            .remote_session(self, id)
     }
     pub(super) fn shared_claim_bot_message(
         &self,
@@ -1627,6 +1601,8 @@ impl Store {
         app: Option<(i64, &str)>,
     ) -> Result<(), String> {
         self.shared_writable()?;
+        // Unreadable settings must leave the session recoverable before SQL deletion.
+        self.shared.as_ref().unwrap().settings.read(|_| ())?;
         let original = self.persisted_session_id(id)?;
         let tx = sql(rusqlite::Transaction::new_unchecked(
             &self.conn,

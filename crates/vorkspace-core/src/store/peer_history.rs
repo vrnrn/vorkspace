@@ -17,11 +17,6 @@ impl Store {
         limit: usize,
         max_chars: usize,
     ) -> Result<Value, String> {
-        if self.remote_session(session)?.is_some() {
-            return Err(
-                "Bounded peer history is available for local Bot conversations only".into(),
-            );
-        }
         let limit = limit.clamp(1, 100);
         let per_message = max_chars.clamp(100, 100_000) / limit;
         let before = before.unwrap_or(i64::MAX as u64).min(i64::MAX as u64) as i64;
@@ -74,7 +69,6 @@ impl Store {
                     AND coalesce(json_extract({payload},'$.draft'),0)=0
                     AND (json_extract({payload},'$.botCard') IS NULL OR length(json_extract({payload},'$.text'))>0)
                     AND coalesce(json_type({payload},'$.interjection'),'missing')!='object'
-                    AND (json_extract({payload},'$.role')!='plan' OR coalesce(json_extract({payload},'$.nativeRemotePlan'),0)=0)
                     AND (json_extract({payload},'$.role')!='tasks' OR coalesce(json_type({payload},'$.taskList.todos'),json_type({payload},'$.taskList.plan'),json_type({payload},'$.taskList.items'),'missing')!='array')
                     THEN substr(json_extract({payload},'$.text'),1,?4) END,{bytes}
                 FROM {table} WHERE {predicate} AND {position}<?2 ORDER BY {position} DESC LIMIT ?3"

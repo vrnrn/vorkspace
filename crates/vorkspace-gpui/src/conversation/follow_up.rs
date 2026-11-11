@@ -236,10 +236,6 @@ impl Conversation {
             return;
         }
 
-        if self.is_remote() {
-            self.remote_draft_action(send, cx);
-            return;
-        }
         if self.needs_history_restore() {
             self.defer_history_action(move |this, cx| this.draft_action(send, cx), cx);
             return;

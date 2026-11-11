@@ -234,5 +234,4 @@ fn nested_and_worktree_sessions_are_refused() {
     let main = store.create("codex", "/project").unwrap();
     let trees = HashMap::from([(main.id, Some("/separate-worktree".into()))]);
     assert!(scoped_sessions("/project", &[main], &trees).is_err());
-    assert!(scoped_sessions("remote://host/project", &[], &HashMap::new()).is_err());
 }

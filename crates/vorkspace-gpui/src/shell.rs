@@ -39,8 +39,6 @@ mod project_delete;
 mod project_settings;
 mod quick_composer;
 mod quick_open;
-mod remote_projects;
-mod remote_sessions;
 mod search;
 mod session_directory;
 mod session_filters;
@@ -498,13 +496,9 @@ pub(crate) struct Shell {
     fullscreen: bool,
     tabs_frame: Entity<Chrome>,
     store: Database,
-    remote: Arc<vorkspace_core::remote::Connections>,
-    remote_project_picker: Option<remote_projects::Open>,
-    remote_marks: HashMap<i64, (bool, bool)>,
     sessions: HashMap<i64, Entity<Conversation>>,
     /// Lightweight history index; only opened or previewed chats own GPUI entities.
     directory: Entity<SessionDirectory>,
-    remote_tombstones: HashMap<i64, SessionRecord>,
     visible_chats: HashSet<i64>,
     history_recency: HashMap<i64, u64>,
     history_clock: u64,
@@ -751,7 +745,6 @@ impl Shell {
             })
             .detach();
         }
-        let remote = app_core.read(cx).remote.clone();
         let mut workspace = Workspace::restore_sessions(saved.as_deref(), summaries, &cwd);
         let layouts = &app_core.read(cx).layouts;
         let window_shared = layouts.shared.clone();
@@ -840,12 +833,8 @@ impl Shell {
             fullscreen: false,
             tabs_frame,
             store,
-            remote,
-            remote_project_picker: None,
-            remote_marks: HashMap::new(),
             sessions: HashMap::new(),
             directory,
-            remote_tombstones: HashMap::new(),
             visible_chats: HashSet::new(),
             history_recency: HashMap::new(),
             history_clock: 0,
@@ -1304,10 +1293,7 @@ impl Shell {
             {
                 return Err("The session's worktree is being removed.".into());
             }
-            if requested.is_some()
-                && !path.starts_with("remote://")
-                && !std::path::Path::new(path).is_dir()
-            {
+            if requested.is_some() && !std::path::Path::new(path).is_dir() {
                 return Err("The session's worktree is no longer available.".into());
             }
         }
@@ -2969,10 +2955,6 @@ impl Render for Shell {
             }))
             .on_action(
                 cx.listener(|this, _: &vorkspace_ui::actions::DismissMenu, window, cx| {
-                    if this.remote_project_picker.is_some() {
-                        this.close_remote_project(window, cx);
-                        return;
-                    }
                     if this.quick_open.is_some() {
                         this.close_quick_open(window, cx);
                         return;
@@ -3179,7 +3161,6 @@ impl Render for Shell {
             .children(self.link_modal(window, cx))
             .children(self.resource_modal(window, cx))
             .children(self.quick_open_modal(window, cx))
-            .children(self.remote_project_modal(window, cx))
             .children(self.notice_modals(window, cx))
             .children(crate::accounts::get(cx))
             .children(

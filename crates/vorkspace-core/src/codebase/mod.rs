@@ -134,9 +134,6 @@ fn lock<T>(mutex: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
     mutex.lock().unwrap_or_else(|e| e.into_inner())
 }
 fn canonical(path: &str) -> Result<String, String> {
-    if crate::files::remote::is_remote(Path::new(path)) {
-        return Err("Codebase Memory currently supports local projects".into());
-    }
     let path = Path::new(path)
         .canonicalize()
         .map_err(|e| format!("Working copy unavailable: {e}"))?;

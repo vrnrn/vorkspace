@@ -388,7 +388,6 @@ impl Conversation {
             || !self.follow_ups.ready
             || self.follow_ups.sending.is_some()
             || self.settings.pending_provider_switch.is_some()
-            || self.is_remote()
             || !cx
                 .try_global::<vorkspace_ui::preferences::Preferences>()
                 .is_none_or(|p| p.follow_up == "steer")
@@ -1038,7 +1037,6 @@ impl Conversation {
                 self.model.clone(),
                 &self.summary.cwd,
                 self.settings.account.clone(),
-                self.host_models(),
                 cx,
             )
             .hide_providers(hidden)

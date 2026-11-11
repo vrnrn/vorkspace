@@ -161,7 +161,7 @@ impl Store {
         if writer.as_ref().is_some_and(|writer| writer.session != id) {
             return Err("Turn history belongs to another conversation".into());
         }
-        if self.shared.is_some() && id >= 0 && self.remote_session(id)?.is_none() {
+        if self.shared.is_some() {
             return self.shared_save_turns(id, &[(at, info)].into(), writer);
         }
         if writer.is_some() {

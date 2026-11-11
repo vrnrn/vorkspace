@@ -400,12 +400,11 @@ impl FileEditor {
             .entity
             .read(cx)
             .editor_baseline_revision(&checkout.relative);
-        let remote_staged = checkout.revision.as_ref().map(|revision| revision.staged);
         let cwd = PathBuf::from(&self.cwd);
         let relative = checkout.relative.clone();
         let work = cx.background_executor().spawn(async move {
             let (original, staged) =
-                vorkspace_core::scm::editor_baseline(&cwd, &relative, remote_staged).ok()??;
+                vorkspace_core::scm::editor_baseline(&cwd, &relative).ok()??;
             let line_ending = if original.contains("\r\n") {
                 "\r\n"
             } else if original.contains('\r') {

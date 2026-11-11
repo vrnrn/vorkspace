@@ -18,10 +18,6 @@ impl TranscriptView {
         self.draft_transfer = retry;
         cx.notify();
     }
-    pub(crate) fn set_remote_saved_draft(&mut self, draft: Option<Draft>, cx: &mut Context<Self>) {
-        self.draft_editable = false;
-        self.set_saved_draft(draft, cx);
-    }
     pub(crate) fn finish_saved_draft_edit(&mut self, draft: Option<Draft>, cx: &mut Context<Self>) {
         self.draft_edit = None;
         self.set_saved_draft(draft, cx);
@@ -341,8 +337,7 @@ impl TranscriptView {
                                             } else {
                                                 actions
                                                     .when(
-                                                        self.draft_editable
-                                                            && self.draft_transfer.is_none(),
+                                                        self.draft_transfer.is_none(),
                                                         |actions| {
                                                             actions.child(
                                                                 draft_button(

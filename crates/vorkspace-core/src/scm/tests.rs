@@ -1119,11 +1119,7 @@ fn editor_baseline_reads_a_literal_nested_file_and_tracks_its_side() {
     assert!(init_git_commit(dir.path(), &[(relative, "head\n")]));
     let root = dir.path().join("src");
     let path = dir.path().join(relative);
-    let read = || {
-        editor_baseline(&root, "[draft].txt", None)
-            .unwrap()
-            .unwrap()
-    };
+    let read = || editor_baseline(&root, "[draft].txt").unwrap().unwrap();
     assert_eq!(read(), ("head\n".into(), false));
     std::fs::write(&path, "index\n").unwrap();
     assert!(git(dir.path(), &["--literal-pathspecs", "add", relative]));

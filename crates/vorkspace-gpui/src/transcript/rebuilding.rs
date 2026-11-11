@@ -454,7 +454,6 @@ impl TranscriptView {
                         && !matches!(
                             row.role.as_str(),
                             "bot-card"
-                                | "remote-plan"
                                 | "visual"
                                 | "bot-document"
                                 | "bot-note"
@@ -542,19 +541,6 @@ impl TranscriptView {
                     self.rows.push(UiRow {
                         key: (0, 0),
                         body: Body::Interjection(note),
-                        message,
-                        first: false,
-                        last: false,
-                        work: false,
-                        work_tail: false,
-                        thought_phase: None,
-                    });
-                }
-            } else if role == "remote-plan" {
-                if let Ok(plan) = serde_json::from_str(&text) {
-                    self.rows.push(UiRow {
-                        key: (0, 0),
-                        body: Body::RemotePlan(plan),
                         message,
                         first: false,
                         last: false,

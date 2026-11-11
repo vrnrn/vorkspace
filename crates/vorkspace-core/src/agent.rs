@@ -85,23 +85,10 @@ impl AccessMode {
         }
     }
 }
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub enum RemoteAction {
-    Compact,
-    Attach(Option<String>),
-    Retry,
-    SaveDraft,
-    SendDraft(String),
-    RemoveDraft(String),
-    BuildPlan(String),
-}
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Settings {
-    /// Native remote control invocation, never saved as provider configuration.
-    #[serde(skip)]
-    pub remote_action: Option<RemoteAction>,
     pub account: crate::accounts::Profile,
     pub usage_limit: Option<crate::limit::Limit>,
     /// Isolated background text jobs; never persisted as conversation settings.

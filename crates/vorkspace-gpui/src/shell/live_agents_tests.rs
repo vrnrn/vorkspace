@@ -186,51 +186,6 @@ fn fast_completion_archive_and_cancellation_follow_semantic_notifications(cx: &m
         .unwrap();
 }
 
-#[gpui::test]
-fn metadata_only_remote_running_and_waiting_sessions_do_not_load_history(cx: &mut TestAppContext) {
-    let (window, _, _) = fixture(cx);
-    let remote = window
-        .update(cx, |shell, _, cx| {
-            let store = locked(&shell.store).unwrap();
-            let project = store
-                .remember_remote_project(
-                    "fixture",
-                    &serde_json::json!({"id":"project", "cwd":"/host/repo"}),
-                )
-                .unwrap();
-            let mut summary = store.create("codex", &project.key).unwrap();
-            drop(store);
-            summary.has_messages = true;
-            let id = summary.id;
-            shell.order.push(id);
-            shell.seed_session_summary(summary, cx);
-            shell.remote_marks.insert(id, (true, false));
-            shell.invalidate_chrome(cx);
-            id
-        })
-        .unwrap();
-    cx.run_until_parked();
-    assert_eq!(snapshot(window, cx), vec![(remote, Status::Working)]);
-    window
-        .update(cx, |shell, _, cx| {
-            assert!(!shell.sessions.contains_key(&remote));
-            shell.remote_marks.insert(remote, (true, true));
-            shell.invalidate_chrome(cx);
-        })
-        .unwrap();
-    cx.run_until_parked();
-    assert_eq!(snapshot(window, cx), vec![(remote, Status::Approval)]);
-    window
-        .update(cx, |shell, _, cx| {
-            assert!(!shell.sessions.contains_key(&remote));
-            shell.remote_marks.insert(remote, (false, false));
-            shell.invalidate_chrome(cx);
-        })
-        .unwrap();
-    cx.run_until_parked();
-    assert!(snapshot(window, cx).is_empty());
-}
-
 #[test]
 #[ignore = "Requires Metal and VOKKY_ACTIVITY_CAPTURE_DIR; separate offscreen fixture only"]
 fn native_activity_capture() {

@@ -460,7 +460,7 @@ fn sidebar_settings_native_capture() {
     }
     window
         .update(&mut cx, |shell, w, cx| {
-            shell.open_settings(crate::settings::Section::Connections, w, cx);
+            shell.open_settings(crate::settings::Section::General, w, cx);
         })
         .unwrap();
     cx.run_until_parked();

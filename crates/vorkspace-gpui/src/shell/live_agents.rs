@@ -825,12 +825,11 @@ impl Shell {
 
     pub(super) fn sync_live_agents(&self, cx: &mut Context<Self>) {
         // App CLI and Bot launchers both install into this registry, independently
-        // of tab/project selection and project folder collapse state. Remote marks
-        // remain metadata-only; rendering this section never calls ensure_session.
+        // of tab/project selection and project folder collapse state.
+        // Rendering this section never calls ensure_session.
         let ids: HashSet<_> = self
             .sessions
             .keys()
-            .chain(self.remote_marks.keys())
             .chain(self.unseen_finished.iter())
             .copied()
             .collect();

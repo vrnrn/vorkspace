@@ -9,11 +9,6 @@ use vorkspace_ui::radius;
 use vorkspace_ui::theme::*;
 
 pub(crate) enum Request {
-    RemotePlan {
-        id: String,
-        text: String,
-        build: bool,
-    },
     QuoteSelection {
         text: String,
     },

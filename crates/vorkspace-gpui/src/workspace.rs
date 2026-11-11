@@ -1010,7 +1010,7 @@ impl Workspace {
     }
     pub fn add_project(&mut self, path: &str) {
         // A folder the app has never seen joins the vorkspace in view,
-        // however it arrived (a dialog, a remote host, an agent command).
+        // whether it came from a dialog or an agent command.
         if self.register_project(path) {
             let active = self.active_vorkspace.clone();
             self.join_vorkspace(&active, path);
@@ -1043,7 +1043,7 @@ impl Workspace {
         self.review_owners
             .get(&id)
             .copied()
-            // Remote sessions also have negative IDs. Only an app descriptor
+            // Only an app descriptor
             // identifies a leaf without a session owner.
             .or_else(|| (!self.app_panes.contains_key(&id)).then_some(id))
     }

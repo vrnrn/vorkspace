@@ -99,7 +99,6 @@ impl Shell {
         path: &str,
         cx: &mut Context<Self>,
     ) -> AnyElement {
-        let remote = vorkspace_core::files::remote::is_remote(std::path::Path::new(path));
         let on = crate::codebase::enabled(path, cx);
         let target = path.to_owned();
         div()
@@ -126,11 +125,7 @@ impl Shell {
                                     .text_size(px(12.))
                                     .line_height(px(18.))
                                     .text_color(content(0.5))
-                                    .child(if remote {
-                                        "Not available for remote projects."
-                                    } else {
-                                        "A local index of this project's symbols and calls, for you and its agents. The first use downloads a 48 MB engine."
-                                    }),
+                                    .child("A local index of this project's symbols and calls, for you and its agents. The first use downloads a 48 MB engine."),
                             ),
                     )
                     .child(
@@ -138,12 +133,10 @@ impl Shell {
                             "project-codebase-switch",
                             "Codebase Memory",
                             on,
-                            !remote,
+                            true,
                         )
                         .on_click(cx.listener(move |this, _, window, cx| {
-                            if !remote {
-                                this.configure_codebase(target.clone(), window, cx)
-                            }
+                            this.configure_codebase(target.clone(), window, cx)
                         })),
                     ),
             )

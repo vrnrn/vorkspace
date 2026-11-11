@@ -11,7 +11,6 @@ use std::{
 use vorkspace_core::{
     agent::{Control, Settings},
     process::TurnToken,
-    remote::Connections,
     store::Session,
 };
 
@@ -108,7 +107,6 @@ impl Admission {
     pub fn run(
         self,
         input: TurnInput,
-        remote: Option<Arc<Connections>>,
         controls: Receiver<Control>,
         updates: async_channel::Sender<Update>,
     ) {
@@ -120,24 +118,13 @@ impl Admission {
             });
             return;
         }
-        if let Some(client) = remote {
-            super::remote::run_with_client(
-                client,
-                input,
-                controls,
-                self.database.clone(),
-                self.cancel.clone(),
-                updates,
-            );
-        } else {
-            super::run_turn(
-                input,
-                controls,
-                self.database.clone(),
-                self.cancel.clone(),
-                updates,
-            );
-        }
+        super::run_turn(
+            input,
+            controls,
+            self.database.clone(),
+            self.cancel.clone(),
+            updates,
+        );
     }
 
     pub fn compact(
@@ -275,7 +262,6 @@ mod tests {
                 settings: Settings::default(),
                 composer_origin: None,
             },
-            None,
             controls,
             updates,
         );

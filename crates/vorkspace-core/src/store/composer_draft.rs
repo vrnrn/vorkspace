@@ -98,169 +98,52 @@ fn validate(payload: &Value) -> Result<(), String> {
     Ok(())
 }
 
-struct Sources {
-    current: String,
-    previous: [Option<String>; 3],
-}
-
 struct ComposerVersion {
     source: String,
     revision: u64,
     deleted: bool,
-    remote: bool,
-}
-
-impl Sources {
-    fn local(current: String) -> Self {
-        Self {
-            current,
-            previous: [None, None, None],
-        }
-    }
-
-    fn params(&self) -> [Option<&str>; 4] {
-        [
-            Some(&self.current),
-            self.previous[0].as_deref(),
-            self.previous[1].as_deref(),
-            self.previous[2].as_deref(),
-        ]
-    }
 }
 
 impl Store {
-    fn composer_sources(&self, id: i64) -> Result<Sources, String> {
-        if self.shared.is_none() {
-            return Ok(Sources::local(id.to_string()));
-        }
-        if id >= 0 {
-            let source = self.persisted_session_id(id)?;
-            let remote = self.conn.query_row(
-                "SELECT EXISTS(SELECT 1 FROM sessions WHERE id=?1 AND cwd >= 'remote://' AND cwd < 'remote:/0')",
-                [&source],
-                |row| row.get::<_, bool>(0),
-            ).map_err(|error| error.to_string())?;
-            if !remote {
-                return Ok(Sources::local(source));
-            }
-        }
-        if let Some(remote) = self.remote_session(id)? {
-            return self.remote_composer_sources(&remote);
-        }
-        Ok(Sources::local(self.persisted_session_id(id)?))
-    }
-
-    fn remote_composer_sources(&self, remote: &super::RemoteSession) -> Result<Sources, String> {
-        let id = remote.summary.id;
-        if self.shared.is_none() {
-            return Ok(Sources::local(id.to_string()));
-        }
-        let environment = &remote.project.environment_id;
-        let bound = remote
-            .session_id
-            .as_ref()
-            .map(|host| format!("remote:{environment}:{host}"));
-        // Host can bind a new conversation after the desktop has saved input.
-        // Keep the native handle as a fallback if a legacy tab later owns it.
-        if id < 0 {
-            return Ok(Sources {
-                current: format!("remote-composer:{environment}:{id}"),
-                previous: [bound, Some(format!("remote:{environment}:{id}")), None],
-            });
-        }
-        let current = self.persisted_session_id(id)?;
-        if let Some(alias) = remote.composer_alias.filter(|alias| *alias < 0) {
-            return Ok(Sources {
-                current,
-                previous: [
-                    Some(format!("remote-composer:{environment}:{alias}")),
-                    bound,
-                    Some(format!("remote:{environment}:{alias}")),
-                ],
-            });
-        }
-        Ok(Sources::local(current))
-    }
-
-    pub(super) fn remote_composer_source_matches(
-        &self,
-        remote: &super::RemoteSession,
-        origin: &ComposerOrigin,
-    ) -> Result<bool, String> {
-        Ok(origin.session == remote.summary.id
-            && self
-                .remote_composer_sources(remote)?
-                .params()
-                .contains(&Some(origin.source.as_str())))
-    }
-
     fn read_composer_row<T>(
         &self,
-        sources: &Sources,
+        source: &str,
         columns: &str,
         read: impl FnOnce(&rusqlite::Row<'_>) -> rusqlite::Result<T>,
     ) -> Result<Option<T>, String> {
         self.conn
             .query_row(
-                &format!("SELECT {columns} FROM composer_drafts WHERE session_id IN (?1,?2,?3,?4)
-                          ORDER BY CASE session_id WHEN ?1 THEN 0 WHEN ?2 THEN 1 WHEN ?3 THEN 2 ELSE 3 END LIMIT 1"),
-                sources.params(),
+                &format!("SELECT {columns} FROM composer_drafts WHERE session_id=?1"),
+                [source],
                 read,
             )
             .optional()
             .map_err(|error| error.to_string())
     }
 
-    fn remote_composer_transferred(
-        &self,
-        id: i64,
-        source: &str,
-        revision: u64,
-    ) -> Result<bool, String> {
-        Ok(self
-            .remote_session(id)?
-            .and_then(|remote| remote.composer_origin)
-            .is_some_and(|origin| origin.source == source && origin.revision == revision))
-    }
-
-    fn composer_version(
-        &self,
-        id: i64,
-        sources: Sources,
-    ) -> Result<Option<ComposerVersion>, String> {
+    fn composer_version(&self, id: i64, source: String) -> Result<Option<ComposerVersion>, String> {
         if self.shared.is_some() {
-            self.read_composer_row(
-                &sources,
-                "session_id,revision,deleted,cwd LIKE 'remote://%'",
-                |row| {
-                    Ok(ComposerVersion {
-                        source: row.get(0)?,
-                        revision: row.get::<_, i64>(1)?.max(0) as u64,
-                        deleted: row.get(2)?,
-                        remote: row.get(3)?,
-                    })
-                },
-            )
+            self.read_composer_row(&source, "session_id,revision,deleted", |row| {
+                Ok(ComposerVersion {
+                    source: row.get(0)?,
+                    revision: row.get::<_, i64>(1)?.max(0) as u64,
+                    deleted: row.get(2)?,
+                })
+            })
         } else {
             Ok(self.composer_draft(id)?.map(|draft| ComposerVersion {
-                source: sources.current,
+                source,
                 revision: draft.revision,
                 deleted: draft.deleted,
-                remote: draft.payload["cwd"]
-                    .as_str()
-                    .is_some_and(|cwd| cwd.starts_with("remote://")),
             }))
         }
     }
 
     pub fn composer_origin(&self, id: i64, revision: u64) -> Result<ComposerOrigin, String> {
         let version = self
-            .composer_version(id, self.composer_sources(id)?)?
+            .composer_version(id, self.persisted_session_id(id)?)?
             .filter(|version| !version.deleted && version.revision == revision)
             .ok_or(DRAFT_CHANGED)?;
-        if version.remote && self.remote_composer_transferred(id, &version.source, revision)? {
-            return Err(DRAFT_CHANGED.into());
-        }
         Ok(ComposerOrigin {
             session: id,
             source: version.source,
@@ -270,8 +153,8 @@ impl Store {
 
     /// Resolve an interrupted notification from the draft and journal owners.
     pub fn composer_transfer_committed(&self, origin: &ComposerOrigin) -> Result<bool, String> {
-        let sources = self.composer_sources(origin.session)?;
-        if !sources.params().contains(&Some(origin.source.as_str())) {
+        let source = self.persisted_session_id(origin.session)?;
+        if source != origin.source {
             return Ok(false);
         }
         let revision = i64::try_from(origin.revision).map_err(|error| error.to_string())?;
@@ -287,18 +170,12 @@ impl Store {
         {
             return Ok(true);
         }
-        let Some(version) = self.composer_version(origin.session, sources)? else {
+        let Some(version) = self.composer_version(origin.session, source)? else {
             return Ok(false);
         };
         Ok(version.deleted
             && version.source == origin.source
-            && version.revision == origin.revision
-            || version.remote
-                && self.remote_composer_transferred(
-                    origin.session,
-                    &origin.source,
-                    origin.revision,
-                )?)
+            && version.revision == origin.revision)
     }
 
     /// The caller owns the transaction that accepts the input. Moving the
@@ -310,17 +187,17 @@ impl Store {
         id: i64,
         origin: &ComposerOrigin,
     ) -> Result<(), String> {
-        let sources = self.composer_sources(id)?;
-        if origin.session != id || origin.source != sources.current {
+        let source = self.persisted_session_id(id)?;
+        if origin.session != id || origin.source != source {
             return Err("Composer submission belongs to another conversation".into());
         }
         let version = self
-            .composer_version(id, sources)?
+            .composer_version(id, source)?
             .filter(|version| {
                 version.revision >= origin.revision && version.source == origin.source
             })
             .ok_or(DRAFT_CHANGED)?;
-        if version.remote || (version.revision == origin.revision && version.deleted) {
+        if version.revision == origin.revision && version.deleted {
             return Err(DRAFT_CHANGED.into());
         }
         let revision = i64::try_from(origin.revision).map_err(|error| error.to_string())?;
@@ -377,16 +254,16 @@ impl Store {
         if !shared::has_table(&self.conn, "composer_draft_recoveries")? {
             return Ok(Vec::new());
         }
-        let sources = self.composer_sources(id)?;
-        let mut query=self.conn.prepare(
-            "SELECT owner,revision,payload_json FROM (
-                 SELECT owner,revision,payload_json,updated_at,ROW_NUMBER() OVER (
-                     PARTITION BY owner ORDER BY CASE session_id WHEN ?1 THEN 0 WHEN ?2 THEN 1 WHEN ?3 THEN 2 ELSE 3 END
-                 ) AS rank FROM composer_draft_recoveries WHERE session_id IN (?1,?2,?3,?4)
-             ) WHERE rank=1 ORDER BY updated_at,owner"
-        ).map_err(|e|e.to_string())?;
+        let source = self.persisted_session_id(id)?;
+        let mut query = self
+            .conn
+            .prepare(
+                "SELECT owner,revision,payload_json FROM composer_draft_recoveries
+             WHERE session_id=?1 ORDER BY updated_at,owner",
+            )
+            .map_err(|e| e.to_string())?;
         let rows = query
-            .query_map(sources.params(), |row| {
+            .query_map([source], |row| {
                 Ok((
                     row.get::<_, String>(0)?,
                     row.get::<_, i64>(1)?,
@@ -408,7 +285,7 @@ impl Store {
         .collect()
     }
     pub fn save_composer_recovery(&self, id: i64, record: ComposerRecovery) -> Result<(), String> {
-        let source = self.composer_sources(id)?.current;
+        let source = self.persisted_session_id(id)?;
         let tx = self
             .conn
             .unchecked_transaction()
@@ -445,13 +322,11 @@ impl Store {
             rusqlite::TransactionBehavior::Immediate,
         )
         .map_err(|error| error.to_string())?;
-        let sources = self.composer_sources(origin.session)?;
+        let source = self.persisted_session_id(origin.session)?;
         let version = self
-            .composer_version(origin.session, sources)?
+            .composer_version(origin.session, source)?
             .filter(|version| {
-                !version.remote
-                    && version.source == origin.source
-                    && version.revision == origin.revision
+                version.source == origin.source && version.revision == origin.revision
             })
             .ok_or(DRAFT_CHANGED)?;
         let recovery = if version.deleted {
@@ -474,66 +349,50 @@ impl Store {
         if !shared::has_table(&self.conn, "composer_draft_recoveries")? {
             return Ok(());
         }
-        let sources = self.composer_sources(id)?;
-        let [current, first, second, third] = sources.params();
+        let source = self.persisted_session_id(id)?;
         self.conn
             .execute(
-                "DELETE FROM composer_draft_recoveries WHERE session_id IN (?1,?2,?3,?4) AND owner=?5",
-                params![current, first, second, third, owner],
+                "DELETE FROM composer_draft_recoveries WHERE session_id=?1 AND owner=?2",
+                params![source, owner],
             )
             .map_err(|e| e.to_string())?;
         Ok(())
     }
     pub fn composer_draft(&self, id: i64) -> Result<Option<ComposerDraft>, String> {
         if self.shared.is_none() {
-            let mut draft: Option<ComposerDraft> = self
+            let draft: Option<ComposerDraft> = self
                 .setting(&format!("composer:{id}"))?
                 .map(|raw| serde_json::from_str(&raw).map_err(|e| e.to_string()))
                 .transpose()?;
-            if let Some(draft) = draft.as_mut().filter(|draft| {
-                !draft.deleted
-                    && draft.payload["cwd"]
-                        .as_str()
-                        .is_some_and(|cwd| cwd.starts_with("remote://"))
-            }) {
-                draft.deleted =
-                    self.remote_composer_transferred(id, &id.to_string(), draft.revision)?;
-            }
+
             return Ok(draft);
         }
         if !shared::has_table(&self.conn, "composer_drafts")? {
             return Ok(None);
         }
         self.read_composer_row(
-            &self.composer_sources(id)?,
-            "session_id,revision,payload_json,deleted",
+            &self.persisted_session_id(id)?,
+            "revision,payload_json,deleted",
             |row| {
                 Ok((
-                    row.get::<_, String>(0)?,
-                    row.get::<_, i64>(1)?.max(0) as u64,
-                    row.get::<_, String>(2)?,
-                    row.get::<_, bool>(3)?,
+                    row.get::<_, i64>(0)?.max(0) as u64,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, bool>(2)?,
                 ))
             },
         )?
-        .map(|(source, revision, raw, deleted)| {
+        .map(|(revision, raw, deleted)| {
             if revision == 0 || raw.len() > 10 * 1024 * 1024 {
                 return Err("Composer draft has an invalid revision or size".into());
             }
-            let mut draft = ComposerDraft {
+            let draft = ComposerDraft {
                 revision,
                 payload: serde_json::from_str(&raw)
                     .map_err(|e| format!("Cannot read composer draft: {e}"))?,
                 deleted,
             };
             validate(&draft.payload)?;
-            if !draft.deleted
-                && draft.payload["cwd"]
-                    .as_str()
-                    .is_some_and(|cwd| cwd.starts_with("remote://"))
-            {
-                draft.deleted = self.remote_composer_transferred(id, &source, revision)?;
-            }
+
             Ok(draft)
         })
         .transpose()
@@ -598,9 +457,9 @@ impl Store {
             // New stores create the same ordinary draft table on first save. No
             // existing row is copied, converted or rewritten during an upgrade.
             ensure_draft_schema(&self.conn)?;
-            let sources = self.composer_sources(id)?;
+            let source = self.persisted_session_id(id)?;
             let current = self
-                .read_composer_row(&sources, "revision", |row| row.get::<_, i64>(0))?
+                .read_composer_row(&source, "revision", |row| row.get::<_, i64>(0))?
                 .unwrap_or(0)
                 .max(0) as u64;
             if current != expected {
@@ -613,7 +472,7 @@ impl Store {
                 .ok_or("Composer draft directory is missing")?;
             self.conn.execute("INSERT INTO composer_drafts(session_id,cwd,revision,payload_json,deleted,updated_at) VALUES(?1,?2,?3,?4,?5,?6)
             ON CONFLICT(session_id) DO UPDATE SET cwd=excluded.cwd,revision=excluded.revision,payload_json=excluded.payload_json,deleted=excluded.deleted,updated_at=excluded.updated_at",
-            params![sources.current,cwd,revision as i64,raw,deleted,crate::time::now_ms().min(i64::MAX as u64) as i64]).map_err(|e|e.to_string())?;
+            params![source,cwd,revision as i64,raw,deleted,crate::time::now_ms().min(i64::MAX as u64) as i64]).map_err(|e|e.to_string())?;
         }
         if let Some(tx) = tx {
             tx.commit().map_err(|e| e.to_string())?;

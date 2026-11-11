@@ -409,7 +409,7 @@ impl Shell {
         self.workspace
             .projects
             .iter()
-            .filter(|p| !p.starts_with("remote://") && self.workspace.is_project_available(p))
+            .filter(|p| self.workspace.is_project_available(p))
             .map(Into::into)
             .collect()
     }

@@ -13,7 +13,7 @@ A vorkspace is a named set of projects (folders or repositories) and Bots: the w
 
 Membership is a view, not ownership. A folder can belong to several vorkspaces and its sessions appear in each. Removing a folder from a vorkspace only hides it there; its sessions and data stay. A Bot belongs to one vorkspace at a time: adding it to another moves it. Bots keep running whichever vorkspace lists them.
 
-On the first launch with vorkspaces, every existing project goes into one vorkspace named **Main**. A project the app has never seen before joins the active vorkspace, however it arrives: Open project, a remote host, or an agent command. A Bot never seen before joins the active vorkspace when the roster loads, so existing Bots also land in Main. A Bot deliberately removed from every vorkspace stays out until it is added back. The last vorkspace cannot be deleted.
+On the first launch with vorkspaces, every existing project goes into one vorkspace named **Main**. A project the app has never seen before joins the active vorkspace, however it arrives: Open project or an agent command. A Bot never seen before joins the active vorkspace when the roster loads, so existing Bots also land in Main. A Bot deliberately removed from every vorkspace stays out until it is added back. The last vorkspace cannot be deleted.
 
 ## Window
 
@@ -51,7 +51,7 @@ The rail's options menu no longer has an Activity switch. The expanded rail list
 - The `workspace-windows` setting holds window layouts, project availability, and shared preferences. The focused layout also feeds the older `workspace` setting for compatibility.
 - AppCore owns the reminder schedule across windows. A window lease coordinates automations, and the shared Bot roster assigns Habit scheduling to one manager.
 - A conversation has one live owner. Opening it in another window raises its owner. Once the owner closes, another window can load the saved conversation. Session metadata changes reach the other windows without opening their transcripts.
-- Remote-host connections, the native Dock badge, and the agent app bridge are shared. The bridge routes a call to the window running the calling session, falling back to the oldest window.
+- The native Dock badge and the agent app bridge are shared. The bridge routes a call to the window running the calling session, falling back to the oldest window.
 
 **Window → Close Window** (⇧⌘W) checks for active work and prompts before discarding unsaved file edits. Notes must finish saving before the window closes. The last window honors **Close to Tray** when enabled.
 

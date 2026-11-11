@@ -45,9 +45,6 @@ impl DiffSnapshot {
     }
 
     pub fn observe(cwd: &Path, known: Option<CheckoutStamp>) -> Result<Option<Self>, String> {
-        if remote_workspace::is_remote(cwd) {
-            return Self::remote(cwd, "git_diff_index").map(Some);
-        }
         let root = expand_home(cwd);
         Ok(match observe_status(&root, known)? {
             StatusObservation::Unchanged => None,
@@ -77,62 +74,10 @@ impl DiffSnapshot {
             local_head: Some(local_head),
         }
     }
-
-    fn remote(cwd: &Path, command: &str) -> Result<Self, String> {
-        #[derive(Deserialize)]
-        struct WireSnapshot {
-            #[serde(flatten)]
-            index: DiffIndex,
-            #[serde(default, rename = "fileVersions")]
-            versions: Option<Vec<[Option<String>; 2]>>,
-        }
-        let WireSnapshot { index, versions } =
-            remote_workspace::command(command, json!({"cwd":cwd,"includeVersions":true}))?;
-        let versions = versions
-            .filter(|versions| {
-                versions.len() == index.files.len()
-                    && versions
-                        .iter()
-                        .zip(&index.files)
-                        .all(|([staged, unstaged], file)| {
-                            staged.is_some() == file.staged && unstaged.is_some() == file.unstaged
-                        })
-            })
-            .map(|versions| {
-                versions
-                    .into_iter()
-                    .zip(&index.files)
-                    .flat_map(|([staged, unstaged], file)| {
-                        [("staged", staged), ("unstaged", unstaged)]
-                            .into_iter()
-                            .filter_map(move |(side, version)| {
-                                Some((
-                                    format!("{side}:{}", file.relative),
-                                    FileDiffVersion {
-                                        index: version?,
-                                        head: None,
-                                        disk: None,
-                                    },
-                                ))
-                            })
-                    })
-                    .collect()
-            })
-            .or_else(|| remote_versions(cwd, &index).ok());
-        Ok(Self {
-            index,
-            versions,
-            stamp: None,
-            local_head: None,
-        })
-    }
 }
 
 /// Changed files and counts, without the branch and upstream reads.
 pub fn diff_files(cwd: &Path) -> Result<DiffIndex, String> {
-    if remote_workspace::is_remote(cwd) {
-        return remote_workspace::command("git_diff_files", json!({"cwd":cwd}));
-    }
     local_index(cwd, false)
 }
 
@@ -162,19 +107,12 @@ fn observe_status(root: &Path, known: Option<CheckoutStamp>) -> Result<StatusObs
 /// Read a working-copy review against one resolved Git prefix.
 pub struct WorktreeReview {
     cwd: PathBuf,
-    // Remote paths are resolved by their own host. The local root prefix is
-    // an empty string for a project at the top of the repository.
-    prefix: Option<String>,
+    // The root prefix is empty for a project at the top of the repository.
+    prefix: String,
 }
 
 impl WorktreeReview {
     pub fn open(cwd: &Path) -> Result<Self, String> {
-        if remote_workspace::is_remote(cwd) {
-            return Ok(Self {
-                cwd: cwd.to_path_buf(),
-                prefix: None,
-            });
-        }
         let cwd = expand_home(cwd);
         let location = git_output(
             &cwd,
@@ -188,14 +126,11 @@ impl WorktreeReview {
             .ok_or("Not a Git working copy")?;
         Ok(Self {
             cwd,
-            prefix: Some(prefix.to_owned()),
+            prefix: prefix.to_owned(),
         })
     }
 
     pub fn snapshot(&self, previous: Option<&DiffIndex>) -> Result<DiffSnapshot, String> {
-        if self.prefix.is_none() {
-            return DiffSnapshot::remote(&self.cwd, "git_diff_files");
-        }
         Ok(DiffSnapshot::local(
             &self.cwd,
             self.local_status()?,
@@ -205,7 +140,7 @@ impl WorktreeReview {
 
     fn local_status(&self) -> Result<LocalStatus, String> {
         let raw = LocalStatus::output(&self.cwd).ok_or("Could not read Git status")?;
-        LocalStatus::parse(&self.cwd, self.prefix.as_deref(), &raw, None)?
+        LocalStatus::parse(&self.cwd, Some(&self.prefix), &raw, None)?
             .ok_or_else(|| "Missing Git observation".into())
     }
 
@@ -213,12 +148,7 @@ impl WorktreeReview {
     /// HEAD with the index; otherwise the index with the working tree.
     pub fn file(&self, relative: &str, staged: bool) -> Result<FileDiff, String> {
         let root = &self.cwd;
-        let Some(prefix) = &self.prefix else {
-            return remote_workspace::command(
-                "git_file_diff",
-                json!({"cwd":root,"relative":relative,"staged":staged}),
-            );
-        };
+        let prefix = &self.prefix;
         let relative = resolve_repo_path(root, relative)?;
         let abs = root.join(&relative);
         let index_spec = format!(":{prefix}{relative}");
@@ -240,63 +170,15 @@ impl WorktreeReview {
     }
 }
 
-fn remote_versions(
-    cwd: &Path,
-    snapshot: &DiffIndex,
-) -> Result<HashMap<String, FileDiffVersion>, String> {
-    // Older hosts omit versions. Use their bounded file-diff API so that
-    // equal line counts still invalidate an externally edited diff.
-    use sha2::{Digest, Sha256};
-    let checkout = WorktreeReview::open(cwd)?;
-    let mut versions = HashMap::new();
-    for file in &snapshot.files {
-        for staged in [true, false] {
-            if if staged { !file.staged } else { !file.unstaged } {
-                continue;
-            }
-            let diff = checkout.file(&file.relative, staged)?;
-            let bytes = serde_json::to_vec(&diff).map_err(|error| error.to_string())?;
-            versions.insert(
-                format!(
-                    "{}:{}",
-                    if staged { "staged" } else { "unstaged" },
-                    file.relative
-                ),
-                FileDiffVersion {
-                    index: format!("{:x}", Sha256::digest(bytes)),
-                    head: snapshot.head.clone(),
-                    disk: None,
-                },
-            );
-        }
-    }
-    Ok(versions)
-}
-
 pub fn file_diff(cwd: &Path, relative: &str, staged: bool) -> Result<FileDiff, String> {
     WorktreeReview::open(cwd)?.file(relative, staged)
 }
 
 /// Read only the Git side an open text editor compares its buffer against.
-pub fn editor_baseline(
-    cwd: &Path,
-    relative: &str,
-    remote_staged: Option<bool>,
-) -> Result<Option<(String, bool)>, String> {
+pub fn editor_baseline(cwd: &Path, relative: &str) -> Result<Option<(String, bool)>, String> {
     let checkout = WorktreeReview::open(cwd)?;
     let root = &checkout.cwd;
-    let Some(prefix) = &checkout.prefix else {
-        let staged = match remote_staged {
-            Some(staged) => staged,
-            None => diff_files(cwd)?
-                .files
-                .iter()
-                .find(|file| file.relative == relative)
-                .is_some_and(|file| file.staged && !file.unstaged),
-        };
-        let diff = checkout.file(relative, staged)?;
-        return Ok((!diff.binary && !diff.too_large).then_some((diff.original, staged)));
-    };
+    let prefix = &checkout.prefix;
     let relative = resolve_repo_path(root, relative)?;
     let status = git_output(
         root,
@@ -342,20 +224,13 @@ pub struct CommitReview {
     cwd: PathBuf,
     sha: String,
     parent: Option<String>,
-    prefix: Option<String>,
+    prefix: String,
 }
 
 impl CommitReview {
     pub fn open(cwd: &Path, sha: &str) -> Result<Self, String> {
         let WorktreeReview { cwd, prefix } = WorktreeReview::open(cwd)?;
-        if prefix.is_none() {
-            return Ok(Self {
-                cwd,
-                sha: sha.to_owned(),
-                parent: None,
-                prefix,
-            });
-        }
+
         let sha = peel_commit(&cwd, sha)?;
         let parent = git_stdout(&cwd, &["rev-parse", "--verify", &format!("{sha}^")]);
         Ok(Self {
@@ -372,11 +247,8 @@ impl CommitReview {
             cwd: root,
             sha,
             parent,
-            prefix,
+            ..
         } = self;
-        if prefix.is_none() {
-            return remote_workspace::command("git_commit_files", json!({"cwd":root,"sha":sha}));
-        }
         let mut files: HashMap<String, FileAcc> = HashMap::new();
         let mut statuses: HashMap<String, &'static str> = HashMap::new();
         let tree = |kind: &str| {
@@ -429,12 +301,7 @@ impl CommitReview {
             parent,
             prefix,
         } = self;
-        let Some(prefix) = prefix else {
-            return remote_workspace::command(
-                "git_commit_file_diff",
-                json!({"cwd":root,"sha":sha,"relative":relative}),
-            );
-        };
+
         let relative = resolve_repo_path(root, relative)?;
         let original = parent
             .as_ref()
@@ -453,13 +320,6 @@ impl CommitReview {
 /// Writes `contents` as the file's index entry, keeping its mode: stages a
 /// single hunk without touching the working tree.
 pub fn stage_contents(cwd: &Path, relative: &str, contents: &[u8]) -> Result<(), String> {
-    if remote_workspace::is_remote(cwd) {
-        let contents = std::str::from_utf8(contents).map_err(|_| "File is not valid UTF-8.")?;
-        return remote_workspace::command(
-            "git_stage_contents",
-            json!({"cwd":cwd,"relative":relative,"contents":contents}),
-        );
-    }
     let root = expand_home(cwd);
     let relative = resolve_repo_path(&root, relative)?;
     if contents.len() as u64 > MAX_TEXT_FILE_BYTES {

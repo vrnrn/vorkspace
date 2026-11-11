@@ -2,7 +2,7 @@
 
 Codebase Memory makes a local map of your project's code: what symbols exist, where they are, and which functions call each other. It starts turned off. Open **Manage vorkspaces…**, pick the project's tab, turn on **Codebase Memory**, then use **Codebase** in the sidebar.
 
-The first use downloads a roughly 48 MB engine. The app checks that download before running it. Indexing and browsing stay on your Mac. This feature does not change the tools you use in an outside terminal. If you let an agent query code, the excerpts it reads become part of its normal AI conversation.
+The first use downloads a roughly 48 MB engine. The app checks that download before running it. Indexing and browsing stay locally on your Mac. This feature does not change the tools you use in an outside terminal. If you let an agent query code, the excerpts it reads become part of its normal AI conversation.
 
 Search for a symbol and select it to read its source. The source appears while the app looks up its callers and callees. You can expand and zoom the relationship diagram. In a narrow tile, use **Back to symbols** to return to the list. The page shows short previews; a large result may need a more specific search. Queries stop if the engine spends more than 30 seconds executing them.
 

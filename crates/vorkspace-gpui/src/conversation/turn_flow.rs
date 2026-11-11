@@ -2,12 +2,11 @@
 use super::*;
 use composer_draft::ComposerLane;
 use std::path::PathBuf;
-use vorkspace_core::{agent::RemoteAction, store::ComposerOrigin};
+use vorkspace_core::store::ComposerOrigin;
 
 enum PromptSource<'a> {
     Composer {
         origin: ComposerOrigin,
-        save_remote_draft: bool,
     },
     Direct,
     Coordinator,
@@ -17,7 +16,6 @@ enum PromptSource<'a> {
         prepared: Option<String>,
         mode: Option<String>,
     },
-    Remote(RemoteAction),
     Bot {
         message: &'a vorkspace_core::bot::Message,
         mode: Option<&'a str>,
@@ -88,9 +86,7 @@ impl Conversation {
             cx.notify();
             return;
         }
-        if self.is_remote() && self.remote_send_guard(cx) {
-            return;
-        }
+
         if self.needs_history_restore() {
             self.defer_history_action(|this, cx| this.send(cx), cx);
             return;
@@ -270,15 +266,10 @@ impl Conversation {
             self.queue_composer(prompt, mode.map(str::to_owned), cx);
             return;
         }
-        self.launch_composer(prompt, false, cx);
+        self.launch_composer(prompt, cx);
     }
 
-    pub(super) fn launch_composer(
-        &mut self,
-        prompt: String,
-        save_remote_draft: bool,
-        cx: &mut Context<Self>,
-    ) -> bool {
+    pub(super) fn launch_composer(&mut self, prompt: String, cx: &mut Context<Self>) -> bool {
         let origin = match self.prepare_composer_submission(ComposerLane::Turn, cx) {
             Ok(origin) => origin,
             Err(error) => {
@@ -291,7 +282,6 @@ impl Conversation {
             prompt,
             PromptSource::Composer {
                 origin: origin.clone(),
-                save_remote_draft,
             },
             cx,
         );
@@ -305,14 +295,6 @@ impl Conversation {
     }
     pub(super) fn launch_coordinator_prompt(&mut self, prompt: String, cx: &mut Context<Self>) {
         self.launch_turn(prompt, PromptSource::Coordinator, cx);
-    }
-    pub(super) fn launch_remote(
-        &mut self,
-        prompt: String,
-        action: RemoteAction,
-        cx: &mut Context<Self>,
-    ) -> bool {
-        self.launch_turn(prompt, PromptSource::Remote(action), cx)
     }
     pub(super) fn launch_follow_up(
         &mut self,
@@ -418,13 +400,9 @@ impl Conversation {
         );
         let mut composer_origin = None;
         match source {
-            PromptSource::Composer {
-                origin,
-                save_remote_draft,
-            } => {
+            PromptSource::Composer { origin } => {
                 settings.ticket_context = self.ticket_context.ready.take().map(Into::into);
                 settings.attachments = self.attachments.clone();
-                settings.remote_action = save_remote_draft.then_some(RemoteAction::SaveDraft);
                 composer_origin = Some(origin);
             }
             PromptSource::Coordinator => settings.internal_message = true,
@@ -447,9 +425,7 @@ impl Conversation {
                 settings.prepared_prompt = message.prepared_prompt.clone();
                 apply_turn_mode(&mut settings, mode);
             }
-            PromptSource::Remote(action) => {
-                settings.remote_action = Some(action);
-            }
+
             PromptSource::Direct => {}
         }
         if reset_orchestration {
@@ -475,7 +451,7 @@ impl Conversation {
             started_at: Some(vorkspace_core::time::now_ms()),
             ..Default::default()
         });
-        if !self.is_remote() && !queued && settings.prepared_prompt.is_none() {
+        if !queued && settings.prepared_prompt.is_none() {
             let prepared = self.completion.read(cx).prepare_prompt(&prompt);
             if prepared != prompt {
                 settings.prepared_prompt = Some(prepared);
@@ -491,15 +467,7 @@ impl Conversation {
             settings.worktree_base = settings.worktree_base.or(self.branch.clone());
             self.status = "Creating worktree…".into();
         }
-        if composer_origin.is_none()
-            && settings.bot.is_none()
-            && matches!(
-                settings.remote_action,
-                None | Some(
-                    RemoteAction::Compact | RemoteAction::SendDraft(_) | RemoteAction::BuildPlan(_)
-                )
-            )
-        {
+        if composer_origin.is_none() && settings.bot.is_none() {
             self.transcript
                 .update(cx, |view, cx| view.submit_prompt(&prompt, &settings, cx));
         }
@@ -517,10 +485,7 @@ impl Conversation {
             .as_ref()
             .and_then(|turn| turn.model_id.clone())
             .or_else(|| settings.model.clone());
-        let remote = self
-            .is_remote()
-            .then(|| self.remote_state.client.clone())
-            .flatten();
+
         let mut projection = turn_projection::TurnProjection::new(
             generation,
             source_provider,
@@ -539,7 +504,6 @@ impl Conversation {
                 settings,
                 composer_origin,
             },
-            remote,
             projection,
             cx,
         ));
@@ -554,8 +518,7 @@ impl Conversation {
             cx.notify();
             return false;
         }
-        if !self.is_remote()
-            && self.settings.account.id != vorkspace_core::accounts::DEFAULT
+        if self.settings.account.id != vorkspace_core::accounts::DEFAULT
             && crate::accounts::get(cx)
                 .is_some_and(|center| !center.read(cx).book.exists(kind, &self.settings.account.id))
         {
@@ -667,10 +630,7 @@ impl Conversation {
         self.settings.turns = self.transcript.read(cx).turns.clone();
         self.save_settings(cx);
         self.refresh_submission_recovery(cx);
-        if self.is_remote() {
-            self.remote_state.refreshing = false;
-            self.refresh_remote_snapshot(cx);
-        }
+
         cx.emit(SessionChanged::Settled);
         cx.notify();
     }

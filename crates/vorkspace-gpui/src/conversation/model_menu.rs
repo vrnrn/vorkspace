@@ -19,14 +19,10 @@ impl Conversation {
         self.catalog_epoch += 1;
         let epoch = self.catalog_epoch;
         let account = self.settings.account.clone();
-        let host = self.host_models();
-        let work = cx.background_executor().spawn(async move {
-            if let Some(host) = host {
-                host.read()?.models_for(kind)
-            } else {
-                catalog::models_for(kind, &account)
-            }
-        });
+
+        let work = cx
+            .background_executor()
+            .spawn(async move { catalog::models_for(kind, &account) });
         cx.spawn(async move |this, cx| {
             if let Ok(models) = work.await {
                 let _ = this.update(cx, |this, cx| {
@@ -76,12 +72,11 @@ impl Conversation {
         let store = self.store.clone();
         let id = self.summary.id;
         let provider = self.summary.provider.clone();
-        let remote = self.is_remote();
         let cancelled = self.settings_write_cancel.clone();
         let title = (!self.summary.has_messages).then(|| self.summary.title.clone());
         cx.background_executor()
             .spawn(async move {
-                let saved = locked(&store).and_then(|s| {
+                let _ = locked(&store).and_then(|s| {
                     if cancelled.load(Ordering::Acquire) {
                         return Ok(());
                     }
@@ -94,9 +89,6 @@ impl Conversation {
                     }
                     Ok(())
                 });
-                if saved.is_ok() && remote && !cancelled.load(Ordering::Acquire) {
-                    let _ = vorkspace_runtime::runtime::remote::configure_saved(store, id);
-                }
             })
             .detach();
     }
@@ -139,9 +131,7 @@ impl Conversation {
             self.settings.model_settings.remove("serviceTier");
         } else if let Some(setting) = id.strip_prefix("model-setting:") {
             if let Ok((key, value)) = serde_json::from_str::<(String, String)>(setting) {
-                if is_effort_key(&key)
-                    && (!self.is_remote() || matches!(key.as_str(), "effort" | "reasoningEffort"))
-                {
+                if is_effort_key(&key) {
                     self.set_effort_choice(&value, cx);
                 }
                 self.settings.model_settings.insert(key, value);
@@ -338,8 +328,7 @@ impl Conversation {
         let provider = picked.0.id();
         let changes_provider = self.summary.provider != provider;
         let changed_model = changes_provider || self.model != picked.1;
-        let local_switch = changes_provider && !self.is_remote();
-        if local_switch && self.needs_history_restore() {
+        if changes_provider && self.needs_history_restore() {
             let picked = ModelPicked(picked.0, picked.1.clone());
             self.defer_history_action(
                 move |this, cx| {
@@ -364,7 +353,7 @@ impl Conversation {
                 .map(|center| center.read(cx).selected(picked.0, &self.summary.cwd))
                 .unwrap_or_default();
             let id = self.summary.id;
-            let saved = if local_switch {
+            let saved = {
                 let transcript = self.transcript.read(cx).source_rows();
                 if next.pending_provider_switch.is_none()
                     && (self.responding()
@@ -389,11 +378,6 @@ impl Conversation {
                 next.revision = next_settings_revision(next.revision);
                 locked(&self.store).and_then(|store| {
                     store.select_local_provider(id, &self.summary.provider, picked.0, next)
-                })
-            } else {
-                locked(&self.store).and_then(|store| {
-                    store.change_provider(id, provider)?;
-                    Ok((next, None))
                 })
             };
             let (settings, binding) = match saved {
@@ -444,7 +428,7 @@ impl Conversation {
         self.refresh_catalog(cx);
         // The local provider and its handoff are already durable. Blanks
         // also save their descriptive title through the ordinary settings path.
-        if !local_switch || !self.summary.has_messages {
+        if !changes_provider || !self.summary.has_messages {
             self.save_settings(cx);
         }
         cx.emit(SessionChanged::Configuration);
@@ -776,12 +760,10 @@ impl Conversation {
                             .icon_color(tint(YELLOW_300, 0.8))
                             .description("Review a plan before building"),
                         MenuAction::new("operator", "Operator")
-                            .disabled(self.is_remote())
                             .icon("cursor-magic")
                             .icon_color(tint(SKY_300, 0.8))
                             .description("Give this thread access to vorkspace"),
                         MenuAction::new("orchestrator", "Orchestrator")
-                            .disabled(self.is_remote())
                             .icon("share")
                             .icon_color(tint(FUCHSIA_300, 0.65))
                             .badge("v1")
@@ -789,10 +771,7 @@ impl Conversation {
                         MenuAction::new("draft", "Draft")
                             .icon("circle-dashed-hi")
                             .description("Save it without starting the agent")
-                            .disabled(
-                                self.follow_ups.state.draft.is_some()
-                                    || (self.is_remote() && self.turn_in_flight()),
-                            ),
+                            .disabled(self.follow_ups.state.draft.is_some()),
                     ]
                     .into_iter()
                     .filter(|action| {
@@ -833,11 +812,9 @@ impl Conversation {
                         self.model.clone(),
                         &self.summary.cwd,
                         self.settings.account.clone(),
-                        self.host_models(),
                         cx,
                     )
                     .hide_providers(hidden)
-                    .allow_provider_switch(true)
                 });
                 events.push(cx.subscribe_in(
                     &list,

@@ -140,10 +140,6 @@ impl Conversation {
     }
 
     fn load_history(&mut self, complete: bool, cx: &mut Context<Self>) {
-        if self.is_remote() {
-            self.load_remote(cx);
-            return;
-        }
         if self.history_unloaded {
             self.reload_history(cx);
             return;
@@ -378,10 +374,7 @@ impl Conversation {
             self.reload_history(cx);
             return;
         }
-        if self.is_remote() {
-            self.refresh_remote_snapshot(cx);
-            return;
-        }
+
         if recovering {
             self.history_read = history::ReadState::Reading;
         }

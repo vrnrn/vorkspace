@@ -136,19 +136,11 @@ fn presentation_metadata(source: &Value) -> Value {
         })
         .collect()
 }
-fn project_content(block: &Value, remote: bool) -> Result<Vec<Row>, String> {
+fn project_content(block: &Value) -> Result<Vec<Row>, String> {
     if block["draft"] == true || (block["internal"] == true && block["role"] != "user") {
         return Ok(Vec::new());
     }
-    if (remote || block["nativeRemotePlan"] == true) && block["role"] == "plan" {
-        return Ok(vec![metadata_row(
-            "remote-plan",
-            &json!({
-                "id":block["id"],"text":block["text"],"streaming":block["streaming"].as_bool().unwrap_or(false),
-                "status":block["plan"]["status"].as_str().unwrap_or("ready")
-            }),
-        )]);
-    }
+
     let role = block["role"].as_str().unwrap_or("system");
     let text = block["text"].as_str().unwrap_or("");
     let mut t = Transcript::default();
@@ -202,33 +194,16 @@ fn metadata_row(role: &str, value: &Value) -> Row {
         sent_at: None,
     }
 }
+
 pub(super) fn project_block(block: &Value) -> Result<Vec<Row>, String> {
-    project_block_in(block, None)
-}
-
-pub(in crate::store) fn project_remote_block(
-    block: &Value,
-    environment: &str,
-    session: &str,
-) -> Result<Vec<Row>, String> {
-    project_block_in(block, Some((environment, session)))
-}
-
-fn project_block_in(block: &Value, remote: Option<(&str, &str)>) -> Result<Vec<Row>, String> {
     if block["draft"] == true || (block["internal"] == true && block["role"] != "user") {
         return Ok(Vec::new());
     }
-    let mut rows = project_content(block, remote.is_some())?;
+    let mut rows = project_content(block)?;
     if block["role"] == "user" {
         let files = &block["attachments"];
         let role = crate::transcript::attachments::ROLE;
-        if let Some((environment, session)) = remote {
-            let qualified =
-                crate::remote::attachments::qualified_references(files, environment, session);
-            rows.push(metadata_row(role, &qualified));
-        } else if block["nativeRemoteAttachments"] == true
-            || files.as_array().is_some_and(|files| !files.is_empty())
-        {
+        if files.as_array().is_some_and(|files| !files.is_empty()) {
             rows.push(metadata_row(role, files));
         }
     }

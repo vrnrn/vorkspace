@@ -1,7 +1,7 @@
 use super::*;
 impl Conversation {
     pub(super) fn refresh_submission_recovery(&mut self, cx: &mut Context<Self>) {
-        if self.is_remote() || self.reviewing_submission {
+        if self.reviewing_submission {
             return;
         }
         self.submission_recovery_epoch = self.submission_recovery_epoch.wrapping_add(1);

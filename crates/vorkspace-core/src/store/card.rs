@@ -26,9 +26,7 @@ impl Store {
                 return Err("Card refresh cannot change its reference".into());
             }
         }
-        if self.remote_session(session)?.is_some() {
-            return Err("Remote transcripts are owned by the host".into());
-        }
+
         if self.shared.is_some() {
             return self.shared_refresh_bot_card(session, id, expected, desired);
         }

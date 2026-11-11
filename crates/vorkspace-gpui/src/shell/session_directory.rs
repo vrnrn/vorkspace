@@ -61,11 +61,7 @@ impl SessionDirectory {
 
 impl Shell {
     pub(super) fn session_record<'a>(&'a self, id: i64, cx: &'a App) -> Option<&'a SessionRecord> {
-        self.directory
-            .read(cx)
-            .rows
-            .get(&id)
-            .or_else(|| self.remote_tombstones.get(&id))
+        self.directory.read(cx).rows.get(&id)
     }
 
     pub(super) fn session_summary<'a>(&'a self, id: i64, cx: &'a App) -> Option<&'a Session> {

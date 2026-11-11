@@ -501,7 +501,6 @@ impl Shell {
         if !self.order.contains(&id)
             && !self.sessions.contains_key(&id)
             && self.workspace.tab_of(id).is_none()
-            && !self.remote_tombstones.contains_key(&id)
         {
             return;
         }
@@ -519,7 +518,6 @@ impl Shell {
         }
         self.release_live_session(id, cx);
         self.session_removal_epoch = self.session_removal_epoch.wrapping_add(1);
-        self.remote_tombstones.remove(&id);
         self.history_recency.remove(&id);
         self.session_marks.remove(&id);
         self.tab_marks.remove(&id);

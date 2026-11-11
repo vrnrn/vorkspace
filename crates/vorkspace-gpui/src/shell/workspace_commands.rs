@@ -549,9 +549,7 @@ impl Shell {
             }
             "terminal" => {
                 let cwd = self.working_copy().to_owned();
-                if cwd.starts_with("remote://")
-                    || (!cfg!(test) && !std::path::Path::new(&cwd).is_dir())
-                {
+                if !cfg!(test) && !std::path::Path::new(&cwd).is_dir() {
                     return Err("Terminal directory is unavailable".into());
                 }
                 None

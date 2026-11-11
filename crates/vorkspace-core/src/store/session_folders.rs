@@ -62,11 +62,7 @@ impl Store {
         };
         self.edit_groups(project, |groups| {
             for &id in sessions {
-                let summary = if project.starts_with("remote://") {
-                    self.remote_session(id)?.map(|remote| remote.summary)
-                } else {
-                    self.bot_session(id)?
-                };
+                let summary = self.bot_session(id)?;
                 if summary.is_none_or(|session| session.cwd != project) {
                     return Err(
                         "A selected conversation is outside this project or was removed.".into(),

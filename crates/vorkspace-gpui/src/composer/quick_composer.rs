@@ -2,8 +2,7 @@
 use crate::{
     input::{self, Input},
     pickers::{
-        HostModels, ModelList, ModelPicked, ProjectPicked, ProjectPicker, model_display_name,
-        model_name,
+        ModelList, ModelPicked, ProjectPicked, ProjectPicker, model_display_name, model_name,
     },
     popover::{Anchor, AnchorSlot, Side, popover},
 };
@@ -76,7 +75,6 @@ impl Shortcut {
     }
 }
 pub(crate) struct QuickComposer {
-    store: vorkspace_runtime::runtime::Database,
     input: Entity<Input>,
     completion: Entity<crate::composer::composer_completion::Completion>,
     projects: Vec<String>,
@@ -137,7 +135,6 @@ impl QuickComposer {
             ),
         ];
         Self {
-            store,
             input,
             completion,
             projects,
@@ -277,19 +274,12 @@ impl QuickComposer {
             .map(|a| a.read(cx).selected(self.kind, &self.cwd))
             .unwrap_or_default();
         let list = cx.new(|cx| {
-            ModelList::new_for(
-                self.kind,
-                self.model.clone(),
-                &self.cwd,
-                profile,
-                HostModels::for_project(&self.store, &self.cwd),
-                cx,
-            )
-            .hide_providers(
-                cx.global::<vorkspace_ui::preferences::Preferences>()
-                    .hidden_providers
-                    .clone(),
-            )
+            ModelList::new_for(self.kind, self.model.clone(), &self.cwd, profile, cx)
+                .hide_providers(
+                    cx.global::<vorkspace_ui::preferences::Preferences>()
+                        .hidden_providers
+                        .clone(),
+                )
         });
         self.picker_events = Some(cx.subscribe_in(
             &list,

@@ -266,13 +266,12 @@ pub fn describe(
     project: &Path,
     sessions_using: impl Fn(&str) -> Result<Vec<i64>, String>,
 ) -> Result<serde_json::Value, String> {
-    let remote = crate::files::remote::is_remote(project);
     let mut rows = Vec::new();
     for tree in crate::git::worktrees(project)? {
         let mut row = serde_json::json!({
             "path": tree.path, "branch": tree.branch, "head": tree.head, "main": tree.main,
         });
-        if !remote && !tree.main {
+        if !tree.main {
             let assessment = assess(project, &tree);
             let sessions = sessions_using(&tree.path)?;
             row["locked"] = serde_json::json!(assessment.locked);

@@ -57,9 +57,6 @@ const SURFACES: &[(&str, Open)] = &[
     ("settings-general", |shell, window, cx| {
         shell.open_settings(Section::General, window, cx)
     }),
-    ("settings-connections", |shell, window, cx| {
-        shell.open_settings(Section::Connections, window, cx)
-    }),
     ("settings-appearance", |shell, window, cx| {
         shell.open_settings(Section::Appearance, window, cx)
     }),

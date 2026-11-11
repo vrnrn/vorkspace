@@ -124,8 +124,8 @@ The first 1.0 release. A native desktop, rebuilt in Rust and GPUI, with the work
 - A native desktop with Rust-owned provider sessions, streaming conversations, terminals and file editing.
 - The familiar legacy layout by default, with a new experimental layout available in Appearance settings and no startup prompt.
 - Bots, Channels, Vox and the local Copilot gateway, with controls for delegated sessions and isolated worktrees.
-- Stronger draft recovery, conflict-aware saves, durable command receipts and safer local and remote operations.
-- Incremental conversation saves and byte limits for provider output and remote transfers.
+- Stronger draft recovery, conflict-aware saves, durable command receipts and safer local operations.
+- Incremental conversation saves and byte limits for provider output.
 - Signed updates from existing installations, keeping your conversations, drafts, settings, accounts and Bot files in place.
 
 ## Up next

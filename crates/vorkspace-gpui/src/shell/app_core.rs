@@ -94,8 +94,6 @@ pub(crate) struct AppCore {
     pub(super) layouts: WindowLayouts,
     next_window_id: u64,
     pub(super) checkouts: Entity<crate::git_status::CheckoutCatalog>,
-    pub(super) remote: Arc<vorkspace_core::remote::Connections>,
-    pub(super) remote_poll: super::remote_sessions::RemotePoll,
     pub(super) quick_shortcut: crate::composer::quick_composer::Shortcut,
     scheduler: Option<WeakEntity<Shell>>,
     scheduler_clock: Option<gpui::Task<()>>,
@@ -191,24 +189,16 @@ impl AppCore {
             .max()
             .unwrap_or(0)
             + 1;
-        let remote_dir = data_dir.clone().unwrap_or_else(|| {
-            std::env::temp_dir().join(format!("vorkspace-remote-{}", std::process::id()))
-        });
-        let remote = Arc::new(vorkspace_core::remote::Connections::new(remote_dir));
-        vorkspace_core::remote::set_default_connections(remote.clone());
         let writes = Arc::new(SettingsWrites::default());
         let quit_writes = writes.clone();
         let quit_store = store.clone();
-        let quit_remote = remote.clone();
         cx.on_app_quit(move |cx| {
             let writes = quit_writes.clone();
             let store = quit_store.clone();
-            let remote = quit_remote.clone();
             cx.background_executor().spawn(async move {
                 if let Err(error) = writes.flush(&store) {
                     eprintln!("Could not save workspace settings on quit: {error}");
                 }
-                remote.shutdown();
             })
         })
         .detach();
@@ -242,8 +232,6 @@ impl AppCore {
                 layouts,
                 next_window_id,
                 checkouts,
-                remote,
-                remote_poll: Default::default(),
                 quick_shortcut: Default::default(),
                 scheduler: None,
                 scheduler_clock: None,
@@ -361,7 +349,6 @@ impl AppCore {
             seen_bots: self.seen_bots.clone(),
         });
         self.flush_settings(cx);
-        self.reconcile_remote_projects(cx);
         cx.notify();
     }
 
@@ -514,12 +501,6 @@ impl Shell {
                 this.automation_service_ready(ready.0.clone(), cx);
             },
         ));
-        self.observations.push(cx.subscribe(
-            &core,
-            |this, _, event: &super::remote_sessions::RemoteCatalog, cx| {
-                this.apply_remote_catalog(event, cx);
-            },
-        ));
         let me = cx.weak_entity();
         core.update(cx, |core, cx| {
             core.register(me);
@@ -529,9 +510,8 @@ impl Shell {
         let release = core.downgrade();
         let window = self.window_layout;
         cx.on_release(move |_, cx| {
-            let _ = release.update(cx, |core, cx| {
+            let _ = release.update(cx, |core, _| {
                 core.keep_visible_agents(window, HashSet::new());
-                core.set_remote_scope(window, None, cx);
                 if !core.windows.iter().any(|window| window.upgrade().is_some()) {
                     core.scheduler_clock = None;
                     core.linked_activity_clock = None;
@@ -542,7 +522,6 @@ impl Shell {
         })
         .detach();
         self.app_core = Some(core);
-        self.sync_remote_scope(cx);
     }
 
     pub(super) fn pending_last_window_bot_writes(&self, cx: &App) -> bool {
@@ -677,7 +656,6 @@ impl Shell {
         if !self.sync_vorkspace_bot_visibility(cx) {
             self.refresh_pane_visibility(cx);
         }
-        self.sync_remote_scope(cx);
         self.invalidate_chrome(cx);
         cx.notify();
     }

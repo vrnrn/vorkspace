@@ -74,9 +74,6 @@ impl Conversation {
             return;
         }
         match request {
-            ResponseRequest::RemotePlan { id, text, build } => {
-                self.remote_plan_request(id, text, *build, cx)
-            }
             ResponseRequest::QuoteSelection { text } => self.bot_quote(text, window, cx),
             ResponseRequest::EditLastTurn { turn } => self.begin_edit_last_turn(*turn, window, cx),
             ResponseRequest::Draft { send } => self.draft_action(*send, cx),

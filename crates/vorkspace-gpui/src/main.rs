@@ -265,9 +265,6 @@ fn main() {
         vox::preview::run();
         return;
     }
-    if let Some(code) = vorkspace_core::remote::ssh_askpass::maybe_run() {
-        std::process::exit(code);
-    }
     let Some(launch::Startup {
         db,
         sessions,

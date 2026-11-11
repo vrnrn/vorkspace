@@ -32,7 +32,7 @@ Clipboard history keeps at most 50 items in memory. A small helper app keeps it 
 
 The app checks whether the clipboard changed twice a second. It makes small image previews in the background, one at a time, and never saves a clipboard history file.
 
-Rust controls Vox calls and translates desktop Copilot requests. Small JavaScript helpers handle editor language tools, voice audio, and remote machines. The editor helpers get a limited amount of working time, and time spent waiting while other apps keep the computer busy does not count against it. Empty conversations show the composer, and session titles stay still. A remote machine keeps its own agents running and history saved even when your desktop disconnects. Notes, recordings and their summaries are drawn by the app itself. Vox audio and HTML previews use separate browser surfaces, and HTML previews cannot send commands to the app.
+Rust controls Vox calls and translates desktop Copilot requests. Small JavaScript helpers handle editor language tools and voice audio. The editor helpers get a limited amount of working time, and time spent waiting while other apps keep the computer busy does not count against it. Empty conversations show the composer, and session titles stay still. Notes, recordings and their summaries are drawn by the app itself. Vox audio and HTML previews use separate browser surfaces, and HTML previews cannot send commands to the app.
 
 Notes, Automations, connector pages, Todos and Search share [one compact design](native-pages.md). The same controls use the same sizes and colors. Narrow windows keep navigation usable without throwing away the selected item or unfinished text.
 
@@ -42,13 +42,13 @@ The app reads saved messages and details about their replies together. Switching
 
 The app groups quick bursts of command output and keeps a readable tail. An idle agent can stay ready for the next message while the saved transcript stays in the conversation's storage.
 
-Queued messages keep the attachments and mode they had when you queued them. Continuing an earlier turn or acting on a remote plan leaves the files you added to your next draft in the composer.
+Queued messages keep the attachments and mode they had when you queued them. Continuing an earlier turn leaves the files you added to your next draft in the composer.
 
 The app keeps word-fade animation data while new text is arriving, then releases it. When you scroll a long chat, the prompt rail uses your position to find nearby prompts.
 
 The app prepares a few attachment thumbnails at a time across all windows. Opening a picture full screen has its own loading path.
 
-The Changes panel and title bar read from the same Git snapshot. One Git status check tells the app which files and branch changed. When everything matches the last check, it can reuse the line totals. On your Mac, the app listens for file changes in an active checkout and still does a periodic check. Remote checkouts and folders the Mac cannot watch use periodic checks. Two windows on the same checkout share a commit graph, and each window keeps its own search and selection. If you switch checkouts while writing a commit message, each checkout keeps its own draft while Changes is open. A confirmation belongs to the checkout and branch where you opened it. Review keeps your place while files refresh. It keeps the lines around an edit in memory and counts the unchanged lines further away. You can open a deleted file to see what was removed, tell staged and unstaged tabs apart, and confirm before discarding a change.
+The Changes panel and title bar read from the same Git snapshot. One Git status check tells the app which files and branch changed. When everything matches the last check, it can reuse the line totals. On your Mac, the app listens for file changes in an active checkout and still does a periodic check. Folders the Mac cannot watch use periodic checks. Two windows on the same checkout share a commit graph, and each window keeps its own search and selection. If you switch checkouts while writing a commit message, each checkout keeps its own draft while Changes is open. A confirmation belongs to the checkout and branch where you opened it. Review keeps your place while files refresh. It keeps the lines around an edit in memory and counts the unchanged lines further away. You can open a deleted file to see what was removed, tell staged and unstaged tabs apart, and confirm before discarding a change.
 
 When you open a file from a saved turn, Review shows that file as it was before and after that turn, even after another turn finishes. Undo and Keep apply to the turn shown on the card. If another turn has replaced it, the app refreshes the card for you.
 
@@ -61,8 +61,6 @@ Each database has one app instance in charge of running automations. Another ins
 When a Bot receives a message, the app sends that message's attachments and options with its own reply. Your composer and chat settings stay ready for your next message.
 
 Side questions keep their own replies and unfinished drafts. You can switch between them or close the sheet and return later. A side question can read the conversation it came from and runs separately from the main reply.
-
-When the app opens one saved remote conversation, it looks up that conversation's saved information directly. It refreshes the lookup when remote bindings change and keeps older tab identities and unsent messages.
 
 Long indexed Bot chats opened from the Bot panel first show their newest messages. Scroll up or choose Load earlier messages to read older parts without losing your place. If the saved chat changes elsewhere, the app reloads it when you request another page; if loading fails temporarily, you can retry. Before a Bot runs or a message changes, the app loads the complete chat so older messages stay safe. Other kinds of history keep their existing loading behavior.
 
@@ -85,8 +83,6 @@ Sidebar rows and top tabs have simple rounded highlights when hovered or selecte
 Hold Command and click the **+** in a project's tab bar to open a new terminal, starting in your selected project or worktree folder. A plain click, or ⌘T, starts a session instead. You can keep several independent shells in the same folder. The [Ghostty terminal engine](terminal.md) understands their output and keyboard input; Vorkspace draws the terminal inside the app. Click a terminal tab at the top to return to that exact shell. Switching tabs keeps its output and commands running; selecting a different folder never moves an existing shell. Closing its tab ends only that shell, with a warning if a command is running. After quitting and reopening the app, saved terminal tabs start new shells in their saved starting folders when selected. Running programs and old terminal output do not survive quitting. The smaller terminal dock and its shortcuts still work separately.
 
 As a reply arrives, only changed chat blocks are saved. The screen can show a small preview while the full tool result stays safely in the database. A stale window cannot overwrite newer saved history.
-
-Pending remote requests and their attachments stay saved on your Mac. The remote machine can report new progress while those requests are waiting for confirmation or Retry.
 
 Bot cards save in the background, one card at a time. Repeated updates combine, and an unchanged card needs no database work. Saving a card leaves the rest of the conversation untouched. The screen changes after the save succeeds, provided it still shows the same card and conversation. An old reply cannot replace a newer card. Saving a later reply also cannot put an older saved card back. Closing its view does not cancel a save. Quitting gives pending saves the app's usual short cleanup window, so busy storage cannot hold Restart open indefinitely. If the app exits before a card refresh saves, its previous saved value remains and can be refreshed next time.
 

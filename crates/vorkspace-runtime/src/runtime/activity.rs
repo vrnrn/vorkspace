@@ -1,14 +1,11 @@
 //! A small presentation receipt, produced where tools are already authoritative.
 //! No output payload or transcript is retained by the sidebar projection.
-use vorkspace_core::{tool::ToolCall, transcript::Row};
+use vorkspace_core::tool::ToolCall;
 
 #[derive(Default)]
 pub(super) struct ToolActivity {
     latest: Option<(usize, String)>,
     after_prompt: usize,
-    source_end: usize,
-    #[cfg(test)]
-    inspected: usize,
 }
 impl ToolActivity {
     pub(super) fn label(&self) -> Option<String> {
@@ -45,66 +42,12 @@ impl ToolActivity {
         }
         self.latest = (!label.is_empty()).then_some((at, label));
     }
-
-    /// Remote history has already been projected on this worker. Inspect its
-    /// changed suffix only; a rollback invalidating the receipt may also inspect
-    /// the surviving prefix to recover its predecessor. Never called by a clock.
-    pub(super) fn snapshot(&mut self, rows: &[Row], changed: usize, cwd: &str) {
-        let changed = changed.min(rows.len());
-        let invalidated = self.latest.as_ref().is_some_and(|(at, _)| {
-            *at >= changed
-                || changed < self.source_end
-                || (changed == self.source_end && rows.get(changed).is_some_and(|row| !row.first))
-        });
-        let mut candidate = None;
-        for at in (changed..rows.len()).rev() {
-            #[cfg(test)]
-            {
-                self.inspected += 1;
-            }
-            if rows[at].first && (rows[at].is_prompt() || rows[at].role == "tool") {
-                candidate = Some(at);
-                break;
-            }
-        }
-        if candidate.is_none() && invalidated {
-            for at in (0..changed).rev() {
-                #[cfg(test)]
-                {
-                    self.inspected += 1;
-                }
-                if rows[at].first && (rows[at].is_prompt() || rows[at].role == "tool") {
-                    candidate = Some(at);
-                    break;
-                }
-            }
-        }
-        if let Some(at) = candidate {
-            self.latest = None;
-            self.after_prompt = 0;
-            if rows[at].is_prompt() {
-                self.prompt(at);
-            }
-            if rows[at].role == "tool" {
-                let end = (at + 1..rows.len())
-                    .find(|&i| rows[i].first)
-                    .unwrap_or(rows.len());
-                self.source_end = end;
-                let text: String = rows[at..end].iter().map(|row| row.text.as_str()).collect();
-                if let Ok(tool) = serde_json::from_str::<ToolCall>(&text) {
-                    self.tool(at, &tool, cwd);
-                }
-            }
-        } else if invalidated {
-            self.latest = None;
-        }
-    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use vorkspace_core::{tool::ToolState, transcript::Transcript};
+    use vorkspace_core::tool::ToolState;
 
     fn command(id: &str, command: &str) -> ToolCall {
         let mut tool = ToolCall::new(id, "exec_command");
@@ -134,68 +77,5 @@ mod tests {
             activity.label().is_none(),
             "a steer must not inherit the previous prompt's tool"
         );
-    }
-
-    #[test]
-    fn remote_suffix_chunks_replacements_and_rollbacks_match_the_authoritative_snapshot() {
-        let mut transcript = Transcript::default();
-        transcript.begin("user");
-        transcript.append("Inspect");
-        let first = transcript.begin("tool");
-        transcript.append(&serde_json::to_string(&command("a", "cargo check")).unwrap());
-        let second = transcript.begin("tool");
-        transcript.append(&serde_json::to_string(&command("b", "cargo test")).unwrap());
-        let mut activity = ToolActivity::default();
-        activity.snapshot(&transcript.rows, 0, "/work");
-        assert_eq!(activity.label().as_deref(), Some("Run cargo test"));
-        // Replacement of the latest call, including a chunked JSON message.
-        transcript.rows.truncate(second);
-        let text = serde_json::to_string(&command("b", &"x".repeat(3000))).unwrap();
-        transcript.begin("tool");
-        transcript.append(&text);
-        activity.snapshot(&transcript.rows, second, "/work");
-        let before = activity.label();
-        let mut changed = transcript.rows[second + 1].text.clone();
-        changed = changed.replace('x', "y");
-        transcript.rows[second + 1].text = changed;
-        activity.snapshot(&transcript.rows, second + 1, "/work");
-        // This replacement changes only a truncated-away command suffix.
-        assert_eq!(activity.label(), before);
-        transcript.rows.truncate(second);
-        activity.snapshot(&transcript.rows, second, "/work");
-        assert_eq!(activity.label().as_deref(), Some("Run cargo check"));
-        transcript.rows.truncate(first);
-        activity.snapshot(&transcript.rows, first, "/work");
-        assert!(activity.label().is_none());
-        activity.snapshot(&[], 0, "/work");
-        assert!(activity.label().is_none());
-    }
-
-    #[test]
-    fn incremental_text_never_revisits_old_history_or_retains_tool_output() {
-        let mut rows = vec![
-            Row {
-                role: "assistant".into(),
-                text: String::new(),
-                first: true,
-                sent_at: None
-            };
-            10_000
-        ];
-        let mut activity = ToolActivity::default();
-        activity.snapshot(&rows, 0, "/work");
-        let baseline = activity.inspected;
-        for _ in 0..100 {
-            let changed = rows.len();
-            rows.push(Row {
-                role: "assistant".into(),
-                text: "token".into(),
-                first: false,
-                sent_at: None,
-            });
-            activity.snapshot(&rows, changed, "/work");
-        }
-        assert_eq!(activity.inspected - baseline, 100);
-        assert!(activity.latest.is_none());
     }
 }

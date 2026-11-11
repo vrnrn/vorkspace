@@ -125,8 +125,7 @@ impl Shell {
                     durable: HashMap::new(),
                 })?;
                 requested.save(&write_ids, &db).map_err(|error| {
-                    // A bulk edit can commit some members before a later
-                    // member fails, especially across local and remote stores.
+                    // A bulk edit can commit some members before a later member fails.
                     let ids: HashSet<_> = write_ids.into_iter().collect();
                     let durable = db
                         .sessions()

@@ -210,7 +210,6 @@ fn settings_replace_native_rail_and_tabs_and_return_to_the_same_session(cx: &mut
     assert!(visual.debug_bounds("sidebar-content").is_none());
     let selectors = [
         "settings-nav-general",
-        "settings-nav-connections",
         "settings-nav-appearance",
         "settings-nav-keybindings",
         "settings-nav-chat",

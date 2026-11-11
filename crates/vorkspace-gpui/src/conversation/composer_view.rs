@@ -113,9 +113,9 @@ impl Conversation {
             .children(menu)
             .children(self.model_list_popover(cx))
             .children(self.orchestration_card(cx))
-            .children(if self.is_remote() { None } else { self.usage_notice(false, cx) })
+            .children(self.usage_notice(false, cx))
             .child(self.message_queue(window, cx))
-            .children(if self.is_remote() { None } else { self.auth_notice(cx) })
+            .children(self.auth_notice(cx))
             .when(self.settings.worktree_removed,|d|d.child(div().mb_2().p_3().rounded(px(radius::CONTAINER)).border_1().border_color(content(0.1)).flex().items_center().gap_3().text_size(px(12.)).child(div().flex_1().child("Worktree deleted. Select a branch or worktree to continue this conversation.")).child(tool_pill("reattach-worktree","Select worktree").child("Select worktree").on_click(cx.listener(|this,_,window,cx|this.open_git(GitMode::Worktree,window,cx))))))
             .when_some(self.settings.pending_provider_switch.as_ref().map(|switch| switch.from.as_str())
                 .or_else(|| self.settings.handoff.as_ref().map(|handoff| handoff.from.as_str())), |d, from| {
@@ -176,7 +176,6 @@ impl Conversation {
             })
             .child(self.approval_shelf(window, cx))
             .child(self.composer_box(window, cx))
-            .children(self.remote_notice(cx))
             .child(self.composer_tools(cx))
             .into_any_element()
     }
@@ -772,10 +771,7 @@ impl Conversation {
             || (!self.attaching
                 && (!self.preparing_worktree || self.turn_in_flight())
                 && (busy || (has_value && self.loaded && !offering))
-                && (busy
-                    || !draft
-                    || (self.follow_ups.state.draft.is_none()
-                        && (!self.is_remote() || !self.turn_in_flight()))));
+                && (busy || !draft || (self.follow_ups.state.draft.is_none())));
         let accent = primary_action(enabled);
         vorkspace_ui::theme::keyboard_reachable(div().id("send-or-stop"), enabled)
             .debug_selector(|| "send-or-stop".into())
