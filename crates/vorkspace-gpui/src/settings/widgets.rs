@@ -167,6 +167,20 @@ pub(super) fn icon_action(
         )
 }
 
+struct SelectTrigger<'a> {
+    id: &'static str,
+    label: &'static str,
+    open: bool,
+    selected: Option<usize>,
+    slot: &'a AnchorSlot,
+    trigger_label: SharedString,
+    trigger_icon: Option<AnyElement>,
+}
+struct SelectKeys {
+    values: Vec<String>,
+    count: usize,
+}
+
 impl SettingsView {
     pub(super) fn flashing(&self, id: Option<&str>) -> bool {
         id.is_some() && self.revealed.as_deref() == id
@@ -259,36 +273,7 @@ impl SettingsView {
         let flash = self.flashing(id);
         let narrow =
             self.scroll.bounds().size.width > px(0.) && self.scroll.bounds().size.width < px(560.);
-        let toggle_only = id.is_some_and(|id| {
-            matches!(
-                id,
-                "sounds"
-                    | "notifications"
-                    | "tab-animations"
-                    | "notes"
-                    | "todos"
-                    | "vox-enabled"
-                    | "vox-silent"
-                    | "bot-minions"
-                    | "quick-composer"
-                    | "clipboard-history"
-                    | "dictation-enabled"
-                    | "working-agents"
-                    | "close-to-tray"
-                    | "main-pane-glass"
-                    | "show-excluded-files"
-                    | "anchor-prompts"
-                    | "paced-reveal"
-                    | "composer-autocorrect"
-                    | "format-on-save"
-                    | "show-remaining-usage"
-                    | "mask-emails"
-                    | "claude-hooks"
-                    | "bots-enabled"
-                    | "bot-menu-bar-icon"
-                    | "show-archived"
-            )
-        });
+        let toggle_only = Self::row_toggle_only(id);
         let stacked = narrow && !toggle_only;
         let compact = description.is_none() && !stacked;
         div()
@@ -362,6 +347,39 @@ impl SettingsView {
                     .children(controls),
             )
             .into_any_element()
+    }
+
+    fn row_toggle_only(id: Option<&'static str>) -> bool {
+        id.is_some_and(|id| {
+            matches!(
+                id,
+                "sounds"
+                    | "notifications"
+                    | "tab-animations"
+                    | "notes"
+                    | "todos"
+                    | "vox-enabled"
+                    | "vox-silent"
+                    | "bot-minions"
+                    | "quick-composer"
+                    | "clipboard-history"
+                    | "dictation-enabled"
+                    | "working-agents"
+                    | "close-to-tray"
+                    | "main-pane-glass"
+                    | "show-excluded-files"
+                    | "anchor-prompts"
+                    | "paced-reveal"
+                    | "composer-autocorrect"
+                    | "format-on-save"
+                    | "show-remaining-usage"
+                    | "mask-emails"
+                    | "claude-hooks"
+                    | "bots-enabled"
+                    | "bot-menu-bar-icon"
+                    | "show-archived"
+            )
+        })
     }
 
     /// Where search lands: each target reports its place in the page.
@@ -566,26 +584,7 @@ impl SettingsView {
                             .cursor_pointer()
                             .on_key_down(cx.listener(
                                 move |this, event: &gpui::KeyDownEvent, _, cx| {
-                                    let modifiers = event.keystroke.modifiers;
-                                    if modifiers.platform
-                                        || modifiers.control
-                                        || modifiers.alt
-                                        || modifiers.shift
-                                    {
-                                        return;
-                                    }
-                                    let current = kind.get(&this.prefs).clamp(min, max);
-                                    let value = match event.keystroke.key.as_str() {
-                                        "left" | "down" => current.saturating_sub(1).max(min),
-                                        "right" | "up" => current.saturating_add(1).min(max),
-                                        "home" => min,
-                                        "end" => max,
-                                        _ => return,
-                                    };
-                                    if value != kind.get(&this.prefs) {
-                                        this.update(cx, |p| kind.set(p, value));
-                                    }
-                                    cx.stop_propagation();
+                                    this.slider_key(kind, min, max, event, cx);
                                 },
                             ))
                             .on_mouse_down(
@@ -599,17 +598,45 @@ impl SettingsView {
                             )
                     }),
             )
-            .child(
-                div()
-                    .w(px(40.))
-                    .flex_shrink_0()
-                    .text_right()
-                    .text_size(px(12.))
-                    .line_height(px(16.))
-                    .text_color(content(1.))
-                    .child(display),
-            )
+            .child(Self::slider_value(display))
             .into_any_element()
+    }
+
+    fn slider_value(display: String) -> Div {
+        div()
+            .w(px(40.))
+            .flex_shrink_0()
+            .text_right()
+            .text_size(px(12.))
+            .line_height(px(16.))
+            .text_color(content(1.))
+            .child(display)
+    }
+
+    fn slider_key(
+        &mut self,
+        kind: SliderKind,
+        min: u32,
+        max: u32,
+        event: &gpui::KeyDownEvent,
+        cx: &mut Context<Self>,
+    ) {
+        let modifiers = event.keystroke.modifiers;
+        if modifiers.platform || modifiers.control || modifiers.alt || modifiers.shift {
+            return;
+        }
+        let current = kind.get(&self.prefs).clamp(min, max);
+        let value = match event.keystroke.key.as_str() {
+            "left" | "down" => current.saturating_sub(1).max(min),
+            "right" | "up" => current.saturating_add(1).min(max),
+            "home" => min,
+            "end" => max,
+            _ => return,
+        };
+        if value != kind.get(&self.prefs) {
+            self.update(cx, |p| kind.set(p, value));
+        }
+        cx.stop_propagation();
     }
     pub(super) fn slide(&mut self, kind: SliderKind, x: gpui::Pixels, cx: &mut Context<Self>) {
         let Some(bounds) = self
@@ -666,143 +693,24 @@ impl SettingsView {
                 Some(w) => d.w(px(w)),
                 None => d.max_w(px(208.)),
             })
-            .child(
-                div()
-                    .id(SharedString::from(format!("select-{id}")))
-                    .debug_selector(move || format!("settings-select-{id}"))
-                    .role(Role::ComboBox)
-                    .aria_label(format!("{label}: {trigger_label}"))
-                    .aria_expanded(open)
-                    .relative()
-                    .w_full()
-                    .flex()
-                    .items_center()
-                    .justify_between()
-                    .gap_2()
-                    .rounded(px(radius::CONTROL))
-                    .border_1()
-                    .border_color(content(0.1))
-                    .bg(content(0.05))
-                    .px_2()
-                    .py_1()
-                    .text_size(px(12.))
-                    .line_height(px(16.))
-                    .text_color(content(1.))
-                    .cursor_pointer()
-                    .hover(|s| s.border_color(content(0.2)))
-                    .child(slot.probe())
-                    .child(
-                        div()
-                            .min_w_0()
-                            .flex_1()
-                            .flex()
-                            .items_center()
-                            .gap(px(6.))
-                            .when_some(trigger_icon, |d, icon| {
-                                d.child(
-                                    div()
-                                        .size_4()
-                                        .flex_shrink_0()
-                                        .flex()
-                                        .items_center()
-                                        .justify_center()
-                                        .child(icon),
-                                )
-                            })
-                            .child(div().min_w_0().truncate().child(trigger_label)),
-                    )
-                    .child(
-                        icon("chevron-down-hi", 14.)
-                            .text_color(content(0.5))
-                            .when(open, |s| {
-                                s.with_transformation(gpui::Transformation::rotate(
-                                    gpui::percentage(0.5),
-                                ))
-                            }),
-                    )
-                    .on_click(cx.listener(move |this, _, window, cx| {
-                        if this.select_open == Some(id) {
-                            this.select_open = None;
-                        } else {
-                            this.select_open = Some(id);
-                            this.select_active = selected.unwrap_or(0);
-                            // Use list-relative row positions: a reopened popover
-                            // can be placed somewhere else or still be animating.
-                            this.select_scroll.set_offset(gpui::point(
-                                px(0.),
-                                px(-(this.select_active as f32) * SELECT_ROW_HEIGHT),
-                            ));
-                            window.focus(&this.select_focus, cx);
-                        }
-                        cx.notify();
-                    })),
-            )
+            .child(self.select_trigger(
+                SelectTrigger {
+                    id,
+                    label,
+                    open,
+                    selected,
+                    slot: &slot,
+                    trigger_label,
+                    trigger_icon,
+                },
+                cx,
+            ))
             .when(open, |d| {
                 let active = self.select_active;
-                let rows = options
-                    .into_iter()
-                    .enumerate()
-                    .map(|(ix, (option, text, icon_el))| {
-                        let is_selected = Some(ix) == selected;
-                        let highlighted = ix == active;
-                        let change = change.clone();
-                        div()
-                            .id(SharedString::from(format!("select-{id}-{ix}")))
-                            .debug_selector(move || format!("settings-option-{id}-{ix}"))
-                            .role(Role::ListBoxOption)
-                            .aria_label(text.clone())
-                            .aria_selected(is_selected)
-                            .w_full()
-                            .h(px(SELECT_ROW_HEIGHT))
-                            .flex_shrink_0()
-                            .flex()
-                            .items_center()
-                            .gap_2()
-                            .rounded(px(radius::CONTAINER))
-                            .px_2()
-                            .py(px(6.))
-                            .text_size(px(12.))
-                            .line_height(px(16.))
-                            .text_color(content(1.))
-                            .cursor_pointer()
-                            .map(|d| {
-                                if highlighted || is_selected {
-                                    d.bg(content(0.1))
-                                } else {
-                                    d.hover(|s| s.bg(vorkspace_ui::fluid::hover(0.05)))
-                                }
-                            })
-                            .when_some(icon_el, |d, icon_el| {
-                                d.child(
-                                    div()
-                                        .size_4()
-                                        .flex_shrink_0()
-                                        .flex()
-                                        .items_center()
-                                        .justify_center()
-                                        .child(icon_el),
-                                )
-                            })
-                            .child(div().min_w_0().flex_1().truncate().child(text))
-                            .when(is_selected, |d| {
-                                d.child(icon("check-hi", 14.).text_color(content(1.)))
-                            })
-                            .on_mouse_move(cx.listener(move |this, _, _, cx| {
-                                if this.select_active != ix {
-                                    this.select_active = ix;
-                                    cx.notify();
-                                }
-                            }))
-                            .on_click(cx.listener(move |this, _, window, cx| {
-                                this.select_open = None;
-                                change(this, option.clone(), cx);
-                                window.focus(&this.focus, cx);
-                                cx.notify();
-                            }))
-                    })
-                    .collect::<Vec<_>>();
+                let rows = Self::select_rows(id, selected, active, options, &change, cx);
                 let count = rows.len();
                 let keys_change = change.clone();
+                let keys = SelectKeys { values, count };
                 d.child(
                     popover(
                         SharedString::from(format!("select-popover-{id}")),
@@ -835,47 +743,7 @@ impl SettingsView {
                             .flex_col()
                             .on_key_down(cx.listener(
                                 move |this, event: &gpui::KeyDownEvent, window, cx| {
-                                    let key = event.keystroke.key.as_str();
-                                    let last = count.saturating_sub(1);
-                                    match key {
-                                        "down" => {
-                                            this.select_active = (this.select_active + 1).min(last)
-                                        }
-                                        "up" => {
-                                            this.select_active =
-                                                this.select_active.saturating_sub(1)
-                                        }
-                                        "home" => this.select_active = 0,
-                                        "end" => this.select_active = last,
-                                        "enter" | "tab" => {
-                                            if let Some(v) = values.get(this.select_active) {
-                                                keys_change(this, v.clone(), cx);
-                                            }
-                                            this.select_open = None;
-                                            window.focus(&this.focus, cx);
-                                        }
-                                        "escape" => {
-                                            this.select_open = None;
-                                            window.focus(&this.focus, cx);
-                                        }
-                                        _ => return,
-                                    }
-                                    if matches!(key, "down" | "up" | "home" | "end") {
-                                        let top = px(this.select_active as f32 * SELECT_ROW_HEIGHT);
-                                        let height = this
-                                            .select_scroll
-                                            .bounds()
-                                            .size
-                                            .height
-                                            .max(px(SELECT_ROW_HEIGHT));
-                                        let offset = this.select_scroll.offset();
-                                        let y = offset
-                                            .y
-                                            .clamp(-top, height - top - px(SELECT_ROW_HEIGHT));
-                                        this.select_scroll.set_offset(gpui::point(offset.x, y));
-                                    }
-                                    cx.stop_propagation();
-                                    cx.notify();
+                                    this.select_key(event, window, cx, &keys, &keys_change);
                                 },
                             ))
                             .children(rows),
@@ -883,6 +751,203 @@ impl SettingsView {
                 )
             })
             .into_any_element()
+    }
+
+    fn select_key(
+        &mut self,
+        event: &gpui::KeyDownEvent,
+        window: &mut gpui::Window,
+        cx: &mut Context<Self>,
+        keys: &SelectKeys,
+        keys_change: &impl Fn(&mut Self, String, &mut Context<Self>),
+    ) {
+        let SelectKeys { values, count } = keys;
+
+        let key = event.keystroke.key.as_str();
+        let last = count.saturating_sub(1);
+        match key {
+            "down" => self.select_active = (self.select_active + 1).min(last),
+            "up" => self.select_active = self.select_active.saturating_sub(1),
+            "home" => self.select_active = 0,
+            "end" => self.select_active = last,
+            "enter" | "tab" => {
+                if let Some(v) = values.get(self.select_active) {
+                    keys_change(self, v.clone(), cx);
+                }
+                self.select_open = None;
+                window.focus(&self.focus, cx);
+            }
+            "escape" => {
+                self.select_open = None;
+                window.focus(&self.focus, cx);
+            }
+            _ => return,
+        }
+        if matches!(key, "down" | "up" | "home" | "end") {
+            let top = px(self.select_active as f32 * SELECT_ROW_HEIGHT);
+            let height = self
+                .select_scroll
+                .bounds()
+                .size
+                .height
+                .max(px(SELECT_ROW_HEIGHT));
+            let offset = self.select_scroll.offset();
+            let y = offset.y.clamp(-top, height - top - px(SELECT_ROW_HEIGHT));
+            self.select_scroll.set_offset(gpui::point(offset.x, y));
+        }
+        cx.stop_propagation();
+        cx.notify();
+    }
+
+    fn select_rows<C: Fn(&mut Self, String, &mut Context<Self>) + Clone + 'static>(
+        id: &'static str,
+        selected: Option<usize>,
+        active: usize,
+        options: Vec<(String, SharedString, Option<AnyElement>)>,
+        change: &C,
+        cx: &mut Context<Self>,
+    ) -> Vec<Stateful<Div>> {
+        options
+            .into_iter()
+            .enumerate()
+            .map(|(ix, (option, text, icon_el))| {
+                let is_selected = Some(ix) == selected;
+                let highlighted = ix == active;
+                let change = change.clone();
+                div()
+                    .id(SharedString::from(format!("select-{id}-{ix}")))
+                    .debug_selector(move || format!("settings-option-{id}-{ix}"))
+                    .role(Role::ListBoxOption)
+                    .aria_label(text.clone())
+                    .aria_selected(is_selected)
+                    .w_full()
+                    .h(px(SELECT_ROW_HEIGHT))
+                    .flex_shrink_0()
+                    .flex()
+                    .items_center()
+                    .gap_2()
+                    .rounded(px(radius::CONTAINER))
+                    .px_2()
+                    .py(px(6.))
+                    .text_size(px(12.))
+                    .line_height(px(16.))
+                    .text_color(content(1.))
+                    .cursor_pointer()
+                    .map(|d| {
+                        if highlighted || is_selected {
+                            d.bg(content(0.1))
+                        } else {
+                            d.hover(|s| s.bg(vorkspace_ui::fluid::hover(0.05)))
+                        }
+                    })
+                    .when_some(icon_el, |d, icon_el| {
+                        d.child(
+                            div()
+                                .size_4()
+                                .flex_shrink_0()
+                                .flex()
+                                .items_center()
+                                .justify_center()
+                                .child(icon_el),
+                        )
+                    })
+                    .child(div().min_w_0().flex_1().truncate().child(text))
+                    .when(is_selected, |d| {
+                        d.child(icon("check-hi", 14.).text_color(content(1.)))
+                    })
+                    .on_mouse_move(cx.listener(move |this, _, _, cx| {
+                        if this.select_active != ix {
+                            this.select_active = ix;
+                            cx.notify();
+                        }
+                    }))
+                    .on_click(cx.listener(move |this, _, window, cx| {
+                        this.select_open = None;
+                        change(this, option.clone(), cx);
+                        window.focus(&this.focus, cx);
+                        cx.notify();
+                    }))
+            })
+            .collect::<Vec<_>>()
+    }
+
+    fn select_trigger(&self, trigger: SelectTrigger<'_>, cx: &mut Context<Self>) -> Stateful<Div> {
+        let SelectTrigger {
+            id,
+            label,
+            open,
+            selected,
+            slot,
+            trigger_label,
+            trigger_icon,
+        } = trigger;
+        div()
+            .id(SharedString::from(format!("select-{id}")))
+            .debug_selector(move || format!("settings-select-{id}"))
+            .role(Role::ComboBox)
+            .aria_label(format!("{label}: {trigger_label}"))
+            .aria_expanded(open)
+            .relative()
+            .w_full()
+            .flex()
+            .items_center()
+            .justify_between()
+            .gap_2()
+            .rounded(px(radius::CONTROL))
+            .border_1()
+            .border_color(content(0.1))
+            .bg(content(0.05))
+            .px_2()
+            .py_1()
+            .text_size(px(12.))
+            .line_height(px(16.))
+            .text_color(content(1.))
+            .cursor_pointer()
+            .hover(|s| s.border_color(content(0.2)))
+            .child(slot.probe())
+            .child(
+                div()
+                    .min_w_0()
+                    .flex_1()
+                    .flex()
+                    .items_center()
+                    .gap(px(6.))
+                    .when_some(trigger_icon, |d, icon| {
+                        d.child(
+                            div()
+                                .size_4()
+                                .flex_shrink_0()
+                                .flex()
+                                .items_center()
+                                .justify_center()
+                                .child(icon),
+                        )
+                    })
+                    .child(div().min_w_0().truncate().child(trigger_label)),
+            )
+            .child(
+                icon("chevron-down-hi", 14.)
+                    .text_color(content(0.5))
+                    .when(open, |s| {
+                        s.with_transformation(gpui::Transformation::rotate(gpui::percentage(0.5)))
+                    }),
+            )
+            .on_click(cx.listener(move |this, _, window, cx| {
+                if this.select_open == Some(id) {
+                    this.select_open = None;
+                } else {
+                    this.select_open = Some(id);
+                    this.select_active = selected.unwrap_or(0);
+                    // Use list-relative row positions: a reopened popover
+                    // can be placed somewhere else or still be animating.
+                    this.select_scroll.set_offset(gpui::point(
+                        px(0.),
+                        px(-(this.select_active as f32) * SELECT_ROW_HEIGHT),
+                    ));
+                    window.focus(&this.select_focus, cx);
+                }
+                cx.notify();
+            }))
     }
 }
 
@@ -937,33 +1002,7 @@ impl SettingsView {
             .filter(|(id, _)| !self.prefs.model_hidden(provider, id))
             .count();
         let weak = cx.weak_entity();
-        let trigger = secondary_button(
-            SharedString::from(format!("models-{provider}")),
-            format!("Choose visible {} models", kind.label()),
-            false,
-            models.is_empty(),
-        )
-        .relative()
-        .gap_1()
-        .debug_selector(move || format!("models-{provider}"))
-        .child(slot.probe())
-        .child(format!("Models {visible}/{}", models.len()))
-        .when(!models.is_empty(), |d| {
-            d.aria_expanded(open)
-                .on_click(cx.listener(move |this, _, window, cx| {
-                    if this.models_open == Some(kind) {
-                        this.models_open = None;
-                    } else {
-                        this.models_open = Some(kind);
-                        this.model_active = None;
-                        this.model_scroll.set_offset(gpui::point(px(0.), px(0.)));
-                        this.model_filter
-                            .update(cx, |input, cx| input.set_text(String::new(), cx));
-                        window.focus(&gpui::Focusable::focus_handle(&this.model_filter, cx), cx);
-                    }
-                    cx.notify();
-                }))
-        });
+        let trigger = Self::models_trigger(kind, visible, models, open, &slot, cx);
         div()
             .relative()
             .child(trigger)
@@ -984,49 +1023,7 @@ impl SettingsView {
                 let down_ids = ids.clone();
                 let rows = filtered
                     .into_iter()
-                    .map(|(ix, (id, name))| {
-                        let shown = !self.prefs.model_hidden(provider, id);
-                        let active = self.model_active.as_deref() == Some(id);
-                        let model = id.clone();
-                        div()
-                            .id(SharedString::from(format!("model-visible-{provider}-{id}")))
-                            .debug_selector(move || format!("model-visible-{provider}-{ix}"))
-                            .role(Role::CheckBox)
-                            .aria_label(name.clone())
-                            .aria_toggled(if shown {
-                                gpui::Toggled::True
-                            } else {
-                                gpui::Toggled::False
-                            })
-                            .when(active, |d| d.aria_active_descendant().bg(content(0.1)))
-                            .w_full()
-                            .flex()
-                            .items_center()
-                            .gap_2()
-                            .rounded(px(radius::CONTAINER))
-                            .px_2()
-                            .py(px(6.))
-                            .text_size(px(12.))
-                            .line_height(px(16.))
-                            .text_color(content(if shown { 1. } else { 0.5 }))
-                            .cursor_pointer()
-                            .hover(|s| s.bg(vorkspace_ui::fluid::hover(0.05)))
-                            .child(
-                                div()
-                                    .size_4()
-                                    .flex_shrink_0()
-                                    .flex()
-                                    .items_center()
-                                    .justify_center()
-                                    .when(shown, |d| {
-                                        d.child(icon("check-hi", 14.).text_color(content(1.)))
-                                    }),
-                            )
-                            .child(div().min_w_0().flex_1().truncate().child(name.clone()))
-                            .on_click(cx.listener(move |this, _, _, cx| {
-                                this.toggle_model_visibility(provider, &model, cx);
-                            }))
-                    })
+                    .map(|(ix, (id, name))| self.model_visibility_row(provider, ix, id, name, cx))
                     .collect::<Vec<_>>();
                 let any_hidden = visible < models.len();
                 d.child(
@@ -1058,55 +1055,12 @@ impl SettingsView {
                                 this.step_model_visibility(&down_ids, 1, cx);
                             }))
                             .capture_action(cx.listener(move |this, _: &input::Submit, _, cx| {
-                                if this.model_filter.read(cx).is_composing() {
-                                    return;
-                                }
-                                let selected = ids
-                                    .iter()
-                                    .find(|id| this.model_active.as_ref() == Some(*id))
-                                    .or_else(|| (ids.len() == 1).then(|| &ids[0]));
-                                if let Some(id) = selected {
-                                    this.toggle_model_visibility(provider, id, cx);
-                                    cx.stop_propagation();
-                                }
+                                this.submit_model_visibility(provider, &ids, cx);
                             }))
                             .flex()
                             .flex_col()
                             .gap_1()
-                            .child(
-                                div()
-                                    .flex()
-                                    .items_center()
-                                    .gap_2()
-                                    .px_2()
-                                    .py_1()
-                                    .child(
-                                        div().flex_1().min_w_0().child(self.model_filter.clone()),
-                                    )
-                                    .when(any_hidden, |d| {
-                                        d.child(
-                                            secondary_button(
-                                                SharedString::from(format!(
-                                                    "models-show-all-{provider}"
-                                                )),
-                                                "Show all models",
-                                                false,
-                                                false,
-                                            )
-                                            .child("Show all")
-                                            .on_click(
-                                                cx.listener(move |this, _, _, cx| {
-                                                    this.update(cx, |p| {
-                                                        let prefix = format!("{provider}:");
-                                                        p.hidden_models.retain(|key| {
-                                                            !key.starts_with(&prefix)
-                                                        });
-                                                    })
-                                                }),
-                                            ),
-                                        )
-                                    }),
-                            )
+                            .child(self.models_filter_bar(provider, any_hidden, cx))
                             .child(
                                 div()
                                     .id(SharedString::from(format!("models-scroll-{provider}")))
@@ -1123,6 +1077,155 @@ impl SettingsView {
                 )
             })
             .into_any_element()
+    }
+
+    fn submit_model_visibility(
+        &mut self,
+        provider: &'static str,
+        ids: &Rc<[String]>,
+        cx: &mut Context<Self>,
+    ) {
+        if self.model_filter.read(cx).is_composing() {
+            return;
+        }
+        let selected = ids
+            .iter()
+            .find(|id| self.model_active.as_ref() == Some(*id))
+            .or_else(|| (ids.len() == 1).then(|| &ids[0]));
+        if let Some(id) = selected {
+            self.toggle_model_visibility(provider, id, cx);
+            cx.stop_propagation();
+        }
+    }
+
+    fn models_trigger(
+        kind: vorkspace_core::provider::Kind,
+        visible: usize,
+        models: &[(String, String)],
+        open: bool,
+        slot: &AnchorSlot,
+        cx: &mut Context<Self>,
+    ) -> Stateful<Div> {
+        let provider = kind.id();
+        secondary_button(
+            SharedString::from(format!("models-{provider}")),
+            format!("Choose visible {} models", kind.label()),
+            false,
+            models.is_empty(),
+        )
+        .relative()
+        .gap_1()
+        .debug_selector(move || format!("models-{provider}"))
+        .child(slot.probe())
+        .child(format!("Models {visible}/{}", models.len()))
+        .when(!models.is_empty(), |d| {
+            d.aria_expanded(open)
+                .on_click(cx.listener(move |this, _, window, cx| {
+                    this.toggle_models_menu(kind, window, cx);
+                }))
+        })
+    }
+
+    fn toggle_models_menu(
+        &mut self,
+        kind: vorkspace_core::provider::Kind,
+        window: &mut gpui::Window,
+        cx: &mut Context<Self>,
+    ) {
+        if self.models_open == Some(kind) {
+            self.models_open = None;
+        } else {
+            self.models_open = Some(kind);
+            self.model_active = None;
+            self.model_scroll.set_offset(gpui::point(px(0.), px(0.)));
+            self.model_filter
+                .update(cx, |input, cx| input.set_text(String::new(), cx));
+            window.focus(&gpui::Focusable::focus_handle(&self.model_filter, cx), cx);
+        }
+        cx.notify();
+    }
+
+    fn models_filter_bar(
+        &self,
+        provider: &'static str,
+        any_hidden: bool,
+        cx: &mut Context<Self>,
+    ) -> Div {
+        div()
+            .flex()
+            .items_center()
+            .gap_2()
+            .px_2()
+            .py_1()
+            .child(div().flex_1().min_w_0().child(self.model_filter.clone()))
+            .when(any_hidden, |d| {
+                d.child(
+                    secondary_button(
+                        SharedString::from(format!("models-show-all-{provider}")),
+                        "Show all models",
+                        false,
+                        false,
+                    )
+                    .child("Show all")
+                    .on_click(cx.listener(move |this, _, _, cx| {
+                        this.update(cx, |p| {
+                            let prefix = format!("{provider}:");
+                            p.hidden_models.retain(|key| !key.starts_with(&prefix));
+                        })
+                    })),
+                )
+            })
+    }
+
+    fn model_visibility_row(
+        &self,
+        provider: &'static str,
+        ix: usize,
+        id: &String,
+        name: &str,
+        cx: &mut Context<Self>,
+    ) -> Stateful<Div> {
+        let shown = !self.prefs.model_hidden(provider, id);
+        let active = self.model_active.as_deref() == Some(id);
+        let model = id.clone();
+        div()
+            .id(SharedString::from(format!("model-visible-{provider}-{id}")))
+            .debug_selector(move || format!("model-visible-{provider}-{ix}"))
+            .role(Role::CheckBox)
+            .aria_label(name.to_owned())
+            .aria_toggled(if shown {
+                gpui::Toggled::True
+            } else {
+                gpui::Toggled::False
+            })
+            .when(active, |d| d.aria_active_descendant().bg(content(0.1)))
+            .w_full()
+            .flex()
+            .items_center()
+            .gap_2()
+            .rounded(px(radius::CONTAINER))
+            .px_2()
+            .py(px(6.))
+            .text_size(px(12.))
+            .line_height(px(16.))
+            .text_color(content(if shown { 1. } else { 0.5 }))
+            .cursor_pointer()
+            .hover(|s| s.bg(vorkspace_ui::fluid::hover(0.05)))
+            .child(
+                div()
+                    .size_4()
+                    .flex_shrink_0()
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .when(shown, |d| {
+                        d.child(icon("check-hi", 14.).text_color(content(1.)))
+                    }),
+            )
+            .child(div().min_w_0().flex_1().truncate().child(name.to_owned()))
+            .on_click(cx.listener(move |this, _, _, cx| {
+                this.toggle_model_visibility(provider, &model, cx);
+            }))
     }
     pub(super) fn project_picker(&mut self, cx: &mut Context<Self>) -> AnyElement {
         let options = self

@@ -1,6 +1,7 @@
 //! React Settings forms and their asynchronous actions.
 use super::widgets::{note, primary_button, red, secondary_button};
 use super::*;
+
 use vorkspace_core::provider::Kind;
 use vorkspace_ui::radius;
 
@@ -30,6 +31,20 @@ pub(super) struct Editor {
     previous: Option<FocusHandle>,
     _subscriptions: Vec<Subscription>,
 }
+struct FormFields<'a> {
+    name: Entity<Input>,
+    body: Entity<Input>,
+    busy: bool,
+    error: &'a Option<String>,
+    provider: String,
+    scope: String,
+    existing: bool,
+    base: String,
+    deleting: bool,
+    editing: bool,
+    inspection: Option<vorkspace_core::cli::Inspection>,
+}
+
 impl SettingsView {
     pub(super) fn open_management(
         &mut self,
@@ -41,48 +56,7 @@ impl SettingsView {
             return;
         }
         self.management_generation += 1;
-        let (label, placeholder) = match target {
-            Target::Cli(_) => ("CLI path", "Auto-detected path"),
-            Target::Mcp => ("Name (optional with mcpServers)", "my-server"),
-            Target::Skill => ("Skill name", "skill-name"),
-            Target::WorktreeSetup => ("Setup command", "npm ci"),
-            _ => ("New branch name", "feature/my-task"),
-        };
-        let name = cx.new(|cx| {
-            let mut input = Input::field(label, placeholder, content(0.35), cx);
-            input.set_font_size(12.);
-            input
-        });
-        if matches!(target, Target::WorktreeSetup) {
-            name.update(cx, |input, cx| {
-                input.set_text(
-                    self.prefs
-                        .worktree_setup
-                        .get(&self.selected_project)
-                        .cloned()
-                        .unwrap_or_default(),
-                    cx,
-                )
-            });
-        }
-        if let Target::Cli(kind) = target {
-            name.update(cx, |input, cx| {
-                input.set_text(
-                    self.prefs
-                        .binary_paths
-                        .get(kind.id())
-                        .cloned()
-                        .unwrap_or_default(),
-                    cx,
-                )
-            });
-        }
-        if matches!(target, Target::Skill) {
-            name.update(cx, |input, cx| {
-                input.set_font_size(13.);
-                input.set_text(vorkspace_core::skills::slug_name(&self.skill_query), cx);
-            });
-        }
+        let name = self.management_name_input(&target, cx);
         let body=cx.new(|cx|Input::multiline_field("JSON configuration", "{\"mcpServers\":{\"my-server\":{\"command\":\"npx\",\"args\":[\"-y\",\"example-mcp\"]}}}",cx));
         let subscriptions = vec![
             cx.subscribe(&name, |_, _, _: &input::Changed, cx| cx.notify()),
@@ -139,6 +113,53 @@ impl SettingsView {
             self.inspect_cli(kind, false, cx);
         }
         cx.notify();
+    }
+
+    fn management_name_input(&self, target: &Target, cx: &mut Context<Self>) -> Entity<Input> {
+        let (label, placeholder) = match target {
+            Target::Cli(_) => ("CLI path", "Auto-detected path"),
+            Target::Mcp => ("Name (optional with mcpServers)", "my-server"),
+            Target::Skill => ("Skill name", "skill-name"),
+            Target::WorktreeSetup => ("Setup command", "npm ci"),
+            _ => ("New branch name", "feature/my-task"),
+        };
+        let name = cx.new(|cx| {
+            let mut input = Input::field(label, placeholder, content(0.35), cx);
+            input.set_font_size(12.);
+            input
+        });
+        if matches!(target, Target::WorktreeSetup) {
+            name.update(cx, |input, cx| {
+                input.set_text(
+                    self.prefs
+                        .worktree_setup
+                        .get(&self.selected_project)
+                        .cloned()
+                        .unwrap_or_default(),
+                    cx,
+                )
+            });
+        }
+        if let Target::Cli(kind) = target {
+            name.update(cx, |input, cx| {
+                input.set_text(
+                    self.prefs
+                        .binary_paths
+                        .get(kind.id())
+                        .cloned()
+                        .unwrap_or_default(),
+                    cx,
+                )
+            });
+        }
+        if matches!(target, Target::Skill) {
+            name.update(cx, |input, cx| {
+                input.set_font_size(13.);
+                input.set_text(vorkspace_core::skills::slug_name(&self.skill_query), cx);
+            });
+        }
+
+        name
     }
     pub(super) fn close_management(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if self.management.as_ref().is_some_and(|e| e.busy) {
@@ -317,377 +338,20 @@ impl SettingsView {
         let deleting = e.delete_sessions;
         let editing = e.editing;
         let inspection = e.inspection.clone();
-        let mut rows = Vec::new();
-        match &target {
-            Target::ResetBot(bot) => {
-                let default = vorkspace_core::bot::Bot {
-                    name: String::new(),
-                    mascot: bot.mascot.clone(),
-                    ..Default::default()
-                }
-                .label();
-                rows.push(note(format!("Its soul goes back to the default and its name to {default}. Changes to its soul can't be recovered.")));
-                rows.push(
-                    div()
-                        .text_size(px(12.))
-                        .text_color(content(0.5))
-                        .child("Its conversation, projects, memory and habits will be kept.")
-                        .into_any_element(),
-                );
-            }
-            Target::Cli(kind) => {
-                let overridden = self.prefs.binary_paths.contains_key(kind.id());
-                let pending = vorkspace_core::cli::configured(*kind)
-                    .as_ref()
-                    .map(|p| p.to_string_lossy().into_owned())
-                    != self.prefs.binary_paths.get(kind.id()).cloned();
-                rows.push(
-                    div()
-                        .flex()
-                        .items_center()
-                        .justify_between()
-                        .gap_3()
-                        .text_size(px(12.))
-                        .child(format!("{} CLI", kind.label()))
-                        .child(
-                            div()
-                                .text_size(px(10.))
-                                .text_color(content(0.5))
-                                .child(format!(
-                                    "Global path · {}",
-                                    if error.is_some() {
-                                        "Needs attention"
-                                    } else if pending {
-                                        "Restart required"
-                                    } else if overridden {
-                                        "Configured"
-                                    } else {
-                                        "Auto-detected"
-                                    }
-                                )),
-                        )
-                        .into_any_element(),
-                );
-                if editing {
-                    rows.push(form_field("CLI path", name, 32.));
-                    rows.push(note("Enter the absolute path to the CLI executable. Changes apply after restarting vorkspace."));
-                } else {
-                    rows.push(
-                        div()
-                            .p_2()
-                            .rounded(px(radius::CONTROL))
-                            .border_1()
-                            .border_color(content(0.1))
-                            .bg(content(0.03))
-                            .text_size(px(10.))
-                            .child(
-                                div().font_family(vorkspace_ui::fonts::MONO).child(
-                                    inspection
-                                        .as_ref()
-                                        .map(|i| i.path.display().to_string())
-                                        .unwrap_or_else(|| {
-                                            if busy {
-                                                "Checking the selected CLI…".into()
-                                            } else {
-                                                "CLI could not be resolved".into()
-                                            }
-                                        }),
-                                ),
-                            )
-                            .child(div().mt_1().text_color(content(0.4)).child(
-                                inspection.map(|i| i.version).unwrap_or_else(|| {
-                                    if busy {
-                                        "Checking version…".into()
-                                    } else {
-                                        "Retry to check this CLI".into()
-                                    }
-                                }),
-                            ))
-                            .into_any_element(),
-                    );
-                }
-            }
-            Target::Mcp => {
-                let available = self.scroll.bounds().size.width.as_f32();
-                let column = ((if available > 0. {
-                    available.min(560.)
-                } else {
-                    560.
-                }) - 46.)
-                    / 2.;
-                rows.push(note(
-                    "Paste a server configuration and choose where to add it.",
-                ));
-                rows.push(
-                    div()
-                        .flex()
-                        .gap_3()
-                        .child(labeled_control(
-                            "Provider",
-                            self.select(
-                                "mcp-provider",
-                                "Provider",
-                                &provider,
-                                [
-                                    ("claude", "Claude Code"),
-                                    ("claude_desktop", "Claude Desktop"),
-                                    ("codex", "Codex"),
-                                ]
-                                .into_iter()
-                                .map(|(id, label)| (id.into(), label.into(), None))
-                                .collect(),
-                                Some(column),
-                                cx,
-                                |this, v, cx| {
-                                    if let Some(e) = &mut this.management {
-                                        e.provider = v;
-                                        e.scope = match e.provider.as_str() {
-                                            "claude" => "local",
-                                            "codex" | "claude_desktop" => "user",
-                                            _ => "project",
-                                        }
-                                        .into();
-                                    }
-                                    cx.notify();
-                                },
-                            ),
-                        ))
-                        .child(labeled_control(
-                            "Scope",
-                            self.select(
-                                "mcp-scope",
-                                "Scope",
-                                &scope,
-                                scopes(&provider)
-                                    .iter()
-                                    .map(|s| {
-                                        (
-                                            s.to_string(),
-                                            SharedString::from(match *s {
-                                                "local" => "Local",
-                                                "project" => "Project",
-                                                _ => "User",
-                                            }),
-                                            None,
-                                        )
-                                    })
-                                    .collect(),
-                                Some(column),
-                                cx,
-                                |this, v, cx| {
-                                    if let Some(e) = &mut this.management {
-                                        e.scope = v;
-                                    }
-                                    cx.notify();
-                                },
-                            ),
-                        ))
-                        .into_any_element(),
-                );
-                rows.push(form_field("Name (optional with mcpServers)", name, 32.));
-                rows.push(form_field("JSON configuration", body, 140.));
-                rows.push(note("Paste one entry from an mcpServers block, or a single server object with a name above."));
-            }
-            Target::Skill => {
-                rows.push(form_field("Skill name", name, 32.));
-                rows.push(self.segmented(
-                    "skill-scope",
-                    "Skill scope",
-                    &scope,
-                    &[("project", "Project"), ("user", "Personal")],
-                    cx,
-                    |this, v, cx| {
-                        if let Some(e) = &mut this.management {
-                            e.scope = v.into();
-                        }
-                        cx.notify();
-                    },
-                ));
-                rows.push(note(
-                    "Creates a starter SKILL.md in .agents/skills. Edit it in your file editor.",
-                ));
-            }
-            Target::WorktreeSetup => {
-                rows.push(name.clone().into_any_element());
-                rows.push(note(
-                    "Runs once, before the first agent turn in each new worktree, with VORKSPACE_PROJECT_PATH and VORKSPACE_WORKTREE_PATH set. Leave it empty for none. If it fails, the agent is told and the worktree is kept.",
-                ));
-            }
-            Target::Worktree => {
-                rows.push(note(format!("An independent working copy of {}. Existing uncommitted changes stay in their current working copy.",self.selected_project)));
-                rows.push(self.select(
-                    "worktree-type",
-                    "Branch type",
-                    if existing { "existing" } else { "new" },
-                    vec![
-                        ("new".into(), "Create a new branch".into(), None),
-                        (
-                            "existing".into(),
-                            "Use an existing local branch".into(),
-                            None,
-                        ),
-                    ],
-                    None,
-                    cx,
-                    |this, v, cx| {
-                        if let Some(e) = &mut this.management {
-                            e.existing = v == "existing";
-                            e.name.update(cx, |i, cx| i.set_text(String::new(), cx));
-                        }
-                        cx.notify();
-                    },
-                ));
-                if existing {
-                    let selected = name.read(cx).content.to_string();
-                    rows.push(
-                        self.select(
-                            "worktree-branch",
-                            "Existing branch",
-                            &selected,
-                            self.discovery
-                                .worktrees
-                                .branches
-                                .iter()
-                                .filter(|b| b.remote.is_none())
-                                .map(|b| (b.name.clone(), b.name.clone().into(), None))
-                                .collect(),
-                            None,
-                            cx,
-                            |this, v, cx| {
-                                if let Some(e) = &mut this.management {
-                                    e.name.update(cx, |i, cx| i.set_text(v, cx));
-                                }
-                                cx.notify();
-                            },
-                        ),
-                    );
-                } else {
-                    rows.push(form_field("New branch name", name, 36.));
-                    let mut options = vec![("HEAD".into(), "Current commit".into(), None)];
-                    options.extend(self.discovery.worktrees.branches.iter().map(|b| {
-                        let label = b
-                            .remote
-                            .as_ref()
-                            .map(|r| format!("{r}/{}", b.name))
-                            .unwrap_or_else(|| b.name.clone());
-                        (label.clone(), label.into(), None)
-                    }));
-                    rows.push(self.select(
-                        "worktree-base",
-                        "Start from",
-                        &base,
-                        options,
-                        None,
-                        cx,
-                        |this, v, cx| {
-                            if let Some(e) = &mut this.management {
-                                e.base = v;
-                            }
-                            cx.notify();
-                        },
-                    ));
-                }
-                rows.push(note(format!(
-                    "Created in {}",
-                    self.discovery.worktrees.default_root.display()
-                )));
-            }
-            Target::DeleteTree(tree) => {
-                let count = self
-                    .ctx
-                    .session_checkouts
-                    .iter()
-                    .filter(|p| vorkspace_core::files::is_equal_or_inside(p, &tree.tree.path))
-                    .count();
-                rows.push(note(
-                    "This permanently deletes the working copy and everything inside it.",
-                ));
-                let mut consequences = div()
-                    .rounded(px(radius::CONTAINER))
-                    .border_1()
-                    .border_color(content(0.1))
-                    .bg(content(0.05))
-                    .p_3()
-                    .text_size(px(12.))
-                    .flex()
-                    .flex_col()
-                    .gap_2()
-                    .child(tree.tree.path.clone());
-                if count > 0 {
-                    consequences = consequences.child(format!(
-                        "{count} sessions using this worktree are {}",
-                        if deleting {
-                            "permanently deleted."
-                        } else {
-                            "kept. Select a branch or worktree to continue them."
-                        }
-                    ));
-                }
-                if tree.assessment.dirty != Some(false) {
-                    consequences = consequences.child(
-                        div()
-                            .text_color(vorkspace_ui::theme::warning())
-                            .child("All uncommitted and untracked changes here are discarded."),
-                    );
-                }
-                if tree.assessment.safety_unknown() {
-                    consequences = consequences.child(
-                        div()
-                            .text_color(vorkspace_ui::theme::warning())
-                            .child("Deleting this worktree can discard files or changes Git could not inspect."),
-                    );
-                }
-                consequences = consequences.child(match &tree.tree.branch {
-                    Some(branch) if tree.assessment.removes_merged_branch() => {
-                        format!("The {branch} branch is fully merged, so it's removed too.")
-                    }
-                    Some(branch) => format!("The {branch} branch and its commits are kept."),
-                    None if tree.assessment.removable() => {
-                        "This worktree has no branch, and nothing in it is unique.".into()
-                    }
-                    None => {
-                        "Git could not verify that this detached worktree is safe to remove.".into()
-                    }
-                });
-                if let Some(count) = tree.assessment.unpushed.filter(|count| *count > 0)
-                    && tree.tree.branch.is_some()
-                    && !tree.assessment.removes_merged_branch()
-                {
-                    consequences = consequences
-                        .child(format!("{count} unpublished commits stay on the branch."));
-                }
-                rows.push(consequences.into_any_element());
-                if count > 0 {
-                    rows.push(
-                        div()
-                            .flex()
-                            .justify_between()
-                            .items_center()
-                            .gap_3()
-                            .p_3()
-                            .rounded(px(radius::CONTAINER))
-                            .border_1()
-                            .border_color(content(0.1))
-                            .text_size(px(12.5))
-                            .child("Also delete associated sessions")
-                            .child(self.toggle(
-                                "delete-worktree-sessions",
-                                "Also delete associated sessions",
-                                deleting,
-                                busy,
-                                cx,
-                                |this, on, cx| {
-                                    if let Some(e) = &mut this.management {
-                                        e.delete_sessions = on;
-                                    }
-                                    cx.notify();
-                                },
-                            ))
-                            .into_any_element(),
-                    );
-                }
-            }
-        }
+        let fields = FormFields {
+            name,
+            body,
+            busy,
+            error: &error,
+            provider,
+            scope,
+            existing,
+            base,
+            deleting,
+            editing,
+            inspection,
+        };
+        let mut rows = self.management_rows(&target, fields, cx);
         if let Some(error) = error {
             rows.push(
                 div()
@@ -702,42 +366,7 @@ impl SettingsView {
         let mut actions = div().flex().items_center().justify_end().gap_2();
         if let Target::Cli(kind) = target {
             if !editing {
-                if self.management.as_ref().is_some_and(|e| e.error.is_some()) {
-                    actions =
-                        actions.child(
-                            secondary_button("retry-cli", "Retry CLI inspection", false, busy)
-                                .child("Retry")
-                                .on_click(cx.listener(move |this, _, _, cx| {
-                                    this.inspect_cli(kind, false, cx)
-                                })),
-                        );
-                }
-                let path = self
-                    .management
-                    .as_ref()
-                    .and_then(|e| e.inspection.as_ref())
-                    .map(|i| i.path.clone());
-                actions = actions
-                    .child(
-                        secondary_button("reveal-cli", "Open CLI location", false, path.is_none())
-                            .child("Open location")
-                            .on_click(move |_, _, cx| {
-                                if let Some(path) = &path {
-                                    cx.reveal_path(path);
-                                }
-                            }),
-                    )
-                    .child(
-                        secondary_button("edit-cli", "Edit CLI path", false, busy)
-                            .child("Edit path")
-                            .on_click(cx.listener(|this, _, window, cx| {
-                                if let Some(e) = &mut this.management {
-                                    e.editing = true;
-                                    window.focus(&e.name.read(cx).focus_handle(cx), cx);
-                                }
-                                cx.notify();
-                            })),
-                    );
+                actions = self.management_cli_actions(actions, kind, busy, cx);
                 rows.push(actions.into_any_element());
                 return div()
                     .flex()
@@ -758,7 +387,35 @@ impl SettingsView {
                 );
             }
         }
-        let label = match target {
+        let label = Self::management_submit_label(&target, busy, deleting);
+        actions = actions
+            .child(
+                secondary_button("cancel-management", "Cancel", false, busy)
+                    .child("Cancel")
+                    .on_click(cx.listener(|this, _, window, cx| this.close_management(window, cx))),
+            )
+            .child(
+                (if matches!(target, Target::DeleteTree(_) | Target::ResetBot(_)) {
+                    secondary_button("submit-management", label, true, busy).bg(red(0.2))
+                } else if matches!(target, Target::Mcp) {
+                    secondary_button("submit-management", label, false, busy)
+                } else {
+                    primary_button("submit-management", label, busy)
+                })
+                .child(label)
+                .on_click(cx.listener(|this, _, _, cx| this.submit_management(cx))),
+            );
+        rows.push(actions.into_any_element());
+        div()
+            .flex()
+            .flex_col()
+            .gap_3()
+            .children(rows)
+            .into_any_element()
+    }
+
+    fn management_submit_label(target: &Target, busy: bool, deleting: bool) -> &'static str {
+        match target {
             Target::Cli(_) => "Save path",
             Target::Mcp => {
                 if busy {
@@ -790,31 +447,518 @@ impl SettingsView {
                     "Delete worktree"
                 }
             }
-        };
+        }
+    }
+
+    fn management_cli_actions(
+        &self,
+        mut actions: gpui::Div,
+        kind: Kind,
+        busy: bool,
+        cx: &mut Context<Self>,
+    ) -> gpui::Div {
+        if self.management.as_ref().is_some_and(|e| e.error.is_some()) {
+            actions = actions.child(
+                secondary_button("retry-cli", "Retry CLI inspection", false, busy)
+                    .child("Retry")
+                    .on_click(cx.listener(move |this, _, _, cx| this.inspect_cli(kind, false, cx))),
+            );
+        }
+        let path = self
+            .management
+            .as_ref()
+            .and_then(|e| e.inspection.as_ref())
+            .map(|i| i.path.clone());
         actions = actions
             .child(
-                secondary_button("cancel-management", "Cancel", false, busy)
-                    .child("Cancel")
-                    .on_click(cx.listener(|this, _, window, cx| this.close_management(window, cx))),
+                secondary_button("reveal-cli", "Open CLI location", false, path.is_none())
+                    .child("Open location")
+                    .on_click(move |_, _, cx| {
+                        if let Some(path) = &path {
+                            cx.reveal_path(path);
+                        }
+                    }),
             )
             .child(
-                (if matches!(target, Target::DeleteTree(_) | Target::ResetBot(_)) {
-                    secondary_button("submit-management", label, true, busy).bg(red(0.2))
-                } else if matches!(target, Target::Mcp) {
-                    secondary_button("submit-management", label, false, busy)
-                } else {
-                    primary_button("submit-management", label, busy)
-                })
-                .child(label)
-                .on_click(cx.listener(|this, _, _, cx| this.submit_management(cx))),
+                secondary_button("edit-cli", "Edit CLI path", false, busy)
+                    .child("Edit path")
+                    .on_click(cx.listener(|this, _, window, cx| {
+                        if let Some(e) = &mut this.management {
+                            e.editing = true;
+                            window.focus(&e.name.read(cx).focus_handle(cx), cx);
+                        }
+                        cx.notify();
+                    })),
             );
-        rows.push(actions.into_any_element());
-        div()
+
+        actions
+    }
+
+    fn management_rows(
+        &self,
+        target: &Target,
+        fields: FormFields<'_>,
+        cx: &mut Context<Self>,
+    ) -> Vec<AnyElement> {
+        let mut rows = Vec::new();
+        match &target {
+            Target::ResetBot(bot) => {
+                let default = vorkspace_core::bot::Bot {
+                    name: String::new(),
+                    mascot: bot.mascot.clone(),
+                    ..Default::default()
+                }
+                .label();
+                rows.push(note(format!("Its soul goes back to the default and its name to {default}. Changes to its soul can't be recovered.")));
+                rows.push(
+                    div()
+                        .text_size(px(12.))
+                        .text_color(content(0.5))
+                        .child("Its conversation, projects, memory and habits will be kept.")
+                        .into_any_element(),
+                );
+            }
+            Target::Cli(kind) => {
+                self.management_cli_fields(kind, fields, &mut rows);
+            }
+            Target::Mcp => {
+                self.management_mcp_fields(fields, &mut rows, cx);
+            }
+            Target::Skill => {
+                self.management_skill_fields(fields, &mut rows, cx);
+            }
+            Target::WorktreeSetup => {
+                self.management_setup_fields(fields, &mut rows);
+            }
+            Target::Worktree => {
+                self.management_worktree_fields(fields, &mut rows, cx);
+            }
+            Target::DeleteTree(tree) => {
+                self.management_delete_fields(tree, fields, &mut rows, cx);
+            }
+        }
+        rows
+    }
+
+    fn management_delete_fields(
+        &self,
+        tree: &data::Tree,
+        fields: FormFields<'_>,
+        rows: &mut Vec<AnyElement>,
+        cx: &mut Context<Self>,
+    ) {
+        let FormFields { busy, deleting, .. } = fields;
+
+        let count = self
+            .ctx
+            .session_checkouts
+            .iter()
+            .filter(|p| vorkspace_core::files::is_equal_or_inside(p, &tree.tree.path))
+            .count();
+        rows.push(note(
+            "This permanently deletes the working copy and everything inside it.",
+        ));
+        let consequences = Self::management_delete_consequences(tree, count, deleting);
+        rows.push(consequences.into_any_element());
+        if count > 0 {
+            rows.push(
+                div()
+                    .flex()
+                    .justify_between()
+                    .items_center()
+                    .gap_3()
+                    .p_3()
+                    .rounded(px(radius::CONTAINER))
+                    .border_1()
+                    .border_color(content(0.1))
+                    .text_size(px(12.5))
+                    .child("Also delete associated sessions")
+                    .child(self.toggle(
+                        "delete-worktree-sessions",
+                        "Also delete associated sessions",
+                        deleting,
+                        busy,
+                        cx,
+                        |this, on, cx| {
+                            if let Some(e) = &mut this.management {
+                                e.delete_sessions = on;
+                            }
+                            cx.notify();
+                        },
+                    ))
+                    .into_any_element(),
+            );
+        }
+    }
+
+    fn management_delete_consequences(
+        tree: &data::Tree,
+        count: usize,
+        deleting: bool,
+    ) -> gpui::Div {
+        let mut consequences = div()
+            .rounded(px(radius::CONTAINER))
+            .border_1()
+            .border_color(content(0.1))
+            .bg(content(0.05))
+            .p_3()
+            .text_size(px(12.))
             .flex()
             .flex_col()
-            .gap_3()
-            .children(rows)
-            .into_any_element()
+            .gap_2()
+            .child(tree.tree.path.clone());
+        if count > 0 {
+            consequences = consequences.child(format!(
+                "{count} sessions using this worktree are {}",
+                if deleting {
+                    "permanently deleted."
+                } else {
+                    "kept. Select a branch or worktree to continue them."
+                }
+            ));
+        }
+        if tree.assessment.dirty != Some(false) {
+            consequences = consequences.child(
+                div()
+                    .text_color(vorkspace_ui::theme::warning())
+                    .child("All uncommitted and untracked changes here are discarded."),
+            );
+        }
+        if tree.assessment.safety_unknown() {
+            consequences =
+                consequences.child(div().text_color(vorkspace_ui::theme::warning()).child(
+                    "Deleting this worktree can discard files or changes Git could not inspect.",
+                ));
+        }
+        consequences = consequences.child(match &tree.tree.branch {
+            Some(branch) if tree.assessment.removes_merged_branch() => {
+                format!("The {branch} branch is fully merged, so it's removed too.")
+            }
+            Some(branch) => format!("The {branch} branch and its commits are kept."),
+            None if tree.assessment.removable() => {
+                "This worktree has no branch, and nothing in it is unique.".into()
+            }
+            None => "Git could not verify that this detached worktree is safe to remove.".into(),
+        });
+        if let Some(count) = tree.assessment.unpushed.filter(|count| *count > 0)
+            && tree.tree.branch.is_some()
+            && !tree.assessment.removes_merged_branch()
+        {
+            consequences =
+                consequences.child(format!("{count} unpublished commits stay on the branch."));
+        }
+
+        consequences
+    }
+
+    fn management_worktree_fields(
+        &self,
+        fields: FormFields<'_>,
+        rows: &mut Vec<AnyElement>,
+        cx: &mut Context<Self>,
+    ) {
+        let FormFields {
+            name,
+            existing,
+            base,
+            ..
+        } = fields;
+
+        rows.push(note(format!("An independent working copy of {}. Existing uncommitted changes stay in their current working copy.",self.selected_project)));
+        rows.push(self.select(
+            "worktree-type",
+            "Branch type",
+            if existing { "existing" } else { "new" },
+            vec![
+                ("new".into(), "Create a new branch".into(), None),
+                (
+                    "existing".into(),
+                    "Use an existing local branch".into(),
+                    None,
+                ),
+            ],
+            None,
+            cx,
+            |this, v, cx| {
+                if let Some(e) = &mut this.management {
+                    e.existing = v == "existing";
+                    e.name.update(cx, |i, cx| i.set_text(String::new(), cx));
+                }
+                cx.notify();
+            },
+        ));
+        if existing {
+            let selected = name.read(cx).content.to_string();
+            rows.push(
+                self.select(
+                    "worktree-branch",
+                    "Existing branch",
+                    &selected,
+                    self.discovery
+                        .worktrees
+                        .branches
+                        .iter()
+                        .filter(|b| b.remote.is_none())
+                        .map(|b| (b.name.clone(), b.name.clone().into(), None))
+                        .collect(),
+                    None,
+                    cx,
+                    |this, v, cx| {
+                        if let Some(e) = &mut this.management {
+                            e.name.update(cx, |i, cx| i.set_text(v, cx));
+                        }
+                        cx.notify();
+                    },
+                ),
+            );
+        } else {
+            rows.push(form_field("New branch name", name, 36.));
+            let mut options = vec![("HEAD".into(), "Current commit".into(), None)];
+            options.extend(self.discovery.worktrees.branches.iter().map(|b| {
+                let label = b
+                    .remote
+                    .as_ref()
+                    .map(|r| format!("{r}/{}", b.name))
+                    .unwrap_or_else(|| b.name.clone());
+                (label.clone(), label.into(), None)
+            }));
+            rows.push(self.select(
+                "worktree-base",
+                "Start from",
+                &base,
+                options,
+                None,
+                cx,
+                |this, v, cx| {
+                    if let Some(e) = &mut this.management {
+                        e.base = v;
+                    }
+                    cx.notify();
+                },
+            ));
+        }
+        rows.push(note(format!(
+            "Created in {}",
+            self.discovery.worktrees.default_root.display()
+        )));
+    }
+
+    fn management_setup_fields(&self, fields: FormFields<'_>, rows: &mut Vec<AnyElement>) {
+        let FormFields { name, .. } = fields;
+
+        rows.push(name.clone().into_any_element());
+        rows.push(note(
+                            "Runs once, before the first agent turn in each new worktree, with VORKSPACE_PROJECT_PATH and VORKSPACE_WORKTREE_PATH set. Leave it empty for none. If it fails, the agent is told and the worktree is kept.",
+                        ));
+    }
+
+    fn management_skill_fields(
+        &self,
+        fields: FormFields<'_>,
+        rows: &mut Vec<AnyElement>,
+        cx: &mut Context<Self>,
+    ) {
+        let FormFields { name, scope, .. } = fields;
+
+        rows.push(form_field("Skill name", name, 32.));
+        rows.push(self.segmented(
+            "skill-scope",
+            "Skill scope",
+            &scope,
+            &[("project", "Project"), ("user", "Personal")],
+            cx,
+            |this, v, cx| {
+                if let Some(e) = &mut this.management {
+                    e.scope = v.into();
+                }
+                cx.notify();
+            },
+        ));
+        rows.push(note(
+            "Creates a starter SKILL.md in .agents/skills. Edit it in your file editor.",
+        ));
+    }
+
+    fn management_mcp_fields(
+        &self,
+        fields: FormFields<'_>,
+        rows: &mut Vec<AnyElement>,
+        cx: &mut Context<Self>,
+    ) {
+        let FormFields {
+            name,
+            body,
+            provider,
+            scope,
+            ..
+        } = fields;
+
+        let available = self.scroll.bounds().size.width.as_f32();
+        let column = ((if available > 0. {
+            available.min(560.)
+        } else {
+            560.
+        }) - 46.)
+            / 2.;
+        rows.push(note(
+            "Paste a server configuration and choose where to add it.",
+        ));
+        rows.push(
+            div()
+                .flex()
+                .gap_3()
+                .child(labeled_control(
+                    "Provider",
+                    self.select(
+                        "mcp-provider",
+                        "Provider",
+                        &provider,
+                        [
+                            ("claude", "Claude Code"),
+                            ("claude_desktop", "Claude Desktop"),
+                            ("codex", "Codex"),
+                        ]
+                        .into_iter()
+                        .map(|(id, label)| (id.into(), label.into(), None))
+                        .collect(),
+                        Some(column),
+                        cx,
+                        |this, v, cx| {
+                            if let Some(e) = &mut this.management {
+                                e.provider = v;
+                                e.scope = match e.provider.as_str() {
+                                    "claude" => "local",
+                                    "codex" | "claude_desktop" => "user",
+                                    _ => "project",
+                                }
+                                .into();
+                            }
+                            cx.notify();
+                        },
+                    ),
+                ))
+                .child(labeled_control(
+                    "Scope",
+                    self.select(
+                        "mcp-scope",
+                        "Scope",
+                        &scope,
+                        scopes(&provider)
+                            .iter()
+                            .map(|s| {
+                                (
+                                    s.to_string(),
+                                    SharedString::from(match *s {
+                                        "local" => "Local",
+                                        "project" => "Project",
+                                        _ => "User",
+                                    }),
+                                    None,
+                                )
+                            })
+                            .collect(),
+                        Some(column),
+                        cx,
+                        |this, v, cx| {
+                            if let Some(e) = &mut this.management {
+                                e.scope = v;
+                            }
+                            cx.notify();
+                        },
+                    ),
+                ))
+                .into_any_element(),
+        );
+        rows.push(form_field("Name (optional with mcpServers)", name, 32.));
+        rows.push(form_field("JSON configuration", body, 140.));
+        rows.push(note("Paste one entry from an mcpServers block, or a single server object with a name above."));
+    }
+
+    fn management_cli_fields(
+        &self,
+        kind: &Kind,
+        fields: FormFields<'_>,
+        rows: &mut Vec<AnyElement>,
+    ) {
+        let FormFields {
+            name,
+            busy,
+            error,
+            editing,
+            inspection,
+            ..
+        } = fields;
+
+        let overridden = self.prefs.binary_paths.contains_key(kind.id());
+        let pending = vorkspace_core::cli::configured(*kind)
+            .as_ref()
+            .map(|p| p.to_string_lossy().into_owned())
+            != self.prefs.binary_paths.get(kind.id()).cloned();
+        rows.push(
+            div()
+                .flex()
+                .items_center()
+                .justify_between()
+                .gap_3()
+                .text_size(px(12.))
+                .child(format!("{} CLI", kind.label()))
+                .child(
+                    div()
+                        .text_size(px(10.))
+                        .text_color(content(0.5))
+                        .child(format!(
+                            "Global path · {}",
+                            if error.is_some() {
+                                "Needs attention"
+                            } else if pending {
+                                "Restart required"
+                            } else if overridden {
+                                "Configured"
+                            } else {
+                                "Auto-detected"
+                            }
+                        )),
+                )
+                .into_any_element(),
+        );
+        if editing {
+            rows.push(form_field("CLI path", name, 32.));
+            rows.push(note("Enter the absolute path to the CLI executable. Changes apply after restarting vorkspace."));
+        } else {
+            rows.push(
+                div()
+                    .p_2()
+                    .rounded(px(radius::CONTROL))
+                    .border_1()
+                    .border_color(content(0.1))
+                    .bg(content(0.03))
+                    .text_size(px(10.))
+                    .child(
+                        div().font_family(vorkspace_ui::fonts::MONO).child(
+                            inspection
+                                .as_ref()
+                                .map(|i| i.path.display().to_string())
+                                .unwrap_or_else(|| {
+                                    if busy {
+                                        "Checking the selected CLI…".into()
+                                    } else {
+                                        "CLI could not be resolved".into()
+                                    }
+                                }),
+                        ),
+                    )
+                    .child(div().mt_1().text_color(content(0.4)).child(
+                        inspection.map(|i| i.version).unwrap_or_else(|| {
+                            if busy {
+                                "Checking version…".into()
+                            } else {
+                                "Retry to check this CLI".into()
+                            }
+                        }),
+                    ))
+                    .into_any_element(),
+            );
+        }
     }
     pub(super) fn management_overlay(
         &mut self,
@@ -887,39 +1031,39 @@ impl SettingsView {
                         })
                         .border_1()
                         .border_color(content(0.12))
-                        .child(
-                            div()
-                                .p_4()
-                                .border_b_1()
-                                .border_color(content(0.1))
-                                .text_size(px(14.))
-                                .font_weight(gpui::FontWeight::SEMIBOLD)
-                                .flex()
-                                .items_center()
-                                .justify_between()
-                                .gap_3()
-                                .child(title)
-                                .child(
-                                    secondary_button(
-                                        "close-management",
-                                        "Close dialog",
-                                        false,
-                                        self.management.as_ref().is_some_and(|e| e.busy),
-                                    )
-                                    .border_0()
-                                    .size_6()
-                                    .p_0()
-                                    .justify_center()
-                                    .child(icon("x", 14.))
-                                    .on_click(cx.listener(
-                                        |this, _, window, cx| this.close_management(window, cx),
-                                    )),
-                                ),
-                        )
+                        .child(self.management_dialog_heading(title, cx))
                         .child(div().p_4().child(form)),
                 )
                 .into_any_element(),
         )
+    }
+
+    fn management_dialog_heading(&self, title: String, cx: &mut Context<Self>) -> gpui::Div {
+        div()
+            .p_4()
+            .border_b_1()
+            .border_color(content(0.1))
+            .text_size(px(14.))
+            .font_weight(gpui::FontWeight::SEMIBOLD)
+            .flex()
+            .items_center()
+            .justify_between()
+            .gap_3()
+            .child(title)
+            .child(
+                secondary_button(
+                    "close-management",
+                    "Close dialog",
+                    false,
+                    self.management.as_ref().is_some_and(|e| e.busy),
+                )
+                .border_0()
+                .size_6()
+                .p_0()
+                .justify_center()
+                .child(icon("x", 14.))
+                .on_click(cx.listener(|this, _, window, cx| this.close_management(window, cx))),
+            )
     }
 }
 fn scopes(provider: &str) -> &'static [&'static str] {

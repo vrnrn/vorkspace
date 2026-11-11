@@ -46,6 +46,35 @@ impl SettingsView {
             .child(self.refresh_button("refresh-settings-worktrees", "Refresh", cx));
         let mut page = vec![toolbar.into_any_element()];
         self.load_worktree_sizes(cx);
+        self.worktree_list(&mut page, cx);
+        if ready {
+            let setup = match self.prefs.worktree_setup.get(&self.selected_project) {
+                Some(command) => format!("They run {command} after checkout."),
+                None => "They only contain tracked files; a setup command can install \
+                         dependencies or restore local files."
+                    .into(),
+            };
+            page.push(
+                div()
+                    .mt_3()
+                    .flex()
+                    .flex_col()
+                    .gap_1()
+                    .child(page_note(format!(
+                        "New worktrees are created in {}. {setup}",
+                        crate::panel_kit::home_relative(&self.discovery.worktrees.default_root)
+                    )))
+                    .child(page_note(
+                        "Sessions can share a worktree. Deleting one discards uncommitted \
+                         changes but keeps its branch, its commits and, by default, its sessions.",
+                    ))
+                    .into_any_element(),
+            );
+        }
+        page
+    }
+
+    fn worktree_list(&self, page: &mut Vec<AnyElement>, cx: &mut Context<Self>) {
         if self.selected_project.is_empty() {
             page.push(super::super::widgets::page_hint(
                 "Add a project to manage its worktrees.",
@@ -82,168 +111,157 @@ impl SettingsView {
                     .border_1()
                     .border_color(content(0.1))
                     .overflow_hidden()
-                    .children(trees.into_iter().enumerate().map(|(ix, tree)| {
-                        let t = &tree.tree;
-                        let path = std::path::PathBuf::from(&t.path);
-                        let count = self
-                            .ctx
-                            .session_checkouts
-                            .iter()
-                            .filter(|p| {
-                                vorkspace_core::files::is_equal_or_inside(p, &t.path)
-                            })
-                            .count();
-                        let status = if t.missing {
-                            "Missing folder"
-                        } else if tree.assessment.dirty == Some(true) {
-                            "Uncommitted changes"
-                        } else if tree.assessment.dirty == Some(false) {
-                            "Clean"
-                        } else {
-                            "Status unavailable"
-                        };
-                        let blocked = tree
-                            .assessment
-                            .discard_blocker(t.branch.is_none())
-                            .is_some();
-                        div()
-                            .p_4()
-                            .flex()
-                            .items_start()
-                            .gap_3()
-                            .border_b_1()
-                            .border_color(content(0.1))
-                            .child(icon("folder-tree", 16.))
-                            .child(
-                                div()
-                                    .min_w_0()
-                                    .flex_1()
-                                    .child(
-                                        div()
-                                            .text_size(px(13.))
-                                            .font_weight(gpui::FontWeight::MEDIUM)
-                                            .child(
-                                                path.file_name()
-                                                    .unwrap_or_default()
-                                                    .to_string_lossy()
-                                                    .into_owned(),
-                                            ),
-                                    )
-                                    .child(
-                                        div()
-                                            .mt_1()
-                                            .text_size(px(11.))
-                                            .text_color(content(0.4))
-                                            .child(t.path.clone()),
-                                    )
-                                    .child(
-                                        div()
-                                            .mt_2()
-                                            .flex()
-                                            .items_center()
-                                            .gap_1()
-                                            .text_size(px(11.))
-                                            .text_color(content(0.55))
-                                            .child(icon("git-branch", 12.))
-                                            .child(
-                                                t.branch
-                                                    .as_ref()
-                                                    .map(|b| format!("Current branch: {b}"))
-                                                    .unwrap_or_else(|| {
-                                                        format!(
-                                                            "Detached at {}",
-                                                            t.head
-                                                                .chars()
-                                                                .take(7)
-                                                                .collect::<String>()
-                                                        )
-                                                    }),
-                                            ),
-                                    )
-                                    .child(
-                                        div()
-                                            .mt_2()
-                                            .text_size(px(11.))
-                                            .text_color(content(0.55))
-                                            .child(format!(
-                                                "{count} {} in this worktree · {status}{}{}",
-                                                if count == 1 { "session" } else { "sessions" },
-                                                if let Some(commits) = tree.assessment.unpushed.filter(|count| *count > 0) {
-                                                    format!(" · {commits} unpublished commits")
-                                                } else {
-                                                    String::new()
-                                                },
-                                                if tree.assessment.locked == Some(true) { " · Locked" } else { "" }
-                                            ))
-                                            .when_some(self.worktree_sizes.get(&t.path), |row, size| {
-                                                row.child(format!("{:.1} GB on disk", *size as f64 / 1e9))
-                                            })
-                                            .when(tree.assessment.safety_unknown(), |row| {
-                                                row.child("Removal safety could not be verified")
-                                            })
-                                            .when(tree.assessment.removable() && count == 0, |row| {
-                                                row.child("Safe to remove: nothing here would be lost")
-                                            }),
-                                    ),
-                            )
-                            .child(
-                                secondary_button(
-                                    SharedString::from(format!("reveal-tree-{ix}")),
-                                    format!("Reveal {}", t.branch.as_deref().unwrap_or("worktree")),
-                                    false,
-                                    t.missing,
-                                )
-                                .child(icon("folder-open", 16.))
-                                .on_click(move |_, _, cx| cx.reveal_path(&path)),
-                            )
-                            .child(
-                                secondary_button(
-                                    SharedString::from(format!("delete-tree-{ix}")),
-                                    format!("Delete {}", t.branch.as_deref().unwrap_or("worktree")),
-                                    false,
-                                    blocked,
-                                )
-                                .child(icon("trash", 16.))
-                                .on_click(cx.listener(
-                                    move |this, _, window, cx| {
-                                        if !blocked {
-                                            this.open_management(
-                                                Target::DeleteTree(tree.clone()),
-                                                window,
-                                                cx,
-                                            );
-                                        }
-                                    },
-                                )),
-                            )
-                    }))
+                    .children(
+                        trees
+                            .into_iter()
+                            .enumerate()
+                            .map(|(ix, tree)| self.worktree_list_row(ix, tree, cx)),
+                    )
                     .into_any_element(),
             );
         }
-        if ready {
-            let setup = match self.prefs.worktree_setup.get(&self.selected_project) {
-                Some(command) => format!("They run {command} after checkout."),
-                None => "They only contain tracked files; a setup command can install \
-                         dependencies or restore local files."
-                    .into(),
-            };
-            page.push(
+    }
+
+    fn worktree_list_row(
+        &self,
+        ix: usize,
+        tree: super::super::data::Tree,
+        cx: &mut Context<Self>,
+    ) -> gpui::Div {
+        let t = &tree.tree;
+        let path = std::path::PathBuf::from(&t.path);
+        let count = self
+            .ctx
+            .session_checkouts
+            .iter()
+            .filter(|p| vorkspace_core::files::is_equal_or_inside(p, &t.path))
+            .count();
+        let status = if t.missing {
+            "Missing folder"
+        } else if tree.assessment.dirty == Some(true) {
+            "Uncommitted changes"
+        } else if tree.assessment.dirty == Some(false) {
+            "Clean"
+        } else {
+            "Status unavailable"
+        };
+        let blocked = tree
+            .assessment
+            .discard_blocker(t.branch.is_none())
+            .is_some();
+        div()
+            .p_4()
+            .flex()
+            .items_start()
+            .gap_3()
+            .border_b_1()
+            .border_color(content(0.1))
+            .child(icon("folder-tree", 16.))
+            .child(self.worktree_row_details(&tree, &path, count, status))
+            .child(
+                secondary_button(
+                    SharedString::from(format!("reveal-tree-{ix}")),
+                    format!("Reveal {}", t.branch.as_deref().unwrap_or("worktree")),
+                    false,
+                    t.missing,
+                )
+                .child(icon("folder-open", 16.))
+                .on_click(move |_, _, cx| cx.reveal_path(&path)),
+            )
+            .child(
+                secondary_button(
+                    SharedString::from(format!("delete-tree-{ix}")),
+                    format!("Delete {}", t.branch.as_deref().unwrap_or("worktree")),
+                    false,
+                    blocked,
+                )
+                .child(icon("trash", 16.))
+                .on_click(cx.listener(move |this, _, window, cx| {
+                    if !blocked {
+                        this.open_management(Target::DeleteTree(tree.clone()), window, cx);
+                    }
+                })),
+            )
+    }
+
+    fn worktree_row_details(
+        &self,
+        tree: &super::super::data::Tree,
+        path: &std::path::Path,
+        count: usize,
+        status: &str,
+    ) -> gpui::Div {
+        let t = &tree.tree;
+        div()
+            .min_w_0()
+            .flex_1()
+            .child(
                 div()
-                    .mt_3()
+                    .text_size(px(13.))
+                    .font_weight(gpui::FontWeight::MEDIUM)
+                    .child(
+                        path.file_name()
+                            .unwrap_or_default()
+                            .to_string_lossy()
+                            .into_owned(),
+                    ),
+            )
+            .child(
+                div()
+                    .mt_1()
+                    .text_size(px(11.))
+                    .text_color(content(0.4))
+                    .child(t.path.clone()),
+            )
+            .child(
+                div()
+                    .mt_2()
                     .flex()
-                    .flex_col()
+                    .items_center()
                     .gap_1()
-                    .child(page_note(format!(
-                        "New worktrees are created in {}. {setup}",
-                        crate::panel_kit::home_relative(&self.discovery.worktrees.default_root)
-                    )))
-                    .child(page_note(
-                        "Sessions can share a worktree. Deleting one discards uncommitted \
-                         changes but keeps its branch, its commits and, by default, its sessions.",
+                    .text_size(px(11.))
+                    .text_color(content(0.55))
+                    .child(icon("git-branch", 12.))
+                    .child(
+                        t.branch
+                            .as_ref()
+                            .map(|b| format!("Current branch: {b}"))
+                            .unwrap_or_else(|| {
+                                format!(
+                                    "Detached at {}",
+                                    t.head.chars().take(7).collect::<String>()
+                                )
+                            }),
+                    ),
+            )
+            .child(
+                div()
+                    .mt_2()
+                    .text_size(px(11.))
+                    .text_color(content(0.55))
+                    .child(format!(
+                        "{count} {} in this worktree · {status}{}{}",
+                        if count == 1 { "session" } else { "sessions" },
+                        if let Some(commits) = tree.assessment.unpushed.filter(|count| *count > 0) {
+                            format!(" · {commits} unpublished commits")
+                        } else {
+                            String::new()
+                        },
+                        if tree.assessment.locked == Some(true) {
+                            " · Locked"
+                        } else {
+                            ""
+                        }
                     ))
-                    .into_any_element(),
-            );
-        }
-        page
+                    .when_some(self.worktree_sizes.get(&t.path), |row, size| {
+                        row.child(format!("{:.1} GB on disk", *size as f64 / 1e9))
+                    })
+                    .when(tree.assessment.safety_unknown(), |row| {
+                        row.child("Removal safety could not be verified")
+                    })
+                    .when(tree.assessment.removable() && count == 0, |row| {
+                        row.child("Safe to remove: nothing here would be lost")
+                    }),
+            )
     }
 }

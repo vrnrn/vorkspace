@@ -1,11 +1,103 @@
 //! ChatPage.
+use crate::settings::Preferences;
 use crate::settings::SettingsView;
+
 use gpui::{AnyElement, Context};
 
 impl SettingsView {
     pub(super) fn chat_page(&mut self, cx: &mut Context<Self>) -> Vec<AnyElement> {
         let p = self.prefs.clone();
-        let transcript = vec![
+        let transcript = self.chat_transcript_rows(&p, cx);
+        let composer = self.chat_composer_rows(&p, cx);
+        let editor = vec![self.row(
+            Some("format-on-save"),
+            true,
+            "Format on save",
+            Some("Format supported files with Prettier before saving.".into()),
+            vec![self.toggle(
+                "format-on-save",
+                "Format on save",
+                p.format_on_save,
+                false,
+                cx,
+                |this, on, cx| this.update(cx, |p| p.format_on_save = on),
+            )],
+        )];
+        let review = vec![self.row(
+            Some("diff-view"),
+            true,
+            "Diff view",
+            Some("Review changes in a unified column or side by side.".into()),
+            vec![self.segmented(
+                "diff-view",
+                "Diff view",
+                if p.diff_view == "split" {
+                    "split"
+                } else {
+                    "unified"
+                },
+                &[("unified", "Unified"), ("split", "Side by side")],
+                cx,
+                |this, v, cx| this.update(cx, |p| p.diff_view = v.into()),
+            )],
+        )];
+        vec![
+            self.group(None, true, "Transcript", None, None, transcript),
+            self.group(None, false, "Composer", None, None, composer),
+            self.group(None, false, "Editor", None, None, editor),
+            self.group(None, false, "Code review", None, None, review),
+        ]
+    }
+
+    fn chat_composer_rows(&self, p: &Preferences, cx: &mut Context<Self>) -> Vec<AnyElement> {
+        vec![
+                    self.row(
+                        Some("follow-up"),
+                        true,
+                        "Follow-up behavior",
+                        Some("Queue follow-ups until the active turn finishes, or steer the active turn immediately.".into()),
+                        vec![self.segmented(
+                            "follow-up",
+                            "Follow-up behavior",
+                            &p.follow_up,
+                            &[("queue", "Queue"), ("steer", "Steer")],
+                            cx,
+                            |this, v, cx| this.update(cx, |p| p.follow_up = v.into()),
+                        )],
+                    ),
+                    self.row(
+                        Some("model-controls"),
+                        false,
+                        "Model controls",
+                        Some("Show model options beside the picker instead of inside the model menu.".into()),
+                        vec![self.segmented(
+                            "model-controls",
+                            "Model controls",
+                            &p.model_controls,
+                            &[("menu", "Menu"), ("beside", "Beside")],
+                            cx,
+                            |this, v, cx| this.update(cx, |p| p.model_controls = v.into()),
+                        )],
+                    ),
+                    self.row(
+                        Some("composer-autocorrect"),
+                        false,
+                        "Autocorrect",
+                        Some("Spell check and autocorrect prompts.".into()),
+                        vec![self.toggle(
+                            "composer-autocorrect",
+                            "Autocorrect",
+                            p.autocorrect,
+                            false,
+                            cx,
+                            |this, on, cx| this.update(cx, |p| p.autocorrect = on),
+                        )],
+                    ),
+                ]
+    }
+
+    fn chat_transcript_rows(&self, p: &Preferences, cx: &mut Context<Self>) -> Vec<AnyElement> {
+        vec![
             self.row(
                 Some("transcript-layout"),
                 true,
@@ -48,88 +140,6 @@ impl SettingsView {
                     |this, on, cx| this.update(cx, |p| p.paced_reveal = on),
                 )],
             ),
-        ];
-        let composer = vec![
-            self.row(
-                Some("follow-up"),
-                true,
-                "Follow-up behavior",
-                Some("Queue follow-ups until the active turn finishes, or steer the active turn immediately.".into()),
-                vec![self.segmented(
-                    "follow-up",
-                    "Follow-up behavior",
-                    &p.follow_up,
-                    &[("queue", "Queue"), ("steer", "Steer")],
-                    cx,
-                    |this, v, cx| this.update(cx, |p| p.follow_up = v.into()),
-                )],
-            ),
-            self.row(
-                Some("model-controls"),
-                false,
-                "Model controls",
-                Some("Show model options beside the picker instead of inside the model menu.".into()),
-                vec![self.segmented(
-                    "model-controls",
-                    "Model controls",
-                    &p.model_controls,
-                    &[("menu", "Menu"), ("beside", "Beside")],
-                    cx,
-                    |this, v, cx| this.update(cx, |p| p.model_controls = v.into()),
-                )],
-            ),
-            self.row(
-                Some("composer-autocorrect"),
-                false,
-                "Autocorrect",
-                Some("Spell check and autocorrect prompts.".into()),
-                vec![self.toggle(
-                    "composer-autocorrect",
-                    "Autocorrect",
-                    p.autocorrect,
-                    false,
-                    cx,
-                    |this, on, cx| this.update(cx, |p| p.autocorrect = on),
-                )],
-            ),
-        ];
-        let editor = vec![self.row(
-            Some("format-on-save"),
-            true,
-            "Format on save",
-            Some("Format supported files with Prettier before saving.".into()),
-            vec![self.toggle(
-                "format-on-save",
-                "Format on save",
-                p.format_on_save,
-                false,
-                cx,
-                |this, on, cx| this.update(cx, |p| p.format_on_save = on),
-            )],
-        )];
-        let review = vec![self.row(
-            Some("diff-view"),
-            true,
-            "Diff view",
-            Some("Review changes in a unified column or side by side.".into()),
-            vec![self.segmented(
-                "diff-view",
-                "Diff view",
-                if p.diff_view == "split" {
-                    "split"
-                } else {
-                    "unified"
-                },
-                &[("unified", "Unified"), ("split", "Side by side")],
-                cx,
-                |this, v, cx| this.update(cx, |p| p.diff_view = v.into()),
-            )],
-        )];
-        vec![
-            self.group(None, true, "Transcript", None, None, transcript),
-            self.group(None, false, "Composer", None, None, composer),
-            self.group(None, false, "Editor", None, None, editor),
-            self.group(None, false, "Code review", None, None, review),
         ]
     }
 }

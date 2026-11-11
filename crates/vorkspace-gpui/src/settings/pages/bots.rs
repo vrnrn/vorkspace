@@ -1,4 +1,5 @@
 use crate::settings::SettingsView;
+
 use crate::settings::{SettingsEvent, management::Target, widgets::icon_action};
 use gpui::{AnyElement, Context, SharedString, div, prelude::*, px};
 use vorkspace_ui::theme::*;
@@ -37,6 +38,11 @@ impl SettingsView {
                 )],
             ),
         ];
+        let roster = self.bot_roster_rows(cx);
+        vec![self.card(None, rows).into_any_element(),self.group(Some("bot-list"),false,"Your bots", Some("Show or hide sessions started by each Bot. Hidden sessions remain available from the Bot's chat.".into()),None,roster)]
+    }
+
+    fn bot_roster_rows(&self, cx: &mut Context<Self>) -> Vec<AnyElement> {
         let mut roster = Vec::new();
         for (ix, bot) in self.ctx.bots.clone().into_iter().enumerate() {
             let show_id = bot.id.clone();
@@ -126,6 +132,7 @@ impl SettingsView {
                 .into_any_element(),
             );
         }
-        vec![self.card(None, rows).into_any_element(),self.group(Some("bot-list"),false,"Your bots",Some("Show or hide sessions started by each Bot. Hidden sessions remain available from the Bot's chat.".into()),None,roster)]
+
+        roster
     }
 }

@@ -1,5 +1,6 @@
 //! Exact project identity and timestamp semantics of notificationPreferences.ts.
 use super::{Preferences, SettingsView, widgets::secondary_button};
+
 use crate::{
     input,
     notifications::{
@@ -626,235 +627,10 @@ impl SettingsView {
         let all_selected = !all_ids.is_empty() && selected.len() == all_ids.len();
         let mut rows = Vec::new();
         if selecting {
-            let select_ids = all_ids.clone();
-            rows.push(
-                div()
-                    .flex()
-                    .items_center()
-                    .justify_between()
-                    .gap_3()
-                    .px_4()
-                    .py(px(14.))
-                    .border_b_1()
-                    .border_color(content(0.05))
-                    .child(
-                        secondary_button(
-                            "notification-select-all",
-                            "Select all projects",
-                            false,
-                            false,
-                        )
-                        .child(if selected.is_empty() {
-                            "Select all projects".into()
-                        } else {
-                            format!("{} selected", selected.len())
-                        })
-                        .on_click(cx.listener(move |this, _, _, cx| {
-                            if all_selected {
-                                this.notification_state.selected.clear();
-                            } else {
-                                this.notification_state
-                                    .selected
-                                    .extend(select_ids.iter().cloned());
-                            }
-                            cx.notify();
-                        })),
-                    )
-                    .when(!selected.is_empty(), |d| {
-                        d.child(self.mute_controls(selected.clone(), "selected".into(), cx))
-                    })
-                    .into_any_element(),
-            );
+            rows.push(self.notification_selection_row(&all_ids, selected, all_selected, cx));
         }
         for (ix, project) in projects.iter().enumerate() {
-            let id = project.id.clone();
-            let expand_id = id.clone();
-            let select_id = id.clone();
-            let expanded = self.notification_state.expanded.as_ref() == Some(&id);
-            let muted = self
-                .prefs
-                .project_muted(&id, vorkspace_core::time::now_ms());
-            let categories: Vec<_> = CATEGORIES
-                .iter()
-                .filter(|(cat, _)| match project.kind.as_str() {
-                    "jira" => *cat == "issues",
-                    "local" => !["pullRequests", "issues"].contains(cat),
-                    _ => true,
-                })
-                .collect();
-            let enabled_count = categories
-                .iter()
-                .filter(|(cat, _)| {
-                    !self.prefs.project_notifications[&id]["disabled"]
-                        .as_array()
-                        .is_some_and(|values| values.iter().any(|v| v.as_str() == Some(cat)))
-                })
-                .count();
-            let status = if muted {
-                "All notifications paused".into()
-            } else if enabled_count == categories.len() {
-                "All categories enabled".into()
-            } else {
-                format!("{enabled_count} of {} enabled", categories.len())
-            };
-            let mut category_rows = Vec::new();
-            if muted {
-                category_rows.push(div().id("project-notification-accessible-2").role(Role::Status).py_3().text_size(px(12.)).text_color(content(0.45)).child("Your category choices apply when notifications resume. You can edit them while muted.").into_any_element());
-            }
-            for (cat, label) in categories {
-                let category = (*cat).to_owned();
-                let project_id = id.clone();
-                let enabled = !self.prefs.project_notifications[&id]["disabled"]
-                    .as_array()
-                    .is_some_and(|values| values.iter().any(|v| v.as_str() == Some(cat)));
-                category_rows.push(
-                    div()
-                        .flex()
-                        .items_center()
-                        .justify_between()
-                        .gap_3()
-                        .py_3()
-                        .text_size(px(12.))
-                        .text_color(content(0.7))
-                        .child(*label)
-                        .child(
-                            crate::controls::switch(
-                                gpui::SharedString::from(format!(
-                                    "notification-category-{id}-{cat}"
-                                )),
-                                format!("{label} for {}", project.name),
-                                enabled,
-                                true,
-                            )
-                            .cursor_pointer()
-                            .on_click(cx.listener(
-                                move |this, _, _, cx| {
-                                    this.update(cx, |p| {
-                                        p.set_category(
-                                            &project_id,
-                                            &category,
-                                            !enabled,
-                                            vorkspace_core::time::now_ms(),
-                                        )
-                                    })
-                                },
-                            )),
-                        )
-                        .into_any_element(),
-                );
-            }
-            rows.push(
-                div()
-                    .id(("notification-project", ix))
-                    .border_b_1()
-                    .border_color(content(0.05))
-                    .child(
-                        div()
-                            .flex()
-                            .items_center()
-                            .flex_wrap()
-                            .gap_3()
-                            .px_4()
-                            .py(px(14.))
-                            .when(selecting, |d| {
-                                d.child(
-                                    secondary_button(
-                                        format!("select-notification-{id}"),
-                                        format!("Select {}", project.name),
-                                        false,
-                                        false,
-                                    )
-                                    .child(if self.notification_state.selected.contains(&id) {
-                                        "✓"
-                                    } else {
-                                        "□"
-                                    })
-                                    .on_click(cx.listener(
-                                        move |this, _, _, cx| {
-                                            if !this.notification_state.selected.remove(&select_id)
-                                            {
-                                                this.notification_state
-                                                    .selected
-                                                    .insert(select_id.clone());
-                                            }
-                                            cx.notify();
-                                        },
-                                    )),
-                                )
-                            })
-                            .child(
-                                div()
-                                    .id(gpui::SharedString::from(format!(
-                                        "expand-notification-{id}"
-                                    )))
-                                    .role(Role::Button)
-                                    .aria_label(format!(
-                                        "Notification categories for {} ({})",
-                                        project.name, project.detail
-                                    ))
-                                    .cursor_pointer()
-                                    .flex_1()
-                                    .min_w(px(180.))
-                                    .flex()
-                                    .items_center()
-                                    .gap_3()
-                                    .child(icon("folder", 16.))
-                                    .child(
-                                        div()
-                                            .flex_1()
-                                            .min_w_0()
-                                            .child(
-                                                div()
-                                                    .truncate()
-                                                    .text_size(px(13.))
-                                                    .font_weight(gpui::FontWeight::MEDIUM)
-                                                    .child(project.name.clone()),
-                                            )
-                                            .child(
-                                                div()
-                                                    .mt_1()
-                                                    .text_size(px(12.))
-                                                    .text_color(content(0.45))
-                                                    .child(format!(
-                                                        "{}{status}",
-                                                        if project.kind == "local" {
-                                                            "Local project · "
-                                                        } else {
-                                                            ""
-                                                        }
-                                                    )),
-                                            ),
-                                    )
-                                    .child(icon(
-                                        if expanded {
-                                            "chevron-down"
-                                        } else {
-                                            "chevron-right"
-                                        },
-                                        14.,
-                                    ))
-                                    .on_click(cx.listener(move |this, _, _, cx| {
-                                        this.notification_state.expanded = if expanded {
-                                            None
-                                        } else {
-                                            Some(expand_id.clone())
-                                        };
-                                        cx.notify();
-                                    })),
-                            )
-                            .child(self.mute_controls(vec![id], format!("project-{ix}"), cx)),
-                    )
-                    .when(expanded, |d| {
-                        d.child(
-                            div()
-                                .border_t_1()
-                                .border_color(content(0.05))
-                                .px_4()
-                                .children(category_rows),
-                        )
-                    })
-                    .into_any_element(),
-            );
+            rows.push(self.notification_project_row(ix, project, selecting, cx));
         }
         if projects.is_empty() {
             rows.push(
@@ -869,9 +645,267 @@ impl SettingsView {
                     .into_any_element(),
             );
         }
-        self.group(Some("project-notifications"),false,"Project notifications",Some("Choose alerts for each project. Muting keeps your preferences and unread indicators.".into()),
+        self.group(Some("project-notifications"),false,"Project notifications", Some("Choose alerts for each project. Muting keeps your preferences and unread indicators.".into()),
             Some(secondary_button("notification-select-projects",if selecting {"Done"} else {"Select projects"},false,projects.is_empty()).child(if selecting {"Done"} else {"Select projects"})
                 .on_click(cx.listener(|this,_,_,cx| {this.notification_state.selecting = !this.notification_state.selecting;this.notification_state.selected.clear();cx.notify();})).into_any_element()),rows)
+    }
+
+    fn notification_project_row(
+        &self,
+        ix: usize,
+        project: &Project,
+        selecting: bool,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        let id = project.id.clone();
+        let expand_id = id.clone();
+        let select_id = id.clone();
+        let expanded = self.notification_state.expanded.as_ref() == Some(&id);
+        let muted = self
+            .prefs
+            .project_muted(&id, vorkspace_core::time::now_ms());
+        let categories: Vec<_> = CATEGORIES
+            .iter()
+            .filter(|(cat, _)| match project.kind.as_str() {
+                "jira" => *cat == "issues",
+                "local" => !["pullRequests", "issues"].contains(cat),
+                _ => true,
+            })
+            .collect();
+        let enabled_count = categories
+            .iter()
+            .filter(|(cat, _)| {
+                !self.prefs.project_notifications[&id]["disabled"]
+                    .as_array()
+                    .is_some_and(|values| values.iter().any(|v| v.as_str() == Some(cat)))
+            })
+            .count();
+        let status = if muted {
+            "All notifications paused".into()
+        } else if enabled_count == categories.len() {
+            "All categories enabled".into()
+        } else {
+            format!("{enabled_count} of {} enabled", categories.len())
+        };
+        let category_rows = self.notification_category_rows(project, &id, muted, categories, cx);
+        div()
+            .id(("notification-project", ix))
+            .border_b_1()
+            .border_color(content(0.05))
+            .child(
+                div()
+                    .flex()
+                    .items_center()
+                    .flex_wrap()
+                    .gap_3()
+                    .px_4()
+                    .py(px(14.))
+                    .when(selecting, |d| {
+                        d.child(
+                            secondary_button(
+                                format!("select-notification-{id}"),
+                                format!("Select {}", project.name),
+                                false,
+                                false,
+                            )
+                            .child(if self.notification_state.selected.contains(&id) {
+                                "✓"
+                            } else {
+                                "□"
+                            })
+                            .on_click(cx.listener(
+                                move |this, _, _, cx| {
+                                    if !this.notification_state.selected.remove(&select_id) {
+                                        this.notification_state.selected.insert(select_id.clone());
+                                    }
+                                    cx.notify();
+                                },
+                            )),
+                        )
+                    })
+                    .child(Self::notification_project_heading(
+                        project, &id, expand_id, expanded, status, cx,
+                    ))
+                    .child(self.mute_controls(vec![id], format!("project-{ix}"), cx)),
+            )
+            .when(expanded, |d| {
+                d.child(
+                    div()
+                        .border_t_1()
+                        .border_color(content(0.05))
+                        .px_4()
+                        .children(category_rows),
+                )
+            })
+            .into_any_element()
+    }
+
+    fn notification_project_heading(
+        project: &Project,
+        id: &String,
+        expand_id: String,
+        expanded: bool,
+        status: String,
+        cx: &mut Context<Self>,
+    ) -> gpui::Stateful<gpui::Div> {
+        div()
+            .id(gpui::SharedString::from(format!(
+                "expand-notification-{id}"
+            )))
+            .role(Role::Button)
+            .aria_label(format!(
+                "Notification categories for {} ({})",
+                project.name, project.detail
+            ))
+            .cursor_pointer()
+            .flex_1()
+            .min_w(px(180.))
+            .flex()
+            .items_center()
+            .gap_3()
+            .child(icon("folder", 16.))
+            .child(
+                div()
+                    .flex_1()
+                    .min_w_0()
+                    .child(
+                        div()
+                            .truncate()
+                            .text_size(px(13.))
+                            .font_weight(gpui::FontWeight::MEDIUM)
+                            .child(project.name.clone()),
+                    )
+                    .child(
+                        div()
+                            .mt_1()
+                            .text_size(px(12.))
+                            .text_color(content(0.45))
+                            .child(format!(
+                                "{}{status}",
+                                if project.kind == "local" {
+                                    "Local project · "
+                                } else {
+                                    ""
+                                }
+                            )),
+                    ),
+            )
+            .child(icon(
+                if expanded {
+                    "chevron-down"
+                } else {
+                    "chevron-right"
+                },
+                14.,
+            ))
+            .on_click(cx.listener(move |this, _, _, cx| {
+                this.notification_state.expanded = if expanded {
+                    None
+                } else {
+                    Some(expand_id.clone())
+                };
+                cx.notify();
+            }))
+    }
+
+    fn notification_category_rows(
+        &self,
+        project: &Project,
+        id: &String,
+        muted: bool,
+        categories: Vec<&(&'static str, &'static str)>,
+        cx: &mut Context<Self>,
+    ) -> Vec<AnyElement> {
+        let mut category_rows = Vec::new();
+        if muted {
+            category_rows.push(div().id("project-notification-accessible-2").role(Role::Status).py_3().text_size(px(12.)).text_color(content(0.45)).child("Your category choices apply when notifications resume. You can edit them while muted.").into_any_element());
+        }
+        for (cat, label) in categories {
+            let category = (*cat).to_owned();
+            let project_id = id.clone();
+            let enabled = !self.prefs.project_notifications[id]["disabled"]
+                .as_array()
+                .is_some_and(|values| values.iter().any(|v| v.as_str() == Some(cat)));
+            category_rows.push(
+                div()
+                    .flex()
+                    .items_center()
+                    .justify_between()
+                    .gap_3()
+                    .py_3()
+                    .text_size(px(12.))
+                    .text_color(content(0.7))
+                    .child(*label)
+                    .child(
+                        crate::controls::switch(
+                            gpui::SharedString::from(format!("notification-category-{id}-{cat}")),
+                            format!("{label} for {}", project.name),
+                            enabled,
+                            true,
+                        )
+                        .cursor_pointer()
+                        .on_click(cx.listener(move |this, _, _, cx| {
+                            this.update(cx, |p| {
+                                p.set_category(
+                                    &project_id,
+                                    &category,
+                                    !enabled,
+                                    vorkspace_core::time::now_ms(),
+                                )
+                            })
+                        })),
+                    )
+                    .into_any_element(),
+            );
+        }
+
+        category_rows
+    }
+
+    fn notification_selection_row(
+        &self,
+        all_ids: &[String],
+        selected: Vec<String>,
+        all_selected: bool,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        let select_ids = all_ids.to_vec();
+        div()
+            .flex()
+            .items_center()
+            .justify_between()
+            .gap_3()
+            .px_4()
+            .py(px(14.))
+            .border_b_1()
+            .border_color(content(0.05))
+            .child(
+                secondary_button(
+                    "notification-select-all",
+                    "Select all projects",
+                    false,
+                    false,
+                )
+                .child(if selected.is_empty() {
+                    "Select all projects".into()
+                } else {
+                    format!("{} selected", selected.len())
+                })
+                .on_click(cx.listener(move |this, _, _, cx| {
+                    if all_selected {
+                        this.notification_state.selected.clear();
+                    } else {
+                        this.notification_state
+                            .selected
+                            .extend(select_ids.iter().cloned());
+                    }
+                    cx.notify();
+                })),
+            )
+            .when(!selected.is_empty(), |d| {
+                d.child(self.mute_controls(selected.clone(), "selected".into(), cx))
+            })
+            .into_any_element()
     }
     pub(super) fn notification_overlay(&self, cx: &mut Context<Self>) -> Vec<AnyElement> {
         let mut overlays = Vec::new();
@@ -947,90 +981,70 @@ impl SettingsView {
                                     .child(custom.error.clone().unwrap_or_default()),
                             )
                         })
-                        .child(
-                            div()
-                                .mt_3()
-                                .pt(px(10.))
-                                .border_t_1()
-                                .border_color(content(0.1))
-                                .flex()
-                                .justify_between()
-                                .child(
-                                    secondary_button(
-                                        "cancel-custom-notification-mute",
-                                        "Cancel",
-                                        false,
-                                        false,
-                                    )
-                                    .child("Cancel")
-                                    .on_click(cx.listener(
-                                        |this, _, _, cx| {
-                                            this.notification_state.custom = None;
-                                            cx.notify();
-                                        },
-                                    )),
-                                )
-                                .child(
-                                    secondary_button(
-                                        "save-custom-notification-mute",
-                                        "Mute until then",
-                                        false,
-                                        false,
-                                    )
-                                    .child("Mute until then")
-                                    .on_click(cx.listener(
-                                        |this, _, _, cx| {
-                                            let Some(custom) = &this.notification_state.custom
-                                            else {
-                                                return;
-                                            };
-                                            let parsed = NaiveDateTime::parse_from_str(
-                                                &format!(
-                                                    "{} {}",
-                                                    custom.date,
-                                                    custom.input.read(cx).content.trim()
-                                                ),
-                                                "%Y-%m-%d %H:%M",
-                                            )
-                                            .ok()
-                                            .and_then(|at| {
-                                                Local.from_local_datetime(&at).earliest()
-                                            })
-                                            .map(|at| at.timestamp_millis().max(0) as u64);
-                                            let now = vorkspace_core::time::now_ms();
-                                            match parsed {
-                                                Some(at) if at > now => {
-                                                    let ids = custom.ids.clone();
-                                                    this.update(cx, |p| {
-                                                        p.mute_projects(&ids, Some(json!(at)), now)
-                                                    });
-                                                    this.notification_state.custom = None;
-                                                }
-                                                _ => {
-                                                    this.notification_state
-                                                        .custom
-                                                        .as_mut()
-                                                        .unwrap()
-                                                        .error = Some(
-                                                        if parsed.is_some() {
-                                                            "Choose a date and time in the future."
-                                                        } else {
-                                                            "Choose a valid date and time."
-                                                        }
-                                                        .into(),
-                                                    );
-                                                }
-                                            }
-                                            cx.notify();
-                                        },
-                                    )),
-                                ),
-                        ),
+                        .child(self.custom_notification_actions(cx)),
                 )
                 .into_any_element(),
             );
         }
         overlays
+    }
+
+    fn custom_notification_actions(&self, cx: &mut Context<Self>) -> gpui::Div {
+        div()
+            .mt_3()
+            .pt(px(10.))
+            .border_t_1()
+            .border_color(content(0.1))
+            .flex()
+            .justify_between()
+            .child(
+                secondary_button("cancel-custom-notification-mute", "Cancel", false, false)
+                    .child("Cancel")
+                    .on_click(cx.listener(|this, _, _, cx| {
+                        this.notification_state.custom = None;
+                        cx.notify();
+                    })),
+            )
+            .child(
+                secondary_button(
+                    "save-custom-notification-mute",
+                    "Mute until then",
+                    false,
+                    false,
+                )
+                .child("Mute until then")
+                .on_click(cx.listener(|this, _, _, cx| {
+                    let Some(custom) = &this.notification_state.custom else {
+                        return;
+                    };
+                    let parsed = NaiveDateTime::parse_from_str(
+                        &format!("{} {}", custom.date, custom.input.read(cx).content.trim()),
+                        "%Y-%m-%d %H:%M",
+                    )
+                    .ok()
+                    .and_then(|at| Local.from_local_datetime(&at).earliest())
+                    .map(|at| at.timestamp_millis().max(0) as u64);
+                    let now = vorkspace_core::time::now_ms();
+                    match parsed {
+                        Some(at) if at > now => {
+                            let ids = custom.ids.clone();
+                            this.update(cx, |p| p.mute_projects(&ids, Some(json!(at)), now));
+                            this.notification_state.custom = None;
+                        }
+                        _ => {
+                            this.notification_state.custom.as_mut().unwrap().error = Some(
+                                if parsed.is_some() {
+                                    "Choose a date and time in the future."
+                                } else {
+                                    "Choose a valid date and time."
+                                }
+                                .into(),
+                            );
+                        }
+                    }
+                    cx.notify();
+                })),
+            )
     }
 }
 impl SettingsView {
@@ -1122,108 +1136,121 @@ impl SettingsView {
                             .text_size(px(12.))
                             .child(month.format("%B %Y").to_string()),
                     )
-                    .child(
-                        div()
-                            .flex()
-                            .gap(px(2.))
-                            .child(
-                                secondary_button(
-                                    "mute-previous-month",
-                                    "Previous month",
-                                    false,
-                                    previous_disabled,
-                                )
-                                .child(icon("chevron-left", 14.))
-                                .on_click(cx.listener(
-                                    move |this, _, _, cx| {
-                                        if !previous_disabled {
-                                            if let Some(custom) =
-                                                &mut this.notification_state.custom
-                                            {
-                                                custom.month = previous;
-                                            }
-                                            cx.notify();
-                                        }
-                                    },
-                                )),
-                            )
-                            .child(
-                                secondary_button("mute-next-month", "Next month", false, false)
-                                    .child(icon("chevron-right", 14.))
-                                    .on_click(cx.listener(move |this, _, _, cx| {
-                                        if let Some(custom) = &mut this.notification_state.custom {
-                                            custom.month = next;
-                                        }
-                                        cx.notify();
-                                    })),
-                            ),
-                    ),
+                    .child(self.mute_month_buttons(previous, next, previous_disabled, cx)),
             )
+            .child(self.mute_calendar_grid(custom, weeks, cx))
+            .into_any_element()
+    }
+
+    fn mute_calendar_grid(
+        &self,
+        custom: &CustomMute,
+        weeks: Vec<gpui::Div>,
+        cx: &mut Context<Self>,
+    ) -> gpui::Stateful<gpui::Div> {
+        div()
+            .id("notification-mute-calendar")
+            .role(Role::Grid)
+            .aria_label("Choose date")
+            .track_focus(&custom.focus)
+            .tab_index(0)
+            .on_mouse_down(
+                gpui::MouseButton::Left,
+                cx.listener(|this, _, window, cx| {
+                    if let Some(custom) = &this.notification_state.custom {
+                        window.focus(&custom.focus, cx);
+                    }
+                }),
+            )
+            .on_key_down(cx.listener(|this, event: &gpui::KeyDownEvent, _, cx| {
+                let Some(custom) = &mut this.notification_state.custom else {
+                    return;
+                };
+                let day = custom.focused_date;
+                let offset = day.weekday().num_days_from_monday() as i64;
+                let next = match event.keystroke.key.as_str() {
+                    "enter" | "space" => {
+                        custom.date = day;
+                        custom.error = None;
+                        Some(day)
+                    }
+                    "left" => Some(day - chrono::Duration::days(1)),
+                    "right" => Some(day + chrono::Duration::days(1)),
+                    "up" => Some(day - chrono::Duration::days(7)),
+                    "down" => Some(day + chrono::Duration::days(7)),
+                    "home" => Some(day - chrono::Duration::days(offset)),
+                    "end" => Some(day + chrono::Duration::days(6 - offset)),
+                    "pageup" => day.checked_sub_months(chrono::Months::new(1)),
+                    "pagedown" => day.checked_add_months(chrono::Months::new(1)),
+                    _ => None,
+                };
+                if let Some(next) = next {
+                    let next = next.max(Local::now().date_naive());
+                    custom.focused_date = next;
+                    custom.month = next.with_day(1).unwrap();
+                    cx.stop_propagation();
+                    cx.notify();
+                }
+            }))
+            .flex()
+            .flex_col()
             .child(
                 div()
-                    .id("notification-mute-calendar")
-                    .role(Role::Grid)
-                    .aria_label("Choose date")
-                    .track_focus(&custom.focus)
-                    .tab_index(0)
-                    .on_mouse_down(
-                        gpui::MouseButton::Left,
-                        cx.listener(|this, _, window, cx| {
-                            if let Some(custom) = &this.notification_state.custom {
-                                window.focus(&custom.focus, cx);
-                            }
-                        }),
-                    )
-                    .on_key_down(cx.listener(|this, event: &gpui::KeyDownEvent, _, cx| {
-                        let Some(custom) = &mut this.notification_state.custom else {
-                            return;
-                        };
-                        let day = custom.focused_date;
-                        let offset = day.weekday().num_days_from_monday() as i64;
-                        let next = match event.keystroke.key.as_str() {
-                            "enter" | "space" => {
-                                custom.date = day;
-                                custom.error = None;
-                                Some(day)
-                            }
-                            "left" => Some(day - chrono::Duration::days(1)),
-                            "right" => Some(day + chrono::Duration::days(1)),
-                            "up" => Some(day - chrono::Duration::days(7)),
-                            "down" => Some(day + chrono::Duration::days(7)),
-                            "home" => Some(day - chrono::Duration::days(offset)),
-                            "end" => Some(day + chrono::Duration::days(6 - offset)),
-                            "pageup" => day.checked_sub_months(chrono::Months::new(1)),
-                            "pagedown" => day.checked_add_months(chrono::Months::new(1)),
-                            _ => None,
-                        };
-                        if let Some(next) = next {
-                            let next = next.max(Local::now().date_naive());
-                            custom.focused_date = next;
-                            custom.month = next.with_day(1).unwrap();
-                            cx.stop_propagation();
-                            cx.notify();
-                        }
-                    }))
                     .flex()
-                    .flex_col()
-                    .child(
-                        div().flex().children(
-                            ["Mo", "Tu", "We", "Th", "Fr", "Sa", "Su"]
-                                .into_iter()
-                                .map(|day| {
-                                    div()
-                                        .w(px(36.))
-                                        .text_center()
-                                        .pb(px(6.))
-                                        .text_size(px(10.))
-                                        .text_color(content(0.4))
-                                        .child(day)
-                                }),
-                        ),
-                    )
-                    .children(weeks),
+                    .children(
+                        ["Mo", "Tu", "We", "Th", "Fr", "Sa", "Su"]
+                            .into_iter()
+                            .map(|day| {
+                                div()
+                                    .w(px(36.))
+                                    .text_center()
+                                    .pb(px(6.))
+                                    .text_size(px(10.))
+                                    .text_color(content(0.4))
+                                    .child(day)
+                            }),
+                    ),
             )
-            .into_any_element()
+            .children(weeks)
+    }
+
+    fn mute_month_buttons(
+        &self,
+        previous: NaiveDate,
+        next: NaiveDate,
+        previous_disabled: bool,
+        cx: &mut Context<Self>,
+    ) -> gpui::Div {
+        div()
+            .flex()
+            .gap(px(2.))
+            .child(
+                secondary_button(
+                    "mute-previous-month",
+                    "Previous month",
+                    false,
+                    previous_disabled,
+                )
+                .child(icon("chevron-left", 14.))
+                .on_click(cx.listener(move |this, _, _, cx| {
+                    if !previous_disabled {
+                        if let Some(custom) = &mut this.notification_state.custom {
+                            custom.month = previous;
+                        }
+                        cx.notify();
+                    }
+                })),
+            )
+            .child(
+                secondary_button("mute-next-month", "Next month", false, false)
+                    .child(icon("chevron-right", 14.))
+                    .on_click(cx.listener(move |this, _, _, cx| {
+                        if let Some(custom) = &mut this.notification_state.custom {
+                            custom.month = next;
+                        }
+                        cx.notify();
+                    })),
+            )
     }
 }
 

@@ -1,3 +1,5 @@
+use crate::settings::Preferences;
+
 use crate::settings::{SettingsEvent, SettingsView, widgets::secondary_button};
 use gpui::{AnyElement, Context, prelude::*};
 impl SettingsView {
@@ -5,39 +7,7 @@ impl SettingsView {
         let p = self.prefs.clone();
         let shortcut = super::command_shortcut(&p, "App: Vox")
             .unwrap_or_else(|| "the shortcut in Keybindings".into());
-        let mut choices = vec![
-            ("builtin".to_string(), "Built-in microphone".to_string()),
-            ("system".into(), "System default".into()),
-        ];
-        choices.extend(self.ctx.vox_devices.clone());
-        let selected = p.vox_microphone["id"].as_str().unwrap_or("builtin");
-        if !choices.iter().any(|(id, _)| id == selected) {
-            choices.push((
-                selected.into(),
-                p.vox_microphone["label"]
-                    .as_str()
-                    .unwrap_or("Selected microphone")
-                    .into(),
-            ));
-        }
-        let microphone = self.select(
-            "vox-microphone",
-            "Microphone",
-            selected,
-            choices
-                .iter()
-                .map(|(id, label)| (id.clone(), label.clone().into(), None))
-                .collect(),
-            Some(208.),
-            cx,
-            move |this, id, cx| {
-                if let Some((_, label)) = choices.iter().find(|(value, _)| *value == id) {
-                    this.update(cx, |p| {
-                        p.vox_microphone = serde_json::json!({"id": id, "label": label})
-                    });
-                }
-            },
-        );
+        let microphone = self.vox_microphone_control(&p, cx);
         let mut rows = vec![
             self.row(
                 Some("vox-enabled"),
@@ -118,5 +88,41 @@ impl SettingsView {
             rows.push(crate::settings::widgets::note(error.clone()));
         }
         vec![self.card(None, rows).into_any_element()]
+    }
+
+    fn vox_microphone_control(&self, p: &Preferences, cx: &mut Context<Self>) -> AnyElement {
+        let mut choices = vec![
+            ("builtin".to_string(), "Built-in microphone".to_string()),
+            ("system".into(), "System default".into()),
+        ];
+        choices.extend(self.ctx.vox_devices.clone());
+        let selected = p.vox_microphone["id"].as_str().unwrap_or("builtin");
+        if !choices.iter().any(|(id, _)| id == selected) {
+            choices.push((
+                selected.into(),
+                p.vox_microphone["label"]
+                    .as_str()
+                    .unwrap_or("Selected microphone")
+                    .into(),
+            ));
+        }
+        self.select(
+            "vox-microphone",
+            "Microphone",
+            selected,
+            choices
+                .iter()
+                .map(|(id, label)| (id.clone(), label.clone().into(), None))
+                .collect(),
+            Some(208.),
+            cx,
+            move |this, id, cx| {
+                if let Some((_, label)) = choices.iter().find(|(value, _)| *value == id) {
+                    this.update(cx, |p| {
+                        p.vox_microphone = serde_json::json!({"id": id, "label": label})
+                    });
+                }
+            },
+        )
     }
 }
