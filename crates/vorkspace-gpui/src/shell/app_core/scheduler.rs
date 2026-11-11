@@ -6,6 +6,53 @@ pub(super) struct AutomationServiceReady(pub Result<ServiceHandle, String>);
 impl EventEmitter<AutomationServiceReady> for AppCore {}
 
 impl AppCore {
+    pub(super) fn start_scheduler_clock(&mut self, cx: &mut Context<Self>) {
+        if self.scheduler_clock.is_some() {
+            return;
+        }
+        self.scheduler_clock = Some(cx.spawn(async move |core, cx| {
+            loop {
+                cx.background_executor()
+                    .timer(std::time::Duration::from_secs(30))
+                    .await;
+                if !cx.update(|cx| {
+                    let Some(core) = core.upgrade() else {
+                        return false;
+                    };
+                    let (scheduler, sidebars) = {
+                        let core = core.read(cx);
+                        let windows: Vec<_> = core
+                            .windows
+                            .iter()
+                            .filter_map(WeakEntity::upgrade)
+                            .filter(|window| !window.read(cx).window_closing)
+                            .collect();
+                        let scheduler = core
+                            .scheduler
+                            .as_ref()
+                            .and_then(WeakEntity::upgrade)
+                            .filter(|window| !window.read(cx).window_closing)
+                            .or_else(|| windows.first().cloned());
+                        let sidebars = windows
+                            .into_iter()
+                            .filter(|window| window.read(cx).workspace.sidebar_visible)
+                            .collect::<Vec<_>>();
+                        (scheduler, sidebars)
+                    };
+                    if let Some(scheduler) = scheduler {
+                        scheduler.update(cx, Shell::poll_automations);
+                    }
+                    for window in sidebars {
+                        window.update(cx, |shell, cx| shell.redraw_sidebar(cx));
+                    }
+                    true
+                }) {
+                    break;
+                }
+            }
+        }));
+    }
+
     pub(in crate::shell) fn request_automation_service(
         &mut self,
         cx: &mut Context<Self>,
@@ -40,6 +87,12 @@ impl AppCore {
                 self.scheduler = Some(shell.clone());
                 true
             }
+        }
+    }
+
+    pub(super) fn release_scheduler(&mut self, shell: &WeakEntity<Shell>) {
+        if self.scheduler.as_ref() == Some(shell) {
+            self.scheduler = None;
         }
     }
 

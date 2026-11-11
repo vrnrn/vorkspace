@@ -28,6 +28,7 @@ pub(crate) use feed::{FeedEvent, InboxFeed};
 
 pub(crate) enum Event {
     Close,
+    ConnectorAvailabilityChanged,
     OpenTab(Box<Item>),
     OpenSession(i64),
     StartSession {
@@ -717,9 +718,13 @@ impl Inbox {
         self.saved_state = baseline;
         if next != self.state {
             let defaults_changed = self.state.default_bots != next.default_bots;
+            let connectors_changed = self.state.connectors != next.connectors;
             self.state = next;
             if defaults_changed && !self.destination_explicit {
                 self.reset_destination();
+            }
+            if connectors_changed && self.owner.is_none() {
+                cx.emit(Event::ConnectorAvailabilityChanged);
             }
             cx.notify();
         }

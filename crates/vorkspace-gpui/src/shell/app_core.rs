@@ -98,6 +98,7 @@ pub(crate) struct AppCore {
     pub(super) remote_poll: super::remote_sessions::RemotePoll,
     pub(super) quick_shortcut: crate::composer::quick_composer::Shortcut,
     scheduler: Option<WeakEntity<Shell>>,
+    scheduler_clock: Option<gpui::Task<()>>,
     reminders: reminders::ReminderSchedule,
     pub(super) github_activity: Entity<crate::notifications::github_activity::GithubActivity>,
     inbox_links: Entity<crate::inbox::SessionLinks>,
@@ -247,6 +248,7 @@ impl AppCore {
                 remote_poll: Default::default(),
                 quick_shortcut: Default::default(),
                 scheduler: None,
+                scheduler_clock: None,
                 reminders: reminders::ReminderSchedule::new(reminders),
                 github_activity,
                 inbox_links,
@@ -525,6 +527,7 @@ impl Shell {
         let me = cx.weak_entity();
         core.update(cx, |core, cx| {
             core.register(me);
+            core.start_scheduler_clock(cx);
             core.start_reminders(cx);
         });
         let release = core.downgrade();
@@ -534,6 +537,7 @@ impl Shell {
                 core.keep_visible_agents(window, HashSet::new());
                 core.set_remote_scope(window, None, cx);
                 if !core.windows.iter().any(|window| window.upgrade().is_some()) {
+                    core.scheduler_clock = None;
                     core.linked_activity_clock = None;
                     core.notification_clicks = None;
                     core.reminders.stop_discovery();
@@ -674,7 +678,9 @@ impl Shell {
                 }
             }
         }
-        self.sync_vorkspace_bot_visibility(cx);
+        if !self.sync_vorkspace_bot_visibility(cx) {
+            self.update_chat_visibility(cx);
+        }
         self.sync_remote_scope(cx);
         self.invalidate_chrome(cx);
         cx.notify();

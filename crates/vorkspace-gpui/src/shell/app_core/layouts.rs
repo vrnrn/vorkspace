@@ -139,7 +139,11 @@ impl Shell {
 
     pub(in crate::shell) fn forget_closed_window(&self, cx: &mut Context<Self>) {
         if let Some(core) = self.app_core.clone() {
-            core.update(cx, |core, cx| core.close_layout(self.window_layout, cx));
+            let shell = cx.weak_entity();
+            core.update(cx, |core, cx| {
+                core.release_scheduler(&shell);
+                core.close_layout(self.window_layout, cx);
+            });
         }
     }
 }

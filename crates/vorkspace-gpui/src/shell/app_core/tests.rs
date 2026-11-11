@@ -248,10 +248,15 @@ fn one_window_fires_scheduled_work_and_hands_it_on_when_closed(cx: &mut TestAppC
     cx.update_window(a.into(), |_, window, _| window.remove_window())
         .unwrap();
     cx.run_until_parked();
-    assert!(
-        b.update(cx, |shell, _, cx| shell.holds_scheduler(cx))
-            .unwrap()
-    );
+    cx.executor()
+        .advance_clock(std::time::Duration::from_secs(30));
+    cx.run_until_parked();
+    let successor = b.entity(cx).unwrap().downgrade();
+    b.read_with(cx, |shell, cx| {
+        let core = shell.app_core.as_ref().unwrap().read(cx);
+        assert!(core.scheduler.as_ref() == Some(&successor));
+    })
+    .unwrap();
 }
 
 #[gpui::test]

@@ -528,7 +528,6 @@ pub(crate) struct Shell {
     sidebar_target: Option<session_groups::RenameTarget>,
     session_row_bounds: HashMap<i64, AnchorSlot>,
     filter_anchor: AnchorSlot,
-    _session_clock: gpui::Task<()>,
     notes: Option<Entity<Notes>>,
     codebase_tabs: HashMap<i64, Entity<crate::codebase::Page>>,
     note_tabs: HashMap<i64, Entity<Notes>>,
@@ -801,25 +800,6 @@ impl Shell {
             .find(|s| Some(s.id) == workspace.active)
             .map(|s| Kind::from_id(&s.provider))
             .unwrap_or(Kind::Codex);
-        let session_clock = cx.spawn(async move |this, cx| {
-            loop {
-                cx.background_executor()
-                    .timer(std::time::Duration::from_secs(30))
-                    .await;
-                if this
-                    .update(cx, |this, cx| {
-                        this.poll_automations(cx);
-                        this.update_chat_visibility(cx);
-                        if this.workspace.sidebar_visible {
-                            this.notify_sidebar(cx);
-                        }
-                    })
-                    .is_err()
-                {
-                    break;
-                }
-            }
-        });
         let git_project = workspace.project.clone();
         let checkouts = app_core.read(cx).checkouts.clone();
         let git = cx.new(|cx| crate::git_status::ProjectGit::shared(git_project, checkouts, cx));
@@ -898,7 +878,6 @@ impl Shell {
             sidebar_target: None,
             session_row_bounds: HashMap::new(),
             filter_anchor: AnchorSlot::default(),
-            _session_clock: session_clock,
             notes: None,
             codebase_tabs: HashMap::new(),
             note_tabs: HashMap::new(),
@@ -1063,6 +1042,8 @@ impl Shell {
             cx.subscribe(&bots, |this, _, _: &crate::bots::Changed, cx| {
                 if this.prune_deleted_bot_tabs(cx) {
                     this.persist(cx);
+                } else if this.workspace_bot_context().is_some() {
+                    this.update_chat_visibility(cx);
                 }
                 // Restored legacy panes share the durable classification even
                 // when their original project-session view is still cached.
@@ -1662,6 +1643,9 @@ impl Shell {
     }
     fn notify_sidebar(&self, cx: &mut Context<Self>) {
         self.sync_live_agents(cx);
+        self.redraw_sidebar(cx);
+    }
+    fn redraw_sidebar(&self, cx: &mut Context<Self>) {
         self.sidebar_frame.update(cx, |_, cx| cx.notify());
         self.project_rail_frame.update(cx, |_, cx| cx.notify());
     }
