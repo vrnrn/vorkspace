@@ -29,6 +29,14 @@ pub struct DiffSnapshot {
     pub index: DiffIndex,
     pub versions: Option<HashMap<String, FileDiffVersion>>,
     pub stamp: Option<CheckoutStamp>,
+    pub local_head: Option<LocalHead>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum LocalHead {
+    Missing,
+    Attached(String),
+    Detached(Option<String>),
 }
 
 impl DiffSnapshot {
@@ -46,10 +54,17 @@ impl DiffSnapshot {
     }
 
     fn local(cwd: &Path, status: LocalStatus, counts: Counts<'_>) -> Self {
+        let index = status.index(cwd, counts);
+        let local_head = match &status.branch {
+            Some(branch) => LocalHead::Attached(branch.clone()),
+            None if index.head.is_some() => LocalHead::Detached(index.branch.clone()),
+            None => LocalHead::Missing,
+        };
         Self {
-            index: status.index(cwd, counts),
+            index,
             versions: Some(status.versions()),
             stamp: status.stamp,
+            local_head: Some(local_head),
         }
     }
 
@@ -98,6 +113,7 @@ impl DiffSnapshot {
             index,
             versions,
             stamp: None,
+            local_head: None,
         })
     }
 }

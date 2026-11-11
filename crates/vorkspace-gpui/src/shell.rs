@@ -823,6 +823,12 @@ impl Shell {
         let git_project = workspace.project.clone();
         let checkouts = app_core.read(cx).checkouts.clone();
         let git = cx.new(|cx| crate::git_status::ProjectGit::shared(git_project, checkouts, cx));
+        let git_head = cx.subscribe(
+            &git,
+            |this, _, event: &crate::git_status::GitHeadChanged, cx| {
+                this.observe_git_head(event, cx);
+            },
+        );
         let resources = cx.new(ResourceMonitor::new);
         let resource_observation = cx.observe(&resources, |_, _, cx| cx.notify());
         let resource_stops = cx.subscribe(&resources, |this, _, request: &StopSession, cx| {
@@ -1011,7 +1017,12 @@ impl Shell {
             move_terminal_anchor: AnchorSlot::default(),
             viewport_width: 1200.,
             viewport_height: 800.,
-            observations: vec![resource_observation, resource_stops, sidebar_search_events],
+            observations: vec![
+                resource_observation,
+                resource_stops,
+                sidebar_search_events,
+                git_head,
+            ],
             render_passes: 0,
         };
         this.scan_external_editors(cx);
@@ -1677,10 +1688,7 @@ impl Shell {
             .map(|view| {
                 let view = view.read(cx);
                 (
-                    view.settings
-                        .worktree_cwd
-                        .clone()
-                        .unwrap_or_else(|| view.summary.cwd.clone()),
+                    view.execution_cwd().to_owned(),
                     Kind::from_id(&view.summary.provider),
                 )
             });
@@ -1694,6 +1702,22 @@ impl Shell {
             changes.update(cx, |c, _| c.text_provider = kind);
         }
         self.sync_right_panel(cx);
+    }
+    fn observe_git_head(&self, event: &crate::git_status::GitHeadChanged, cx: &mut Context<Self>) {
+        let active = self
+            .workspace
+            .active
+            .and_then(|id| self.workspace.session_for_pane(id));
+        let chats = self
+            .visible_chats
+            .iter()
+            .copied()
+            .chain(active.filter(|id| !self.visible_chats.contains(id)));
+        for id in chats {
+            if let Some(view) = self.sessions.get(&id) {
+                view.update(cx, |view, cx| view.observe_git_head(event, cx));
+            }
+        }
     }
     /// The active tab's review pane, created from its saved state.
     fn unsaved_files(&self, cx: &App) -> bool {

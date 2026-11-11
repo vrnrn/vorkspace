@@ -213,6 +213,57 @@ fn response_target_picker_preserves_model_effort_and_working_copy(cx: &mut TestA
 }
 
 #[gpui::test]
+fn observed_head_belongs_to_the_effective_checkout(cx: &mut TestAppContext) {
+    use crate::git_status::GitHeadChanged;
+    use vorkspace_core::scm::LocalHead;
+
+    let store = Store::open(Path::new(":memory:")).unwrap();
+    let summary = store.create("codex", "/work/head-projection").unwrap();
+    let main = summary.cwd.clone();
+    let linked = format!("{main}-linked");
+    let view = cx.new(|cx| Conversation::new(summary, Arc::new(Mutex::new(store)), cx));
+    view.update(cx, |chat, cx| {
+        chat.loaded = true;
+        chat.settings.worktree_cwd = Some(linked.clone());
+        chat.observe_git_head(
+            &GitHeadChanged {
+                cwd: main.clone(),
+                head: LocalHead::Attached("ignored-main".into()),
+            },
+            cx,
+        );
+        assert!(chat.branch.is_none());
+        chat.observe_git_head(
+            &GitHeadChanged {
+                cwd: linked,
+                head: LocalHead::Detached(Some("12345678901".into())),
+            },
+            cx,
+        );
+        assert_eq!(chat.branch.as_deref(), Some("12345678901"));
+        assert!(
+            chat.git
+                .as_ref()
+                .is_some_and(|head| head.detached && head.linked)
+        );
+        chat.settings.worktree_removed = true;
+        chat.observe_git_head(
+            &GitHeadChanged {
+                cwd: main,
+                head: LocalHead::Attached("main".into()),
+            },
+            cx,
+        );
+        assert_eq!(chat.branch.as_deref(), Some("main"));
+        assert!(
+            chat.git
+                .as_ref()
+                .is_some_and(|head| !head.detached && !head.linked)
+        );
+    });
+}
+
+#[gpui::test]
 fn new_tab_shows_its_folders_branch_at_once_and_no_loading_status(cx: &mut TestAppContext) {
     vorkspace_model::git_cache::remember(
         "/work/remembered",

@@ -69,11 +69,17 @@ impl Shell {
         let run_changed = matches!(change, Turn | Settled | Loaded);
         let refresh_checkout = matches!(change, Checkout | Settled | Loaded)
             || matches!(change, Attention) && needs_approval;
-        if self.workspace.active == Some(id)
+        if self
+            .workspace
+            .active
+            .and_then(|tab| self.workspace.session_for_pane(tab))
+            == Some(id)
             && (checkout_changed || refresh_checkout || provider_changed || project_changed)
         {
             self.sync_git(cx);
-            if refresh_checkout {
+            if matches!(change, Checkout) {
+                self.git.update(cx, |git, cx| git.changed(cx));
+            } else if refresh_checkout {
                 self.git.update(cx, |git, cx| git.reload(cx));
             }
         }

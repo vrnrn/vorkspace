@@ -72,7 +72,7 @@ struct FileStatus {
 pub(super) struct LocalStatus {
     pub(super) stamp: Option<CheckoutStamp>,
     head: Option<String>,
-    branch: Option<String>,
+    pub(super) branch: Option<String>,
     upstream: Option<String>,
     ahead_behind: Option<(i64, i64)>,
     files: HashMap<String, FileStatus>,

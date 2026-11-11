@@ -9,6 +9,10 @@ pub(crate) use checkout::{Checkout, CheckoutCatalog, EditorBaselineRevision, His
 
 /// A disk or Git change: Changes, History and the Explorer reread.
 pub(crate) struct GitChanged;
+pub(crate) struct GitHeadChanged {
+    pub(crate) cwd: String,
+    pub(crate) head: vorkspace_core::scm::LocalHead,
+}
 
 #[derive(Default, Clone, PartialEq)]
 pub(crate) struct StatusMap {
@@ -73,6 +77,7 @@ pub(crate) struct ProjectGit {
     polling: bool,
 }
 impl EventEmitter<GitChanged> for ProjectGit {}
+impl EventEmitter<GitHeadChanged> for ProjectGit {}
 
 impl ProjectGit {
     #[cfg(test)]
@@ -192,6 +197,14 @@ impl ProjectGit {
         let invalidate = self.source_revision != checkout.revision;
         self.source_revision = checkout.revision;
         let changed = self.snapshot.as_ref().map(Arc::as_ptr) != snapshot.as_ref().map(Arc::as_ptr);
+        let previous_head = self
+            .snapshot
+            .as_ref()
+            .and_then(|old| old.local_head.as_ref());
+        let next_head = snapshot.as_ref().and_then(|new| new.local_head.as_ref());
+        let head = next_head
+            .filter(|head| Some(*head) != previous_head)
+            .cloned();
         self.snapshot = snapshot;
         if invalidate {
             self.epoch += 1;
@@ -199,6 +212,12 @@ impl ProjectGit {
         }
         if changed {
             cx.notify();
+        }
+        if let Some(head) = head {
+            cx.emit(GitHeadChanged {
+                cwd: self.project.clone(),
+                head,
+            });
         }
     }
 

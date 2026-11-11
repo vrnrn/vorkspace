@@ -90,11 +90,12 @@ impl CheckoutCatalog {
 pub(super) struct Snapshot {
     pub(super) index: Arc<DiffIndex>,
     pub(super) statuses: StatusMap,
+    pub(super) local_head: Option<scm::LocalHead>,
     bytes: usize,
 }
 
 impl Snapshot {
-    fn new(index: DiffIndex, path: &str) -> Self {
+    fn new(index: DiffIndex, local_head: Option<scm::LocalHead>, path: &str) -> Self {
         let statuses = status_maps(&index, path);
         // Estimates include the shared index and both derived status maps.
         let bytes = index.files.capacity() * std::mem::size_of::<scm::ChangedFile>()
@@ -118,6 +119,7 @@ impl Snapshot {
         Self {
             statuses,
             index: Arc::new(index),
+            local_head,
             bytes,
         }
     }
@@ -150,6 +152,7 @@ impl Observation {
             index,
             versions,
             stamp,
+            local_head,
         }) = scm::DiffSnapshot::observe(cwd, known_stamp)?
         else {
             return Ok(None);
@@ -157,9 +160,9 @@ impl Observation {
         let snapshot = before
             .as_ref()
             .map(|read| &read.snapshot)
-            .filter(|known| *known.index == index)
+            .filter(|known| *known.index == index && known.local_head == local_head)
             .cloned()
-            .unwrap_or_else(|| Arc::new(Snapshot::new(index, path)));
+            .unwrap_or_else(|| Arc::new(Snapshot::new(index, local_head, path)));
         let versions = versions.map(|versions| {
             before
                 .and_then(|read| read.versions)
@@ -358,6 +361,7 @@ impl Checkout {
             });
         let history_changed = self.observation.as_ref().is_some_and(|before| {
             history_inputs_changed(&before.snapshot.index, &read.snapshot.index)
+                || before.snapshot.local_head != read.snapshot.local_head
         });
         self.observation = Some(read);
         if invalidate {

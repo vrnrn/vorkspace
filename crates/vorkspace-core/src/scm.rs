@@ -25,7 +25,7 @@ use command::{git_checked, git_output, git_run, git_stdout};
 pub(crate) use command::{git_cmd, git_output_capped};
 pub use review::{
     diff_files, editor_baseline, file_diff, stage_contents, CommitReview, DiffSnapshot, FileDiff,
-    WorktreeReview, MAX_TEXT_FILE_BYTES,
+    LocalHead, WorktreeReview, MAX_TEXT_FILE_BYTES,
 };
 pub use status::{CheckoutStamp, FileDiffVersion};
 
