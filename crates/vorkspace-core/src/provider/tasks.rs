@@ -137,6 +137,11 @@ impl Protocol {
         let Some(id) = text(&item["id"]) else {
             return true;
         };
+        self.codex_agent_item(item, id, events);
+        self.replay_codex_children(events);
+        true
+    }
+    fn codex_agent_item(&mut self, item: &Value, id: &str, events: &mut Vec<Event>) {
         let action = item["tool"].as_str().unwrap_or("");
         let mut ids: Vec<String> = ["agentThreadId", "agent_thread_id"]
             .iter()
@@ -221,6 +226,8 @@ impl Protocol {
                 }
             }
         }
+    }
+    fn replay_codex_children(&mut self, events: &mut Vec<Event>) {
         let pending = std::mem::take(&mut self.activities.pending);
         for frame in pending {
             let thread =
@@ -239,7 +246,6 @@ impl Protocol {
                 self.activities.pending.push(frame);
             }
         }
-        true
     }
     fn codex_child(&mut self, parent: &str, method: &str, params: &Value, events: &mut Vec<Event>) {
         if method == "thread/started" {
