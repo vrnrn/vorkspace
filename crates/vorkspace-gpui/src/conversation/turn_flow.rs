@@ -54,7 +54,7 @@ impl Conversation {
         }
         self.loaded = true;
         self.model = settings.model.clone();
-        self.settings = settings;
+        self.replace_settings(settings, cx);
         self.input
             .update(cx, |input, cx| input.set_text(prompt, cx));
         self.send(cx);
@@ -388,7 +388,7 @@ impl Conversation {
             cx.notify();
             return false;
         };
-        self.settings.usage_limit = None;
+        self.set_usage_limit(None, cx);
         self.attach_account(cx);
         let model_label = self.model_label();
         self.sync_tool_paths(cx);

@@ -37,7 +37,7 @@ impl Conversation {
             return;
         }
         self.model = settings.model.clone();
-        self.settings = settings;
+        self.replace_settings(settings, cx);
         self.attach_account(cx);
         self.loaded = true;
         self.status = "Ready".into();

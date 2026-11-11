@@ -257,7 +257,7 @@ impl Conversation {
             || (initial && settings.revision >= self.settings.revision);
         if configuration_changed {
             settings.turns = std::mem::take(&mut self.settings.turns);
-            self.settings = settings;
+            self.replace_settings(settings, cx);
             self.model = self.settings.model.clone();
         }
         let history_changed = history.is_some();

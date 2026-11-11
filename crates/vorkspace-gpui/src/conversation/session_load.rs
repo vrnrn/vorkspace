@@ -291,7 +291,7 @@ impl Conversation {
                         }
                         let bot = this.settings.bot.take();
                         let environment = std::mem::take(&mut this.settings.environment);
-                        this.settings = settings;
+                        this.replace_settings(settings, cx);
                         this.attach_account(cx);
                         this.settings.bot = bot;
                         this.settings.environment = environment;

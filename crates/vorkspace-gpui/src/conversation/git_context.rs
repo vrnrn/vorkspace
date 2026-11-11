@@ -30,7 +30,7 @@ impl Conversation {
         cx: &mut Context<Self>,
     ) {
         self.summary = summary;
-        self.settings = settings;
+        self.replace_settings(settings, cx);
         self.context = None;
         self.status = "Worktree deleted".into();
         self.refresh_git(cx);

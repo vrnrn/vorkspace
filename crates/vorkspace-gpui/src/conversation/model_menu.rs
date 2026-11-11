@@ -62,7 +62,7 @@ impl Conversation {
         if settings.model.is_some() {
             self.model = settings.model.clone();
         }
-        self.settings = settings;
+        self.replace_settings(settings, cx);
         cx.notify();
     }
     pub(super) fn save_settings(&mut self, cx: &mut Context<Self>) {
@@ -414,7 +414,7 @@ impl Conversation {
                 self.summary.title = format!("New {} session", picked.0.label());
             }
         }
-        self.settings = next;
+        self.replace_settings(next, cx);
         self.model = picked.1.clone();
         self.resolved_model = None;
         if let Some(context) = &mut self.context {

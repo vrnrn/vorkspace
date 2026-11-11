@@ -264,6 +264,7 @@ fn subscription_limits_persist_and_release_a_bot_only_once_when_armed(
     let view = cx.new(|cx| Conversation::new(summary, store.clone(), cx));
     cx.run_until_parked();
     view.update(cx, |v, cx| {
+        assert!(v.usage_watch.is_none());
         v.settings.bot = Some(vorkspace_core::agent::BotContext {
             bot: Default::default(),
             root: "/fixture".into(),
@@ -272,6 +273,7 @@ fn subscription_limits_persist_and_release_a_bot_only_once_when_armed(
         v.status = "Usage limit reached: Fixture subscription exhausted".into();
         v.detect_usage_limit(cx);
         assert!(v.settings.usage_limit.is_some());
+        assert!(v.usage_watch.is_some());
         assert!(v.follow_ups.state.paused);
     });
     cx.run_until_parked();
@@ -292,15 +294,22 @@ fn subscription_limits_persist_and_release_a_bot_only_once_when_armed(
         })
         .detach();
     });
-    view.update(cx, |v, cx| {
+    view.update(cx, |v, _| {
         v.settings.usage_limit.as_mut().unwrap().resets_at = Some(usage::now_ms() - 31_000);
-        v.tick_usage(cx);
+    });
+    cx.executor().advance_clock(Duration::from_secs(30));
+    cx.run_until_parked();
+    view.update(cx, |v, _| {
         assert!(v.settings.usage_limit.is_some());
         v.settings.usage_limit.as_mut().unwrap().resume_at_reset = true;
-        v.tick_usage(cx);
-        assert!(v.settings.usage_limit.is_none());
-        v.tick_usage(cx);
     });
+    cx.executor().advance_clock(Duration::from_secs(30));
+    cx.run_until_parked();
+    view.read_with(cx, |v, _| {
+        assert!(v.settings.usage_limit.is_none());
+        assert!(v.usage_watch.is_none());
+    });
+    cx.executor().advance_clock(Duration::from_secs(30));
     cx.run_until_parked();
     assert_eq!(resumed.get(), 1);
 }

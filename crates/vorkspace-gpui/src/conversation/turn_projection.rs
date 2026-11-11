@@ -286,7 +286,7 @@ impl TurnProjection {
             }
             this.preparing_worktree = false;
             if !stopping && let Some(limit) = settlement.usage_limit {
-                this.settings.usage_limit = Some(limit);
+                this.set_usage_limit(Some(limit), cx);
             }
             if !this.is_remote() {
                 this.detect_usage_limit(cx);

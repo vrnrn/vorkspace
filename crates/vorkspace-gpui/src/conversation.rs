@@ -261,8 +261,7 @@ pub(crate) struct Conversation {
     catalog: ModelRows,
     catalog_epoch: u64,
     account_switching: bool,
-    _usage_clock: gpui::Task<()>,
-    _account_usage: Option<Subscription>,
+    usage_watch: Option<accounts::UsageWatch>,
     approvals: std::collections::VecDeque<Approval>,
     approval_ui: approvals::State,
     questions: std::collections::VecDeque<(
@@ -500,23 +499,6 @@ impl Conversation {
                     .selected(Kind::from_id(&summary.provider), &summary.cwd)
             })
             .unwrap_or_default();
-        let usage_clock = cx.spawn(async move |this, cx| {
-            loop {
-                cx.background_executor()
-                    .timer(std::time::Duration::from_secs(30))
-                    .await;
-                if this.update(cx, |this, cx| this.tick_usage(cx)).is_err() {
-                    break;
-                }
-            }
-        });
-        let account_usage = crate::accounts::get(cx).map(|center| {
-            cx.observe(&center, |this, _, cx| {
-                if this.settings.usage_limit.is_some() {
-                    this.tick_usage(cx);
-                }
-            })
-        });
         let draft_state = composer_draft::State::new(store.clone(), summary.id);
         let draft_quit = cx.on_app_quit(|this, cx| {
             this.capture_composer(cx);
@@ -597,8 +579,7 @@ impl Conversation {
             catalog: Default::default(),
             catalog_epoch: 0,
             account_switching: false,
-            _usage_clock: usage_clock,
-            _account_usage: account_usage,
+            usage_watch: None,
             approvals: Default::default(),
             approval_ui: Default::default(),
             questions: Default::default(),
