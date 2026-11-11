@@ -118,7 +118,7 @@ fn accepted_queue_message_flushes_prior_tokens_and_its_receipt_atomically() {
     let from = transcript.begin("user");
     transcript.append("Next");
     pending
-        .accept(&store, id, from, &transcript, "queued", now)
+        .accept((&store, id), from, &transcript, "queued", now)
         .unwrap();
     let store = locked(&store).unwrap();
     assert_eq!(store.load(id).unwrap().rows, transcript.rows);

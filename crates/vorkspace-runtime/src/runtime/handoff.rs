@@ -5,14 +5,15 @@ use std::{path::Path, sync::mpsc};
 use vorkspace_core::agent::{AccessMode, Decision, Handoff, ProviderSwitch};
 
 pub(super) fn prepare(
-    session: i64,
+    history: TurnHistory<'_>,
     source: &ProviderSwitch,
     cwd: &str,
     user_request: &str,
-    rows: &[Row],
     root: Option<std::path::PathBuf>,
     user_cancel: Arc<AtomicBool>,
 ) -> Handoff {
+    let session = history.summary.id;
+    let rows = history.earlier;
     let kind = Kind::from_id(&source.from);
     let cwd = if source.cwd.is_empty() {
         cwd

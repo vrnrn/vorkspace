@@ -28,13 +28,13 @@ impl Submissions {
     }
     fn reserve(
         &self,
-        user_turn: &str,
-        text: &str,
+        message: (&str, &str),
         prepared: Option<&str>,
         attachments: &[std::path::PathBuf],
         settings: Option<&Settings>,
         history: Option<&NativeHistoryRequest>,
     ) -> Result<String, String> {
+        let (user_turn, text) = message;
         let attempt = uuid();
         let metadata: Vec<_> = attachments.iter().map(|path| serde_json::json!({
             "id":path.to_string_lossy(), "name":path.file_name().unwrap_or_default().to_string_lossy(),
@@ -74,8 +74,7 @@ impl Submissions {
             .or_else(|| settings.bot_message_id.clone())
             .unwrap_or_else(uuid);
         self.initial = Some(self.reserve(
-            &user_turn,
-            text,
+            (&user_turn, text),
             settings.prepared_prompt.as_deref(),
             &settings.attachments,
             Some(settings),
@@ -125,8 +124,7 @@ impl Submissions {
         message: &vorkspace_core::follow_up::Message,
     ) -> Result<(), String> {
         let attempt = self.reserve(
-            &message.id,
-            &message.text,
+            (&message.id, &message.text),
             message.prepared_prompt.as_deref(),
             &message.attachments,
             None,

@@ -2,9 +2,7 @@
 //! bounded cadence. Delivery receipts and settled turns always flush immediately.
 use super::*;
 use std::time::Instant;
-
 const SHARED_SAVE_INTERVAL: Duration = Duration::from_millis(250);
-
 pub(super) struct PendingSave {
     from: Option<usize>,
     context_dirty: bool,
@@ -13,13 +11,11 @@ pub(super) struct PendingSave {
     pub(super) writer: Option<vorkspace_core::store::TurnHistory>,
     pub(super) overlap: bool,
 }
-
 struct ContextOwner {
     provider: String,
     account: String,
     thread: Option<String>,
 }
-
 impl PendingSave {
     pub(super) fn new(now: Instant) -> Self {
         Self {
@@ -31,7 +27,6 @@ impl PendingSave {
             overlap: false,
         }
     }
-
     pub(super) fn own_context(&mut self, provider: &str, account: &str, thread: Option<&str>) {
         self.context_owner = Some(ContextOwner {
             provider: provider.into(),
@@ -39,26 +34,21 @@ impl PendingSave {
             thread: thread.map(str::to_owned),
         });
     }
-
     pub(super) fn own_context_thread(&mut self, thread: Option<&str>) {
         if let Some(owner) = &mut self.context_owner {
             owner.thread = thread.map(str::to_owned);
         }
     }
-
     pub(super) fn changed(&mut self, row: usize) {
         self.from = Some(self.from.map_or(row, |old| old.min(row)));
     }
-
     pub(super) fn context_changed(&mut self) {
         self.context_dirty = true;
     }
-
     pub(super) fn due(&self, boundary: bool, now: Instant) -> bool {
         (self.from.is_some() || self.context_dirty)
             && (boundary || now.saturating_duration_since(self.last_flush) >= SHARED_SAVE_INTERVAL)
     }
-
     pub(super) fn flush(
         &mut self,
         store: &Database,
@@ -93,7 +83,6 @@ impl PendingSave {
         self.last_flush = now;
         Ok(())
     }
-
     pub(super) fn write(
         &mut self,
         store: &mut Store,
@@ -111,7 +100,6 @@ impl PendingSave {
         }
         Ok(())
     }
-
     pub(super) fn receipt(
         &mut self,
         store: &Database,
@@ -128,16 +116,15 @@ impl PendingSave {
         }
         Ok(())
     }
-
     pub(super) fn accept(
         &mut self,
-        store: &Database,
-        session: i64,
+        target: (&Database, i64),
         from: usize,
         transcript: &Transcript,
         message: &str,
         now: Instant,
     ) -> Result<(), String> {
+        let (store, session) = target;
         let from = self.from.map_or(from, |old| old.min(from));
         self.write(
             &mut *locked(store)?,

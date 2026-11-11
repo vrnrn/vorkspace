@@ -399,8 +399,7 @@ for line in sys.stdin:
     let other = std::cell::RefCell::new(Store::open_vorkspace(&root.join("sessions.db")).unwrap());
     let pending = std::cell::RefCell::new(None);
     let result = manual_compaction::run_using(
-        summary.clone(),
-        settings.clone(),
+        (summary.clone(), settings.clone()),
         store.clone(),
         cancel,
         |started| {
@@ -495,8 +494,7 @@ for line in sys.stdin:
     // child must be gone while this attempt still owns its durable claim.
     std::fs::write(root.join("cancel-mode"), "").unwrap();
     let stopped = manual_compaction::run_using(
-        summary,
-        settings,
+        (summary, settings),
         store.clone(),
         Arc::new(AtomicBool::new(false)),
         |_| {},
@@ -573,8 +571,7 @@ fn native_cursor_advance_blocks_stale_bot_and_compaction_admission() {
             .is_err()
     );
     let rejected = manual_compaction::run_using(
-        summary.clone(),
-        settings,
+        (summary.clone(), settings),
         store.clone(),
         cancel,
         |_| panic!("An unfinished external turn cannot start compaction"),
@@ -599,8 +596,7 @@ fn manual_compaction_does_not_publish_usage_after_its_binding_changes() {
         };
         let id = summary.id;
         let outcome = manual_compaction::run_using(
-            summary.clone(),
-            settings,
+            (summary.clone(), settings),
             store.clone(),
             Arc::new(AtomicBool::new(false)),
             |_| {},
