@@ -279,164 +279,11 @@ impl Protocol {
         v: Value,
         stdin: &mut impl Write,
     ) -> Result<Vec<Event>, String> {
-        let mut events = Vec::new();
         let kind = v["type"].as_str().unwrap_or("");
         if kind == "response" {
-            let wire = v["id"].as_str().unwrap_or("");
-            if self.request.kind == Kind::Omp
-                && v["command"] == "prompt"
-                && wire == self.pi.prompt_id
-                && v["success"] == false
-            {
-                return Err(v["error"].as_str().unwrap_or("OMP command failed").into());
-            }
-            let id = match self.pi.pending.remove(wire) {
-                Some(id) => id,
-                None if self.pi.generation == 0 => wire,
-                None => return Ok(events),
-            };
-            // A timed-out optional control can answer after the prompt began.
-            // Ignore that stale response rather than submit the prompt twice.
-            let tracked = self.pi.deadlines.remove(id).is_some();
-            if !tracked && matches!(id, "native-thinking" | "native-fast") {
-                return Ok(events);
-            }
-            if v["success"] == false {
-                return self.pi_response_failure(
-                    id,
-                    v["error"].as_str().unwrap_or("RPC request failed"),
-                    stdin,
-                );
-            }
-            match id {
-                "native-models" => {
-                    if self.request.kind == Kind::Omp {
-                        self.catalog_result = Some(v["data"].clone());
-                        self.done = true;
-                    } else {
-                        let data = v["data"].get("models").unwrap_or(&v["data"]);
-                        let signature = data.to_string();
-                        if signature != self.pi.catalog_signature {
-                            self.pi.catalog_signature = signature;
-                            self.pi.catalog_changed = Some(Instant::now());
-                        }
-                        for model in data.as_array().into_iter().flatten() {
-                            if let (Some(provider), Some(id)) =
-                                (model["provider"].as_str(), model["id"].as_str())
-                            {
-                                self.pi
-                                    .catalog_models
-                                    .insert(format!("{provider}/{id}"), model.clone());
-                            }
-                        }
-                        if self
-                            .pi
-                            .catalog_started
-                            .is_some_and(|started| started.elapsed() >= Duration::from_secs(5))
-                            && self
-                                .pi
-                                .catalog_changed
-                                .is_some_and(|changed| changed.elapsed() >= Duration::from_secs(1))
-                        {
-                            self.pi_catalog_finish();
-                        } else {
-                            self.pi.catalog_poll =
-                                Some(Instant::now() + Duration::from_millis(500));
-                        }
-                    }
-                }
-                "native-commands" => {
-                    if self.command_probe {
-                        if !v["data"]["commands"].is_array() {
-                            return Err(
-                                "Provider command catalog returned no commands array".into()
-                            );
-                        }
-                        self.done = true;
-                    }
-                    events.push(Event::Commands(super::commands::parse_commands(
-                        self.request.kind,
-                        &v["data"]["commands"],
-                    )));
-                }
-                "native-compact" => {
-                    events.push(Event::Context {
-                        used: v["data"]["estimatedTokensAfter"].as_u64(),
-                        window: self.pi.window,
-                    });
-                    events.push(Event::Done);
-                    self.done = true;
-                }
-                "native-state" => {
-                    if !self.compact && !self.request.settings.text_only {
-                        self.pi_send(
-                            "native-commands", json!({"type":if self.request.kind == Kind::Omp {"get_available_commands"} else {"get_commands"}}), 15, stdin,
-                        )?;
-                    }
-                    if let Some(id) = v["data"]["sessionId"]
-                        .as_str()
-                        .or_else(|| v["data"]["session_id"].as_str())
-                    {
-                        events.push(Event::SessionId(id.into()));
-                    }
-                    let model = &v["data"]["model"];
-                    self.pi.window = model["contextWindow"].as_u64();
-                    if let (Some(provider), Some(id)) =
-                        (model["provider"].as_str(), model["id"].as_str())
-                    {
-                        events.push(Event::Model(format!("{provider}/{id}")));
-                    }
-                    let selected = self
-                        .request
-                        .model
-                        .as_deref()
-                        .and_then(|model| model.split_once('/'));
-                    if self.request.kind == Kind::Pi
-                        && selected.is_some_and(|(provider, id)| {
-                            !provider.is_empty()
-                                && !id.is_empty()
-                                && (model["provider"].as_str() != Some(provider)
-                                    || model["id"].as_str() != Some(id))
-                        })
-                    {
-                        let (provider, id) = selected.unwrap();
-                        self.pi_send(
-                            "native-model",
-                            json!({"type":"set_model","provider":provider,"modelId":id}),
-                            15,
-                            stdin,
-                        )?;
-                    } else {
-                        self.pi_thinking(stdin)?;
-                    }
-                }
-                "native-model" => {
-                    self.pi.window = v["data"]["contextWindow"].as_u64().or(self.pi.window);
-                    if let Some(model) = &self.request.model {
-                        events.push(Event::Model(model.clone()));
-                    }
-                    self.pi_thinking(stdin)?;
-                }
-                "native-thinking" => self.pi_fast(stdin)?,
-                "native-fast" => self.pi_prompt(stdin)?,
-                "native-stats" => {
-                    let usage = &v["data"]["contextUsage"];
-                    events.push(Event::Context {
-                        used: usage["tokens"].as_u64(),
-                        window: usage["contextWindow"].as_u64().or(self.pi.window),
-                    });
-                    events.extend(self.pi_finish()?);
-                }
-                "native-abort" => events.extend(self.pi_finish()?),
-                "native-prompt"
-                    if self.request.kind == Kind::Omp && v["data"]["agentInvoked"] == false =>
-                {
-                    events.extend(self.pi_finish()?)
-                }
-                _ => {}
-            }
-            return Ok(events);
+            return self.pi_response(&v, stdin);
         }
+        let mut events = Vec::new();
         if self.probe {
             return Ok(events);
         }
@@ -444,206 +291,17 @@ impl Protocol {
             "message_start" | "message_end"
                 if self.request.kind == Kind::Omp && v["message"]["role"] == "custom" =>
             {
-                if kind == "message_start" && v["message"]["display"] == true {
-                    let message = &v["message"];
-                    let custom_type = message["customType"]
-                        .as_str()
-                        .filter(|value| !value.trim().is_empty())
-                        .unwrap_or("custom");
-                    let mut text = custom_message_text(&message["content"]);
-                    let mut severity = None;
-                    if custom_type == "advisor" {
-                        let mut notes = Vec::new();
-                        for note in message["details"]["notes"].as_array().into_iter().flatten() {
-                            let Some(body) =
-                                note["note"].as_str().filter(|body| !body.trim().is_empty())
-                            else {
-                                continue;
-                            };
-                            notes.push(body);
-                            match note["severity"].as_str() {
-                                Some("blocker") => severity = Some("blocker".into()),
-                                Some("concern") if severity.as_deref() != Some("blocker") => {
-                                    severity = Some("concern".into())
-                                }
-                                Some("nit") if severity.is_none() => severity = Some("nit".into()),
-                                _ => {}
-                            }
-                        }
-                        if !notes.is_empty() {
-                            text = notes.join("\n\n");
-                        }
-                    }
-                    events.push(Event::Interjection {
-                        text,
-                        custom_type: custom_type.into(),
-                        severity,
-                    });
-                    self.text_key = None;
-                }
+                self.pi_custom_message(&v, kind, &mut events)
             }
             "message_start" if v["message"]["role"] == "assistant" => self.pi.message += 1,
-            "message_update" => {
-                let event = &v["assistantMessageEvent"];
-                let delta = event["delta"]
-                    .as_str()
-                    .or_else(|| event["delta"]["text"].as_str())
-                    .unwrap_or("");
-                match event["type"].as_str() {
-                    Some("text_delta") => self.text(
-                        &format!("pi-{}", self.pi.message),
-                        delta,
-                        false,
-                        &mut events,
-                    ),
-                    Some("thinking_delta") => events.push(Event::Reasoning(delta.into())),
-                    _ => {}
-                }
-            }
+            "message_update" => self.pi_message_delta(&v, &mut events),
             "message_end" if v["message"]["role"] == "assistant" => {
-                if v["message"]["stopReason"] == "error" {
-                    self.pi.error = Some(
-                        v["message"]["errorMessage"]
-                            .as_str()
-                            .filter(|s| !s.is_empty())
-                            .unwrap_or("Provider turn failed")
-                            .into(),
-                    );
-                }
-                let text = v["message"]["content"]
-                    .as_array()
-                    .into_iter()
-                    .flatten()
-                    .filter(|c| c["type"] == "text")
-                    .filter_map(|c| c["text"].as_str())
-                    .collect::<String>();
-                self.text(&format!("pi-{}", self.pi.message), &text, true, &mut events);
-                let usage = &v["message"]["usage"];
-                let input = usage["input"].as_u64().unwrap_or(0);
-                let output = usage["output"].as_u64().unwrap_or(0);
-                let read = usage["cacheRead"].as_u64().unwrap_or(0);
-                let write = usage["cacheWrite"].as_u64().unwrap_or(0);
-                self.metrics.input_tokens += input;
-                self.metrics.output_tokens += output;
-                self.metrics.cache_read_tokens += read;
-                self.metrics.cache_write_tokens += write;
-                let total = self.metrics.input_tokens
-                    + self.metrics.cache_read_tokens
-                    + self.metrics.cache_write_tokens;
-                if total > 0
-                    && (usage.get("cacheRead").is_some() || usage.get("cacheWrite").is_some())
-                {
-                    self.metrics.cache_hit_percent =
-                        Some(self.metrics.cache_read_tokens as f64 / total as f64 * 100.);
-                }
-                if self.metrics.reported() {
-                    events.push(Event::Metrics(self.metrics));
-                }
-                events.push(Event::Context {
-                    used: Some(input + output + read + write),
-                    window: self.pi.window,
-                });
+                self.pi_assistant_end(&v, &mut events)
             }
             "tool_execution_start" | "tool_execution_update" | "tool_execution_end" => {
-                let Some(id) = v["toolCallId"].as_str() else {
-                    return Ok(events);
-                };
-                let tool = self
-                    .tools
-                    .entry(id.into())
-                    .or_insert_with(|| ToolCall::new(id, v["toolName"].as_str().unwrap_or("Tool")));
-                // OMP can emit an update after a terminal tool event.
-                if kind == "tool_execution_update" && tool.state != ToolState::Running {
-                    return Ok(events);
-                }
-                if let Some(input) = v.get("args").or_else(|| v.get("arguments")) {
-                    let input = input
-                        .as_str()
-                        .and_then(|s| serde_json::from_str::<Value>(s).ok())
-                        .unwrap_or_else(|| input.clone());
-                    let mut previous: Value =
-                        serde_json::from_str(&tool.input).unwrap_or_else(|_| json!({}));
-                    if let (Some(previous), Some(next)) =
-                        (previous.as_object_mut(), input.as_object())
-                    {
-                        previous.extend(next.clone());
-                    }
-                    tool.input = serde_json::to_string_pretty(&previous).unwrap_or_default();
-                }
-                let output = acp::content_text(
-                    &v[if kind == "tool_execution_end" {
-                        "result"
-                    } else {
-                        "partialResult"
-                    }]["content"],
-                );
-                if !output.is_empty() {
-                    tool.output = output;
-                }
-                tool.bound_output();
-                if kind == "tool_execution_end" {
-                    tool.state = if v["isCancelled"] == true || v["isCanceled"] == true {
-                        ToolState::Cancelled
-                    } else if v["isError"] == true {
-                        ToolState::Failed
-                    } else {
-                        ToolState::Completed
-                    };
-                }
-                events.push(Event::Tool(tool.clone()));
+                self.pi_tool_frame(&v, kind, &mut events)
             }
-            "extension_ui_request" => {
-                let id = v["id"].to_string();
-                let method = v["method"].as_str().unwrap_or("");
-                if self.request.kind == Kind::Omp && method == "cancel" {
-                    if self.questions.contains_key(&id) {
-                        self.respond(
-                            Control {
-                                id: id.clone(),
-                                decision: Decision::Deny,
-                            },
-                            stdin,
-                        )?;
-                        events.push(Event::QuestionResolved(id));
-                    }
-                } else if method == "confirm" {
-                    self.approvals
-                        .insert(id.clone(), (v["id"].clone(), "pi".into(), v.clone()));
-                    if self.pi.cancelling {
-                        self.respond(
-                            Control {
-                                id,
-                                decision: Decision::Deny,
-                            },
-                            stdin,
-                        )?;
-                        return Ok(events);
-                    }
-                    events.push(Event::Approval(Approval {
-                        id,
-                        title: v["title"]
-                            .as_str()
-                            .unwrap_or("Provider confirmation")
-                            .into(),
-                        detail: v["message"].as_str().unwrap_or("").into(),
-                        can_remember: false,
-                    }));
-                } else if matches!(method, "select" | "input" | "editor") {
-                    self.question(v["id"].clone(), "pi", v.clone(), &mut events, stdin)?;
-                    if self.pi.cancelling {
-                        self.respond(
-                            Control {
-                                id,
-                                decision: Decision::Deny,
-                            },
-                            stdin,
-                        )?;
-                        events.clear();
-                    }
-                } else if let Some(text) = v["message"].as_str().or_else(|| v["title"].as_str()) {
-                    events.push(Event::Status(text.into()));
-                }
-            }
+            "extension_ui_request" => self.pi_extension(&v, &mut events, stdin)?,
             "auto_retry_start" => {
                 self.pi.retrying = true;
                 self.pi.error = None;
@@ -654,17 +312,7 @@ impl Protocol {
                 self.pi.compacting = true;
                 self.compaction(None, ToolState::Running, &mut events);
             }
-            "compaction_end" => {
-                self.pi.compacting = false;
-                let state = if v["aborted"] == true {
-                    ToolState::Cancelled
-                } else if v["error"].is_string() || v["isError"] == true {
-                    ToolState::Failed
-                } else {
-                    ToolState::Completed
-                };
-                self.compaction(None, state, &mut events);
-            }
+            "compaction_end" => self.pi_compaction_end(&v, &mut events),
             "agent_end" if v["willRetry"] == true => self.pi.error = None,
             "agent_settled" if !self.pi.finishing => self.pi_settle(stdin)?,
             "agent_end"
@@ -697,29 +345,7 @@ impl Protocol {
                 }
             }
             "config_update" if self.request.kind == Kind::Omp => {
-                let mut model = None;
-                if let (Some(provider), Some(id)) =
-                    (v["model"]["provider"].as_str(), v["model"]["id"].as_str())
-                {
-                    model = Some(format!("{provider}/{id}"));
-                }
-                self.pi.window = v["model"]["contextWindow"].as_u64().or(self.pi.window);
-                let mut model_settings = HashMap::new();
-                if let Some(thinking) = v["thinkingLevel"].as_str().filter(|level| {
-                    matches!(
-                        *level,
-                        "off" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max"
-                    )
-                }) {
-                    model_settings.insert("thinking".into(), thinking.into());
-                }
-                if let Some(fast) = v["fastModeEnabled"].as_bool() {
-                    model_settings.insert("fast".into(), fast.to_string());
-                }
-                events.push(Event::ConfigChanged {
-                    model,
-                    model_settings,
-                });
+                self.pi_configuration(&v, &mut events)
             }
             "available_commands_update" if self.request.kind == Kind::Omp => {
                 if v["commands"].is_array() {
@@ -740,6 +366,412 @@ impl Protocol {
             _ => {}
         }
         Ok(events)
+    }
+
+    fn pi_response(&mut self, v: &Value, stdin: &mut impl Write) -> Result<Vec<Event>, String> {
+        let mut events = Vec::new();
+        let wire = v["id"].as_str().unwrap_or("");
+        if self.request.kind == Kind::Omp
+            && v["command"] == "prompt"
+            && wire == self.pi.prompt_id
+            && v["success"] == false
+        {
+            return Err(v["error"].as_str().unwrap_or("OMP command failed").into());
+        }
+        let id = match self.pi.pending.remove(wire) {
+            Some(id) => id,
+            None if self.pi.generation == 0 => wire,
+            None => return Ok(events),
+        };
+        // A timed-out optional control can answer after the prompt began.
+        // Ignore that stale response rather than submit the prompt twice.
+        let tracked = self.pi.deadlines.remove(id).is_some();
+        if !tracked && matches!(id, "native-thinking" | "native-fast") {
+            return Ok(events);
+        }
+        if v["success"] == false {
+            return self.pi_response_failure(
+                id,
+                v["error"].as_str().unwrap_or("RPC request failed"),
+                stdin,
+            );
+        }
+        match id {
+            "native-models" => self.pi_models_response(v),
+            "native-commands" => {
+                if self.command_probe {
+                    if !v["data"]["commands"].is_array() {
+                        return Err("Provider command catalog returned no commands array".into());
+                    }
+                    self.done = true;
+                }
+                events.push(Event::Commands(super::commands::parse_commands(
+                    self.request.kind,
+                    &v["data"]["commands"],
+                )));
+            }
+            "native-compact" => {
+                events.push(Event::Context {
+                    used: v["data"]["estimatedTokensAfter"].as_u64(),
+                    window: self.pi.window,
+                });
+                events.push(Event::Done);
+                self.done = true;
+            }
+            "native-state" => self.pi_state_response(v, &mut events, stdin)?,
+            "native-model" => {
+                self.pi.window = v["data"]["contextWindow"].as_u64().or(self.pi.window);
+                if let Some(model) = &self.request.model {
+                    events.push(Event::Model(model.clone()));
+                }
+                self.pi_thinking(stdin)?;
+            }
+            "native-thinking" => self.pi_fast(stdin)?,
+            "native-fast" => self.pi_prompt(stdin)?,
+            "native-stats" => {
+                let usage = &v["data"]["contextUsage"];
+                events.push(Event::Context {
+                    used: usage["tokens"].as_u64(),
+                    window: usage["contextWindow"].as_u64().or(self.pi.window),
+                });
+                events.extend(self.pi_finish()?);
+            }
+            "native-abort" => events.extend(self.pi_finish()?),
+            "native-prompt"
+                if self.request.kind == Kind::Omp && v["data"]["agentInvoked"] == false =>
+            {
+                events.extend(self.pi_finish()?)
+            }
+            _ => {}
+        }
+        Ok(events)
+    }
+
+    fn pi_models_response(&mut self, v: &Value) {
+        if self.request.kind == Kind::Omp {
+            self.catalog_result = Some(v["data"].clone());
+            self.done = true;
+        } else {
+            let data = v["data"].get("models").unwrap_or(&v["data"]);
+            let signature = data.to_string();
+            if signature != self.pi.catalog_signature {
+                self.pi.catalog_signature = signature;
+                self.pi.catalog_changed = Some(Instant::now());
+            }
+            for model in data.as_array().into_iter().flatten() {
+                if let (Some(provider), Some(id)) =
+                    (model["provider"].as_str(), model["id"].as_str())
+                {
+                    self.pi
+                        .catalog_models
+                        .insert(format!("{provider}/{id}"), model.clone());
+                }
+            }
+            if self
+                .pi
+                .catalog_started
+                .is_some_and(|started| started.elapsed() >= Duration::from_secs(5))
+                && self
+                    .pi
+                    .catalog_changed
+                    .is_some_and(|changed| changed.elapsed() >= Duration::from_secs(1))
+            {
+                self.pi_catalog_finish();
+            } else {
+                self.pi.catalog_poll = Some(Instant::now() + Duration::from_millis(500));
+            }
+        }
+    }
+
+    fn pi_state_response(
+        &mut self,
+        v: &Value,
+        events: &mut Vec<Event>,
+        stdin: &mut impl Write,
+    ) -> Result<(), String> {
+        if !self.compact && !self.request.settings.text_only {
+            self.pi_send(
+                                    "native-commands", json!({"type":if self.request.kind == Kind::Omp {"get_available_commands"} else {"get_commands"}}), 15, stdin,
+                                )?;
+        }
+        if let Some(id) = v["data"]["sessionId"]
+            .as_str()
+            .or_else(|| v["data"]["session_id"].as_str())
+        {
+            events.push(Event::SessionId(id.into()));
+        }
+        let model = &v["data"]["model"];
+        self.pi.window = model["contextWindow"].as_u64();
+        if let (Some(provider), Some(id)) = (model["provider"].as_str(), model["id"].as_str()) {
+            events.push(Event::Model(format!("{provider}/{id}")));
+        }
+        let selected = self
+            .request
+            .model
+            .as_deref()
+            .and_then(|model| model.split_once('/'));
+        if self.request.kind == Kind::Pi
+            && selected.is_some_and(|(provider, id)| {
+                !provider.is_empty()
+                    && !id.is_empty()
+                    && (model["provider"].as_str() != Some(provider)
+                        || model["id"].as_str() != Some(id))
+            })
+        {
+            let (provider, id) = selected.unwrap();
+            self.pi_send(
+                "native-model",
+                json!({"type":"set_model","provider":provider,"modelId":id}),
+                15,
+                stdin,
+            )?;
+        } else {
+            self.pi_thinking(stdin)?;
+        }
+
+        Ok(())
+    }
+
+    fn pi_custom_message(&mut self, v: &Value, kind: &str, events: &mut Vec<Event>) {
+        if kind == "message_start" && v["message"]["display"] == true {
+            let message = &v["message"];
+            let custom_type = message["customType"]
+                .as_str()
+                .filter(|value| !value.trim().is_empty())
+                .unwrap_or("custom");
+            let mut text = custom_message_text(&message["content"]);
+            let mut severity = None;
+            if custom_type == "advisor" {
+                let mut notes = Vec::new();
+                for note in message["details"]["notes"].as_array().into_iter().flatten() {
+                    let Some(body) = note["note"].as_str().filter(|body| !body.trim().is_empty())
+                    else {
+                        continue;
+                    };
+                    notes.push(body);
+                    match note["severity"].as_str() {
+                        Some("blocker") => severity = Some("blocker".into()),
+                        Some("concern") if severity.as_deref() != Some("blocker") => {
+                            severity = Some("concern".into())
+                        }
+                        Some("nit") if severity.is_none() => severity = Some("nit".into()),
+                        _ => {}
+                    }
+                }
+                if !notes.is_empty() {
+                    text = notes.join("\n\n");
+                }
+            }
+            events.push(Event::Interjection {
+                text,
+                custom_type: custom_type.into(),
+                severity,
+            });
+            self.text_key = None;
+        }
+    }
+
+    fn pi_message_delta(&mut self, v: &Value, events: &mut Vec<Event>) {
+        let event = &v["assistantMessageEvent"];
+        let delta = event["delta"]
+            .as_str()
+            .or_else(|| event["delta"]["text"].as_str())
+            .unwrap_or("");
+        match event["type"].as_str() {
+            Some("text_delta") => {
+                self.text(&format!("pi-{}", self.pi.message), delta, false, events)
+            }
+            Some("thinking_delta") => events.push(Event::Reasoning(delta.into())),
+            _ => {}
+        }
+    }
+
+    fn pi_assistant_end(&mut self, v: &Value, events: &mut Vec<Event>) {
+        if v["message"]["stopReason"] == "error" {
+            self.pi.error = Some(
+                v["message"]["errorMessage"]
+                    .as_str()
+                    .filter(|s| !s.is_empty())
+                    .unwrap_or("Provider turn failed")
+                    .into(),
+            );
+        }
+        let text = v["message"]["content"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter(|c| c["type"] == "text")
+            .filter_map(|c| c["text"].as_str())
+            .collect::<String>();
+        self.text(&format!("pi-{}", self.pi.message), &text, true, events);
+        let usage = &v["message"]["usage"];
+        let input = usage["input"].as_u64().unwrap_or(0);
+        let output = usage["output"].as_u64().unwrap_or(0);
+        let read = usage["cacheRead"].as_u64().unwrap_or(0);
+        let write = usage["cacheWrite"].as_u64().unwrap_or(0);
+        self.metrics.input_tokens += input;
+        self.metrics.output_tokens += output;
+        self.metrics.cache_read_tokens += read;
+        self.metrics.cache_write_tokens += write;
+        let total = self.metrics.input_tokens
+            + self.metrics.cache_read_tokens
+            + self.metrics.cache_write_tokens;
+        if total > 0 && (usage.get("cacheRead").is_some() || usage.get("cacheWrite").is_some()) {
+            self.metrics.cache_hit_percent =
+                Some(self.metrics.cache_read_tokens as f64 / total as f64 * 100.);
+        }
+        if self.metrics.reported() {
+            events.push(Event::Metrics(self.metrics));
+        }
+        events.push(Event::Context {
+            used: Some(input + output + read + write),
+            window: self.pi.window,
+        });
+    }
+
+    fn pi_tool_frame(&mut self, v: &Value, kind: &str, events: &mut Vec<Event>) {
+        let Some(id) = v["toolCallId"].as_str() else {
+            return;
+        };
+        let tool = self
+            .tools
+            .entry(id.into())
+            .or_insert_with(|| ToolCall::new(id, v["toolName"].as_str().unwrap_or("Tool")));
+        // OMP can emit an update after a terminal tool event.
+        if kind == "tool_execution_update" && tool.state != ToolState::Running {
+            return;
+        }
+        if let Some(input) = v.get("args").or_else(|| v.get("arguments")) {
+            let input = input
+                .as_str()
+                .and_then(|s| serde_json::from_str::<Value>(s).ok())
+                .unwrap_or_else(|| input.clone());
+            let mut previous: Value =
+                serde_json::from_str(&tool.input).unwrap_or_else(|_| json!({}));
+            if let (Some(previous), Some(next)) = (previous.as_object_mut(), input.as_object()) {
+                previous.extend(next.clone());
+            }
+            tool.input = serde_json::to_string_pretty(&previous).unwrap_or_default();
+        }
+        let output = acp::content_text(
+            &v[if kind == "tool_execution_end" {
+                "result"
+            } else {
+                "partialResult"
+            }]["content"],
+        );
+        if !output.is_empty() {
+            tool.output = output;
+        }
+        tool.bound_output();
+        if kind == "tool_execution_end" {
+            tool.state = if v["isCancelled"] == true || v["isCanceled"] == true {
+                ToolState::Cancelled
+            } else if v["isError"] == true {
+                ToolState::Failed
+            } else {
+                ToolState::Completed
+            };
+        }
+        events.push(Event::Tool(tool.clone()));
+    }
+
+    fn pi_extension(
+        &mut self,
+        v: &Value,
+        events: &mut Vec<Event>,
+        stdin: &mut impl Write,
+    ) -> Result<(), String> {
+        let id = v["id"].to_string();
+        let method = v["method"].as_str().unwrap_or("");
+        if self.request.kind == Kind::Omp && method == "cancel" {
+            if self.questions.contains_key(&id) {
+                self.respond(
+                    Control {
+                        id: id.clone(),
+                        decision: Decision::Deny,
+                    },
+                    stdin,
+                )?;
+                events.push(Event::QuestionResolved(id));
+            }
+        } else if method == "confirm" {
+            self.approvals
+                .insert(id.clone(), (v["id"].clone(), "pi".into(), v.clone()));
+            if self.pi.cancelling {
+                self.respond(
+                    Control {
+                        id,
+                        decision: Decision::Deny,
+                    },
+                    stdin,
+                )?;
+                return Ok(());
+            }
+            events.push(Event::Approval(Approval {
+                id,
+                title: v["title"]
+                    .as_str()
+                    .unwrap_or("Provider confirmation")
+                    .into(),
+                detail: v["message"].as_str().unwrap_or("").into(),
+                can_remember: false,
+            }));
+        } else if matches!(method, "select" | "input" | "editor") {
+            self.question(v["id"].clone(), "pi", v.clone(), events, stdin)?;
+            if self.pi.cancelling {
+                self.respond(
+                    Control {
+                        id,
+                        decision: Decision::Deny,
+                    },
+                    stdin,
+                )?;
+                events.clear();
+            }
+        } else if let Some(text) = v["message"].as_str().or_else(|| v["title"].as_str()) {
+            events.push(Event::Status(text.into()));
+        }
+
+        Ok(())
+    }
+
+    fn pi_compaction_end(&mut self, v: &Value, events: &mut Vec<Event>) {
+        self.pi.compacting = false;
+        let state = if v["aborted"] == true {
+            ToolState::Cancelled
+        } else if v["error"].is_string() || v["isError"] == true {
+            ToolState::Failed
+        } else {
+            ToolState::Completed
+        };
+        self.compaction(None, state, events);
+    }
+
+    fn pi_configuration(&mut self, v: &Value, events: &mut Vec<Event>) {
+        let mut model = None;
+        if let (Some(provider), Some(id)) =
+            (v["model"]["provider"].as_str(), v["model"]["id"].as_str())
+        {
+            model = Some(format!("{provider}/{id}"));
+        }
+        self.pi.window = v["model"]["contextWindow"].as_u64().or(self.pi.window);
+        let mut model_settings = HashMap::new();
+        if let Some(thinking) = v["thinkingLevel"].as_str().filter(|level| {
+            matches!(
+                *level,
+                "off" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max"
+            )
+        }) {
+            model_settings.insert("thinking".into(), thinking.into());
+        }
+        if let Some(fast) = v["fastModeEnabled"].as_bool() {
+            model_settings.insert("fast".into(), fast.to_string());
+        }
+        events.push(Event::ConfigChanged {
+            model,
+            model_settings,
+        });
     }
 }
 
