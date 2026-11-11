@@ -125,15 +125,14 @@ impl PendingSave {
         at: usize,
         info: vorkspace_core::agent::TurnInfo,
     ) -> Result<(), String> {
-        if let Some(writer) = self.writer.as_mut() {
-            self.overlap = !locked(store)?.save_turn_info(session, at, info, writer)?;
-            if self.overlap {
-                return Err("The saved conversation changed during this turn".into());
-            }
-            Ok(())
-        } else {
-            save_turn_receipt(store, session, at, info)
+        if !self.overlap {
+            self.overlap =
+                !locked(store)?.save_turn_info(session, at, info, self.writer.as_mut())?;
         }
+        if self.overlap {
+            return Err("The saved conversation changed during this turn".into());
+        }
+        Ok(())
     }
 
     pub(super) fn accept(
@@ -157,20 +156,6 @@ impl PendingSave {
         self.last_flush = now;
         Ok(())
     }
-}
-
-pub(super) fn save_turn_receipt(
-    store: &Database,
-    session: i64,
-    turn: usize,
-    info: vorkspace_core::agent::TurnInfo,
-) -> Result<(), String> {
-    let store = locked(store)?;
-    // The picker/composer may have changed during the run. Update only its
-    // immutable turn receipts, using the latest settings revision.
-    let mut settings = store.agent_settings(session)?.unwrap_or_default();
-    settings.turns.insert(turn, info);
-    store.save_agent_settings(session, &settings)
 }
 
 #[cfg(test)]

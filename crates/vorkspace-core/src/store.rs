@@ -619,7 +619,21 @@ impl Store {
         if self.shared.is_some() && id >= 0 && self.remote_session(id)?.is_none() {
             return self.shared_save_agent_preferences(id, preferences);
         }
-        self.save_agent_settings(id, preferences)
+        if id < 0 || self.remote_session(id)?.is_some() {
+            return self.save_agent_settings(id, preferences);
+        }
+        let tx = self
+            .conn
+            .is_autocommit()
+            .then(|| self.agent_configuration_transaction())
+            .transpose()?;
+        let mut settings = preferences.clone();
+        settings.turns = self.agent_settings(id)?.unwrap_or_default().turns;
+        self.save_agent_settings(id, &settings)?;
+        if let Some(tx) = tx {
+            tx.commit().map_err(|error| error.to_string())?;
+        }
+        Ok(())
     }
 
     pub fn change_provider(&self, id: i64, provider: &str) -> Result<(), String> {

@@ -154,26 +154,28 @@ fn settled_turn_receipt_persists_without_a_view_and_keeps_newer_picker_settings(
         .save_agent_settings(id, &settings)
         .unwrap();
     let started_at = transcript.rows[0].sent_at.unwrap();
-    save_turn_receipt(
-        &store,
-        id,
-        1,
-        vorkspace_core::agent::TurnInfo {
-            provider: "codex".into(),
-            model: "Turn Model".into(),
-            model_id: Some("turn-model".into()),
-            provider_turn_id: Some("turn-id".into()),
-            started_at: Some(started_at),
-            duration_ms: 9000,
-            duration_known: true,
-            completed_at: Some(started_at + 9000),
-            metrics: Some(vorkspace_core::agent::TurnMetrics {
-                output_tokens: 5,
-                ..Default::default()
-            }),
-        },
-    )
-    .unwrap();
+    locked(&store)
+        .unwrap()
+        .save_turn_info(
+            id,
+            1,
+            vorkspace_core::agent::TurnInfo {
+                provider: "codex".into(),
+                model: "Turn Model".into(),
+                model_id: Some("turn-model".into()),
+                provider_turn_id: Some("turn-id".into()),
+                started_at: Some(started_at),
+                duration_ms: 9000,
+                duration_known: true,
+                completed_at: Some(started_at + 9000),
+                metrics: Some(vorkspace_core::agent::TurnMetrics {
+                    output_tokens: 5,
+                    ..Default::default()
+                }),
+            },
+            None,
+        )
+        .unwrap();
     let store = locked(&store).unwrap();
     let saved = store.agent_settings(id).unwrap().unwrap();
     assert_eq!(saved.revision, 42);

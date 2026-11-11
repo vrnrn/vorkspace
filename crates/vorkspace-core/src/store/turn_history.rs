@@ -149,17 +149,38 @@ impl Store {
         }
     }
 
+    /// Merge a settled receipt through its storage owner. A shared writer also
+    /// fences numeric turn offsets against its original history baseline.
     pub fn save_turn_info(
         &self,
         id: i64,
         at: usize,
         info: crate::agent::TurnInfo,
-        writer: &mut TurnHistory,
+        writer: Option<&mut TurnHistory>,
     ) -> Result<bool, String> {
-        if writer.session != id {
+        if writer.as_ref().is_some_and(|writer| writer.session != id) {
             return Err("Turn history belongs to another conversation".into());
         }
-        self.shared_save_turns(id, &[(at, info)].into(), Some(writer))
+        if self.shared.is_some() && id >= 0 && self.remote_session(id)?.is_none() {
+            return self.shared_save_turns(id, &[(at, info)].into(), writer);
+        }
+        if writer.is_some() {
+            return Err("Turn history is unavailable for this conversation".into());
+        }
+        let tx = self
+            .conn
+            .is_autocommit()
+            .then(|| self.agent_configuration_transaction())
+            .transpose()?;
+        let mut settings = self.agent_settings(id)?.unwrap_or_default();
+        #[cfg(test)]
+        tests::pause_receipt_read();
+        settings.turns.insert(at, info);
+        self.save_agent_settings(id, &settings)?;
+        if let Some(tx) = tx {
+            tx.commit().map_err(|error| error.to_string())?;
+        }
+        Ok(true)
     }
 
     /// Publish the competing version without changing the winner's transcript,
@@ -389,6 +410,80 @@ pub fn recovery_text(rows: &[Row]) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::{cell::RefCell, sync::mpsc, time::Duration};
+
+    thread_local! {
+        static RECEIPT_READ: RefCell<Option<(mpsc::Sender<()>, mpsc::Receiver<()>)>> = const { RefCell::new(None) };
+    }
+
+    pub(super) fn pause_receipt_read() {
+        RECEIPT_READ.with(|gate| {
+            if let Some((ready, resume)) = gate.borrow_mut().take() {
+                ready.send(()).unwrap();
+                resume.recv_timeout(Duration::from_secs(15)).unwrap();
+            }
+        });
+    }
+
+    #[test]
+    fn legacy_receipts_serialize_with_independent_preference_writers_and_failed_saves() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("legacy.db");
+        let peer = Store::open(&path).unwrap();
+        let id = peer.create("codex", "/project").unwrap().id;
+        let preferences = crate::agent::Settings {
+            revision: 42,
+            model: Some("next-turn-model".into()),
+            ..Default::default()
+        };
+        let (ready, reached) = mpsc::channel();
+        let (resume, released) = mpsc::channel();
+        let worker_path = path.clone();
+        let worker = std::thread::spawn(move || {
+            let store = Store::open(&worker_path).unwrap();
+            RECEIPT_READ.set(Some((ready, released)));
+            store
+                .save_turn_info(
+                    id,
+                    1,
+                    crate::agent::TurnInfo {
+                        model: "admitted-model".into(),
+                        ..Default::default()
+                    },
+                    None,
+                )
+                .unwrap()
+        });
+        reached.recv_timeout(Duration::from_secs(15)).unwrap();
+        peer.conn.busy_timeout(Duration::ZERO).unwrap();
+        let blocked = peer.save_agent_preferences(id, &preferences);
+        resume.send(()).unwrap();
+        assert!(worker.join().unwrap());
+        assert!(blocked.is_err());
+        peer.save_agent_preferences(id, &preferences).unwrap();
+        let saved = peer.agent_settings(id).unwrap().unwrap();
+        assert_eq!(saved.revision, 42);
+        assert_eq!(saved.model.as_deref(), Some("next-turn-model"));
+        assert_eq!(saved.turns[&1].model, "admitted-model");
+
+        peer.conn.execute_batch("CREATE TRIGGER reject_receipt BEFORE UPDATE ON native_settings WHEN NEW.key LIKE 'agent:%' BEGIN SELECT RAISE(ABORT,'receipt save rejected'); END;").unwrap();
+        assert!(peer
+            .save_turn_info(id, 2, crate::agent::TurnInfo::default(), None)
+            .is_err());
+        peer.conn
+            .execute_batch("DROP TRIGGER reject_receipt")
+            .unwrap();
+        let reopened = Store::open(&path).unwrap();
+        reopened.save_agent_preferences(id, &preferences).unwrap();
+        let saved = reopened.agent_settings(id).unwrap().unwrap();
+        assert_eq!(saved.model, preferences.model);
+        assert_eq!(saved.turns.len(), 1);
+        assert!(peer
+            .save_turn_info(id, 2, crate::agent::TurnInfo::default(), None)
+            .unwrap());
+        peer.configure_agent(id, "codex", &preferences).unwrap();
+        assert_eq!(peer.agent_settings(id).unwrap().unwrap().turns.len(), 2);
+    }
 
     #[test]
     fn a_view_reload_cannot_bless_an_overlapping_turn_and_both_versions_survive() {

@@ -235,7 +235,7 @@ impl Store {
         Ok(true)
     }
 
-    fn agent_configuration_transaction(&self) -> Result<Transaction<'_>, String> {
+    pub(super) fn agent_configuration_transaction(&self) -> Result<Transaction<'_>, String> {
         Transaction::new_unchecked(&self.conn, TransactionBehavior::Immediate)
             .map_err(|error| error.to_string())
     }
