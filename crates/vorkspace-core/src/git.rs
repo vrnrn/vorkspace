@@ -31,6 +31,22 @@ pub struct Snapshot {
     pub branches: Arc<[Branch]>,
     pub worktrees: Arc<[Worktree]>,
 }
+
+pub struct CheckoutHead {
+    pub current: Option<String>,
+    pub detached: bool,
+    pub linked: bool,
+}
+
+impl From<Snapshot> for CheckoutHead {
+    fn from(snapshot: Snapshot) -> Self {
+        Self {
+            current: snapshot.current,
+            detached: snapshot.detached,
+            linked: snapshot.linked,
+        }
+    }
+}
 pub(crate) fn git(cwd: &Path, args: &[&str]) -> Result<String, String> {
     if crate::files::remote::is_remote(cwd) {
         return Err("This isn’t available for projects on another machine yet.".into());
@@ -54,38 +70,11 @@ pub fn snapshot(cwd: &Path) -> Result<Snapshot, String> {
         return remote::snapshot(cwd);
     }
     let trees = worktrees(cwd)?;
-    let canonical = std::fs::canonicalize(cwd).unwrap_or_else(|_| cwd.to_owned());
-    let working_copy = trees
-        .iter()
-        .filter_map(|tree| {
-            let root = std::fs::canonicalize(&tree.path).ok()?;
-            (canonical.starts_with(&root)
-                && !canonical.starts_with(root.join(".git"))
-                && !tree.head.is_empty())
-            .then_some((root, tree))
-        })
-        .max_by_key(|(root, _)| root.components().count());
-    let (current, linked) = if let Some((_, tree)) = working_copy {
-        (tree.branch.clone(), !tree.main)
-    } else {
-        // Custom Git layouts can put the checkout outside its registered path.
-        // Git must also reject bare repositories and its own metadata directory.
-        let root = git(cwd, &["rev-parse", "--show-toplevel"])?;
-        let root = std::fs::canonicalize(root.trim()).unwrap_or(canonical);
-        let current = git(cwd, &["symbolic-ref", "--short", "HEAD"])
-            .ok()
-            .map(|s| s.trim().to_owned());
-        let linked = trees
-            .iter()
-            .any(|t| !t.main && std::fs::canonicalize(&t.path).ok().as_ref() == Some(&root));
-        (current, linked)
-    };
-    let detached = current.is_none();
-    let current = current.or_else(|| {
-        git(cwd, &["rev-parse", "--short", "HEAD"])
-            .ok()
-            .map(|s| s.trim().to_owned())
-    });
+    let CheckoutHead {
+        current,
+        detached,
+        linked,
+    } = local_head(cwd, &trees)?;
     let branches = git(
         cwd,
         &[
@@ -118,6 +107,54 @@ pub fn snapshot(cwd: &Path) -> Result<Snapshot, String> {
         linked,
         branches,
         worktrees: trees.into(),
+    })
+}
+
+/// Resolve the current checkout without enumerating its branch choices.
+pub fn head(cwd: &Path) -> Result<CheckoutHead, String> {
+    if crate::files::remote::is_remote(cwd) {
+        return remote::snapshot(cwd).map(Into::into);
+    }
+    local_head(cwd, &worktrees(cwd)?)
+}
+
+fn local_head(cwd: &Path, trees: &[Worktree]) -> Result<CheckoutHead, String> {
+    let canonical = std::fs::canonicalize(cwd).unwrap_or_else(|_| cwd.to_owned());
+    let working_copy = trees
+        .iter()
+        .filter_map(|tree| {
+            let root = std::fs::canonicalize(&tree.path).ok()?;
+            (canonical.starts_with(&root)
+                && !canonical.starts_with(root.join(".git"))
+                && !tree.head.is_empty())
+            .then_some((root, tree))
+        })
+        .max_by_key(|(root, _)| root.components().count());
+    let (current, linked) = if let Some((_, tree)) = working_copy {
+        (tree.branch.clone(), !tree.main)
+    } else {
+        // Custom Git layouts can put the checkout outside its registered path.
+        // Git must also reject bare repositories and its own metadata directory.
+        let root = git(cwd, &["rev-parse", "--show-toplevel"])?;
+        let root = std::fs::canonicalize(root.trim()).unwrap_or(canonical);
+        let current = git(cwd, &["symbolic-ref", "--short", "HEAD"])
+            .ok()
+            .map(|s| s.trim().to_owned());
+        let linked = trees
+            .iter()
+            .any(|t| !t.main && std::fs::canonicalize(&t.path).ok().as_ref() == Some(&root));
+        (current, linked)
+    };
+    let detached = current.is_none();
+    let current = current.or_else(|| {
+        git(cwd, &["rev-parse", "--short", "HEAD"])
+            .ok()
+            .map(|s| s.trim().to_owned())
+    });
+    Ok(CheckoutHead {
+        current,
+        detached,
+        linked,
     })
 }
 

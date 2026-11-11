@@ -9,6 +9,7 @@ use std::{
 
 /// A checkout can use separate worktree and common Git directories. Include
 /// all three inputs so a branch change or index replacement can wake readers.
+/// An ordinary folder can become a checkout, so watch its directory as well.
 pub fn checkout_watch_paths(cwd: &Path) -> Option<Vec<PathBuf>> {
     if remote_workspace::is_remote(cwd) {
         return None;
@@ -19,11 +20,17 @@ pub fn checkout_watch_paths(cwd: &Path) -> Option<Vec<PathBuf>> {
         let path = Path::new(OsStr::from_bytes(output.strip_suffix(b"\n")?));
         path.canonicalize().ok()
     };
-    let mut roots = [
-        resolve(&["rev-parse", "--show-toplevel"])?,
-        resolve(&["rev-parse", "--absolute-git-dir"])?,
-        resolve(&["rev-parse", "--path-format=absolute", "--git-common-dir"])?,
-    ];
+    let Some(worktree) = resolve(&["rev-parse", "--show-toplevel"]) else {
+        let directory = cwd.canonicalize().ok()?;
+        return directory.is_dir().then(|| vec![directory]);
+    };
+    let mut roots = vec![worktree];
+    roots.extend(resolve(&["rev-parse", "--absolute-git-dir"]));
+    roots.extend(resolve(&[
+        "rev-parse",
+        "--path-format=absolute",
+        "--git-common-dir",
+    ]));
     roots.sort_unstable();
     let mut paths = Vec::new();
     for root in roots {

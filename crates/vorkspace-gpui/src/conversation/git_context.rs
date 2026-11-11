@@ -1,6 +1,6 @@
 //! The session's checkout: worktrees, tool paths and Git state.
 use super::*;
-use vorkspace_core::git::Snapshot;
+use vorkspace_core::git::CheckoutHead;
 
 #[derive(Default, PartialEq, Eq)]
 pub(super) struct Head {
@@ -9,13 +9,12 @@ pub(super) struct Head {
 }
 
 impl Head {
-    pub(super) fn split(snapshot: Option<Snapshot>) -> (Option<String>, Option<Self>) {
+    pub(super) fn split(snapshot: Option<CheckoutHead>) -> (Option<String>, Option<Self>) {
         match snapshot {
-            Some(Snapshot {
+            Some(CheckoutHead {
                 current,
                 detached,
                 linked,
-                ..
             }) => (current, Some(Self { detached, linked })),
             None => (None, None),
         }
@@ -80,7 +79,7 @@ impl Conversation {
         let work_cwd = cwd.clone();
         let work = cx
             .background_executor()
-            .spawn(async move { vorkspace_model::git_cache::load(Path::new(&work_cwd)).ok() });
+            .spawn(async move { vorkspace_core::git::head(Path::new(&work_cwd)).ok() });
         self.git_refresh = Some(cx.spawn(async move |this, cx| {
             let git = work.await;
             let _ = this.update(cx, |this, cx| {
@@ -102,7 +101,8 @@ impl Conversation {
     pub(super) fn seed_git(&mut self) {
         self.git_refresh = None;
         self.git_cwd = self.execution_cwd().to_owned();
-        (self.branch, self.git) = Head::split(vorkspace_model::git_cache::get(&self.git_cwd));
+        (self.branch, self.git) =
+            Head::split(vorkspace_model::git_cache::get(&self.git_cwd).map(Into::into));
     }
 
     pub(crate) fn observe_git_head(

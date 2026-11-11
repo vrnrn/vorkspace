@@ -7,7 +7,10 @@ use std::{
     sync::Arc,
     time::{Duration, Instant},
 };
-use vorkspace_core::scm::{self, CheckoutStamp, DiffIndex};
+use vorkspace_core::{
+    files::path_key,
+    scm::{self, CheckoutStamp, DiffIndex},
+};
 
 mod history;
 #[cfg(target_os = "macos")]
@@ -41,8 +44,9 @@ struct Retained {
 
 impl CheckoutCatalog {
     pub(super) fn acquire(&mut self, path: &str, cx: &mut Context<Self>) -> Entity<Checkout> {
-        if let Some(checkout) = self.checkouts.get(path).and_then(WeakEntity::upgrade) {
-            if let Some(entry) = self.retained.get_mut(path) {
+        let key = path_key(path);
+        if let Some(checkout) = self.checkouts.get(&key).and_then(WeakEntity::upgrade) {
+            if let Some(entry) = self.retained.get_mut(&key) {
                 self.clock += 1;
                 entry.touched = self.clock;
             }
@@ -52,18 +56,19 @@ impl CheckoutCatalog {
             .retain(|_, checkout| checkout.upgrade().is_some());
         let catalog = cx.weak_entity();
         let checkout = cx.new(|_| Checkout::new(path.to_owned(), catalog));
-        self.checkouts.insert(path.to_owned(), checkout.downgrade());
+        self.checkouts.insert(key, checkout.downgrade());
         checkout
     }
 
     fn retain(&mut self, path: &str, checkout: Entity<Checkout>, bytes: usize) {
+        let key = path_key(path);
         if bytes > RETAINED_BYTES {
-            self.retained.remove(path);
+            self.retained.remove(&key);
             return;
         }
         self.clock += 1;
         self.retained.insert(
-            path.to_owned(),
+            key,
             Retained {
                 _checkout: checkout,
                 bytes,
@@ -247,9 +252,6 @@ impl Checkout {
         if self.last_scan.is_some_and(|at| at.elapsed() < POLL) {
             return;
         }
-        if self.observation.is_none() && !self.scanning {
-            self.warm_choices(cx);
-        }
         self.scan(Refresh::Probe, cx);
     }
 
@@ -291,21 +293,11 @@ impl Checkout {
         self.generation += 1;
         self.revision += 1;
         cx.notify();
-        self.warm_choices(cx);
         self.reconcile(cx);
     }
 
     pub(super) fn reconcile(&mut self, cx: &mut Context<Self>) {
         self.scan(Refresh::Reconcile, cx);
-    }
-
-    pub(super) fn warm_choices(&self, cx: &Context<Self>) {
-        let path = self.path.clone();
-        cx.background_executor()
-            .spawn(async move {
-                let _ = vorkspace_model::git_cache::load(Path::new(&path));
-            })
-            .detach();
     }
 
     fn scan(&mut self, refresh: Refresh, cx: &mut Context<Self>) {

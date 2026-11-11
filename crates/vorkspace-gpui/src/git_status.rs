@@ -233,10 +233,7 @@ impl ProjectGit {
 
     pub(crate) fn resume(&mut self, cx: &mut Context<Self>) {
         if let Some(checkout) = &self.checkout {
-            checkout.update(cx, |checkout, cx| {
-                checkout.warm_choices(cx);
-                checkout.reconcile(cx);
-            });
+            checkout.update(cx, Checkout::reconcile);
         }
     }
 

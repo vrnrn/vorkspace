@@ -5,7 +5,16 @@ fn snapshot_uses_checkout_identity_and_rejects_metadata_directories() {
     let cwd = temp.path().join("project");
     let nested = cwd.join("src/deep");
     std::fs::create_dir_all(&nested).unwrap();
+    assert_eq!(
+        crate::scm::checkout_watch_paths(&nested).unwrap(),
+        [nested.canonicalize().unwrap()]
+    );
+    assert!(head(&nested).is_err());
     git(&cwd, &["init", "-b", "main"]).unwrap();
+    assert_eq!(
+        crate::scm::checkout_watch_paths(&nested).unwrap(),
+        [cwd.canonicalize().unwrap()]
+    );
     let unborn = snapshot(&nested).unwrap();
     assert_eq!(unborn.current.as_deref(), Some("main"));
     assert!(!unborn.detached && !unborn.linked);
@@ -54,6 +63,9 @@ fn snapshot_uses_checkout_identity_and_rejects_metadata_directories() {
     assert!(detached.detached && !detached.linked);
     assert_eq!(detached.current.as_deref(), Some(expected.trim()));
     assert_eq!(expected.trim().len(), 11);
+    let label = head(&nested).unwrap();
+    assert_eq!(label.current, detached.current);
+    assert!(label.detached && !label.linked);
 }
 
 #[test]

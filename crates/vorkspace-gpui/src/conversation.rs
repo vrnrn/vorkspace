@@ -413,7 +413,8 @@ impl Conversation {
         let (branch, git) = git_context::Head::split(
             (!summary.has_messages)
                 .then(|| vorkspace_model::git_cache::get(&summary.cwd))
-                .flatten(),
+                .flatten()
+                .map(Into::into),
         );
         let completion = cx.new(|cx| {
             crate::composer::composer_completion::Completion::new(
