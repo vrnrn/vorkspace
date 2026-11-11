@@ -671,6 +671,7 @@ fn submitted_modes_clear_for_a_started_turn_and_stay_cleared_after_completion(
                     view.submission_generation,
                     view.summary.provider.clone(),
                     view.settings.account.id.clone(),
+                    view.summary.provider_id.clone(),
                     None,
                 );
                 projection.composer_origin = Some(origin.clone());

@@ -213,7 +213,7 @@ mod tests {
             project(
                 view.downgrade(),
                 rx,
-                TurnProjection::new(0, "codex".into(), String::new(), None),
+                TurnProjection::new(0, "codex".into(), String::new(), None, None),
                 Some((admission, done)),
                 cx,
             );

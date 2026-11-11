@@ -129,3 +129,130 @@ pub(super) fn prepare(
         brief: vorkspace_core::response::choose_handoff_brief(&brief, rows),
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::os::unix::fs::PermissionsExt;
+
+    #[test]
+    fn a_retained_handoff_survives_failed_start_and_is_consumed_only_after_acceptance() {
+        for shared in [false, true] {
+            let directory = tempfile::tempdir().unwrap();
+            let root = directory.path();
+            let open = if shared {
+                Store::open_vorkspace
+            } else {
+                Store::open
+            };
+            let store = open(&root.join("sessions.db")).unwrap();
+            let summary = store.create("codex", root.to_str().unwrap()).unwrap();
+            let mut settings = Settings {
+                revision: 9,
+                text_only: true,
+                handoff: Some(Handoff {
+                    from: "claude".into(),
+                    brief: "Preserve the prepared project recap".into(),
+                }),
+                ..Default::default()
+            };
+            store.save_agent_preferences(summary.id, &settings).unwrap();
+            let store = Arc::new(Mutex::new(store));
+            let (tx, rx) = async_channel::bounded(64);
+            let (_control, controls) = mpsc::channel();
+            run_turn_using(
+                TurnInput {
+                    summary: summary.clone(),
+                    prompt: "First continuation never reached the provider".into(),
+                    settings,
+                    composer_origin: None,
+                },
+                controls,
+                store.clone(),
+                Arc::new(AtomicBool::new(false)),
+                tx,
+                |_| None,
+            );
+            let updates: Vec<_> = std::iter::from_fn(|| rx.try_recv().ok()).collect();
+            assert_eq!(
+                updates.last().unwrap().settlement().unwrap().outcome,
+                TurnOutcome::Failed
+            );
+            settings = locked(&store)
+                .unwrap()
+                .agent_preferences(summary.id)
+                .unwrap()
+                .unwrap();
+            let retained = settings.handoff.as_ref().unwrap();
+            assert!(
+                retained
+                    .brief
+                    .contains("Preserve the prepared project recap")
+            );
+            assert!(
+                retained
+                    .brief
+                    .contains("First continuation never reached the provider")
+            );
+            assert_eq!(settings.revision, 9);
+            let projected = updates.last().unwrap().handoff.as_ref().unwrap();
+            assert_eq!(projected.as_ref(), Some(retained));
+
+            let binary = root.join("mock-provider");
+            std::fs::write(
+                &binary,
+                r#"#!/usr/bin/env python3
+import json, sys
+for line in sys.stdin:
+    value=json.loads(line)
+    method=value.get('method')
+    if method=='initialize':
+        print(json.dumps({'id':value['id'],'result':{}}),flush=True)
+    elif method=='thread/start':
+        print(json.dumps({'id':value['id'],'result':{'thread':{'id':'handoff-thread'}}}),flush=True)
+    elif method=='turn/start':
+        with open('accepted-request.json','w') as output:
+            json.dump(value,output)
+        print(json.dumps({'id':value['id'],'result':{'turn':{'id':'accepted'}}}),flush=True)
+        print(json.dumps({'method':'item/agentMessage/delta','params':{'itemId':'answer','delta':'Continued from the recap'}}),flush=True)
+        print(json.dumps({'method':'turn/completed','params':{'turn':{'status':'completed'}}}),flush=True)
+        break
+"#,
+            )
+            .unwrap();
+            std::fs::set_permissions(&binary, std::fs::Permissions::from_mode(0o700)).unwrap();
+            let (tx, rx) = async_channel::bounded(64);
+            let (_control, controls) = mpsc::channel();
+            run_turn_using(
+                TurnInput {
+                    summary: summary.clone(),
+                    prompt: "Continue again".into(),
+                    settings,
+                    composer_origin: None,
+                },
+                controls,
+                store.clone(),
+                Arc::new(AtomicBool::new(false)),
+                tx,
+                |_| Some(binary),
+            );
+            let updates: Vec<_> = std::iter::from_fn(|| rx.try_recv().ok()).collect();
+            assert_eq!(
+                updates.last().unwrap().settlement().unwrap().outcome,
+                TurnOutcome::Completed
+            );
+            assert_eq!(updates.last().unwrap().handoff, Some(None));
+            let saved = locked(&store)
+                .unwrap()
+                .agent_preferences(summary.id)
+                .unwrap()
+                .unwrap();
+            assert!(saved.handoff.is_none());
+            assert_eq!(saved.revision, 9);
+            let request = std::fs::read_to_string(root.join("accepted-request.json")).unwrap();
+            assert!(request.contains("Preserve the prepared project recap"));
+            assert!(request.contains("First continuation never reached the provider"));
+            assert!(request.contains("Continue again"));
+        }
+    }
+}

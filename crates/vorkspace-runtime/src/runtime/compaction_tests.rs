@@ -283,7 +283,7 @@ fn bot_final_snapshot_includes_imports_when_initial_publication_is_stopped_or_sk
             &finished.transcript,
             TranscriptPatch::BotSnapshot { turn_start: 4, .. }
         ));
-        assert_eq!(finished.provider_id, summary.provider_id);
+        assert_eq!(finished.binding, ProviderBinding::Unchanged);
         assert_eq!(finished.delivered.as_deref(), Some(message));
         assert_eq!(
             finished.transcript.rows()[..visible.rows.len()],
@@ -712,10 +712,10 @@ fn rollover_resets_context_before_provider_start_and_keeps_it_reset_on_failure()
             tx,
             |_| {
                 let reset = std::iter::from_fn(|| rx.try_recv().ok())
-                    .find(|update| update.provider_reset)
+                    .find(|update| update.binding == ProviderBinding::Set(None))
                     .expect("reset must reach the view before provider startup");
                 assert!(!reset.finished());
-                assert_eq!(reset.provider_id, None);
+                assert_eq!(reset.binding, ProviderBinding::Set(None));
                 assert_eq!(reset.context, Some(Usage::default()));
                 let store = locked(&store).unwrap();
                 let saved = store.bot_session(summary.id).unwrap().unwrap();
@@ -725,13 +725,14 @@ fn rollover_resets_context_before_provider_start_and_keeps_it_reset_on_failure()
             },
         );
         let finished = std::iter::from_fn(|| rx.try_recv().ok()).last().unwrap();
-        assert!(finished.finished() && finished.provider_reset);
+        assert!(finished.finished());
+        assert!(matches!(finished.binding, ProviderBinding::Set(_)));
         assert!(
             finished.status.contains("CLI not found"),
             "{}",
             finished.status
         );
-        assert_eq!(finished.provider_id, None);
+        assert_eq!(finished.binding, ProviderBinding::Set(None));
         assert_eq!(finished.context, Some(Usage::default()));
         drop(store);
         let reopened = Store::open_vorkspace(&root.join("sessions.db")).unwrap();
@@ -820,19 +821,22 @@ for line in sys.stdin:
         );
         let updates: Vec<_> = std::iter::from_fn(|| rx.try_recv().ok()).collect();
         let finished = updates.last().unwrap();
-        assert!(finished.finished() && finished.provider_reset);
+        assert!(finished.finished());
+        assert!(matches!(finished.binding, ProviderBinding::Set(_)));
         assert_eq!(finished.status, "Ready");
-        assert_eq!(finished.provider_id.as_deref(), Some("replacement-thread"));
+        assert_eq!(
+            finished.binding,
+            ProviderBinding::Set(Some("replacement-thread".into()))
+        );
         let new_usage = report_usage.then_some(Usage {
             used: 4200,
             window: Some(272_000),
         });
         assert_eq!(finished.context, Some(new_usage.unwrap_or_default()));
-        assert!(
-            updates[..updates.len() - 1].iter().any(|update| {
-                update.provider_reset && update.context == Some(Usage::default())
-            })
-        );
+        assert!(updates[..updates.len() - 1].iter().any(|update| {
+            matches!(update.binding, ProviderBinding::Set(_))
+                && update.context == Some(Usage::default())
+        }));
 
         let prompt = std::fs::read_to_string(root.join("received-prompt.txt")).unwrap();
         assert!(prompt.contains("Respect the assigned scope."));
@@ -952,7 +956,7 @@ for line in sys.stdin:
         let finished = updates.last().unwrap();
         assert!(finished.finished());
         assert_eq!(finished.status, "Ready");
-        assert_eq!(finished.provider_id, summary.provider_id);
+        assert_eq!(finished.binding, ProviderBinding::Unchanged);
         if turn == 2 {
             std::fs::remove_dir(&pointer_path).unwrap();
             bot::home::write_session(root, &bot_context.bot, &summary, &settings.account).unwrap();

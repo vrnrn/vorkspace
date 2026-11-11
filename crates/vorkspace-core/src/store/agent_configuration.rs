@@ -16,6 +16,53 @@ pub struct ProviderSource<'a> {
 }
 
 impl Store {
+    /// Bind a provider's newly observed thread only to its admitted source.
+    /// The read, ownership check and write share the SQLite writer transaction.
+    pub fn record_provider_session(
+        &self,
+        source: ProviderSource<'_>,
+        next_id: &str,
+        reset_context: bool,
+    ) -> Result<bool, String> {
+        if source.session < 0 || self.remote_session(source.session)?.is_some() {
+            return Err("Remote provider bindings belong to the Host".into());
+        }
+        let tx = self.agent_configuration_transaction()?;
+        let Some(binding) = self.local_agent_binding(source.session)? else {
+            return Ok(false);
+        };
+        let mut settings = self.agent_preferences(source.session)?.unwrap_or_default();
+        if let Some(pending) = settings.pending_provider_switch.as_mut().filter(|pending| {
+            pending.from == source.provider
+                && pending.account.id == source.account
+                && pending.provider_id.as_deref() == source.provider_id
+        }) {
+            pending.provider_id = Some(next_id.into());
+            self.save_agent_preferences(source.session, &settings)?;
+        } else if binding.provider == source.provider
+            && binding.provider_id.as_deref() == source.provider_id
+            && settings.account.id == source.account
+        {
+            if reset_context {
+                if !self.replace_bot_provider_session(
+                    source.session,
+                    source.provider,
+                    source.account,
+                    source.provider_id,
+                    Some(next_id),
+                )? {
+                    return Ok(false);
+                }
+            } else {
+                self.provider_id(source.session, next_id)?;
+            }
+        } else {
+            return Ok(false);
+        }
+        tx.commit().map_err(|error| error.to_string())?;
+        Ok(true)
+    }
+
     /// Provider feedback can update its selected or outgoing binding, never a newer choice.
     pub fn record_provider_configuration(
         &self,
@@ -226,6 +273,110 @@ impl Store {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn observed_threads_preserve_replacements_and_follow_only_the_exact_outgoing_source() {
+        for shared in [false, true] {
+            let directory = tempfile::tempdir().unwrap();
+            let path = directory.path().join("agent.db");
+            let open = if shared {
+                Store::open_vorkspace
+            } else {
+                Store::open
+            };
+            let store = open(&path).unwrap();
+            let peer = open(&path).unwrap();
+            let id = store.create("omp", "/project").unwrap().id;
+            let settings = Settings {
+                revision: 3,
+                ..Default::default()
+            };
+            store.save_agent_preferences(id, &settings).unwrap();
+            store.provider_id(id, "source-thread").unwrap();
+            let source = |provider_id| ProviderSource {
+                session: id,
+                provider: "omp",
+                account: crate::accounts::DEFAULT,
+                provider_id,
+                revision: 3,
+            };
+            store
+                .save_context_usage(
+                    id,
+                    &crate::context::Usage {
+                        used: 9000,
+                        window: Some(10000),
+                    },
+                )
+                .unwrap();
+            assert!(store
+                .record_provider_session(source(Some("source-thread")), "observed-thread", true)
+                .unwrap());
+            assert_eq!(
+                peer.local_agent_binding(id)
+                    .unwrap()
+                    .unwrap()
+                    .provider_id
+                    .as_deref(),
+                Some("observed-thread")
+            );
+            assert_eq!(peer.context_usage(id).unwrap(), None);
+            assert_eq!(peer.agent_preferences(id).unwrap().unwrap().revision, 3);
+
+            peer.provider_id(id, "replacement-thread").unwrap();
+            assert!(!store
+                .record_provider_session(source(Some("observed-thread")), "stale-thread", true)
+                .unwrap());
+            assert_eq!(
+                peer.local_agent_binding(id)
+                    .unwrap()
+                    .unwrap()
+                    .provider_id
+                    .as_deref(),
+                Some("replacement-thread")
+            );
+            let mut replacement = settings.clone();
+            replacement.account.id = "replacement-account".into();
+            peer.save_agent_preferences(id, &replacement).unwrap();
+            assert!(!store
+                .record_provider_session(
+                    source(Some("replacement-thread")),
+                    "wrong-account-thread",
+                    false
+                )
+                .unwrap());
+            peer.save_agent_preferences(id, &settings).unwrap();
+            peer.select_local_provider(id, "omp", Kind::Claude, selection(Kind::Omp, 4))
+                .unwrap();
+            assert!(!store
+                .record_provider_session(
+                    source(Some("observed-thread")),
+                    "stale-outgoing-thread",
+                    false
+                )
+                .unwrap());
+            assert!(store
+                .record_provider_session(
+                    source(Some("replacement-thread")),
+                    "outgoing-thread",
+                    false
+                )
+                .unwrap());
+            let selected = peer.local_agent_binding(id).unwrap().unwrap();
+            assert_eq!(selected.provider, "claude");
+            assert_eq!(selected.provider_id, None);
+            let saved = peer.agent_preferences(id).unwrap().unwrap();
+            assert_eq!(saved.revision, 4);
+            assert_eq!(
+                saved
+                    .pending_provider_switch
+                    .unwrap()
+                    .provider_id
+                    .as_deref(),
+                Some("outgoing-thread")
+            );
+        }
+    }
 
     #[test]
     fn provider_feedback_preserves_new_choices_and_updates_the_exact_outgoing_source() {

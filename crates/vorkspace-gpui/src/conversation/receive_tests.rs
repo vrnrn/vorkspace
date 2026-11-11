@@ -3,7 +3,8 @@ use gpui::{TestAppContext, WindowHandle};
 use vorkspace_core::{store::Store, transcript::Row};
 
 use vorkspace_runtime::runtime::{
-    HistoryRecovery, TranscriptPatch, TurnOutcome, TurnSettlement, TurnTransition, Update,
+    HistoryRecovery, ProviderBinding, TranscriptPatch, TurnOutcome, TurnSettlement, TurnTransition,
+    Update,
 };
 
 fn synthetic_row(index: usize) -> Row {
@@ -51,6 +52,57 @@ fn conversation(cx: &mut TestAppContext) -> WindowHandle<Conversation> {
 }
 
 #[gpui::test]
+fn a_turn_binding_tracks_its_own_updates_and_preserves_an_independent_replacement(
+    cx: &mut TestAppContext,
+) {
+    let window = conversation(cx);
+    window
+        .update(cx, |view, _, cx| {
+            view.summary.provider_id = Some("admitted-thread".into());
+            let mut projection = turn_projection::TurnProjection::new(
+                view.submission_generation,
+                view.summary.provider.clone(),
+                view.settings.account.id.clone(),
+                view.summary.provider_id.clone(),
+                None,
+            );
+            for id in ["first-observed-thread", "second-observed-thread"] {
+                projection.apply(
+                    view,
+                    Update {
+                        binding: ProviderBinding::Set(Some(id.into())),
+                        ..Default::default()
+                    },
+                    cx,
+                );
+                assert_eq!(view.summary.provider_id.as_deref(), Some(id));
+            }
+            view.summary.provider_id = Some("independent-thread".into());
+            let current_context = vorkspace_core::context::Usage {
+                used: 990,
+                window: Some(1000),
+            };
+            view.context = Some(current_context);
+            projection.apply(
+                view,
+                Update {
+                    binding: ProviderBinding::Set(Some("second-observed-thread".into())),
+                    context: Some(Default::default()),
+                    transition: TurnTransition::settled(TurnOutcome::Completed),
+                    ..Default::default()
+                },
+                cx,
+            );
+            assert_eq!(
+                view.summary.provider_id.as_deref(),
+                Some("independent-thread")
+            );
+            assert_eq!(view.context, Some(current_context));
+        })
+        .unwrap();
+}
+
+#[gpui::test]
 fn saved_provider_feedback_updates_the_projection_without_resaving_or_overriding_a_choice(
     cx: &mut TestAppContext,
 ) {
@@ -95,6 +147,7 @@ fn saved_provider_feedback_updates_the_projection_without_resaving_or_overriding
                 view.submission_generation,
                 view.summary.provider.clone(),
                 view.settings.account.id.clone(),
+                view.summary.provider_id.clone(),
                 None,
             );
             projection.apply(
@@ -211,6 +264,7 @@ fn resolving_one_request_publishes_attention_while_another_remains(cx: &mut Test
                 view.submission_generation,
                 view.summary.provider.clone(),
                 view.settings.account.id.clone(),
+                view.summary.provider_id.clone(),
                 None,
             );
             projection.apply(
@@ -335,7 +389,7 @@ fn stop_between_updates_skips_streaming_but_accepts_the_final_replay(cx: &mut Te
     let (tx, rx) = async_channel::bounded(8);
     tx.try_send(update(0, false)).unwrap();
     let mut skipped = update(1, false);
-    skipped.provider_reset = true;
+    skipped.binding = ProviderBinding::Set(None);
     skipped.context = Some(Default::default());
     skipped.approvals.push(Approval {
         id: "late-approval".into(),
@@ -352,7 +406,7 @@ fn stop_between_updates_skips_streaming_but_accepts_the_final_replay(cx: &mut Te
     };
     rows.push(synthetic_row(1));
     final_update.status = "Ready".into();
-    final_update.provider_reset = true;
+    final_update.binding = ProviderBinding::Set(None);
     final_update.context = Some(Default::default());
     tx.try_send(final_update).unwrap();
     start_receiver(window, rx, cx);
@@ -434,7 +488,7 @@ fn stopped_bot_accepts_a_settled_snapshot_without_its_initial_imported_rows(
         turn_start: 6,
         rows: rows[..7].to_vec(),
     };
-    skipped.provider_id = Some("wrong-skipped-thread".into());
+    skipped.binding = ProviderBinding::Set(Some("wrong-skipped-thread".into()));
     tx.try_send(skipped).unwrap();
     tx.try_send(vorkspace_runtime::runtime::Update {
         transcript: TranscriptPatch::BotSnapshot {
@@ -442,7 +496,7 @@ fn stopped_bot_accepts_a_settled_snapshot_without_its_initial_imported_rows(
             rows: rows.clone(),
         },
         provider_turn_id: Some("managed-turn".into()),
-        provider_id: Some("saved-thread".into()),
+        binding: ProviderBinding::Set(Some("saved-thread".into())),
         status: "Ready".into(),
         transition: TurnTransition::settled(TurnOutcome::Completed),
         ..Default::default()

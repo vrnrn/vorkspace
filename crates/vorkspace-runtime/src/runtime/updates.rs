@@ -14,8 +14,7 @@ pub struct Update {
     pub follow_up_delivered: Vec<String>,
     pub follow_up_errors: Vec<(String, String)>,
     pub delivered: Option<String>,
-    pub provider_id: Option<String>,
-    pub provider_reset: bool,
+    pub binding: ProviderBinding,
     pub model: Option<String>,
     pub configuration: Option<ProviderConfiguration>,
     pub context: Option<vorkspace_core::context::Usage>,
@@ -26,6 +25,14 @@ pub struct Update {
     pub questions_resolved: Vec<String>,
     pub handoff: Option<Option<vorkspace_core::agent::Handoff>>,
     pub status: String,
+}
+
+/// An observed binding is published only after its owner commits it.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub enum ProviderBinding {
+    #[default]
+    Unchanged,
+    Set(Option<String>),
 }
 
 /// A saved provider observation and the local choice it is allowed to refresh.

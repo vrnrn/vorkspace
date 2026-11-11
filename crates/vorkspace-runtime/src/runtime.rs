@@ -23,8 +23,8 @@ pub mod remote;
 mod submissions;
 mod updates;
 pub use updates::{
-    HistoryRecovery, ProviderConfiguration, TranscriptPatch, TurnOutcome, TurnSettlement,
-    TurnTransition, Update,
+    HistoryRecovery, ProviderBinding, ProviderConfiguration, TranscriptPatch, TurnOutcome,
+    TurnSettlement, TurnTransition, Update,
 };
 #[cfg(test)]
 mod ticket_context_tests;
@@ -111,6 +111,7 @@ fn run_turn_using(
     let mut initial_delivery = None;
     let mut accepted_messages = Vec::new();
     let mut provider_id = summary.provider_id.clone();
+    let mut binding = ProviderBinding::Unchanged;
     let mut provider_reset = false;
     let mut turn_start = 0;
     let mut activity = activity::ToolActivity::default();
@@ -201,6 +202,9 @@ fn run_turn_using(
                 }
                 provider_reset = provider_id != current.provider_id;
                 provider_id = current.provider_id;
+                if provider_reset {
+                    binding = ProviderBinding::Set(provider_id.clone());
+                }
                 pending.own_bot_context(provider_id.as_deref());
                 context = store.context_usage(summary.id)?.unwrap_or_default();
                 (transcript, pending.writer) = store.load_turn_history(summary.id)?;
@@ -240,6 +244,7 @@ fn run_turn_using(
                     return Err("The Bot session changed before context rollover. Retry to continue its current session.".into());
                 }
                 provider_id = None;
+                binding = ProviderBinding::Set(None);
                 pending.own_bot_context(None);
                 context = vorkspace_core::context::Usage::default();
                 provider_reset = true;
@@ -255,7 +260,7 @@ fn run_turn_using(
                     &tx,
                     &cancel,
                     Update {
-                        provider_reset: true,
+                        binding: binding.clone(),
                         context: Some(context),
                         status: "Starting fresh context…".into(),
                         ..Default::default()
@@ -264,7 +269,6 @@ fn run_turn_using(
             }
         }
         let mut persisted = settings.clone();
-        persisted.handoff = None;
         // These modes belong to this turn, not the next composer draft.
         persisted.plan = false;
         persisted.operator = false;
@@ -304,6 +308,9 @@ fn run_turn_using(
             &transcript.rows[start..],
             settings.bot_message_id.as_deref(),
         )?;
+        // A retained recap belongs to this admitted request until the provider
+        // accepts it. A failed restart must leave the packet ready for retry.
+        prepared_handoff = settings.handoff.clone();
         let mut info =
             settings
                 .turn_model
@@ -347,8 +354,7 @@ fn run_turn_using(
                 } else {
                     TranscriptPatch::tail(start, transcript.rows[start..].to_vec())
                 },
-                provider_reset,
-                provider_id: provider_reset.then(|| provider_id.clone()).flatten(),
+                binding: binding.clone(),
                 context: provider_reset.then_some(context),
                 status: if creating_worktree {
                     "Creating worktree…"
@@ -606,8 +612,7 @@ fn run_turn_using(
                 }
                 let mut start = transcript.rows.len();
                 let mut status = "Streaming…".to_string();
-                let mut changed_id = None;
-                let mut changed_provider_reset = false;
+                let mut changed_binding = ProviderBinding::Unchanged;
                 let mut model = None;
                 let mut configuration = None;
                 let mut context_changed = false;
@@ -752,46 +757,30 @@ fn run_turn_using(
                         }
                         Event::SessionId(id) => {
                             if provider_id.as_ref() != Some(&id) {
-                                let store = locked(&store)?;
-                                let mut settings =
-                                    store.agent_preferences(summary.id)?.unwrap_or_default();
-                                if let Some(pending) = settings.pending_provider_switch.as_mut()
-                                    && pending.from == summary.provider
-                                    && pending.account.id == source_account
-                                {
-                                    pending.provider_id = Some(id.clone());
-                                    store.save_agent_preferences(summary.id, &settings)?;
-                                } else if settings.account.id == source_account
-                                    && store
-                                        .bot_session(summary.id)?
-                                        .is_some_and(|session| session.provider == summary.provider)
-                                {
+                                let saved = locked(&store)?.record_provider_session(
+                                    vorkspace_core::store::ProviderSource {
+                                        session: summary.id,
+                                        provider: &summary.provider,
+                                        account: &source_account,
+                                        provider_id: provider_id.as_deref(),
+                                        revision: source_revision,
+                                    },
+                                    &id,
+                                    bot_home.is_some(),
+                                )?;
+                                if saved {
+                                    binding = ProviderBinding::Set(Some(id.clone()));
+                                    changed_binding = binding.clone();
                                     if bot_home.is_some() {
-                                        if !store.replace_bot_provider_session(
-                                            summary.id,
-                                            &summary.provider,
-                                            &source_account,
-                                            provider_id.as_deref(),
-                                            Some(&id),
-                                        )? {
-                                            return Err(
-                                                "The Bot provider session changed during this turn"
-                                                    .into(),
-                                            );
-                                        }
                                         context = vorkspace_core::context::Usage::default();
                                         context_changed = true;
                                         provider_reset = true;
-                                        changed_provider_reset = true;
-                                    } else {
-                                        store.provider_id(summary.id, &id)?;
                                     }
                                 }
                                 provider_id = Some(id.clone());
                                 if bot_home.is_some() {
                                     pending.own_bot_context(Some(&id));
                                 }
-                                changed_id = Some(id);
                             }
                         }
                         Event::Model(id) => model = Some(id),
@@ -915,8 +904,7 @@ fn run_turn_using(
                                 start,
                                 transcript.rows[start..].to_vec(),
                             ),
-                            provider_id: changed_id,
-                            provider_reset: changed_provider_reset,
+                            binding: changed_binding,
                             model,
                             configuration,
                             context: context_changed.then_some(context),
@@ -1218,8 +1206,11 @@ fn run_turn_using(
             TranscriptPatch::tail(start, rows)
         },
         provider_turn_id: settled_provider_turn_id.filter(|_| bot_snapshot),
-        provider_id: if pending.overlap { None } else { provider_id },
-        provider_reset: provider_reset && !pending.overlap,
+        binding: if pending.overlap {
+            ProviderBinding::Unchanged
+        } else {
+            binding
+        },
         configuration: observed_configuration.filter(|_| !pending.overlap),
         context: (provider_reset && !pending.overlap).then_some(context),
         transition: TurnTransition::Settled(TurnSettlement {

@@ -1,12 +1,13 @@
 //! Apply an admitted turn's updates to a conversation without owning execution.
 use super::*;
 use vorkspace_core::store::ComposerOrigin;
-use vorkspace_runtime::runtime::{TurnOutcome, TurnTransition, Update};
+use vorkspace_runtime::runtime::{ProviderBinding, TurnOutcome, TurnTransition, Update};
 
 pub(super) struct TurnProjection {
     pub(super) generation: u64,
     source_provider: String,
     source_account: String,
+    source_provider_id: Option<String>,
     turn_model_id: Option<String>,
     pub(super) composer_origin: Option<ComposerOrigin>,
     pub(super) title_seed: Option<String>,
@@ -17,12 +18,14 @@ impl TurnProjection {
         generation: u64,
         source_provider: String,
         source_account: String,
+        source_provider_id: Option<String>,
         turn_model_id: Option<String>,
     ) -> Self {
         Self {
             generation,
             source_provider,
             source_account,
+            source_provider_id,
             turn_model_id,
             composer_origin: None,
             title_seed: None,
@@ -122,20 +125,20 @@ impl TurnProjection {
             this.transcript
                 .update(cx, |view, _| view.record_provider_turn(id));
         }
-        if update.provider_reset && source_selected {
-            this.summary.provider_id = None;
-        }
-        if let Some(id) = update.provider_id {
+        if let ProviderBinding::Set(id) = update.binding {
             if let Some(pending) = this.settings.pending_provider_switch.as_mut()
                 && pending.from == source_provider
                 && pending.account.id == source_account
+                && pending.provider_id == self.source_provider_id
             {
-                pending.provider_id = Some(id);
-            } else if source_selected {
-                this.summary.provider_id = Some(id);
+                pending.provider_id = id.clone();
+            } else if source_selected && this.summary.provider_id == self.source_provider_id {
+                this.summary.provider_id = id.clone();
             }
+            self.source_provider_id = id;
         }
-        if let Some(handoff) = update.handoff.filter(|_| source_selected) {
+        let source_bound = source_selected && this.summary.provider_id == self.source_provider_id;
+        if let Some(handoff) = update.handoff.filter(|_| source_bound) {
             this.settings.pending_provider_switch = None;
             this.settings.handoff = handoff;
         }
@@ -175,7 +178,7 @@ impl TurnProjection {
             this.transcript
                 .update(cx, |v, _| v.identity(source_provider, &name));
         }
-        if let Some(context) = update.context.filter(|_| source_selected) {
+        if let Some(context) = update.context.filter(|_| source_bound) {
             this.context = Some(context);
         }
         if let Some(metrics) = update.metrics {

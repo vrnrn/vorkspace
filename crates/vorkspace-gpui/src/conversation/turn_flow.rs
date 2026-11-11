@@ -510,9 +510,6 @@ impl Conversation {
                 self.settings.orchestrator = false;
             }
         }
-        if self.settings.handoff.take().is_some() {
-            self.save_settings(cx);
-        }
         self.approvals.clear();
         self.questions.clear();
         let turn_model_id = settings
@@ -528,6 +525,7 @@ impl Conversation {
             generation,
             source_provider,
             source_account,
+            summary.provider_id.clone(),
             turn_model_id,
         );
         projection.composer_origin = composer_origin.clone();
@@ -584,6 +582,7 @@ impl Conversation {
                 generation,
                 source_provider,
                 source_account,
+                self.summary.provider_id.clone(),
                 turn_model_id,
             ),
             None,

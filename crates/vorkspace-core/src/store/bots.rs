@@ -45,9 +45,12 @@ impl Store {
 
         let tx = self
             .conn
-            .unchecked_transaction()
+            .is_autocommit()
+            .then(|| self.conn.unchecked_transaction())
+            .transpose()
             .map_err(|e| e.to_string())?;
-        let changed = tx
+        let changed = self
+            .conn
             .execute(
                 "UPDATE native_sessions SET provider_id=?5
                  WHERE id=?1 AND provider=?2 AND provider_id IS ?4 AND COALESCE(
@@ -60,12 +63,15 @@ impl Store {
         if changed != 1 {
             return Ok(false);
         }
-        tx.execute(
-            "DELETE FROM native_settings WHERE key=?1",
-            [format!("context:{id}")],
-        )
-        .map_err(|e| e.to_string())?;
-        tx.commit().map_err(|e| e.to_string())?;
+        self.conn
+            .execute(
+                "DELETE FROM native_settings WHERE key=?1",
+                [format!("context:{id}")],
+            )
+            .map_err(|e| e.to_string())?;
+        if let Some(tx) = tx {
+            tx.commit().map_err(|e| e.to_string())?;
+        }
         Ok(true)
     }
 
