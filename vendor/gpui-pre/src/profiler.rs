@@ -474,7 +474,7 @@ impl TaskStatistics {
             let to_replace = self
                 .longest_poll_times
                 .iter()
-                .position_min_by_key(TaskTiming::poll_duration)
+                .position_min_by_key(|task| task.poll_duration())
                 .expect("guarded by the comparison with nth_longest_yield_time");
             self.longest_poll_times[to_replace] = task;
 
