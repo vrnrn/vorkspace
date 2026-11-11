@@ -120,6 +120,7 @@ fn run_turn_using(
     let mut visual_introduction = None;
     let mut prepared_handoff = None;
     let mut observed_configuration = None;
+    let source_revision = settings.revision;
     let mut handoff_accepted = false;
     let mut handoff_retired = false;
     // SessionReview's recorded turn: its project and id, once the baseline is taken.
@@ -810,11 +811,11 @@ fn run_turn_using(
                                 provider: &summary.provider,
                                 account: &source_account,
                                 provider_id: provider_id.as_deref(),
-                                revision: settings.revision,
+                                revision: source_revision,
                             };
                             if locked(&store)?.record_provider_configuration(source, &patch)? {
                                 let saved = ProviderConfiguration {
-                                    revision: settings.revision,
+                                    revision: source_revision,
                                     provider_id: provider_id.clone(),
                                     patch,
                                 };
