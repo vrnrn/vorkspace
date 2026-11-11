@@ -49,8 +49,18 @@ impl DiffSnapshot {
             return Self::remote(cwd, "git_diff_index").map(Some);
         }
         let root = expand_home(cwd);
-        Ok(observe_status(&root, known)?
-            .map(|status| Self::local(&root, status, Counts::Full { sync: true })))
+        Ok(match observe_status(&root, known)? {
+            StatusObservation::Unchanged => None,
+            StatusObservation::Missing => Some(Self {
+                index: DiffIndex::default(),
+                versions: Some(HashMap::new()),
+                stamp: None,
+                local_head: Some(LocalHead::Missing),
+            }),
+            StatusObservation::Present(status) => {
+                Some(Self::local(&root, status, Counts::Full { sync: true }))
+            }
+        })
     }
 
     fn local(cwd: &Path, status: LocalStatus, counts: Counts<'_>) -> Self {
@@ -128,21 +138,27 @@ pub fn diff_files(cwd: &Path) -> Result<DiffIndex, String> {
 
 pub(super) fn local_index(cwd: &Path, sync: bool) -> Result<DiffIndex, String> {
     let root = expand_home(cwd);
-    Ok(
-        observe_status(&root, None)?.map_or_else(DiffIndex::default, |status| {
-            status.index(&root, Counts::Full { sync })
-        }),
-    )
+    Ok(match observe_status(&root, None)? {
+        StatusObservation::Present(status) => status.index(&root, Counts::Full { sync }),
+        StatusObservation::Unchanged | StatusObservation::Missing => DiffIndex::default(),
+    })
+}
+
+enum StatusObservation {
+    Unchanged,
+    Missing,
+    Present(LocalStatus),
 }
 
 fn observe_status(
     root: &Path,
     known: Option<CheckoutStamp>,
-) -> Result<Option<LocalStatus>, String> {
+) -> Result<StatusObservation, String> {
     match LocalStatus::output(root) {
-        Some(raw) => LocalStatus::parse(root, None, &raw, known),
+        Some(raw) => LocalStatus::parse(root, None, &raw, known)
+            .map(|status| status.map_or(StatusObservation::Unchanged, StatusObservation::Present)),
         None if git_is_work_tree(root) => Err("Could not read Git status".into()),
-        None => Ok(Some(LocalStatus::default())),
+        None => Ok(StatusObservation::Missing),
     }
 }
 

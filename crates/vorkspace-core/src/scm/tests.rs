@@ -68,6 +68,43 @@ fn file(dir: &Path, relative: &str) -> ChangedFile {
 }
 
 #[test]
+fn plain_folders_observe_checkout_creation_and_removal() {
+    let dir = tmp();
+    let root = dir.path();
+    let nested = root.join("nested");
+    std::fs::create_dir(&nested).unwrap();
+    std::fs::write(nested.join("notes.txt"), "draft\n").unwrap();
+    let missing = DiffSnapshot::read(&nested).unwrap();
+    assert_eq!(missing.index, DiffIndex::default());
+    assert_eq!(missing.local_head, Some(LocalHead::Missing));
+    assert!(missing.versions.unwrap().is_empty());
+    assert!(missing.stamp.is_none());
+    assert_eq!(diff_files(&nested).unwrap(), DiffIndex::default());
+
+    assert!(init_git(root, "main"));
+    let created = DiffSnapshot::observe(&nested, missing.stamp)
+        .unwrap()
+        .unwrap();
+    assert_eq!(created.local_head, Some(LocalHead::Attached("main".into())));
+    assert_eq!(created.index.head, None);
+    assert_eq!(created.index.files.len(), 1);
+    assert_eq!(created.index.files[0].relative, "notes.txt");
+    assert!(created.stamp.is_some());
+    assert!(DiffSnapshot::observe(&nested, created.stamp)
+        .unwrap()
+        .is_none());
+
+    std::fs::remove_dir_all(root.join(".git")).unwrap();
+    let removed = DiffSnapshot::observe(&nested, created.stamp)
+        .unwrap()
+        .unwrap();
+    assert_eq!(removed.index, DiffIndex::default());
+    assert_eq!(removed.local_head, Some(LocalHead::Missing));
+    assert!(removed.versions.unwrap().is_empty());
+    assert!(removed.stamp.is_none());
+}
+
+#[test]
 fn nested_checkout_detects_same_count_edits_and_preserves_literal_paths() {
     let dir = tmp();
     let root = dir.path();
