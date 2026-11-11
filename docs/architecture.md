@@ -10,7 +10,7 @@ Text layout caches key wrapped geometry by text, font runs, font size, width and
 
 Native workspace and editor menu commands share the ordinary action dispatch path. If AppKit has deactivated the window, the remembered workspace retains its focused control as the action target. Management dialogs keep their own focus and reject underlying editor commands.
 
-Formatting starts a fresh bounded interpreter with Prettier's language and option catalog. Parser and printer code loads on demand from six compiled-in plugins, including plugins needed by embedded languages. Find uses CodeMirror's public text and regular-expression cursors with its grapheme and word-category rules. Asset builds compare the native formatting and Find adapters against the full upstream entry points. The PHP bundle applies guarded lexer and heredoc-highlighting corrections at generation time.
+Formatting starts a fresh bounded interpreter with Prettier's language and option catalog. Parser and printer code loads on demand from six compiled-in plugins, including plugins needed by embedded languages. Find delegates query, word-boundary and replacement policy to CodeMirror's SearchQuery. Asset builds compare native formatting against the full upstream Prettier entry point. The PHP bundle applies guarded lexer and heredoc-highlighting corrections at generation time.
 
 A conversation admits a turn, records its submission state, starts the selected provider CLI through the core process owner, and projects streamed events into the visible transcript. Approvals and Stop remain routed through that owner. Durable receipts and revision checks distinguish accepted work from unknown or stale results. Closing or hiding a view does not mean its conversation was deleted.
 

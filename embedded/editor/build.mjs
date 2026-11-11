@@ -3,7 +3,7 @@ import { readFile, writeFile, readdir } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
 import path from "node:path";
 import vm from "node:vm";
-import { verifyFormat, verifyPhp, verifySearch } from "./verify.mjs";
+import { verifyFormat, verifyPhp } from "./verify.mjs";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const root = path.resolve(here, "../..");
@@ -204,7 +204,6 @@ const search = JSON.parse(
 );
 if (search.matches.length !== 2 || search.matches[0].insert !== "hello!")
   throw new Error("Search smoke check failed");
-verifySearch(searcher);
 const formatSource = await readFile(formatAsset, "utf8");
 const createFormatter = () => {
   const loaded = [];
