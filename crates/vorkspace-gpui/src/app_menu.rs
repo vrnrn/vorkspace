@@ -38,7 +38,11 @@ fn workspace_fallback<A: Action>(cx: &mut App) {
                 // the retained editor target used by ordinary key dispatch.
                 let focus = modal
                     .clone()
-                    .or_else(|| window.focused(cx))
+                    .or_else(|| {
+                        window
+                            .focused(cx)
+                            .filter(|focus| window.is_action_available_in(action.as_ref(), focus))
+                    })
                     .unwrap_or_else(|| shell.menu_focus());
                 if !window.is_action_available_in(action.as_ref(), &focus) {
                     return;

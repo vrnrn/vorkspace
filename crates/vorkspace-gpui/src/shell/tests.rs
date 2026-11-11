@@ -3267,6 +3267,36 @@ fn explorer_files_share_the_review_pane_and_dirty_close_can_cancel_or_save(
 }
 
 #[gpui::test]
+fn native_workspace_menu_retains_its_root_fallback_for_a_retired_focus(cx: &mut TestAppContext) {
+    cx.update(crate::app_menu::init);
+    let (window, _, _) = window(cx);
+    let visual = &mut gpui::VisualTestContext::from_window(window.into(), cx);
+    visual.run_until_parked();
+    let before = window
+        .read_with(visual, |shell, _| shell.workspace.sidebar_visible)
+        .unwrap();
+    visual.deactivate_window();
+    let retired = window
+        .update(visual, |shell, window, cx| {
+            let retired = cx.focus_handle();
+            window.focus(&retired, cx);
+            assert!(!window.is_action_available_in(&ToggleRightPanel, &retired));
+            assert!(window.is_action_available_in(&ToggleRightPanel, &shell.menu_focus()));
+            retired
+        })
+        .unwrap();
+    visual.cx.update(|cx| cx.dispatch_action(&ToggleRightPanel));
+    visual.run_until_parked();
+    assert_eq!(
+        window
+            .read_with(visual, |shell, _| shell.workspace.sidebar_visible)
+            .unwrap(),
+        !before
+    );
+    drop(retired);
+}
+
+#[gpui::test]
 fn native_editor_menu_uses_retained_focus_and_respects_a_management_modal(cx: &mut TestAppContext) {
     cx.update(|cx| {
         vorkspace_ui::clock::use_test_clock(cx);
