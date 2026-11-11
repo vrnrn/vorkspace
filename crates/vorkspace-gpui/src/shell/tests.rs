@@ -3322,10 +3322,15 @@ fn native_editor_menu_uses_retained_focus_and_respects_a_management_modal(cx: &m
         })
         .unwrap();
     visual.run_until_parked();
+    vorkspace_ui::clock::settle_animations(window, visual);
     let editor = window
         .update(visual, |shell, window, cx| {
             let editor = shell.reviews[&id].read(cx).active_editor().unwrap();
-            window.focus(&editor.read(cx).input.read(cx).focus_handle(cx), cx);
+            let input = &editor.read(cx).input;
+            assert_eq!(input.read(cx).content.as_ref(), source);
+            let focus = input.read(cx).focus_handle(cx);
+            assert!(window.is_action_available_in(&crate::file_tools::file_editor::Format, &focus));
+            window.focus(&focus, cx);
             editor
         })
         .unwrap();
