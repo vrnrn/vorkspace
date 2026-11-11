@@ -1,5 +1,7 @@
 # Architecture
 
+The file parser can work on its own. It labels parts of the text as keywords, strings, comments and similar groups. The screen chooses the colors for those labels from your current theme.
+
 The desktop app window is drawn by GPUI. Rust keeps track of conversations, files, Bots, and running agents in the same desktop process. The code is split into several crates, which are smaller building blocks with one job each, such as colors and animation timing or understanding code in the editor. Splitting them changes how the code is organized, not how the app runs: they are all still one app. Saved history lives in SQLite, with extra window settings beside it.
 
 The app reads the saved workspace and Bot list once as it opens. Windows share the same conversation list, including names, draft markers, and working folders. Each window keeps its own tabs and selection. If a conversation is already open in another window, the app takes you to that window.

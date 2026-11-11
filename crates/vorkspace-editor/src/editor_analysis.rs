@@ -1,7 +1,6 @@
 //! The Tauri editor's CodeMirror/Lezer analysis, without a web view. The bundled
 //! parsers and editorLint.ts run in a bounded interpreter on a background worker.
 //! Languages with a Tree-sitter grammar are analysed natively by editor_syntax.
-use gpui::SharedString;
 use rquickjs::{Context, Function, Promise, Runtime};
 use serde::Deserialize;
 use std::{ops::Range, time::Duration};
@@ -17,7 +16,57 @@ pub struct Analysis {
 pub struct Token {
     pub from: usize,
     pub to: usize,
-    pub kind: SharedString,
+    pub kind: TokenKind,
+}
+
+/// Semantic highlighting shared by both parsers. The JS wire names remain
+/// compatible with the embedded language definitions and desktop theme.
+#[derive(Clone, Copy, Debug, Default, Deserialize, PartialEq, Eq)]
+pub enum TokenKind {
+    #[serde(rename = "var(--syntax-keyword)")]
+    Keyword,
+    #[serde(rename = "var(--syntax-callable)")]
+    Callable,
+    #[serde(rename = "var(--syntax-string)")]
+    String,
+    #[serde(rename = "var(--syntax-type)")]
+    Type,
+    #[serde(rename = "var(--syntax-tag)")]
+    Tag,
+    #[serde(rename = "var(--syntax-number)")]
+    Number,
+    #[serde(rename = "var(--syntax-comment)")]
+    Comment,
+    #[serde(rename = "var(--syntax-property)")]
+    Property,
+    #[serde(rename = "var(--syntax-meta)")]
+    Meta,
+    #[serde(rename = "var(--color-markdown-heading)")]
+    Heading,
+    #[serde(rename = "var(--syntax-invalid)")]
+    Invalid,
+    #[default]
+    #[serde(other)]
+    Text,
+}
+
+impl AsRef<str> for TokenKind {
+    fn as_ref(&self) -> &str {
+        match self {
+            Self::Keyword => "var(--syntax-keyword)",
+            Self::Callable => "var(--syntax-callable)",
+            Self::String => "var(--syntax-string)",
+            Self::Type => "var(--syntax-type)",
+            Self::Tag => "var(--syntax-tag)",
+            Self::Number => "var(--syntax-number)",
+            Self::Comment => "var(--syntax-comment)",
+            Self::Property => "var(--syntax-property)",
+            Self::Meta => "var(--syntax-meta)",
+            Self::Heading => "var(--color-markdown-heading)",
+            Self::Invalid => "var(--syntax-invalid)",
+            Self::Text => "",
+        }
+    }
 }
 #[derive(Clone, Debug, Deserialize)]
 pub struct Diagnostic {
@@ -308,7 +357,7 @@ impl Analysis {
                 Some(Token {
                     from,
                     to,
-                    kind: t.kind.clone(),
+                    kind: t.kind,
                 })
             })
             .collect();
@@ -441,6 +490,30 @@ fn analyze_within(
 mod tests {
     use super::*;
     #[test]
+    fn token_classes_decode_to_semantic_kinds_and_unknown_classes_keep_plain_text() {
+        for kind in [
+            TokenKind::Keyword,
+            TokenKind::Callable,
+            TokenKind::String,
+            TokenKind::Type,
+            TokenKind::Tag,
+            TokenKind::Number,
+            TokenKind::Comment,
+            TokenKind::Property,
+            TokenKind::Meta,
+            TokenKind::Heading,
+            TokenKind::Invalid,
+        ] {
+            let wire = serde_json::to_string(kind.as_ref()).unwrap();
+            assert_eq!(serde_json::from_str::<TokenKind>(&wire).unwrap(), kind);
+        }
+        assert_eq!(
+            serde_json::from_str::<TokenKind>("\"var(--future-style)\"").unwrap(),
+            TokenKind::Text
+        );
+        assert_eq!(TokenKind::Text.as_ref(), "");
+    }
+    #[test]
     fn frontend_parsers_report_real_syntax_errors_and_keep_grammar_gap_filters() {
         for (path, source) in [
             ("a.tsx", "export const App = () => <div>hello</div>;"),
@@ -514,7 +587,7 @@ mod edit_tests {
         let token = |from, to| Token {
             from,
             to,
-            kind: "var(--syntax-string)".into(),
+            kind: TokenKind::String,
         };
         let analysis = Analysis {
             tokens: vec![token(0, 3), token(4, 9), token(10, 12)],

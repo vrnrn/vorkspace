@@ -124,12 +124,12 @@ fn large_tsx_analysis_highlights_the_end_of_the_current_and_original_file() {
     assert!(
         tail.tokens
             .iter()
-            .any(|token| token.kind == "var(--syntax-keyword)")
+            .any(|token| token.kind == TokenKind::Keyword)
     );
     assert!(
         tail.tokens
             .iter()
-            .any(|token| token.kind == "var(--syntax-string)")
+            .any(|token| token.kind == TokenKind::String)
     );
     assert!(
         analysis

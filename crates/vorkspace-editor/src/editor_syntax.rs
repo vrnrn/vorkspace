@@ -2,8 +2,7 @@
 //! errors and the git gutter, in the `Analysis` shape the editor renders. A
 //! session keeps its last tree, so an edit reparses and re-highlights only the
 //! lines it touched. Languages without a grammar here use the QuickJS path.
-use crate::editor_analysis::{Analysis, Change, Diagnostic, Edit, Fold, Token};
-use gpui::SharedString;
+use crate::editor_analysis::{Analysis, Change, Diagnostic, Edit, Fold, Token, TokenKind};
 use std::{
     collections::HashMap,
     ops::Range,
@@ -111,7 +110,7 @@ enum Capture {
     /// Template substitutions and the like: the default colour inside an
     /// otherwise coloured node.
     Reset,
-    Color(&'static str),
+    Color(TokenKind),
 }
 
 /// Tree-sitter capture names → the editor's `--syntax-*` groups, matching the
@@ -120,25 +119,25 @@ fn capture(name: &str, attribute_is_property: bool) -> Capture {
     let group = |name: &str| name.split('.').next().unwrap_or(name).to_owned();
     Capture::Color(match name {
         "embedded" => return Capture::Reset,
-        "boolean" | "constant.builtin" | "variable.builtin" => "var(--syntax-keyword)",
-        "label" => "var(--syntax-callable)",
-        "escape" | "character" => "var(--syntax-string)",
-        "constructor" | "namespace" | "module" => "var(--syntax-type)",
-        "tag.error" => "var(--syntax-invalid)",
-        "number" | "float" | "constant.numeric" => "var(--syntax-number)",
-        "text.title" => "var(--color-markdown-heading)",
-        "string.special.key" => "var(--syntax-property)",
+        "boolean" | "constant.builtin" | "variable.builtin" => TokenKind::Keyword,
+        "label" => TokenKind::Callable,
+        "escape" | "character" => TokenKind::String,
+        "constructor" | "namespace" | "module" => TokenKind::Type,
+        "tag.error" => TokenKind::Invalid,
+        "number" | "float" | "constant.numeric" => TokenKind::Number,
+        "text.title" => TokenKind::Heading,
+        "string.special.key" => TokenKind::Property,
         _ => match group(name).as_str() {
-            "keyword" => "var(--syntax-keyword)",
-            "function" => "var(--syntax-callable)",
-            "string" => "var(--syntax-string)",
-            "type" => "var(--syntax-type)",
-            "tag" => "var(--syntax-tag)",
-            "comment" => "var(--syntax-comment)",
-            "property" => "var(--syntax-property)",
-            "attribute" if attribute_is_property => "var(--syntax-property)",
-            "attribute" => "var(--syntax-meta)",
-            _ if name.starts_with("markup.heading") => "var(--color-markdown-heading)",
+            "keyword" => TokenKind::Keyword,
+            "function" => TokenKind::Callable,
+            "string" => TokenKind::String,
+            "type" => TokenKind::Type,
+            "tag" => TokenKind::Tag,
+            "comment" => TokenKind::Comment,
+            "property" => TokenKind::Property,
+            "attribute" if attribute_is_property => TokenKind::Property,
+            "attribute" => TokenKind::Meta,
+            _ if name.starts_with("markup.heading") => TokenKind::Heading,
             _ => return Capture::Ignore,
         },
     })
@@ -328,11 +327,7 @@ fn highlight(grammar: &Grammar, tree: &Tree, text: &str, range: Range<usize>) ->
         {
             last.to = to;
         } else {
-            tokens.push(Token {
-                from,
-                to,
-                kind: SharedString::new_static(kind),
-            });
+            tokens.push(Token { from, to, kind });
         }
     };
     let mut stack: Vec<(usize, Capture)> = Vec::new();
@@ -663,7 +658,7 @@ fn changes(original: &str, current: &str, original_tokens: &[Token]) -> Vec<Chan
                     .map(|t| Token {
                         from: t.from.max(from_a) - from_a,
                         to: t.to.min(to_a) - from_a,
-                        kind: t.kind.clone(),
+                        kind: t.kind,
                     })
                     .collect(),
             }
@@ -713,7 +708,7 @@ fn splice(tokens: Vec<Token>, dirty: &[Range<usize>], fresh: Vec<Token>) -> Vec<
                 out.push(Token {
                     from,
                     to: range.start,
-                    kind: token.kind.clone(),
+                    kind: token.kind,
                 });
             }
             from = from.max(range.end);

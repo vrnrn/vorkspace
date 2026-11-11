@@ -4,6 +4,8 @@
 
 `crates/vorkspace-gpui` owns windows, focus, layout, input, rendering, and interactive views, on top of the smaller `vorkspace-ui`, `vorkspace-runtime`, `vorkspace-editor`, `vorkspace-model`, and `vorkspace-macos` crates. `crates/vorkspace-core` owns provider transports, persistence, filesystem/Git operations, account configuration, Bot state, and application effects. These app owners execute in one desktop process. Optional [Codebase Memory](codebase.md) runs a pinned local engine in a private subprocess namespace; the desktop core remains the authority for project access and cancellation.
 
+`vorkspace-editor` analyzes source independently of the window framework. Tree-sitter and the bounded QuickJS fallback publish byte ranges and compact semantic token kinds. Embedded parser class names decode at that boundary, including a plain-text fallback for unknown styles. The desktop resolves the resulting classes through the live theme.
+
 A conversation admits a turn, records its submission state, starts the selected provider CLI through the core process owner, and projects streamed events into the visible transcript. Approvals and Stop remain routed through that owner. Durable receipts and revision checks distinguish accepted work from unknown or stale results. Closing or hiding a view does not mean its conversation was deleted.
 
 The core reads and writes the desktop SQLite schema directly. Native viewport and supplementary state live in an atomically written `.gpui.json` sidecar. Bot files live under the selected data directory. History projection preserves unloaded fields and canonical provider session IDs; conflicting writes fail instead of replacing newer state. [Data continuity](data-storage.md) explains historical-data reads.

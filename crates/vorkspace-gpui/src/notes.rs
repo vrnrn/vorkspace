@@ -367,7 +367,7 @@ impl Notes {
                     .push(vorkspace_editor::editor_analysis::Token {
                         from: start,
                         to: at - usize::from(line.ends_with('\n')),
-                        kind: "var(--color-markdown-heading)".into(),
+                        kind: vorkspace_editor::editor_analysis::TokenKind::Heading,
                     });
             }
         }

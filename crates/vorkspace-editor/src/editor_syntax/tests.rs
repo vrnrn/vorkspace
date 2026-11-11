@@ -47,7 +47,7 @@ fn normalized(tokens: &[Token]) -> Vec<(usize, usize, String)> {
     for t in tokens {
         match out.last_mut() {
             Some(last) if last.1 == t.from && last.2 == t.kind.as_ref() => last.1 = t.to,
-            _ => out.push((t.from, t.to, t.kind.to_string())),
+            _ => out.push((t.from, t.to, t.kind.as_ref().to_owned())),
         }
     }
     out
@@ -260,7 +260,7 @@ fn changes_carry_the_baselines_tokens() {
     let string = change
         .tokens
         .iter()
-        .find(|t| t.kind == "var(--syntax-string)")
+        .find(|t| t.kind == TokenKind::String)
         .unwrap();
     assert_eq!(&change.original[string.from..string.to], "\"x\"");
 }

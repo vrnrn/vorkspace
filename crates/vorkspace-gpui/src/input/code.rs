@@ -1436,7 +1436,7 @@ fn token_line(
         }
         runs.push(TextRun {
             len: token.to - token.from,
-            color: vorkspace_ui::theme::syntax_color(&token.kind),
+            color: vorkspace_ui::theme::syntax_color(token.kind.as_ref()),
             ..base.clone()
         });
         at = token.to;
@@ -1481,7 +1481,7 @@ fn shape(i: &Input, row: usize, width: Option<Pixels>, w: &mut Window) -> Wrappe
     for token in tokens.iter().skip(first).take_while(|t| t.from < end) {
         let from = token.from.max(start);
         let to = token.to.min(end);
-        let color = vorkspace_ui::theme::syntax_color(&token.kind);
+        let color = vorkspace_ui::theme::syntax_color(token.kind.as_ref());
         if let Some(fold) = code.geometry.fold_at(row) {
             if from < fold.from {
                 spans.push((from - start, to.min(fold.from) - start, color));
@@ -1704,7 +1704,7 @@ impl Element for CodeElement {
                                     .map(|t| vorkspace_editor::editor_analysis::Token {
                                         from: t.from.saturating_sub(offset),
                                         to: t.to.min(offset + text.len()) - offset,
-                                        kind: t.kind.clone(),
+                                        kind: t.kind,
                                     })
                                     .collect();
                                 offset += text.len() + 1;
