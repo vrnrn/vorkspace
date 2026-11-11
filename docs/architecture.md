@@ -6,6 +6,12 @@
 
 `vorkspace-editor` analyzes source independently of the window framework. Tree-sitter and the bounded QuickJS fallback publish byte ranges and compact semantic token kinds. Embedded parser class names decode at that boundary, including a plain-text fallback for unknown styles. The desktop resolves the resulting classes through the live theme.
 
+Text layout caches key wrapped geometry by text, font runs, font size, width and remaining line limit. Unwrapped shaping remains reusable independently of wrapping. Frame retention transfers only validated layout ranges, and font generation changes invalidate both frame caches.
+
+Native workspace and editor menu commands share the ordinary action dispatch path. If AppKit has deactivated the window, the remembered workspace retains its focused control as the action target. Management dialogs keep their own focus and reject underlying editor commands.
+
+Formatting starts a fresh bounded interpreter with Prettier's language and option catalog. Parser and printer code loads on demand from six compiled-in plugins, including plugins needed by embedded languages. Find uses CodeMirror's public text and regular-expression cursors with its grapheme and word-category rules. Asset builds compare the native formatting and Find adapters against the full upstream entry points. The PHP bundle applies guarded lexer and heredoc-highlighting corrections at generation time.
+
 A conversation admits a turn, records its submission state, starts the selected provider CLI through the core process owner, and projects streamed events into the visible transcript. Approvals and Stop remain routed through that owner. Durable receipts and revision checks distinguish accepted work from unknown or stale results. Closing or hiding a view does not mean its conversation was deleted.
 
 The core reads and writes the desktop SQLite schema directly. Native viewport and supplementary state live in an atomically written `.gpui.json` sidecar. Bot files live under the selected data directory. History projection preserves unloaded fields and canonical provider session IDs; conflicting writes fail instead of replacing newer state. [Data continuity](data-storage.md) explains historical-data reads.

@@ -1,11 +1,21 @@
-// Embed Prettier parsers and native editor formatting defaults.
+// Prettier resolves embedded languages through the same lazy plugin catalog.
 import { formatWithCursor } from "prettier/standalone";
-import * as estree from "prettier/plugins/estree";
-import * as babel from "prettier/plugins/babel";
-import * as typescript from "prettier/plugins/typescript";
-import * as postcss from "prettier/plugins/postcss";
-import * as html from "prettier/plugins/html";
-import * as markdown from "prettier/plugins/markdown";
+import catalog from "native-format-plugins";
+
+const plugins = catalog.map(({ name, parsers, printers, ...metadata }) => {
+  let plugin;
+  const load = () => (plugin ??= globalThis.vorkspaceLoadFormatPlugin(name));
+  return {
+    ...metadata,
+    parsers: Object.fromEntries(
+      parsers.map((parser) => [parser, () => load().parsers[parser]]),
+    ),
+    printers: Object.fromEntries(
+      printers.map((printer) => [printer, () => load().printers[printer]]),
+    ),
+  };
+});
+
 globalThis.vorkspaceFormat = async (path, source, cursorOffset, parser) => {
   try {
     return JSON.stringify(
@@ -13,7 +23,7 @@ globalThis.vorkspaceFormat = async (path, source, cursorOffset, parser) => {
         filepath: path,
         parser,
         cursorOffset,
-        plugins: [estree, babel, typescript, postcss, html, markdown],
+        plugins,
       }),
     );
   } catch {

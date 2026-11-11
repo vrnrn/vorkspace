@@ -24,6 +24,34 @@ fn search_and_replace_share_codemirror_unicode_captures_and_word_boundaries() {
     );
 }
 #[test]
+fn prettier_loads_embedded_parsers_through_the_native_boundary() {
+    for (path, source, fragment) in [
+        (
+            "a.html",
+            "<script>const value={x:1}</script><style>body{color:red}</style>",
+            "const value = { x: 1 };",
+        ),
+        (
+            "a.md",
+            "```tsx\nconst value={x:1}\n```\n",
+            "const value = { x: 1 };",
+        ),
+        (
+            "a.mdx",
+            "export const value={x:1}\n\n<section>{value.x}</section>\n",
+            "export const value = { x: 1 };",
+        ),
+    ] {
+        let at = source.find("value").unwrap();
+        let formatted = format(path, source, at).unwrap().unwrap();
+        assert!(
+            formatted.formatted.contains(fragment),
+            "{path}: {formatted:?}"
+        );
+        assert!(formatted.formatted[formatted.cursor..].starts_with("value"));
+    }
+}
+#[test]
 fn prettier_and_emmet_keep_cursor_bytes_and_the_frontend_defaults() {
     let source = "const emoji='🙂';const value={x:1}";
     let result = format("a.ts", source, source.find("value").unwrap())

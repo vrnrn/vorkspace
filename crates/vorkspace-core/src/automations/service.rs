@@ -1,10 +1,10 @@
 //! Owns automation storage, transactional admission and recovery.
+use super::schema::{ensure_schema, RECOVERABLE_RUN};
 use super::{
     has_time_trigger, hydrate_triggers, new_id, next_run_at, normalize_triggers, now_millis,
     validate_id, validate_upsert, Automation, AutomationEventClaim, AutomationRun,
     AutomationUpsert, DueAutomationRun, MAX_PROMPT,
 };
-use super::schema::{ensure_schema, RECOVERABLE_RUN};
 use rusqlite::{params, params_from_iter, Connection, OptionalExtension, TransactionBehavior};
 use std::path::Path;
 

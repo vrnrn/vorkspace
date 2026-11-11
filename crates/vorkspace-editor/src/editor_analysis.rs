@@ -1,9 +1,11 @@
-//! The Tauri editor's CodeMirror/Lezer analysis, without a web view. The bundled
-//! parsers and editorLint.ts run in a bounded interpreter on a background worker.
+//! Native CodeMirror/Lezer analysis and Prettier formatting. The bundled
+//! parsers run in a bounded interpreter on a background worker.
 //! Languages with a Tree-sitter grammar are analysed natively by editor_syntax.
-use rquickjs::{Context, Function, Promise, Runtime};
+use rquickjs::{Context, Ctx, Function, Object, Promise, Runtime};
 use serde::Deserialize;
 use std::{ops::Range, time::Duration};
+
+include!("../assets/native-format-plugins.rs");
 
 #[derive(Clone, Debug, Default, Deserialize)]
 pub struct Analysis {
@@ -246,6 +248,10 @@ pub fn format(path: &str, source: &str, at: usize) -> Result<Option<Formatted>, 
     let (_runtime, context) = runtime()?;
     let json = context
         .with(|ctx| -> rquickjs::Result<String> {
+            ctx.globals().set(
+                "vorkspaceLoadFormatPlugin",
+                Function::new(ctx.clone(), load_format_plugin)?,
+            )?;
             ctx.eval::<(), _>(include_str!("../assets/native-format.js"))?;
             let function: Function = ctx.globals().get("vorkspaceFormat")?;
             function
@@ -254,6 +260,21 @@ pub fn format(path: &str, source: &str, at: usize) -> Result<Option<Formatted>, 
         })
         .map_err(|e| e.to_string())?;
     formatted_result(&json)
+}
+
+fn load_format_plugin<'js>(ctx: Ctx<'js>, name: String) -> rquickjs::Result<Object<'js>> {
+    let (_, source) = FORMAT_PLUGINS
+        .iter()
+        .find(|(id, _)| *id == name)
+        .ok_or_else(|| {
+            rquickjs::Error::new_from_js_message(
+                "string",
+                "formatter plugin",
+                "Unknown embedded formatter plugin",
+            )
+        })?;
+    ctx.eval::<(), _>(*source)?;
+    ctx.globals().get("vorkspaceFormatPlugin")
 }
 pub fn emmet(path: &str, source: &str, at: usize) -> Result<Option<Formatted>, String> {
     let (_runtime, context) = runtime()?;
