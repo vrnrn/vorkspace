@@ -531,6 +531,19 @@ impl ResourceMonitor {
         let memory = rows.iter().try_fold(0u64, |total, row| {
             Some(total.saturating_add(row.memory_bytes?))
         });
+        let process_summary = format!(
+            "{} {} · {}",
+            rows.len(),
+            if rows.len() == 1 {
+                "process"
+            } else {
+                "processes"
+            },
+            memory.map_or_else(
+                || "Usage unavailable".into(),
+                |bytes| format!("{} memory", format_memory(bytes)),
+            )
+        );
         let expanded = self.expanded.contains(&id);
         let turn = rows.iter().find_map(|process| process.turn.clone());
         let stopping_session = self.stopping.as_ref().is_some_and(|stop| {
@@ -616,6 +629,8 @@ impl ResourceMonitor {
                     .id(("resource-processes", id as u64))
                     .role(Role::Button)
                     .map(vorkspace_ui::theme::tab_reachable)
+                    .aria_label(format!("Processes for {title}"))
+                    .aria_description(process_summary.clone())
                     .aria_expanded(expanded)
                     .ml(px(34.))
                     .mt(px(2.))
@@ -634,19 +649,7 @@ impl ResourceMonitor {
                         },
                         12.,
                     ))
-                    .child(format!(
-                        "{} {} · {}",
-                        rows.len(),
-                        if rows.len() == 1 {
-                            "process"
-                        } else {
-                            "processes"
-                        },
-                        memory.map_or_else(
-                            || "Usage unavailable".into(),
-                            |bytes| format!("{} memory", format_memory(bytes)),
-                        )
-                    ))
+                    .child(process_summary)
                     .on_click(cx.listener(move |this, _, _, cx| {
                         if !this.expanded.remove(&id) {
                             this.expanded.insert(id);
@@ -692,7 +695,20 @@ impl ResourceMonitor {
                 StopTarget::Session { id, .. } => agent && *id == session,
                 StopTarget::Tool(stamp) => *stamp == identity,
             });
+        let usage = format!(
+            "{} · {} · PID {pid}",
+            process
+                .cpu_percent
+                .map_or_else(|| "CPU unavailable".into(), |cpu| format!("{cpu:.0}% CPU"),),
+            process
+                .memory_bytes
+                .map_or_else(|| "Memory unavailable".into(), format_memory),
+        );
         div()
+            .id(("resource-process", u64::from(pid)))
+            .role(Role::Group)
+            .aria_label(process.command.clone())
+            .aria_description(usage.clone())
             .flex()
             .min_w_0()
             .items_center()
@@ -714,16 +730,7 @@ impl ResourceMonitor {
                             .truncate()
                             .text_size(px(10.))
                             .text_color(content(0.4))
-                            .child(format!(
-                                "{} · {} · PID {pid}",
-                                process.cpu_percent.map_or_else(
-                                    || "CPU unavailable".into(),
-                                    |cpu| format!("{cpu:.0}% CPU"),
-                                ),
-                                process
-                                    .memory_bytes
-                                    .map_or_else(|| "Memory unavailable".into(), format_memory,),
-                            )),
+                            .child(usage),
                     ),
             )
             .child(

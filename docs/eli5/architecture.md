@@ -46,6 +46,8 @@ When you open a file from a saved turn, Review shows that file as it was before 
 
 Open **View → Running Work** to see the app’s local agents. A Stop click is tied to the reply shown in the list, even from another window or after its chat view disappears. The worker keeps ownership until its final save. An old Stop or screen update cannot affect a newer reply.
 
+If the app cannot read process usage, it still lists the agents it knows about and lets you stop them. Missing CPU and memory readings are labeled unavailable.
+
 When a Bot receives a message, the app sends that message's attachments and options with its own reply. Your composer and chat settings stay ready for your next message.
 
 Side questions keep their own replies and unfinished drafts. You can switch between them or close the sheet and return later. A side question can read the conversation it came from and runs separately from the main reply.
