@@ -141,15 +141,6 @@ impl AppCore {
                     .is_some_and(|m| m.read(cx).calling_view(session, cx).is_some())
             })
     }
-
-    pub(in crate::shell) fn running_turn(
-        &self,
-        id: i64,
-        token: &vorkspace_core::process::TurnToken,
-        cx: &App,
-    ) -> Option<Entity<Conversation>> {
-        crate::conversation::turn_driver::running_view(&self.store, id, token, cx)
-    }
 }
 
 impl Shell {

@@ -22,7 +22,7 @@ pub struct Finished {
     pub commands: Option<Vec<provider::NativeCommand>>,
 }
 
-pub fn run(
+pub(super) fn run(
     summary: Session,
     settings: Settings,
     store: Database,

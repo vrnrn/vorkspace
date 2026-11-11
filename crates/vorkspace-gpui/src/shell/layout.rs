@@ -293,12 +293,14 @@ impl Shell {
         let request = request.clone();
         // Let this Shell update finish before the conversation publishes Stop.
         cx.defer(move |cx| {
-            let view = core.as_ref().and_then(|core| {
-                core.read(cx)
-                    .running_turn(request.session, &request.turn, cx)
-            });
-            let stopped = view.is_some_and(|view| {
-                view.update(cx, |view, cx| view.stop_running_turn(&request.turn, cx))
+            let store = core.as_ref().map(|core| core.read(cx).store.clone());
+            let stopped = store.is_some_and(|store| {
+                crate::conversation::turn_driver::stop_running(
+                    &store,
+                    request.session,
+                    &request.turn,
+                    cx,
+                )
             });
             let _ = monitor.update(cx, |monitor, cx| {
                 monitor.finish_session_stop(&request, stopped, cx)

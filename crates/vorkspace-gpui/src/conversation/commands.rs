@@ -1,7 +1,7 @@
 //! Composer commands are handled before taking a draft or entering the turn queue.
 use super::*;
 use vorkspace_core::provider;
-use vorkspace_runtime::runtime::manual_compaction::{self, Started};
+use vorkspace_runtime::runtime::manual_compaction::Started;
 
 impl Conversation {
     /// Returns true when this input belongs to a local command, including failures.
@@ -89,7 +89,6 @@ impl Conversation {
             return;
         };
         self.cancel = admission.cancel_handle();
-        let cancel = self.cancel.clone();
         self.turn_state = TurnState::Running;
         self.notification_cancelled = false;
         self.review
@@ -99,12 +98,12 @@ impl Conversation {
         self.status = "Compacting context…".into();
         let compact_draft = self.input.read(cx).content.clone();
         let clear_command = compact_draft.trim().eq_ignore_ascii_case("/compact");
-        let store = self.store.clone();
         self.completion
             .update(cx, |completion, cx| completion.dismiss(cx));
         let (publish, progress) = async_channel::bounded(1);
+        let (worker, projection_owner) = admission.into_worker();
         let work = cx.background_executor().spawn(async move {
-            manual_compaction::run(summary, settings, store, cancel, move |history| {
+            worker.compact(summary, settings, move |history| {
                 let _ = publish.try_send(history);
             })
         });
@@ -132,7 +131,7 @@ impl Conversation {
                 }
             });
             let finished = work.await;
-            if !cx.update(|cx| admission.release(cx)) {
+            if !cx.update(|cx| projection_owner.release(cx)) {
                 return;
             }
             let _ = this.update(cx, |this, cx| {

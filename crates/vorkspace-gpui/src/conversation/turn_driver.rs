@@ -1,6 +1,7 @@
-//! Application-owned admission, worker lifetime and delivery to the live view.
+//! Optional view projection of turns whose admission belongs to the runtime.
 use super::{Conversation, turn_projection::TurnProjection};
 use gpui::{App, Entity, Global, WeakEntity};
+use runtime::turns::{self, SessionKey};
 use std::{
     collections::HashMap,
     sync::{Arc, atomic::AtomicBool},
@@ -8,36 +9,24 @@ use std::{
 use vorkspace_core::{agent::Control, process::TurnToken, remote::Connections};
 use vorkspace_runtime::runtime::{self, Database, Update};
 
-#[derive(Clone, Copy, PartialEq, Eq, Hash)]
-struct SessionKey {
-    store: usize,
-    session: i64,
-}
-
-impl SessionKey {
-    fn new(store: &Database, session: i64) -> Self {
-        Self {
-            store: Arc::as_ptr(store) as usize,
-            session,
-        }
-    }
-}
-
 struct Active {
     token: TurnToken,
     view: WeakEntity<Conversation>,
 }
 
 #[derive(Default)]
-struct Runs(HashMap<SessionKey, Active>);
-impl Global for Runs {}
+struct RunViews {
+    runtime: turns::Runs,
+    views: HashMap<SessionKey, Active>,
+}
+impl Global for RunViews {}
 
 pub(super) const ALREADY_ACTIVE: &str =
     "This conversation is still settling an earlier turn. Your input was preserved.";
 
 pub(super) fn available(store: &Database, session: i64, cx: &App) -> bool {
-    cx.try_global::<Runs>()
-        .is_none_or(|runs| !runs.0.contains_key(&SessionKey::new(store, session)))
+    cx.try_global::<RunViews>()
+        .is_none_or(|runs| runs.runtime.available(store, session))
 }
 
 pub(crate) fn running_view(
@@ -46,11 +35,9 @@ pub(crate) fn running_view(
     token: &TurnToken,
     cx: &App,
 ) -> Option<Entity<Conversation>> {
-    let active = cx
-        .try_global::<Runs>()?
-        .0
-        .get(&SessionKey::new(store, session))?;
-    if &active.token == token {
+    let runs = cx.try_global::<RunViews>()?;
+    let active = runs.views.get(&SessionKey::new(store, session))?;
+    if &active.token == token && runs.runtime.owns(store, session, token) {
         active.view.upgrade()
     } else {
         None
@@ -58,10 +45,28 @@ pub(crate) fn running_view(
 }
 
 pub(super) struct Admission {
-    key: SessionKey,
-    store: Database,
+    worker: turns::Admission,
     view: WeakEntity<Conversation>,
-    cancel: Arc<AtomicBool>,
+}
+
+pub(super) struct ProjectionOwner {
+    key: SessionKey,
+    token: TurnToken,
+}
+
+pub(crate) fn stop_running(
+    store: &Database,
+    session: i64,
+    token: &TurnToken,
+    cx: &mut App,
+) -> bool {
+    if let Some(view) = running_view(store, session, token, cx)
+        && view.update(cx, |view, cx| view.stop_running_turn(token, cx))
+    {
+        return true;
+    }
+    cx.try_global::<RunViews>()
+        .is_some_and(|runs| runs.runtime.stop(store, session, token))
 }
 
 pub(super) fn admit(
@@ -70,27 +75,29 @@ pub(super) fn admit(
     view: WeakEntity<Conversation>,
     cx: &mut App,
 ) -> Option<Admission> {
-    use std::collections::hash_map::Entry;
-    let key = SessionKey::new(store, session);
-    let Entry::Vacant(slot) = cx.default_global::<Runs>().0.entry(key) else {
-        return None;
-    };
-    let cancel = Arc::new(AtomicBool::new(false));
-    slot.insert(Active {
-        token: (&cancel).into(),
-        view: view.clone(),
-    });
-    Some(Admission {
-        key,
-        store: store.clone(),
-        view,
-        cancel,
-    })
+    let runs = cx.default_global::<RunViews>();
+    let worker = runs.runtime.admit(store, session)?;
+    runs.views.insert(
+        worker.key(),
+        Active {
+            token: worker.token(),
+            view: view.clone(),
+        },
+    );
+    Some(Admission { worker, view })
 }
 
 impl Admission {
     pub(super) fn cancel_handle(&self) -> Arc<AtomicBool> {
-        self.cancel.clone()
+        self.worker.cancel_handle()
+    }
+
+    pub(super) fn into_worker(self) -> (turns::Admission, ProjectionOwner) {
+        let owner = ProjectionOwner {
+            key: self.worker.key(),
+            token: self.worker.token(),
+        };
+        (self.worker, owner)
     }
 
     pub(super) fn launch(
@@ -100,32 +107,28 @@ impl Admission {
         projection: TurnProjection,
         cx: &mut App,
     ) -> std::sync::mpsc::Sender<Control> {
-        let store = self.store.clone();
+        let view = self.view.clone();
+        let (worker, projection_owner) = self.into_worker();
         let (controls, control_rx) = std::sync::mpsc::channel();
         let (tx, rx) = async_channel::bounded(8);
         let (worker_alive, done) = async_channel::bounded::<()>(1);
-        let cancel = self.cancel_handle();
         cx.background_executor()
             .spawn(async move {
-                // Keep admission through the worker's last save, including when
-                // the recipient view has gone away or the worker unwinds.
                 let _worker_alive = worker_alive;
-                if let Some(client) = remote {
-                    runtime::remote::run_with_client(client, input, control_rx, store, cancel, tx);
-                } else {
-                    runtime::run_turn(input, control_rx, store, cancel, tx);
-                }
+                worker.run(input, remote, control_rx, tx);
             })
             .detach();
-        project(self.view.clone(), rx, projection, Some((self, done)), cx);
+        project(view, rx, projection, Some((projection_owner, done)), cx);
         controls
     }
+}
 
+impl ProjectionOwner {
     pub(super) fn release(self, cx: &mut App) -> bool {
-        let runs = &mut cx.default_global::<Runs>().0;
+        let runs = &mut cx.default_global::<RunViews>().views;
         if runs
             .get(&self.key)
-            .is_some_and(|run| run.token.matches(&self.cancel))
+            .is_some_and(|run| run.token == self.token)
         {
             runs.remove(&self.key);
             true
@@ -139,10 +142,11 @@ pub(super) fn project(
     view: WeakEntity<Conversation>,
     rx: async_channel::Receiver<Update>,
     mut projection: TurnProjection,
-    run: Option<(Admission, async_channel::Receiver<()>)>,
+    run: Option<(ProjectionOwner, async_channel::Receiver<()>)>,
     cx: &mut App,
 ) {
     cx.spawn(async move |cx| {
+        let mut attached = true;
         let terminal = loop {
             let Ok(update) = rx.recv().await else {
                 break None;
@@ -150,16 +154,22 @@ pub(super) fn project(
             if update.finished() {
                 break Some(update);
             }
-            if view
-                .update(cx, |view, cx| projection.apply(view, update, cx))
-                .is_err()
+            if attached
+                && view
+                    .update(cx, |view, cx| projection.apply(view, update, cx))
+                    .is_err()
             {
-                break None;
+                attached = false;
+                if run.is_none() {
+                    break None;
+                }
             }
-            // A ready channel can refill without yielding to input or paint.
-            cx.background_executor()
-                .timer(std::time::Duration::from_millis(1))
-                .await;
+            if attached {
+                // A ready channel can refill without yielding to input or paint.
+                cx.background_executor()
+                    .timer(std::time::Duration::from_millis(1))
+                    .await;
+            }
         };
         drop(rx);
         let lease = if let Some((lease, done)) = run {
@@ -204,34 +214,94 @@ mod tests {
         let id = summary.id;
         let view = cx.new(|cx| Conversation::new(summary.clone(), store.clone(), cx));
         let (updates, rx) = async_channel::bounded(1);
-        let (worker, done) = async_channel::bounded(1);
-        let token = cx.update(|cx| {
+        let (alive, done) = async_channel::bounded(1);
+        let (worker, token) = cx.update(|cx| {
             let admission = admit(&store, id, view.downgrade(), cx).unwrap();
-            let token = (&admission.cancel).into();
+            let token = admission.worker.token();
             assert_eq!(running_view(&store, id, &token, cx), Some(view.clone()));
             assert!(admit(&store, id, view.downgrade(), cx).is_none());
+            let (worker, owner) = admission.into_worker();
             project(
                 view.downgrade(),
                 rx,
                 TurnProjection::new(0, "codex".into(), String::new(), None, None),
-                Some((admission, done)),
+                Some((owner, done)),
                 cx,
             );
-            token
+            (worker, token)
         });
         drop(view);
+        updates.try_send(Update::default()).unwrap();
+        cx.run_until_parked();
+        assert!(
+            !updates.is_closed(),
+            "the admitted worker keeps its progress receiver"
+        );
+        cx.update(|cx| {
+            assert!(!available(&store, id, cx));
+            assert!(stop_running(&store, id, &token, cx));
+        });
+        assert!(
+            worker
+                .cancel_handle()
+                .load(std::sync::atomic::Ordering::Relaxed)
+        );
         drop(updates);
         cx.run_until_parked();
         cx.update(|cx| assert!(!available(&store, id, cx)));
         drop(worker);
-        cx.run_until_parked();
         let successor = cx.new(|cx| Conversation::new(summary, store.clone(), cx));
-        cx.update(|cx| {
+        let (worker, owner, next) = cx.update(|cx| {
             let admission = admit(&store, id, successor.downgrade(), cx).unwrap();
             assert!(running_view(&store, id, &token, cx).is_none());
-            let token = (&admission.cancel).into();
-            assert_eq!(running_view(&store, id, &token, cx), Some(successor));
-            assert!(admission.release(cx));
+            let next = admission.worker.token();
+            let (worker, owner) = admission.into_worker();
+            (worker, owner, next)
         });
+        // The earlier projection cleanup reaches the UI after its successor
+        // registered. It cannot remove that successor's view or cancellation.
+        drop(alive);
+        cx.run_until_parked();
+        cx.update(|cx| {
+            assert_eq!(running_view(&store, id, &next, cx), Some(successor));
+            assert!(!stop_running(&store, id, &token, cx));
+            assert!(!available(&store, id, cx));
+            assert!(owner.release(cx));
+        });
+        assert!(
+            !worker
+                .cancel_handle()
+                .load(std::sync::atomic::Ordering::Relaxed)
+        );
+        drop(worker);
+        cx.update(|cx| assert!(available(&store, id, cx)));
+    }
+
+    #[gpui::test]
+    fn a_detached_observer_retires_without_retaining_a_runtime_run(cx: &mut gpui::TestAppContext) {
+        let store = Arc::new(std::sync::Mutex::new(
+            vorkspace_core::store::Store::open(std::path::Path::new(":memory:")).unwrap(),
+        ));
+        let summary = runtime::locked(&store)
+            .unwrap()
+            .create("codex", "/tmp")
+            .unwrap();
+        let id = summary.id;
+        let view = cx.new(|cx| Conversation::new(summary, store.clone(), cx));
+        let (updates, rx) = async_channel::bounded(1);
+        cx.update(|cx| {
+            project(
+                view.downgrade(),
+                rx,
+                TurnProjection::new(0, "codex".into(), String::new(), None, None),
+                None,
+                cx,
+            )
+        });
+        drop(view);
+        updates.try_send(Update::default()).unwrap();
+        cx.run_until_parked();
+        assert!(updates.is_closed());
+        cx.update(|cx| assert!(available(&store, id, cx)));
     }
 }

@@ -564,7 +564,7 @@ fn reply(question: &Question, answers: Vec<Vec<String>>) -> Value {
     }
     json!({"kind":"answered","answers":selected,"custom":custom})
 }
-pub fn run(
+pub(super) fn run(
     input: super::TurnInput,
     controls: std::sync::mpsc::Receiver<Control>,
     store: Database,
@@ -578,7 +578,7 @@ pub fn run(
         }
     }
 }
-pub fn run_with_client(
+pub(super) fn run_with_client(
     client: Arc<vorkspace_core::remote::Connections>,
     input: super::TurnInput,
     controls: std::sync::mpsc::Receiver<Control>,

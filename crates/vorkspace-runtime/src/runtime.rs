@@ -21,6 +21,7 @@ pub mod native_history;
 mod persistence;
 pub mod remote;
 mod submissions;
+pub mod turns;
 mod updates;
 pub use updates::{
     HistoryRecovery, ProviderBinding, ProviderConfiguration, TranscriptPatch, TurnOutcome,
@@ -63,7 +64,7 @@ pub fn locked(store: &Database) -> Result<std::sync::MutexGuard<'_, Store>, Stri
         .map_err(|_| "Native session store unavailable".into())
 }
 
-pub fn run_turn(
+fn run_turn(
     input: TurnInput,
     controls: std::sync::mpsc::Receiver<Control>,
     store: Database,
