@@ -12,7 +12,7 @@ use crate::notifications::{
     platform, reminders,
 };
 use crate::settings::{Preferences, ProjectNotifications};
-use std::time::Duration;
+use std::{collections::BTreeSet, time::Duration};
 
 pub(super) struct State {
     pub region: AnchorSlot,
@@ -29,6 +29,7 @@ pub(super) struct State {
     #[cfg(test)]
     spoken: Vec<String>,
     responding: HashSet<i64>,
+    pending_input_sessions: BTreeSet<i64>,
     sequence: u64,
     badge: usize,
     sounds_enabled: bool,
@@ -58,6 +59,7 @@ impl State {
             #[cfg(test)]
             spoken: Vec::new(),
             responding: HashSet::new(),
+            pending_input_sessions: BTreeSet::new(),
             sequence: 0,
             badge: 0,
             sounds_enabled: workspace.preferences.sounds,
@@ -94,10 +96,9 @@ impl Shell {
         }
     }
 
-    /// Call from SessionChanged, so a turn beginning and ending between render
-    /// frames still produces exactly one completion. Render sync shares the set.
+    /// Observe completion independently of whether the window paints a frame.
     pub(super) fn notification_session_changed(&mut self, id: i64, cx: &mut Context<Self>) {
-        self.process_notification_inputs(cx);
+        self.notification_input_changed(id, cx);
         let Some(view) = self.sessions.get(&id) else {
             return;
         };
@@ -107,7 +108,6 @@ impl Shell {
             return;
         }
         if !self.notification_state.responding.remove(&id)
-            || chat.responding()
             || chat.notification_was_cancelled()
             || chat.summary.archived
             || self
@@ -127,6 +127,23 @@ impl Shell {
             Some(crate::sound::Cue::Finished),
             cx,
         );
+    }
+
+    pub(super) fn release_session_notice(&mut self, id: i64, cx: &mut Context<Self>) {
+        self.notification_state.responding.remove(&id);
+        self.notification_input_changed(id, cx);
+    }
+
+    fn notification_input_changed(&mut self, id: i64, cx: &mut Context<Self>) {
+        let pending = self
+            .notification_chat(id, cx)
+            .is_some_and(|view| view.read(cx).needs_approval());
+        if pending {
+            self.notification_state.pending_input_sessions.insert(id);
+        } else if !self.notification_state.pending_input_sessions.remove(&id) {
+            return;
+        }
+        self.process_notification_inputs(cx);
     }
 
     pub(super) fn bind_notices(&mut self, cx: &mut Context<Self>) {
@@ -225,8 +242,8 @@ impl Shell {
         if let Some(bots) = self.bots.clone() {
             self.observations.push(cx.subscribe(
                 &bots,
-                |this, _, _: &crate::bots::NotificationChanged, cx| {
-                    this.process_notification_inputs(cx);
+                |this, _, event: &crate::bots::NotificationChanged, cx| {
+                    this.notification_input_changed(event.0, cx);
                     cx.notify()
                 },
             ));
@@ -269,6 +286,13 @@ impl Shell {
             core.update(cx, |core, cx| core.start_native_notifications(cx));
         }
         self.notification_state.badge = 0;
+        self.notification_state.pending_input_sessions = self
+            .notification_chats(cx)
+            .iter()
+            .map(|view| view.read(cx))
+            .filter(|chat| chat.needs_approval())
+            .map(|chat| chat.summary.id)
+            .collect();
         self.process_notification_inputs(cx);
     }
 
@@ -303,8 +327,10 @@ impl Shell {
     /// Advance banners and the Dock badge while an occluded window skips render.
     fn process_notification_inputs(&mut self, cx: &mut Context<Self>) {
         let snapshots: Vec<_> = self
-            .notification_chats(cx)
+            .notification_state
+            .pending_input_sessions
             .iter()
+            .filter_map(|&id| self.notification_chat(id, cx))
             .filter_map(|view| self.input_snapshot(view.read(cx), false, cx))
             .collect();
         self.notification_state.approvals.update(cx, |notices, _| {
@@ -432,48 +458,21 @@ impl Shell {
                 self.notification_state.sounds_enabled_at = now;
             }
         }
-        let views = self.notification_chats(cx);
         let mut snapshots = Vec::new();
         let mut directories = HashMap::new();
-        let mut completed = Vec::new();
-        let mut live_ids = HashSet::new();
-        for view in views {
+        for view in self
+            .notification_state
+            .pending_input_sessions
+            .iter()
+            .filter_map(|&id| self.notification_chat(id, cx))
+        {
             let chat = view.read(cx);
-            let id = chat.summary.id;
-            live_ids.insert(id);
-            if chat.responding() {
-                self.notification_state.responding.insert(id);
-            } else if self.notification_state.responding.remove(&id)
-                && !chat.responding()
-                && !chat.notification_was_cancelled()
-                && !chat.summary.archived
-                && self.sessions.contains_key(&id)
-                && !self
-                    .bots
-                    .as_ref()
-                    .is_some_and(|bots| bots.read(cx).is_bot_session(id))
-            {
-                completed.push((chat.summary.clone(), chat.notification_reply_body(cx)));
-            }
             if let Some(snapshot) = self.input_snapshot(chat, self.window_active, cx) {
                 directories.insert(snapshot.session_id.clone(), chat.summary.cwd.clone());
                 snapshots.push(snapshot);
             }
         }
-        self.notification_state
-            .responding
-            .retain(|id| live_ids.contains(id));
         self.publish_pending_inputs(&snapshots, cx);
-        for (summary, body) in completed {
-            self.announce(format!("{} finished", summary.title));
-            self.deliver_session_notice(
-                &summary,
-                "agentFinished",
-                &body,
-                Some(crate::sound::Cue::Finished),
-                cx,
-            );
-        }
         self.schedule_mute_expiry(now, cx);
         let prefs = &self.workspace.preferences;
         self.notification_state.approvals.update(cx, |notices, cx| {

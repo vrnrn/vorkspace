@@ -1,7 +1,7 @@
 use super::*;
 
 /// Forward request-level changes even when the attention boolean is unchanged.
-pub(crate) struct NotificationChanged;
+pub(crate) struct NotificationChanged(pub i64);
 impl EventEmitter<NotificationChanged> for Bots {}
 
 /// Capture before dispatch starts another queued turn or a finished run is

@@ -89,9 +89,10 @@ impl TurnProjection {
             .and_then(|settlement| settlement.history_recovery);
         let activity_changed = this.activity != update.activity;
         this.activity = update.activity;
-        let needed_approval = this.needs_approval();
-        let incoming_notification_input =
-            !stopping && (!update.approvals.is_empty() || !update.questions.is_empty());
+        let inputs_changed = (!stopping
+            && (!update.approvals.is_empty() || !update.questions.is_empty()))
+            || !update.approvals_resolved.is_empty()
+            || !update.questions_resolved.is_empty();
         use vorkspace_runtime::runtime::TranscriptPatch;
         let patch = update.transcript;
         let stop_stream = stopping && !matches!(&patch, TranscriptPatch::BotSnapshot { .. });
@@ -220,7 +221,6 @@ impl TurnProjection {
                     {
                         return;
                     }
-                    let before = this.needs_approval();
                     let decision = reply
                         .answers
                         .clone()
@@ -246,9 +246,7 @@ impl TurnProjection {
                         "Working…"
                     }
                     .into();
-                    if before != this.needs_approval() {
-                        cx.emit(SessionChanged::Attention);
-                    }
+                    cx.emit(SessionChanged::Attention);
                     cx.notify();
                 },
             );
@@ -349,7 +347,7 @@ impl TurnProjection {
             if checkout_changed {
                 cx.emit(SessionChanged::Checkout);
             }
-            if incoming_notification_input || needed_approval != this.needs_approval() {
+            if inputs_changed {
                 cx.emit(SessionChanged::Attention);
             }
         }

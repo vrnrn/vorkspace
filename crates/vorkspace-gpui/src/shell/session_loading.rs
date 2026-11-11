@@ -67,15 +67,15 @@ impl Shell {
 
         use SessionChanged::*;
         let run_changed = matches!(change, Turn | Settled | Loaded);
+        let attention_changed = change.affects_attention();
         let refresh_checkout = matches!(change, Checkout | Settled | Loaded)
             || matches!(change, Attention) && needs_approval;
-        if self
+        let active = self
             .workspace
             .active
             .and_then(|tab| self.workspace.session_for_pane(tab))
-            == Some(id)
-            && (checkout_changed || refresh_checkout || provider_changed || project_changed)
-        {
+            == Some(id);
+        if active && (checkout_changed || refresh_checkout || provider_changed || project_changed) {
             self.sync_git(cx);
             if matches!(change, Checkout) {
                 self.git.update(cx, |git, cx| git.changed(cx));
@@ -93,18 +93,27 @@ impl Shell {
         if run_changed || checkout_changed || matches!(change, Checkout) {
             self.sync_review_locks(cx);
         }
-        self.refresh_session_mark(id, cx);
-        if change.affects_attention() {
+        if summary_changed || attention_changed {
+            self.refresh_session_mark(id, cx);
+        }
+        if attention_changed {
             self.notification_session_changed(id, cx);
         }
-        if run_changed || summary_changed || matches!(change, Configuration) {
+        if active && (run_changed || summary_changed || matches!(change, Configuration)) {
             self.update_usage_provider(cx);
         }
         if run_changed || checkout_changed || project_changed || matches!(change, Checkout) {
             self.update_chat_visibility(cx);
         }
-        self.invalidate_chrome(cx);
-        cx.notify();
+        if summary_changed
+            || checkout_changed
+            || draft_changed
+            || attention_changed
+            || matches!(change, Checkout)
+        {
+            self.invalidate_chrome(cx);
+            cx.notify();
+        }
     }
 
     pub(super) fn session_metadata<'a>(&'a self, id: i64, cx: &'a App) -> Metadata<'a> {

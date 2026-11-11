@@ -1477,7 +1477,7 @@ impl Bots {
                 habit: false,
                 was_cancelled: view.notification_was_cancelled(),
             });
-        cx.emit(NotificationChanged);
+        cx.emit(NotificationChanged(view.summary.id));
         if let Some(completion) = completion {
             cx.emit(completion);
         }

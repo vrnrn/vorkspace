@@ -327,10 +327,10 @@ impl Bots {
     }
     pub(super) fn stop_chat(&mut self, id: &str, cx: &mut Context<Self>) {
         if let Some(view) = self.chats.remove(id) {
-            self.conversation_views
-                .borrow_mut()
-                .remove(&view.read(cx).summary.id);
+            let session = view.read(cx).summary.id;
+            self.conversation_views.borrow_mut().remove(&session);
             view.update(cx, |view, cx| view.bot_stop(cx));
+            cx.emit(super::NotificationChanged(session));
         }
     }
 

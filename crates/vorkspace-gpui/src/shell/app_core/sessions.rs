@@ -353,6 +353,7 @@ impl Shell {
     pub(in crate::shell) fn release_live_session(&mut self, id: i64, cx: &mut Context<Self>) {
         self.sessions.remove(&id);
         self.visible_chats.remove(&id);
+        self.release_session_notice(id, cx);
         if let Some(core) = &self.app_core {
             let me = cx.weak_entity();
             core.update(cx, |core, _| {

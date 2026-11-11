@@ -34,6 +34,7 @@ fn a_request_in_a_visible_conversation_never_doubles_as_a_toast(cx: &mut TestApp
             // keyboard is elsewhere: its inline card already asks.
             shell.window_active = true;
             window.blur(cx);
+            shell.notification_session_changed(session, cx);
             shell.sync_notices(cx);
             assert!(shell.notification_state.approvals.read(cx).is_empty());
             // Away from the window, the toast is how the request reaches you.
@@ -68,6 +69,7 @@ fn scrolling_a_split_pane_onscreen_replaces_its_approval_toast(cx: &mut TestAppC
                 chat.request_approval_for_test("request", "Run tests?");
             });
             shell.window_active = true;
+            shell.notification_session_changed(hidden, cx);
             shell.sync_notices(cx);
             assert!(!shell.notification_state.approvals.read(cx).is_empty());
         })
@@ -91,6 +93,36 @@ fn scrolling_a_split_pane_onscreen_replaces_its_approval_toast(cx: &mut TestAppC
             shell.window_active = true;
             shell.sync_notices(cx);
             assert!(shell.notification_state.approvals.read(cx).is_empty());
+        })
+        .unwrap();
+}
+
+#[gpui::test]
+fn releasing_one_chat_updates_pending_notices_without_waiting_for_render(cx: &mut TestAppContext) {
+    let (window, first, second) = crate::shell::tests::same_project_window(cx);
+    window
+        .update(cx, |shell, _, cx| {
+            for id in [first, second] {
+                shell.sessions[&id].update(cx, |chat, _| {
+                    chat.request_approval_for_test("shared-request", "Run tests?");
+                });
+                shell.notification_session_changed(id, cx);
+            }
+            assert_eq!(shell.notification_state.badge, 2);
+            shell.release_live_session(first, cx);
+            assert_eq!(shell.notification_state.badge, 1);
+            assert!(
+                shell
+                    .notification_state
+                    .pending_input_sessions
+                    .contains(&second)
+            );
+            assert!(
+                !shell
+                    .notification_state
+                    .pending_input_sessions
+                    .contains(&first)
+            );
         })
         .unwrap();
 }

@@ -89,6 +89,51 @@ fn start_receiver(
         .unwrap();
 }
 
+#[gpui::test]
+fn resolving_one_request_publishes_attention_while_another_remains(cx: &mut TestAppContext) {
+    let window = conversation(cx);
+    let entity = window.entity(cx).unwrap();
+    let seen = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+    cx.update(|cx| {
+        let seen = seen.clone();
+        cx.subscribe(&entity, move |view, event: &SessionChanged, cx| {
+            if matches!(event, SessionChanged::Attention) {
+                seen.borrow_mut().push(
+                    view.read(cx)
+                        .pending_notification_inputs(cx)
+                        .into_iter()
+                        .map(|input| input.request_id)
+                        .collect::<Vec<_>>(),
+                );
+            }
+        })
+        .detach();
+    });
+    window
+        .update(cx, |view, _, cx| {
+            view.begin_turn(cx);
+            view.request_approval_for_test("first", "First");
+            view.request_approval_for_test("second", "Second");
+            let mut projection = turn_projection::TurnProjection::new(
+                view.submission_generation,
+                view.summary.provider.clone(),
+                view.settings.account.id.clone(),
+                None,
+            );
+            projection.apply(
+                view,
+                Update {
+                    approvals_resolved: vec!["first".into()],
+                    ..Default::default()
+                },
+                cx,
+            );
+        })
+        .unwrap();
+    cx.run_until_parked();
+    assert_eq!(&*seen.borrow(), &[vec!["second".to_owned()]]);
+}
+
 /// Tick runnable tasks without advancing timers. Once the receiver starts,
 /// inspect what a single foreground poll did before any continuation can run.
 fn first_poll(window: WindowHandle<Conversation>, cx: &mut TestAppContext) {

@@ -3999,7 +3999,7 @@ fn closing_and_reopening_tabs_preserves_busy_session_draft_and_history(cx: &mut 
         .unwrap();
 }
 #[gpui::test]
-fn typing_and_streaming_do_not_rebuild_sidebar_or_tabs(cx: &mut TestAppContext) {
+fn chat_edits_and_catalog_refreshes_do_not_rebuild_sidebar_or_tabs(cx: &mut TestAppContext) {
     let (window, _, b) = window(cx);
     let root = window.root(cx).unwrap();
     let chrome = root.read_with(cx, |s, _| (s.sidebar_frame.clone(), s.tabs_frame.clone()));
@@ -4029,6 +4029,8 @@ fn typing_and_streaming_do_not_rebuild_sidebar_or_tabs(cx: &mut TestAppContext) 
                         cx,
                     )
                 });
+                cx.emit(SessionChanged::Configuration);
+                cx.emit(SessionChanged::History);
                 cx.notify();
             })
         })
