@@ -35,6 +35,170 @@ fn item(number: i64) -> crate::inbox::Item {
 }
 
 #[test]
+fn execution_lease_protects_live_runs_and_recovers_only_after_owner_handoff() {
+    use std::os::unix::fs::{symlink, MetadataExt};
+    const PROBE: &str = "VORKSPACE_AUTOMATION_EXECUTION_PROBE";
+    const RUN: &str = "VORKSPACE_AUTOMATION_EXECUTION_RUN";
+    if let Some(path) = std::env::var_os(PROBE) {
+        let mut peer = Service::open(Path::new(&path)).unwrap();
+        let id = std::env::var(RUN).unwrap();
+        let now = now_millis();
+        assert!(peer.poll(now).unwrap().is_empty());
+        assert!(peer.claim_run(&id, now).unwrap().is_none());
+        assert!(peer.update_run(&id, "failed", None, None, now).is_err());
+        let automation = peer.list().unwrap().pop().unwrap();
+        peer.run_now(&automation.id, automation.updated_at, now)
+            .unwrap();
+        return;
+    }
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("sessions.sqlite");
+    let mut owner = Service::open(&path).unwrap();
+    let automation = save(&mut owner, vec![]);
+    let now = now_millis();
+    let active = owner
+        .run_now(&automation.id, automation.updated_at, now)
+        .unwrap();
+    assert_eq!(
+        owner
+            .claim_run(&active.run.id, now)
+            .unwrap()
+            .unwrap()
+            .run
+            .status,
+        "preparing"
+    );
+    assert!(owner.claim_run(&active.run.id, now).unwrap().is_none());
+    let alias = directory.path().join("database-alias.sqlite");
+    symlink(&path, &alias).unwrap();
+    let mut peer = Service::open(&alias).unwrap();
+    assert_eq!(owner.execution_path, peer.execution_path);
+    assert!(peer.poll(now).unwrap().is_empty());
+    let lock = owner.execution_path.as_ref().unwrap().clone();
+    let inode = std::fs::metadata(&lock).unwrap().ino();
+
+    let output = std::process::Command::new(std::env::current_exe().unwrap())
+        .args([
+            "--exact",
+            "automations::service::tests::execution_lease_protects_live_runs_and_recovers_only_after_owner_handoff",
+            "--nocapture",
+        ])
+        .env(PROBE, &path)
+        .env(RUN, &active.run.id)
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let queued = owner.poll(now).unwrap();
+    assert_eq!(queued.len(), 1);
+    assert_ne!(queued[0].run.id, active.run.id);
+    let preparing = owner.claim_run(&queued[0].run.id, now).unwrap().unwrap();
+    assert!(owner
+        .update_run(
+            &active.run.id,
+            "running",
+            Some("session-1".into()),
+            None,
+            now
+        )
+        .is_ok());
+    assert!(peer.poll(now).unwrap().is_empty());
+    assert_eq!(
+        get_run(&peer.conn, &active.run.id).unwrap().status,
+        "running"
+    );
+    drop(owner);
+
+    let recovered = peer.poll(now + 1).unwrap();
+    assert_eq!(recovered.len(), 1);
+    assert_eq!(recovered[0].run.id, preparing.run.id);
+    assert_eq!(recovered[0].run.status, "pending");
+    assert_eq!(
+        get_run(&peer.conn, &active.run.id).unwrap().status,
+        "cancelled"
+    );
+    assert!(peer
+        .update_run(
+            &active.run.id,
+            "running",
+            Some("session-1".into()),
+            None,
+            now + 2
+        )
+        .is_err());
+    assert!(peer
+        .claim_run(&preparing.run.id, now + 2)
+        .unwrap()
+        .is_some());
+    assert_eq!(std::fs::metadata(lock).unwrap().ino(), inode);
+}
+
+#[test]
+fn dispatch_failures_remain_preparing_and_terminal_results_cannot_be_reopened() {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("sessions.sqlite");
+    let mut service = Service::open(&path).unwrap();
+    let automation = save(&mut service, vec![]);
+    let now = now_millis();
+    let due = service
+        .run_now(&automation.id, automation.updated_at, now)
+        .unwrap();
+    service.conn.execute_batch("CREATE TRIGGER reject_preparing BEFORE UPDATE ON automation_runs WHEN json_extract(NEW.run_json, '$.status')='preparing' BEGIN SELECT RAISE(ABORT,'claim rejected'); END;").unwrap();
+    assert!(service.claim_run(&due.run.id, now).is_err());
+    assert_eq!(
+        get_run(&service.conn, &due.run.id).unwrap().status,
+        "pending"
+    );
+    service
+        .conn
+        .execute_batch("DROP TRIGGER reject_preparing")
+        .unwrap();
+    service.claim_run(&due.run.id, now).unwrap().unwrap();
+    assert!(service
+        .update_run(&due.run.id, "running", None, None, now)
+        .is_err());
+    assert!(service
+        .update_run(&due.run.id, "succeeded", None, None, now)
+        .is_err());
+    service.conn.execute_batch("CREATE TRIGGER reject_running BEFORE UPDATE ON automation_runs WHEN json_extract(NEW.run_json, '$.status')='running' BEGIN SELECT RAISE(ABORT,'dispatch rejected'); END;").unwrap();
+    assert!(service
+        .update_run(&due.run.id, "running", Some("session-1".into()), None, now)
+        .is_err());
+    assert_eq!(
+        get_run(&service.conn, &due.run.id).unwrap().status,
+        "preparing"
+    );
+    service
+        .conn
+        .execute_batch("DROP TRIGGER reject_running")
+        .unwrap();
+    service
+        .update_run(&due.run.id, "running", Some("session-1".into()), None, now)
+        .unwrap();
+    service
+        .update_run(&due.run.id, "succeeded", None, None, now + 1)
+        .unwrap();
+    assert!(service
+        .update_run(
+            &due.run.id,
+            "running",
+            Some("session-2".into()),
+            None,
+            now + 2
+        )
+        .is_err());
+    let settled = get_run(&service.conn, &due.run.id).unwrap();
+    assert_eq!(settled.status, "succeeded");
+    assert_eq!(settled.session_id.as_deref(), Some("session-1"));
+    drop(service);
+    let mut reopened = Service::open(&path).unwrap();
+    assert!(reopened.poll(now + 3).unwrap().is_empty());
+}
+
+#[test]
 fn stale_editors_cannot_replace_or_delete_a_newer_definition() {
     let directory = tempfile::tempdir().unwrap();
     let path = directory.path().join("sessions.sqlite");
@@ -253,6 +417,7 @@ fn recovery_returns_pending_prompts_and_cancels_interrupted_running_runs() {
         .run_now(&automation.id, automation.updated_at, now + 1)
         .unwrap()
         .run;
+    service.claim_run(&running.id, now + 2).unwrap().unwrap();
     service
         .update_run(
             &running.id,

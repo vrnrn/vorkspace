@@ -40,6 +40,14 @@ struct NewSession {
     install: crate::session_install::Install,
 }
 
+struct PreparedRun {
+    summary: Session,
+    settings: Settings,
+    install: Option<crate::session_install::Install>,
+    view: Option<Entity<Conversation>>,
+    reuse: Option<Candidate>,
+}
+
 #[derive(Default)]
 pub(super) struct State {
     pub service: Option<ServiceHandle>,
@@ -149,26 +157,15 @@ impl Shell {
             return;
         }
         self.automation_state.polling = true;
-        let core = self.app_core.clone().expect("registered workspace window");
-        let recover = !core.read(cx).automation_recovered;
-        let cutoff = core.read(cx).automation_cutoff;
-        let work = cx.background_executor().spawn(async move {
-            let mut service = service_lock(&service)?;
-            let mut runs = if recover {
-                service.recover(cutoff, now())?
-            } else {
-                Vec::new()
-            };
-            runs.extend(service.claim_due(now())?);
-            Ok::<_, String>(runs)
-        });
+        let work = cx
+            .background_executor()
+            .spawn(async move { service_lock(&service)?.poll(now()) });
         cx.spawn(async move |this, cx| {
             let result = work.await;
             let _ = this.update_in(cx, |this, window, cx| {
                 this.automation_state.polling = false;
                 match result {
                     Ok(runs) => {
-                        core.update(cx, |core, _| core.automation_recovered = true);
                         for run in runs {
                             this.launch_automation(run, false, cx);
                         }
@@ -251,11 +248,44 @@ impl Shell {
         {
             return;
         }
-        let launch = Launch {
-            due,
-            reveal,
-            navigation: self.navigation_revision,
+        let Some(service) = self.automation_state.service.clone() else {
+            self.automation_state.pending.remove(&due.run.id);
+            self.initialize_automations(cx);
+            return;
         };
+        let id = due.run.id;
+        let requested = id.clone();
+        let navigation = self.navigation_revision;
+        let work = cx
+            .background_executor()
+            .spawn(async move { service_lock(&service)?.claim_run(&requested, now()) });
+        cx.spawn(async move |this, cx| {
+            let result = work.await;
+            let _ = this.update(cx, |this, cx| match result {
+                Ok(Some(due)) => this.prepare_claimed_automation(
+                    Launch {
+                        due,
+                        reveal,
+                        navigation,
+                    },
+                    cx,
+                ),
+                Ok(None) => {
+                    // Another process owns execution, or this exact run was
+                    // already claimed. Its durable queue remains authoritative.
+                    this.automation_state.pending.remove(&id);
+                }
+                Err(error) => {
+                    this.automation_state.pending.remove(&id);
+                    this.error = Some(format!("Could not claim automation run: {error}"));
+                    cx.notify();
+                }
+            });
+        })
+        .detach();
+    }
+
+    fn prepare_claimed_automation(&mut self, launch: Launch, cx: &mut Context<Self>) {
         let Some(view) = self.automation_reuse_view(&launch.due.automation, cx) else {
             self.prepare_automation(launch, None, cx);
             return;
@@ -420,8 +450,8 @@ impl Shell {
         });
         cx.spawn(async move |this, cx| {
             let prepared = work.await;
-            let _ = this.update_in(cx, |this, window, cx| {
-                this.finish_automation_preparation(launch, reuse, prepared, window, cx);
+            let _ = this.update(cx, |this, cx| {
+                this.finish_automation_preparation(launch, reuse, prepared, cx);
             });
         })
         .detach();
@@ -432,7 +462,6 @@ impl Shell {
         launch: Launch,
         reuse: Option<Candidate>,
         prepared: Result<Option<NewSession>, String>,
-        window: &mut Window,
         cx: &mut Context<Self>,
     ) {
         if let Some(candidate) = reuse {
@@ -518,6 +547,93 @@ impl Shell {
                 return;
             }
         };
+        let Some(service) = self.automation_state.service.clone() else {
+            let error = self.discard_uninstalled_automation(
+                id,
+                install.as_mut(),
+                "Automations became unavailable before submission".into(),
+            );
+            self.automation_launch_failed(launch, error, cx);
+            return;
+        };
+        if let Some(candidate) = reuse {
+            self.automation_state.reserved.insert(candidate.id);
+        }
+        let prepared = PreparedRun {
+            summary,
+            settings,
+            install,
+            view,
+            reuse,
+        };
+        let run_id = launch.due.run.id.clone();
+        let work = cx.background_executor().spawn(async move {
+            service_lock(&service)?.update_run(&run_id, "running", Some(persisted), None, now())
+        });
+        cx.spawn(async move |this, cx| {
+            let result = work.await;
+            let _ = this.update_in(cx, |this, window, cx| {
+                let mut prepared = prepared;
+                if let Err(error) = result {
+                    if let Some(candidate) = prepared.reuse {
+                        this.automation_state.reserved.remove(&candidate.id);
+                    }
+                    let error = this.discard_uninstalled_automation(
+                        prepared.summary.id,
+                        prepared.install.as_mut(),
+                        error,
+                    );
+                    this.automation_launch_failed(launch, error, cx);
+                    return;
+                }
+                this.submit_prepared_automation(launch, prepared, window, cx);
+            });
+        })
+        .detach();
+    }
+
+    fn submit_prepared_automation(
+        &mut self,
+        launch: Launch,
+        mut prepared: PreparedRun,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let id = prepared.summary.id;
+        let automation = &launch.due.automation;
+        let checkout = requested_worktree(automation);
+        if let Some(candidate) = prepared.reuse {
+            self.automation_state.reserved.remove(&candidate.id);
+            let current = self.automation_candidate(candidate, cx);
+            if current.is_none_or(|view| {
+                let chat = view.read(cx);
+                chat.managed_availability(cx) != ManagedAvailability::Available
+                    || chat.settings.account != prepared.settings.account
+                    || chat.summary.provider != automation.harness
+                    || path_key(&chat.summary.cwd) != path_key(&automation.cwd)
+                    || chat.settings.worktree_cwd.as_deref().map(path_key) != checkout.map(path_key)
+            }) {
+                self.prepare_automation(launch, None, cx);
+                return;
+            }
+        }
+        let verified = if self.project_is_deleting(&automation.cwd, cx) {
+            Err("The automation's project is being removed.".into())
+        } else {
+            self.verify_prepared_checkout(id, checkout, cx)
+        };
+        if let Err(error) = verified {
+            let error = self.discard_uninstalled_automation(id, prepared.install.as_mut(), error);
+            self.automation_launch_failed(launch, error, cx);
+            return;
+        }
+        let PreparedRun {
+            summary,
+            settings,
+            mut install,
+            view,
+            ..
+        } = prepared;
         let installed = if let Some(install) = &install {
             self.install_prepared(summary, install, cx)
         } else {
@@ -532,7 +648,7 @@ impl Shell {
             self.automation_launch_failed(launch, error, cx);
             return;
         };
-        if let Some(linked) = linked {
+        if let Some(linked) = automation_work_item(&launch.due.run) {
             view.update(cx, |view, _| view.summary.work_item = Some(linked));
         }
         let due = launch.due;
@@ -545,7 +661,6 @@ impl Shell {
                 generation_before: view.read(cx).submission_generation,
             },
         );
-        self.update_automation_run(due.run.id, "running", Some(persisted), None, cx);
         if !due.automation.session_folder_id.is_empty() {
             self.persist_automation_folder(
                 &due.automation.cwd,

@@ -8,6 +8,8 @@ use crate::store::automations_schema::{ensure_schema, RECOVERABLE_RUN};
 use rusqlite::{params, params_from_iter, Connection, OptionalExtension, TransactionBehavior};
 use std::path::Path;
 
+mod execution;
+
 const MAX_RUNS_PER_AUTOMATION: i64 = 100;
 
 const EVENT_CLAIMS_BACKFILL: &str = "event-claims-v1";
@@ -146,6 +148,19 @@ fn write_run(conn: &Connection, run: &AutomationRun) -> Result<(), String> {
     Ok(())
 }
 
+fn get_run(conn: &Connection, id: &str) -> Result<AutomationRun, String> {
+    let raw = conn
+        .query_row(
+            "SELECT run_json FROM automation_runs WHERE id = ?1",
+            [id],
+            |row| row.get::<_, String>(0),
+        )
+        .optional()
+        .map_err(|error| error.to_string())?
+        .ok_or("Automation run not found.")?;
+    serde_json::from_str(&raw).map_err(|error| error.to_string())
+}
+
 fn new_run(
     automation_id: &str,
     trigger: &str,
@@ -275,6 +290,8 @@ fn apply_run_summary(automation: &mut Automation, run: &AutomationRun) {
 /// Opens automation definitions and history in the desktop session database.
 pub struct Service {
     conn: Connection,
+    execution_path: Option<std::path::PathBuf>,
+    execution: Option<execution::Execution>,
 }
 impl Service {
     pub fn open(path: &Path) -> Result<Self, String> {
@@ -289,7 +306,11 @@ impl Service {
         conn.execute_batch("PRAGMA foreign_keys=ON;")
             .map_err(|e| e.to_string())?;
         prepare_storage(&mut conn).map_err(|e| e.to_string())?;
-        Ok(Self { conn })
+        Ok(Self {
+            conn,
+            execution_path: execution::lock_path(path)?,
+            execution: None,
+        })
     }
     pub fn list(&self) -> Result<Vec<Automation>, String> {
         list(&self.conn, None)
@@ -395,11 +416,7 @@ impl Service {
         Ok(runs)
     }
 
-    pub fn recover(
-        &mut self,
-        started_before: i64,
-        now: i64,
-    ) -> Result<Vec<DueAutomationRun>, String> {
+    fn recover(&mut self, started_before: i64, now: i64) -> Result<Vec<DueAutomationRun>, String> {
         let tx = self.conn.transaction().map_err(|error| error.to_string())?;
         let mut statement = tx
             .prepare(&format!(
@@ -425,6 +442,13 @@ impl Service {
             let Some(mut automation) = get(&tx, &run.automation_id)? else {
                 continue;
             };
+            if run.status == "preparing" {
+                run.status = "pending".into();
+                run.started_at = None;
+                write_run(&tx, &run)?;
+                apply_run_summary(&mut automation, &run);
+                write_automation(&tx, &automation)?;
+            }
             // Historical runs remain visible, but a retired connector's queued
             // event must not be dispatched again after restart.
             if run.status == "pending"
@@ -634,24 +658,26 @@ impl Service {
         if let Some(session_id) = session_id.as_deref() {
             validate_id(session_id, "session")?;
         }
-        if !matches!(
-            status,
-            "pending" | "running" | "succeeded" | "failed" | "skipped" | "cancelled"
-        ) {
+        if !matches!(status, "running" | "succeeded" | "failed" | "cancelled") {
             return Err("Invalid automation run status.".into());
         }
-        let tx = self.conn.transaction().map_err(|error| error.to_string())?;
-        let raw = tx
-            .query_row(
-                "SELECT run_json FROM automation_runs WHERE id = ?1",
-                [&run_id],
-                |row| row.get::<_, String>(0),
-            )
-            .optional()
-            .map_err(|error| error.to_string())?
-            .ok_or_else(|| "Automation run not found.".to_string())?;
-        let mut run: AutomationRun =
-            serde_json::from_str(&raw).map_err(|error| error.to_string())?;
+        if self.execution.is_none() {
+            return Err("This process does not own automation execution.".into());
+        }
+        let tx = self
+            .conn
+            .transaction_with_behavior(TransactionBehavior::Immediate)
+            .map_err(|error| error.to_string())?;
+        let mut run = get_run(&tx, run_id)?;
+        if !matches!(run.status.as_str(), "preparing" | "running") {
+            return Err("This automation run has already settled or was not claimed.".into());
+        }
+        if run.status == "preparing" && status == "succeeded" {
+            return Err("This automation run has not started.".into());
+        }
+        if status == "running" && session_id.is_none() && run.session_id.is_none() {
+            return Err("The automation session must be saved before submission.".into());
+        }
         run.status = status.to_owned();
         if run.status == "running" && run.started_at.is_none() {
             run.started_at = Some(now);
@@ -695,7 +721,7 @@ impl Service {
     }
     /// Atomically claims each due occurrence, including skipped occurrences outside
     /// the grace period. Bounded work prevents an offline period monopolizing UI polling.
-    pub fn claim_due(&mut self, now: i64) -> Result<Vec<DueAutomationRun>, String> {
+    fn claim_due(&mut self, now: i64) -> Result<Vec<DueAutomationRun>, String> {
         let mut due = Vec::new();
         for mut automation in list(&self.conn, Some(now))? {
             if !automation.enabled || !has_time_trigger(&automation) {

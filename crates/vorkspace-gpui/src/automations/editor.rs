@@ -975,6 +975,7 @@ impl Automations {
                     "failed" => ("Failed", Some(StatusColor::Danger)),
                     "skipped" => ("Skipped", Some(StatusColor::Warning)),
                     "cancelled" => ("Cancelled", None),
+                    "preparing" => ("Preparing", None),
                     "running" => ("Running", None),
                     _ => ("Pending", None),
                 };
@@ -990,12 +991,15 @@ impl Automations {
                     .font_weight(gpui::FontWeight::MEDIUM)
                     .text_color(color)
                     .bg(fill)
-                    .when(run.status == "running", |d| {
-                        d.child(crate::panel_kit::spinner(
-                            SharedString::from(format!("automation-run-spinner-{index}")),
-                            12.,
-                        ))
-                    })
+                    .when(
+                        matches!(run.status.as_str(), "preparing" | "running"),
+                        |d| {
+                            d.child(crate::panel_kit::spinner(
+                                SharedString::from(format!("automation-run-spinner-{index}")),
+                                12.,
+                            ))
+                        },
+                    )
                     .child(label);
                 let metadata = page::meta()
                     .flex()
@@ -1175,7 +1179,7 @@ fn at(timestamp: i64) -> String {
         .unwrap_or_else(|| "—".into())
 }
 fn duration(run: &AutomationRun) -> String {
-    let live = matches!(run.status.as_str(), "pending" | "running");
+    let live = matches!(run.status.as_str(), "pending" | "preparing" | "running");
     let start = run
         .started_at
         .or_else(|| (run.status != "pending").then_some(run.created_at));
