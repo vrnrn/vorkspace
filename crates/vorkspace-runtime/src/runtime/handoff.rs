@@ -137,7 +137,12 @@ mod tests {
 
     #[test]
     fn a_retained_handoff_survives_failed_start_and_is_consumed_only_after_acceptance() {
-        for shared in [false, true] {
+        for (shared, provider) in [
+            (false, "codex"),
+            (true, "codex"),
+            (false, "omp"),
+            (true, "omp"),
+        ] {
             let directory = tempfile::tempdir().unwrap();
             let root = directory.path();
             let open = if shared {
@@ -146,7 +151,7 @@ mod tests {
                 Store::open
             };
             let store = open(&root.join("sessions.db")).unwrap();
-            let summary = store.create("codex", root.to_str().unwrap()).unwrap();
+            let summary = store.create(provider, root.to_str().unwrap()).unwrap();
             let mut settings = Settings {
                 revision: 9,
                 text_only: true,
@@ -183,6 +188,7 @@ mod tests {
                 .agent_preferences(summary.id)
                 .unwrap()
                 .unwrap();
+            settings.text_only = true;
             let retained = settings.handoff.as_ref().unwrap();
             assert!(
                 retained
@@ -205,6 +211,17 @@ mod tests {
 import json, sys
 for line in sys.stdin:
     value=json.loads(line)
+    kind=value.get('type')
+    if kind:
+        data={'sessionId':'handoff-thread'} if kind=='get_state' else {}
+        if kind=='prompt':
+            with open('accepted-request.json','w') as output:
+                json.dump(value,output)
+            print(json.dumps({'type':'message_end','message':{'role':'assistant','content':[{'type':'text','text':'Continued from the recap'}]}}),flush=True)
+            data={'agentInvoked':False}
+        print(json.dumps({'type':'response','id':value.get('id'),'command':kind,'success':True,'data':data}),flush=True)
+        if kind=='prompt': break
+        continue
     method=value.get('method')
     if method=='initialize':
         print(json.dumps({'id':value['id'],'result':{}}),flush=True)

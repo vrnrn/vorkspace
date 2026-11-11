@@ -630,6 +630,22 @@ fn run_turn_using(
                 let mut commands = None;
                 let mut provider_turn_id = None;
                 for event in events {
+                    if matches!(&event, Event::Ready | Event::Done)
+                        && let Some(prepared) =
+                            prepared_handoff.as_ref().filter(|_| !handoff_accepted)
+                    {
+                        handoff_accepted = true;
+                        handoff_retired = locked(&store)?.settle_local_provider_handoff(
+                            summary.id,
+                            &summary.provider,
+                            &source_account,
+                            prepared,
+                            None,
+                        )?;
+                        if handoff_retired {
+                            handoff = Some(None);
+                        }
+                    }
                     match event {
                         Event::Commands(discovered) => commands = Some(discovered),
                         Event::TurnId(id) => {
@@ -641,21 +657,6 @@ fn run_turn_using(
                         Event::Ready => {
                             turn_ready = true;
                             boundary = true;
-                            if let Some(prepared) =
-                                prepared_handoff.as_ref().filter(|_| !handoff_accepted)
-                            {
-                                handoff_accepted = true;
-                                handoff_retired = locked(&store)?.settle_local_provider_handoff(
-                                    summary.id,
-                                    &summary.provider,
-                                    &source_account,
-                                    prepared,
-                                    None,
-                                )?;
-                                if handoff_retired {
-                                    handoff = Some(None);
-                                }
-                            }
                         }
                         Event::FollowUpDispatch(message) => {
                             submissions.dispatch_follow_up(&message)?;
