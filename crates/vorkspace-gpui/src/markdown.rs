@@ -452,7 +452,7 @@ fn inline_selected(
     let mut text = String::new();
     let mut highlights = Vec::new();
     let mut fonts = Vec::new();
-    let mut links = Vec::new();
+    let mut links: Vec<(Range<usize>, String)> = Vec::new();
     let fade = fade.filter(|times| !times.is_empty());
     for run in runs {
         let start = text.len();
@@ -507,7 +507,14 @@ fn inline_selected(
             fonts.push((range.clone(), vorkspace_ui::fonts::MONO.into()));
         }
         if let Some(url) = &style.link {
-            links.push((range, url.clone()));
+            if let Some((previous, _)) = links
+                .last_mut()
+                .filter(|(previous, target)| previous.end == range.start && target == url)
+            {
+                previous.end = range.end;
+            } else {
+                links.push((range, url.clone()));
+            }
         }
     }
     let text: SharedString = text.into();
@@ -516,11 +523,13 @@ fn inline_selected(
         .with_font_family_overrides(fonts);
     let layout = styled.layout().clone();
     let text_id: SharedString = format!("{id}-text").into();
-    let styled = InteractiveText::new(text_id, styled)
-        .with_link_cursors(links.iter().map(|(range, _)| range.clone()).collect());
-    let mut child = div().id(id).child(styled);
-    if !links.is_empty() {
+    let styled = InteractiveText::new(text_id, styled);
+    let mut child = div().id(id);
+    if links.is_empty() {
+        child = child.child(styled);
+    } else {
         let links: std::rc::Rc<[(Range<usize>, String)]> = links.into();
+        child = child.child(styled.with_links(links.clone(), open_link));
         let clicked_links = links.clone();
         let clicked_selection = selection.clone();
         let clicked_layout = layout.clone();
@@ -620,7 +629,9 @@ fn rich_inline(
                     .when(file, |d| {
                         let path = code_link(run, infer_file_links).unwrap().to_owned();
                         let menu_path = path.clone();
-                        d.cursor(gpui::CursorStyle::PointingHand)
+                        d.role(Role::Link)
+                            .aria_label(text.clone())
+                            .cursor(gpui::CursorStyle::PointingHand)
                             .hover(|s| s.bg(vorkspace_ui::fluid::hover(0.13)))
                             .on_click(move |event, window, cx| {
                                 if activate_link(event, clicked_selection.as_ref()) {
@@ -673,7 +684,6 @@ fn rich_inline(
                     ..Default::default()
                 };
                 let link = style.link.clone();
-                let menu_link = link.clone();
                 let styled =
                     StyledText::new(text.to_owned()).with_highlights([(0..text.len(), highlight)]);
                 let layout = styled.layout().clone();
@@ -698,22 +708,21 @@ fn rich_inline(
                         .text_size(px(font_size))
                         .line_height(px(24.))
                         .opacity(alpha)
-                        .when(link.is_some(), |d| {
-                            d.cursor(gpui::CursorStyle::PointingHand)
-                        })
                         .child(child)
-                        .on_click(move |event, window, cx| {
-                            if let Some(url) = &link
-                                && activate_link(event, clicked_selection.as_ref())
-                            {
-                                open_link(url, window, cx);
-                            }
-                        })
-                        .on_mouse_down(MouseButton::Right, move |event, window, cx| {
-                            if let Some(url) = &menu_link {
-                                link_menu(url, event.position, window, cx);
-                                cx.stop_propagation();
-                            }
+                        .when_some(link, |d, url| {
+                            let menu_url = url.clone();
+                            d.role(Role::Link)
+                                .aria_label(text.to_owned())
+                                .cursor(gpui::CursorStyle::PointingHand)
+                                .on_click(move |event, window, cx| {
+                                    if activate_link(event, clicked_selection.as_ref()) {
+                                        open_link(&url, window, cx);
+                                    }
+                                })
+                                .on_mouse_down(MouseButton::Right, move |event, window, cx| {
+                                    link_menu(&menu_url, event.position, window, cx);
+                                    cx.stop_propagation();
+                                })
                         })
                         .into_any_element(),
                 );
@@ -1213,6 +1222,147 @@ pub(crate) fn selection_text(row: &MarkdownRow) -> String {
 mod file_link_tests {
     use super::*;
     use vorkspace_model::markdown_model::InlineStyle;
+
+    #[gpui::test]
+    fn wrapped_links_keep_one_accessible_target_and_text_order_after_resize(
+        cx: &mut gpui::TestAppContext,
+    ) {
+        use gpui::{Context, FocusHandle, VisualTestContext, size};
+        use std::{cell::RefCell, rc::Rc};
+
+        struct AccessibleMarkdown {
+            row: MarkdownRow,
+            focus: FocusHandle,
+            opened: Rc<RefCell<Vec<String>>>,
+        }
+        impl gpui::Render for AccessibleMarkdown {
+            fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+                let opened = self.opened.clone();
+                div()
+                    .track_focus(&self.focus)
+                    .w_full()
+                    .p(px(20.))
+                    .on_action(move |path: &crate::file_link::OpenPath, _, _| {
+                        opened.borrow_mut().push(path.0.clone());
+                    })
+                    .child(body(
+                        &self.row,
+                        "accessible-row".into(),
+                        Tone::Normal,
+                        None,
+                        vorkspace_ui::clock::Instant::now(),
+                    ))
+            }
+        }
+
+        let opened = Rc::new(RefCell::new(Vec::new()));
+        let row = rows(&Block::Paragraph {
+            runs: vec![
+                InlineRun {
+                    text: "Before ".into(),
+                    style: InlineStyle::default(),
+                },
+                InlineRun {
+                    text: "long café source ".into(),
+                    style: InlineStyle {
+                        link: Some("/fixture/source.rs:5:1".into()),
+                        ..Default::default()
+                    },
+                },
+                InlineRun {
+                    text: "continues over several wrapped lines".into(),
+                    style: InlineStyle {
+                        bold: true,
+                        link: Some("/fixture/source.rs:5:1".into()),
+                        ..Default::default()
+                    },
+                },
+                InlineRun {
+                    text: " after".into(),
+                    style: InlineStyle::default(),
+                },
+            ],
+        })
+        .remove(0);
+        let window = cx.update(|cx| {
+            cx.open_window(Default::default(), |window, cx| {
+                cx.new(|cx| {
+                    let focus = cx.focus_handle();
+                    window.focus(&focus, cx);
+                    AccessibleMarkdown {
+                        row,
+                        focus,
+                        opened: opened.clone(),
+                    }
+                })
+            })
+            .unwrap()
+        });
+        let visual = &mut VisualTestContext::from_window(window.into(), cx);
+        visual.activate_accessibility();
+        let mut identity = None;
+        for width in [210., 350., 210.] {
+            visual.simulate_resize(size(px(width), px(400.)));
+            visual.run_until_parked();
+            let node = window
+                .update(visual, |_, window, _| {
+                    let tree: serde_json::Value =
+                        serde_json::from_str(&window.debug_a11y_tree_json().unwrap()).unwrap();
+                    let nodes = tree["nodes"].as_object().unwrap();
+                    let paragraph = nodes
+                        .values()
+                        .find(|node| node["aria"]["role"] == "Paragraph")
+                        .unwrap();
+                    assert!(paragraph["aria"]["value"].is_null());
+                    let children: Vec<_> = paragraph["children"]
+                        .as_array()
+                        .unwrap()
+                        .iter()
+                        .map(|id| &nodes[id.as_str().unwrap()])
+                        .collect();
+                    let text: String = children
+                        .iter()
+                        .map(|node| {
+                            node["aria"]["value"]
+                                .as_str()
+                                .or_else(|| node["aria"]["label"].as_str())
+                                .unwrap()
+                        })
+                        .collect();
+                    assert_eq!(
+                        text,
+                        "Before long café source continues over several wrapped lines after"
+                    );
+                    let links: Vec<_> = children
+                        .into_iter()
+                        .filter(|node| node["aria"]["role"] == "Link")
+                        .collect();
+                    assert_eq!(links.len(), 1);
+                    assert_eq!(
+                        links[0]["aria"]["label"],
+                        "long café source continues over several wrapped lines"
+                    );
+                    gpui::accesskit::NodeId(
+                        links[0]["accesskit_id"].as_str().unwrap().parse().unwrap(),
+                    )
+                })
+                .unwrap();
+            assert_eq!(*identity.get_or_insert(node), node);
+            visual.simulate_accessibility_action(gpui::accesskit::ActionRequest {
+                action: gpui::AccessibleAction::Click,
+                target_tree: gpui::accesskit::TreeId::ROOT,
+                target_node: node,
+                data: None,
+            });
+            visual.run_until_parked();
+        }
+        assert_eq!(
+            *opened.borrow(),
+            vec!["/fixture/source.rs:5:1"; 3],
+            "accessible activation dispatches the original target after each reflow"
+        );
+    }
+
     #[test]
     fn preview_links_keep_their_document_base_and_display_text() {
         let runs = vec![

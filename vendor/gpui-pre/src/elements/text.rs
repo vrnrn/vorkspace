@@ -1150,6 +1150,20 @@ pub struct InteractiveText {
     tooltip_builder: Option<Rc<dyn Fn(usize, &mut Window, &mut App) -> Option<AnyView>>>,
     tooltip_id: Option<TooltipId>,
     clickable_ranges: Vec<Range<usize>>,
+    links: Option<AccessibleTextLinks>,
+}
+
+struct AccessibleTextLinks {
+    targets: Rc<[(Range<usize>, String)]>,
+    activate: Rc<dyn Fn(&str, &mut Window, &mut App)>,
+}
+
+#[doc(hidden)]
+pub struct InteractiveTextPrepaintState {
+    hitbox: Option<Hitbox>,
+    link_hitboxes: Vec<Hitbox>,
+    scale_factor: f32,
+    accessible_links: Vec<(accesskit::NodeId, usize)>,
 }
 
 struct InteractiveTextClickEvent {
@@ -1178,12 +1192,22 @@ impl InteractiveText {
             tooltip_builder: None,
             tooltip_id: None,
             clickable_ranges: Vec::new(),
+            links: None,
         }
     }
 
-    /// Display a pointing-hand cursor over these shaped text ranges.
-    pub fn with_link_cursors(mut self, ranges: Vec<Range<usize>>) -> Self {
-        self.clickable_ranges = ranges;
+    /// Expose links in text order and display their shaped pointing-hand regions.
+    /// Accessible activation calls the target directly, including wrapped links.
+    pub fn with_links(
+        mut self,
+        targets: Rc<[(Range<usize>, String)]>,
+        activate: impl Fn(&str, &mut Window, &mut App) + 'static,
+    ) -> Self {
+        self.clickable_ranges = targets.iter().map(|(range, _)| range.clone()).collect();
+        self.links = (!targets.is_empty()).then(|| AccessibleTextLinks {
+            targets,
+            activate: Rc::new(activate),
+        });
         self
     }
 
@@ -1228,7 +1252,7 @@ impl InteractiveText {
 
 impl Element for InteractiveText {
     type RequestLayoutState = ();
-    type PrepaintState = (Option<Hitbox>, Vec<Hitbox>);
+    type PrepaintState = InteractiveTextPrepaintState;
 
     fn id(&self) -> Option<ElementId> {
         Some(self.element_id.clone())
@@ -1239,11 +1263,76 @@ impl Element for InteractiveText {
     }
 
     fn a11y_role(&self) -> Option<accesskit::Role> {
-        Some(accesskit::Role::Label)
+        Some(if self.links.is_some() {
+            accesskit::Role::Paragraph
+        } else {
+            accesskit::Role::Label
+        })
     }
 
     fn write_a11y_info(&self, node: &mut accesskit::Node) {
-        node.set_value(self.text.text.to_string());
+        if self.links.is_none() {
+            node.set_value(self.text.text.to_string());
+        }
+    }
+
+    fn a11y_synthetic_children(
+        &mut self,
+        state: &mut Self::PrepaintState,
+        builder: &mut crate::A11ySubtreeBuilder,
+    ) {
+        let Some(links) = &self.links else { return };
+        let layout = self.text.layout();
+        let mut append = |range: Range<usize>, target: Option<(usize, &str)>| {
+            if range.is_empty() {
+                return;
+            }
+            let text = &self.text.text[range.clone()];
+            let mut node = accesskit::Node::new(if target.is_some() {
+                accesskit::Role::Link
+            } else {
+                accesskit::Role::Label
+            });
+            if let Some((_, url)) = target {
+                node.set_label(text);
+                node.set_url(url);
+                node.add_action(accesskit::Action::Click);
+            } else {
+                node.set_value(text);
+            }
+            let mut bounds: Option<Bounds<Pixels>> = None;
+            layout.for_each_range_bounds(range.clone(), false, |rect| {
+                bounds = Some(bounds.map_or(rect, |bounds| bounds.union(&rect)));
+            });
+            if let Some(bounds) = bounds {
+                let scale = state.scale_factor as f64;
+                node.set_bounds(accesskit::Rect {
+                    x0: bounds.left().0 as f64 * scale,
+                    y0: bounds.top().0 as f64 * scale,
+                    x1: bounds.right().0 as f64 * scale,
+                    y1: bounds.bottom().0 as f64 * scale,
+                });
+            }
+            let node_id = builder.synthetic_node_id((target.is_some(), range.start));
+            if builder.push_child(node_id, node)
+                && let Some((index, _)) = target
+            {
+                state.accessible_links.push((node_id, index));
+            }
+        };
+        let mut cursor = 0;
+        for (index, (range, url)) in links.targets.iter().enumerate() {
+            if range.start < cursor
+                || range.is_empty()
+                || self.text.text.get(range.clone()).is_none()
+            {
+                continue;
+            }
+            append(cursor..range.start, None);
+            append(range.clone(), Some((index, url)));
+            cursor = range.end;
+        }
+        append(cursor..self.text.text.len(), None);
     }
 
     fn request_layout(
@@ -1297,7 +1386,12 @@ impl Element for InteractiveText {
                 link_hitboxes.push(window.insert_hitbox(rect, HitboxBehavior::Normal));
             });
         }
-        (hitbox, link_hitboxes)
+        InteractiveTextPrepaintState {
+            hitbox,
+            link_hitboxes,
+            scale_factor: window.scale_factor(),
+            accessible_links: Vec::new(),
+        }
     }
 
     fn paint(
@@ -1306,14 +1400,25 @@ impl Element for InteractiveText {
         inspector_id: Option<&InspectorElementId>,
         bounds: Bounds<Pixels>,
         _: &mut Self::RequestLayoutState,
-        (hitbox, link_hitboxes): &mut Self::PrepaintState,
+        state: &mut Self::PrepaintState,
         window: &mut Window,
         cx: &mut App,
     ) {
-        for link_hitbox in link_hitboxes {
+        if window.is_a11y_active()
+            && let Some(links) = &self.links
+        {
+            for &(node_id, index) in &state.accessible_links {
+                let targets = links.targets.clone();
+                let activate = links.activate.clone();
+                window.on_a11y_action(node_id, accesskit::Action::Click, move |_, window, cx| {
+                    activate(&targets[index].1, window, cx);
+                });
+            }
+        }
+        for link_hitbox in &state.link_hitboxes {
             window.set_cursor_style(crate::CursorStyle::PointingHand, link_hitbox);
         }
-        let Some(hitbox) = hitbox else {
+        let Some(hitbox) = &state.hitbox else {
             self.text
                 .paint(None, inspector_id, bounds, &mut (), &mut (), window, cx);
             return;

@@ -150,10 +150,7 @@ enum StatusObservation {
     Present(LocalStatus),
 }
 
-fn observe_status(
-    root: &Path,
-    known: Option<CheckoutStamp>,
-) -> Result<StatusObservation, String> {
+fn observe_status(root: &Path, known: Option<CheckoutStamp>) -> Result<StatusObservation, String> {
     match LocalStatus::output(root) {
         Some(raw) => LocalStatus::parse(root, None, &raw, known)
             .map(|status| status.map_or(StatusObservation::Unchanged, StatusObservation::Present)),
