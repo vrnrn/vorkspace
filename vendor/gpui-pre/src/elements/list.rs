@@ -173,7 +173,7 @@ pub struct ListScrollEvent {
     /// The range of items currently visible in the list, after applying the scroll event.
     pub visible_range: Range<usize>,
 
-    /// The number of items that are currently visible in the list, after applying the scroll event.
+    /// The total number of items in the list.
     pub count: usize,
 
     /// Whether the list has been scrolled.
@@ -542,8 +542,19 @@ impl ListState {
             if old_range.contains(item_ix) {
                 *item_ix = old_range.start;
                 *offset_in_item = px(0.);
+                state.pending_scroll = None;
             } else if old_range.end <= *item_ix {
+                let old_ix = *item_ix;
                 *item_ix = *item_ix - (old_range.end - old_range.start) + spliced_count;
+                if let Some(pending) = state.pending_scroll.as_mut() {
+                    let anchor_ix = match pending {
+                        PendingScroll::Absolute { item_ix, .. } => item_ix,
+                        PendingScroll::Proportional(anchor) => &mut anchor.item_ix,
+                    };
+                    if *anchor_ix == old_ix {
+                        *anchor_ix = *item_ix;
+                    }
+                }
             }
         }
     }
@@ -892,7 +903,7 @@ impl StateInner {
         cursor.seek(&Count(scroll_top.item_ix), Bias::Right);
         let start_y = cursor.start().height + scroll_top.offset_in_item;
         cursor.seek_forward(&Height(start_y + height), Bias::Left);
-        scroll_top.item_ix..cursor.start().count + 1
+        scroll_top.item_ix..(cursor.start().count + 1).min(items.summary().count)
     }
 
     fn scroll(
@@ -917,22 +928,22 @@ impl StateInner {
             .max(px(0.))
             .min(scroll_max);
 
+        let (start, ..) =
+            self.items
+                .find::<ListItemSummary, _>((), &Height(new_scroll_top), Bias::Right);
+        let applied = ListOffset {
+            item_ix: start.count,
+            offset_in_item: new_scroll_top - start.height,
+        };
         if self.alignment == ListAlignment::Bottom && new_scroll_top == scroll_max {
             self.pending_scroll = None;
             self.logical_scroll_top = None;
         } else {
-            let (start, ..) =
-                self.items
-                    .find::<ListItemSummary, _>((), &Height(new_scroll_top), Bias::Right);
-            let scroll_top = ListOffset {
-                item_ix: start.count,
-                offset_in_item: new_scroll_top - start.height,
-            };
             // The user's scroll supersedes the position stashed by a
             // remeasure; re-anchor the pending adjustment so it doesn't revert
             // this scroll on the next layout.
-            self.rebase_pending_scroll(scroll_top);
-            self.logical_scroll_top = Some(scroll_top);
+            self.rebase_pending_scroll(applied);
+            self.logical_scroll_top = Some(applied);
         }
 
         if delta.y > px(0.) {
@@ -940,7 +951,7 @@ impl StateInner {
         }
 
         if let Some(handler) = self.scroll_handler.as_mut() {
-            let visible_range = Self::visible_range(&self.items, height, scroll_top);
+            let visible_range = Self::visible_range(&self.items, height, &applied);
             handler(
                 &ListScrollEvent {
                     visible_range,

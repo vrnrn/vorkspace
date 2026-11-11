@@ -70,6 +70,7 @@ pub struct UniformList {
 
 /// Frame state used by the [UniformList].
 pub struct UniformListFrameState {
+    measured_item: Option<Size<Pixels>>,
     items: SmallVec<[AnyElement; 32]>,
     decorations: SmallVec<[AnyElement; 2]>,
 }
@@ -280,7 +281,8 @@ impl Element for UniformList {
         cx: &mut App,
     ) -> (LayoutId, Self::RequestLayoutState) {
         let max_items = self.item_count;
-        let item_size = self.measure_item(None, window, cx);
+        let measured_item = (self.sizing_behavior == ListSizingBehavior::Infer)
+            .then(|| self.measure_item(window, cx));
         let layout_id = self.interactivity.request_layout(
             global_id,
             inspector_id,
@@ -288,6 +290,7 @@ impl Element for UniformList {
             cx,
             |style, window, cx| match self.sizing_behavior {
                 ListSizingBehavior::Infer => {
+                    let item_size = measured_item.unwrap_or_default();
                     window.with_text_style(style.text_style().cloned(), |window| {
                         window.request_measured_layout(
                             style,
@@ -322,6 +325,7 @@ impl Element for UniformList {
         (
             layout_id,
             UniformListFrameState {
+                measured_item,
                 items: SmallVec::new(),
                 decorations: SmallVec::new(),
             },
@@ -356,7 +360,9 @@ impl Element for UniformList {
             ListHorizontalSizingBehavior::Unconstrained
         );
 
-        let longest_item_size = self.measure_item(None, window, cx);
+        let longest_item_size = frame_state
+            .measured_item
+            .unwrap_or_else(|| self.measure_item(window, cx));
         let content_width = if can_scroll_horizontally {
             padded_bounds.size.width.max(longest_item_size.width)
         } else {
@@ -396,12 +402,11 @@ impl Element for UniformList {
                 if self.item_count > 0 {
                     let content_height = item_height * self.item_count;
 
-                    let is_scrolled_vertically = !scroll_offset.y.is_zero();
-                    let max_scroll_offset = padded_bounds.size.height - content_height;
-
-                    if is_scrolled_vertically && scroll_offset.y < max_scroll_offset {
-                        shared_scroll_offset.borrow_mut().y = max_scroll_offset;
-                        scroll_offset.y = max_scroll_offset;
+                    let max_scroll_offset = (content_height - padded_bounds.size.height).max(Pixels::ZERO);
+                    let clamped_y = scroll_offset.y.clamp(-max_scroll_offset, Pixels::ZERO);
+                    if clamped_y != scroll_offset.y {
+                        shared_scroll_offset.borrow_mut().y = clamped_y;
+                        scroll_offset.y = clamped_y;
                     }
 
                     let content_width = content_size.width + padding.left + padding.right;
@@ -413,15 +418,20 @@ impl Element for UniformList {
                     }
 
                     if let Some(DeferredScrollToItem {
-                        mut item_index,
+                        item_index,
                         mut strategy,
                         offset,
                         scroll_strict,
                     }) = shared_scroll_to_item
                     {
-                        if y_flipped {
-                            item_index = self.item_count.saturating_sub(item_index + 1);
-                        }
+                        let last = self.item_count - 1;
+                        let item_index = if item_index == usize::MAX && strategy == ScrollStrategy::Bottom {
+                            last
+                        } else if y_flipped {
+                            last - item_index.min(last)
+                        } else {
+                            item_index.min(last)
+                        };
                         let list_height = padded_bounds.size.height;
                         let mut updated_scroll_offset = shared_scroll_offset.borrow_mut();
                         let item_top = item_height * item_index;
@@ -442,8 +452,6 @@ impl Element for UniformList {
                                 }
                             }
 
-                            let max_scroll_offset =
-                                (content_height - list_height).max(Pixels::ZERO);
                             match strategy {
                                 ScrollStrategy::Top => {
                                     updated_scroll_offset.y = -(item_top - offset_pixels)
@@ -658,12 +666,7 @@ impl UniformList {
         self
     }
 
-    fn measure_item(
-        &self,
-        list_width: Option<Pixels>,
-        window: &mut Window,
-        cx: &mut App,
-    ) -> Size<Pixels> {
+    fn measure_item(&self, window: &mut Window, cx: &mut App) -> Size<Pixels> {
         if self.item_count == 0 {
             return Size::default();
         }
@@ -674,9 +677,7 @@ impl UniformList {
             return Size::default();
         };
         let available_space = size(
-            list_width.map_or(AvailableSpace::MaxContent, |width| {
-                AvailableSpace::Definite(width)
-            }),
+            AvailableSpace::MaxContent,
             AvailableSpace::MinContent,
         );
         item_to_measure.layout_as_root(available_space, window, cx)
