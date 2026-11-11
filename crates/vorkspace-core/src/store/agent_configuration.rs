@@ -285,8 +285,8 @@ mod tests {
                 Store::open
             };
             let store = open(&path).unwrap();
-            let peer = open(&path).unwrap();
             let id = store.create("omp", "/project").unwrap().id;
+            let peer = open(&path).unwrap();
             let settings = Settings {
                 revision: 3,
                 ..Default::default()
