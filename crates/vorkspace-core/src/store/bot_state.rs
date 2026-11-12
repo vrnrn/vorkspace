@@ -24,9 +24,6 @@ impl Roster {
             *roster.storage_baseline.lock().map_err(|e| e.to_string())? =
                 Some(serde_json::to_string(&roster).map_err(|e| e.to_string())?);
         }
-        {
-            roster.reconcile_desktop(store, store.desktop_preferences())?;
-        }
         let mut ids = HashSet::new();
         roster.bots.retain(|m| {
             !m.id.is_empty()

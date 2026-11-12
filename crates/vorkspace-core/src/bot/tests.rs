@@ -729,3 +729,15 @@ fn the_minion_guide_follows_the_setting() {
     assert!(enabled.contains("reuse useful members"));
     assert!(enabled.contains("minions.fire"));
 }
+
+#[test]
+fn codex_home_is_account_scoped_and_never_created_by_lookup() {
+    let temp = tempfile::tempdir().unwrap();
+    let root = temp.path().join("bots");
+    assert!(codex_home(&root, "default").unwrap().is_none());
+    let expected = temp.path().join("codex-bots/default");
+    std::fs::create_dir_all(&expected).unwrap();
+    assert_eq!(codex_home(&root, "default").unwrap(), Some(expected));
+    assert!(codex_home(&root, "another-account").unwrap().is_none());
+    assert!(codex_home(&root, "../escape").is_err());
+}

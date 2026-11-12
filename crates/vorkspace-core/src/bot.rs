@@ -144,10 +144,6 @@ pub struct Roster {
     pub held_messages: std::collections::HashSet<String>,
     #[serde(default, skip_serializing_if = "std::collections::HashMap::is_empty")]
     pub message_modes: std::collections::HashMap<String, String>,
-    /// Last observed desktop identities, for reconciling later desktop edits
-    /// without discarding deliberate native edits or resurrecting deletions.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub(crate) desktop_source: Option<Vec<Bot>>,
     /// Shared by local snapshots so queued saves compare with the last successful publication.
     #[serde(skip)]
     pub(crate) storage_baseline: std::sync::Arc<std::sync::Mutex<Option<String>>>,
