@@ -1344,15 +1344,6 @@ impl Shell {
                 this.session_changed(id, *event, cx);
             }),
         );
-        self.observations.push(cx.subscribe(
-            &view,
-            move |this, view, _: &crate::conversation::SessionActivityChanged, cx| {
-                let label = view.read(cx).activity.clone();
-                this.sidebar
-                    .live_agents
-                    .update(cx, |activity, cx| activity.set_activity(id, label, cx));
-            },
-        ));
         self.observations
             .push(cx.subscribe(&view, |this, _, transfer: &Transfer, cx| {
                 this.transfer_response(transfer.clone(), cx)

@@ -395,7 +395,6 @@ fn tool_notifications_update_only_the_receipt_preserving_focus_draft_and_run_clo
             .update(visual, |shell, _, cx| {
                 assert_eq!(shell.sessions[&a].read(cx).activity.as_deref(), label);
                 let activity = shell.sidebar.live_agents.read(cx);
-                assert_eq!(activity.activity_label(&activity.agents[0]), label);
                 assert_eq!(
                     activity.snapshots, snapshots,
                     "tool and output receipts must not resnapshot the registry"
@@ -424,15 +423,6 @@ fn tool_notifications_update_only_the_receipt_preserving_focus_draft_and_run_clo
         .unwrap();
     visual.executor().advance_clock(Duration::from_millis(1));
     visual.run_until_parked();
-    window
-        .update(visual, |shell, _, cx| {
-            let activity = shell.sidebar.live_agents.read(cx);
-            assert_eq!(
-                activity.activity_label(&activity.agents[0]),
-                Some("Run current command")
-            );
-        })
-        .unwrap();
 }
 
 #[gpui::test]

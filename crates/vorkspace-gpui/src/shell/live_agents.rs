@@ -13,21 +13,9 @@ pub(super) enum Status {
     Working,
     Done,
 }
-impl Status {
-    #[cfg(test)]
-    fn label(self) -> &'static str {
-        match self {
-            Self::Approval => "Need approval",
-            Self::Working => "Working",
-            Self::Done => "Done",
-        }
-    }
-}
-
 #[derive(Clone, Debug, PartialEq)]
 struct Agent {
     id: i64,
-    activity: Option<String>,
     status: Status,
     updated_at: u64,
 }
@@ -100,27 +88,6 @@ impl LiveAgents {
     pub(super) fn hide(&mut self) {
         self.visible = false;
         self.animation = None;
-    }
-
-    pub(super) fn set_activity(&mut self, id: i64, label: Option<String>, cx: &mut Context<Self>) {
-        if let Some(agent) = self.agents.iter_mut().find(|agent| agent.id == id)
-            && agent.activity != label
-        {
-            agent.activity = label;
-            cx.notify();
-        }
-    }
-
-    // Status is always spoken by the row, even when no label is painted.
-    #[cfg(test)]
-    fn activity_label<'a>(&self, agent: &'a Agent) -> Option<&'a str> {
-        match agent.status {
-            Status::Approval => Some(Status::Approval.label()),
-            Status::Working => agent.activity.as_deref().filter(|label| {
-                !label.trim().is_empty() && !matches!(label.trim(), "Working" | "Done")
-            }),
-            Status::Done => None,
-        }
     }
 
     fn working_count(&self) -> usize {
@@ -307,10 +274,6 @@ impl Shell {
                 let metadata = self.session_metadata(id, cx);
                 Some(Agent {
                     id,
-                    activity: self
-                        .sessions
-                        .get(&id)
-                        .and_then(|view| view.read(cx).activity.clone()),
                     status,
                     updated_at: metadata.summary.updated_at,
                 })
