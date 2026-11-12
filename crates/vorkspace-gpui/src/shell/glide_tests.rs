@@ -59,7 +59,6 @@ fn the_workspace_tab_thumb_glides_to_the_new_tab_and_lands(cx: &mut TestAppConte
     let (window, _, _) = super::tests::window(cx);
     window
         .update(cx, |shell, _, cx| {
-            shell.workspace.classic_layout = true;
             shell.invalidate_chrome(cx);
             cx.notify();
         })

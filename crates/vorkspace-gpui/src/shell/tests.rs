@@ -167,7 +167,6 @@ fn hover_preview_waits_and_never_materializes_a_conversation(cx: &mut TestAppCon
     let (id, count) = window
         .update(cx, |shell, window, cx| {
             // Classic previews remain available without loading a conversation.
-            shell.workspace.classic_layout = true;
             let mut summary = locked(&shell.store)
                 .unwrap()
                 .create("codex", "/work/vorkspace")
@@ -986,7 +985,6 @@ fn removed_layout_shortcut_preserves_the_original_workspace_and_composer(cx: &mu
     cx.run_until_parked();
     window
         .update(cx, |shell, _, cx| {
-            assert!(shell.workspace.classic_layout);
             let session = shell.sessions[&shell.workspace.active.unwrap()].read(cx);
             assert_eq!(session.input.read(cx).content, "Keep this draft");
             assert!(!shell.workspace.right_panel_open);
@@ -1580,7 +1578,6 @@ fn original_layout_keeps_project_rail_sidebar_and_workspace_independent(cx: &mut
                 let summaries =
                     [a, b].map(|id| (id, shell.session_metadata(id, cx).summary.cwd.clone()));
                 let restored = Workspace::restore(Some(&saved), &summaries, "/work/vorkspace");
-                assert!(restored.classic_layout);
                 assert_eq!(
                     restored.project_rail_open,
                     shell.workspace.project_rail_open
@@ -2838,7 +2835,6 @@ pub(super) fn window_with_scale(
     let ids = (a.id, b.id);
     let mut state = Workspace::default();
     state.preferences.ui_scale = scale;
-    assert!(state.classic_layout);
     state.add_project("/work/another-project");
     state.add_project("/work/vorkspace");
     state.open(a.id);

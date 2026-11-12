@@ -359,9 +359,6 @@ pub(crate) struct Workspace {
     pub focused: HashMap<i64, i64>,
     /// Each project's terminal dock (ProjectTerminalDock), by project path.
     pub docks: HashMap<String, TerminalDock>,
-    /// The original desktop layout. Kept for older serialized workspaces;
-    /// restored state always selects this layout.
-    pub classic_layout: bool,
     pub preferences: vorkspace_ui::preferences::Preferences,
     pub session_filters: vorkspace_core::session_filters::Filters,
     /// Last desktop source values, used to reconcile subsequent desktop changes
@@ -544,7 +541,6 @@ impl Default for Workspace {
             layouts: Default::default(),
             focused: Default::default(),
             docks: Default::default(),
-            classic_layout: true,
             preferences: vorkspace_ui::preferences::Preferences::default(),
             session_filters: Default::default(),
             desktop_project_preferences: None,
@@ -621,7 +617,6 @@ impl Workspace {
             }
         }
         let _ = state.migrate_project_rail();
-        state.classic_layout = true;
         state.projects.retain(|p| {
             state
                 .project_archive

@@ -86,7 +86,6 @@ fn desktop_settings_and_sidebar_filters_use_native_names_units_and_enums() {
     assert_eq!(settings["default_models"]["claude"], "claude-opus-4-8");
     assert_eq!(settings["keybindings"]["App: Search"], "cmd-j");
     assert!(settings["keybindings"]["App: Settings"].is_null());
-    assert_eq!(workspace["classic_layout"], true);
     assert_eq!(workspace["sidebar_visible"], false);
     assert_eq!(
         workspace["right_panel_tabs"],
@@ -212,7 +211,6 @@ fn source_picker_choices_and_file_mode_reconcile_and_unported_prefs_stay_exact()
 fn absent_desktop_inset_setting_uses_the_desktop_classic_default() {
     let mut workspace = json!({});
     source(&[]).apply_workspace(&mut workspace);
-    assert_eq!(workspace["classic_layout"], true);
     let mut isolated = json!({"classic_layout":false});
     DesktopPreferences::default().apply_workspace(&mut isolated);
     assert_eq!(isolated["classic_layout"], false);
@@ -298,7 +296,6 @@ fn new_sidebar_source_baselines_preserve_existing_canonical_native_choices() {
         ("vorkspace.sidebarTabOrder", r#"["sessions"]"#),
     ]);
     preferences.apply_workspace(&mut workspace);
-    assert_eq!(workspace["classic_layout"], true);
     assert_eq!(workspace["project_rail_open"], false);
     assert_eq!(workspace["project_rail_width"], 245.);
     assert_eq!(workspace["sidebar_tabs"]["/work"], "graph");
@@ -409,7 +406,6 @@ fn malformed_sidebar_source_uses_defaults_and_does_not_clobber_other_fields() {
         ("vorkspace.sidebarTabOrder", r#"[null,4,"inbox","graph"]"#),
     ])
     .apply_workspace(&mut workspace);
-    assert_eq!(workspace["classic_layout"], true);
     assert_eq!(workspace["project_rail_open"], true);
     assert_eq!(workspace["project_rail_width"], 200.);
     assert_eq!(workspace["sidebar_tabs"], json!({}));

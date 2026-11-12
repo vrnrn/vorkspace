@@ -157,27 +157,6 @@ fn terminal_legacy_restore_preserves_other_tabs_and_upgrades_scope_identity() {
 }
 
 #[test]
-fn original_layout_is_used_for_fresh_and_previously_experimental_workspaces() {
-    assert!(Workspace::default().classic_layout);
-    assert!(
-        serde_json::from_str::<Workspace>("{}")
-            .unwrap()
-            .classic_layout
-    );
-    for classic in [false, true] {
-        let saved =
-            serde_json::json!({"classic_layout":classic,"new_layout_prompt_dismissed":false});
-        let restored = Workspace::restore(Some(&saved.to_string()), &[], "/work");
-        assert!(restored.classic_layout);
-        let reopened = Workspace::restore(
-            Some(&serde_json::to_string(&restored).unwrap()),
-            &[],
-            "/work",
-        );
-        assert!(reopened.classic_layout);
-    }
-}
-#[test]
 fn sidebar_navigation_normalizes_ids_and_preserves_disabled_slots_and_hidden_state() {
     let saved = serde_json::json!({
         "sidebar_navigation_order": ["notes", "unknown", "plugins", "github", "notes", "meetings", "automations"],

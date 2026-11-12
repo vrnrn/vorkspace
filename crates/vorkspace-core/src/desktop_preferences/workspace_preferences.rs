@@ -455,10 +455,6 @@ impl DesktopPreferences {
             "new_layout_prompt_dismissed",
             json!(self.flag("newLayoutPromptDismissed").unwrap_or(false)),
         );
-        // Only the original desktop layout is supported. Earlier saved inset
-        // choices cannot reactivate the removed layout when reopening a store.
-        target.insert("classic_layout".into(), json!(true));
-        source.insert("classic_layout".into(), json!(true));
         reconcile_preference(
             target,
             old,
