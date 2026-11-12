@@ -365,13 +365,13 @@ impl LiveAgents {
         self.sync_timer(cx);
     }
 
-    fn present(&mut self, compact: bool, cx: &mut Context<Self>) -> bool {
-        if self.agents.is_empty() || (compact && self.working_count() == 0) {
+    fn present(&mut self, cx: &mut Context<Self>) -> bool {
+        if self.agents.is_empty() || self.working_count() == 0 {
             self.hide();
             return false;
         }
-        if self.compact != compact || !self.visible {
-            self.compact = compact;
+        if !self.compact || !self.visible {
+            self.compact = true;
             self.scroll.remeasure();
             self.visible = true;
             cx.notify();
@@ -874,11 +874,7 @@ impl Shell {
         });
     }
 
-    pub(super) fn live_agents_preview(
-        &self,
-        compact: bool,
-        cx: &mut Context<Self>,
-    ) -> Option<AnyElement> {
+    pub(super) fn live_agents_preview(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
         if !self.workspace.sidebar_activity_visible || !self.workspace.preferences.working_agents {
             self.sidebar
                 .live_agents
@@ -888,7 +884,7 @@ impl Shell {
         let visible = self
             .sidebar
             .live_agents
-            .update(cx, |activity, cx| activity.present(compact, cx));
+            .update(cx, |activity, cx| activity.present(cx));
         visible.then(|| self.sidebar.live_agents.clone().into_any_element())
     }
 }

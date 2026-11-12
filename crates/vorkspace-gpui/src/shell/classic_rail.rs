@@ -520,7 +520,7 @@ impl Shell {
                         })),
                 ),
         )
-        .children(self.live_agents_preview(true, cx))
+        .children(self.live_agents_preview(cx))
         .child(compact_footer(
             self.resources.clone(),
             self.workspace
