@@ -656,27 +656,6 @@ fn meeting_list_excludes_documents_but_reads_keep_saved_content() {
 }
 
 #[test]
-fn built_in_meetings_can_reopen_and_update_legacy_data() {
-    let root = tempfile::tempdir().unwrap();
-    let legacy = root.path().join("plugins/meetings/data");
-    let (_, id) = saved(&legacy);
-    let meetings = Meetings::open(root.path()).unwrap();
-    assert_eq!(meetings.read(&id).unwrap().meeting.title, "Planning");
-    let mut settings = meetings.settings().unwrap();
-    settings.model = "new-model".into();
-    meetings.save_settings(&settings).unwrap();
-    assert_eq!(
-        Meetings::open(root.path())
-            .unwrap()
-            .settings()
-            .unwrap()
-            .model,
-        "new-model"
-    );
-    assert!(!root.path().join("meetings").exists());
-}
-
-#[test]
 fn old_summary_settings_load_without_an_effort_override() {
     let root = tempfile::tempdir().unwrap();
     let service = Meetings::open(root.path()).unwrap();

@@ -22,7 +22,7 @@ Each Start has a unique run identity and compares the previous durable run under
 
 SQLite owns note titles, authored Markdown, tags and project associations. Its `note_recordings` relation links each note to the recording's existing ID, including an identity reservation before capture starts. A reserved recording link does not by itself create a saved note. Existing visible meeting records are imported into Notes once; subsequent loads preserve note edits. Deletion tombstones prevent later imports or delayed saves from recreating a deleted note.
 
-Recording files remain below the desktop data directory at `meetings/`. Existing records in the earlier `plugins/meetings/data/` location are reopened in place, without moving transcript files. Both locations use the same layout.
+Recording files remain below the desktop data directory at `meetings/`, which uses this layout:
 
 - `recordings/<id>/state.json`, `owner.lock` and `transcript.jsonl` hold recorder metadata and immutable source text.
 - `meetings/<id>.json` holds the editable transcript override, recording document's revision and optional summary. Its legacy title does not override the note's SQLite title.

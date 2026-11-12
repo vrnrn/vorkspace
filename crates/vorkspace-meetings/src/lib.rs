@@ -449,21 +449,9 @@ impl Meetings {
         })
     }
     pub fn open(root: &Path) -> Result<Self, String> {
-        let current = root.join("meetings");
-        let legacy_root = root.join("plugins");
-        let legacy = legacy_root.join("meetings");
-        let legacy_data = legacy.join("data");
-        // Keep transcripts and summary settings from the previous Meetings build.
-        let directory = if real_directory(&current)? {
-            current
-        } else if real_directory(&legacy_root)?
-            && real_directory(&legacy)?
-            && real_directory(&legacy_data)?
-        {
-            legacy_data
-        } else {
-            current
-        };
+        let directory = root.join("meetings");
+        // A meetings path that exists must be a real directory.
+        real_directory(&directory)?;
         Ok(Self { directory })
     }
 }
