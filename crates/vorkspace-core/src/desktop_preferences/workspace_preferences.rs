@@ -471,23 +471,6 @@ impl DesktopPreferences {
             .filter(|s| ["files", "changes", "graph"].contains(s))
             .unwrap_or("files");
         reconcile_preference(target, old, &mut source, "right_panel_tab", json!(tab));
-        let order = self
-            .json("vorkspace.rightPanelTabOrder")
-            .or_else(|| self.json("vorkspace.sidebarTabOrder"));
-        let mut tabs = Vec::new();
-        for tab in order
-            .as_ref()
-            .and_then(Value::as_array)
-            .into_iter()
-            .flatten()
-            .filter_map(Value::as_str)
-            .chain(["files", "changes", "graph"])
-        {
-            if ["files", "changes", "graph"].contains(&tab) && !tabs.contains(&tab) {
-                tabs.push(tab);
-            }
-        }
-        reconcile_preference(target, old, &mut source, "right_panel_tabs", json!(tabs));
         reconcile_preference(
             target,
             old,

@@ -72,21 +72,6 @@ pub(crate) enum RightTab {
     Changes,
     Graph,
 }
-impl RightTab {
-    /// loadRightPanelTabOrder: unique known tabs, the missing ones appended.
-    pub(crate) fn normalize(order: &[RightTab]) -> Vec<RightTab> {
-        let mut out = Vec::new();
-        for tab in order
-            .iter()
-            .chain(&[Self::Files, Self::Changes, Self::Graph])
-        {
-            if !out.contains(tab) {
-                out.push(*tab);
-            }
-        }
-        out
-    }
-}
 
 /// Tool headers share the open-file tab bar's height and bottom rule.
 pub(crate) fn pane_header(id: &'static str, label: &'static str) -> Stateful<gpui::Div> {

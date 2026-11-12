@@ -87,10 +87,6 @@ fn desktop_settings_and_sidebar_filters_use_native_names_units_and_enums() {
     assert_eq!(settings["keybindings"]["App: Search"], "cmd-j");
     assert!(settings["keybindings"]["App: Settings"].is_null());
     assert_eq!(workspace["sidebar_visible"], false);
-    assert_eq!(
-        workspace["right_panel_tabs"],
-        json!(["changes", "files", "graph"])
-    );
     assert_eq!(workspace["changes_view"], "tree");
     let filters: crate::session_filters::Filters =
         serde_json::from_value(workspace["session_filters"].clone()).unwrap();

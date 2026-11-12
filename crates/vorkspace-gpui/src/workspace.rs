@@ -338,11 +338,10 @@ pub(crate) struct Workspace {
     /// Show qualifying running and unseen finished sessions in the project rail.
     pub sidebar_activity_visible: bool,
     pub sidebar_subscriptions_visible: bool,
-    /// The inset right panel: tab, width and tab order.
+    /// The inset right panel: tab and width.
     pub right_panel_tab: crate::panel_kit::RightTab,
     /// Shared width for project tools and Bot details, independent of visibility.
     pub right_panel_width: f32,
-    pub right_panel_tabs: Vec<crate::panel_kit::RightTab>,
     pub changes_view: crate::git_tools::changes::ChangesView,
     /// Each tab's file/review pane beside its chat.
     pub reviews: std::collections::HashMap<i64, crate::git_tools::review::ReviewState>,
@@ -527,7 +526,6 @@ impl Default for Workspace {
             sidebar_subscriptions_visible: true,
             right_panel_tab: Default::default(),
             right_panel_width: crate::right_panel::WIDTH_DEFAULT,
-            right_panel_tabs: crate::panel_kit::RightTab::normalize(&[]),
             changes_view: Default::default(),
             reviews: Default::default(),
             review_owners: Default::default(),
@@ -763,7 +761,6 @@ impl Workspace {
             .right_panel_width
             .clamp(crate::right_panel::WIDTH_MIN, crate::right_panel::WIDTH_MAX)
             .round();
-        state.right_panel_tabs = crate::panel_kit::RightTab::normalize(&state.right_panel_tabs);
         state.reviews.retain(|id, review| {
             (sessions.contains_key(id)
                 || state.review_owners.contains_key(id)
