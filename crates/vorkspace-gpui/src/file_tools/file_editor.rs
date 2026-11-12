@@ -550,9 +550,6 @@ impl FileEditor {
             .update(cx, |i, cx| i.select_range(from..from, cx));
         cx.notify();
     }
-    fn revert_change(&mut self, cx: &mut Context<Self>) {
-        self.apply_change(cx);
-    }
 }
 impl gpui::Render for FileEditor {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {

@@ -1,6 +1,6 @@
 use super::*;
 impl FileEditor {
-    pub(super) fn apply_change(&mut self, cx: &mut Context<Self>) {
+    pub(super) fn revert_change(&mut self, cx: &mut Context<Self>) {
         let input = self.input.read(cx);
         if input.is_composing() {
             return;
