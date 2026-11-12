@@ -503,15 +503,8 @@ impl TranscriptView {
     }
 
     fn rebuild_message_turn(&mut self, at: usize, is_prompt: bool, building: &mut Rebuilding) {
-        let mut turn = building.turn;
-        let mut turn_end = building.turn_end;
-        let mut awaiting_answer = building.awaiting_answer;
-        let mut final_answer = building.final_answer;
-        let mut has_work = building.has_work;
-        let mut ready = building.ready;
-        let mut receipt_start = building.receipt_start;
-        if at >= turn_end {
-            turn = if is_prompt {
+        if at >= building.turn_end {
+            building.turn = if is_prompt {
                 (at..self.source.len())
                     .find(|&i| !self.source[i].is_prompt())
                     .unwrap_or(self.source.len())
@@ -521,22 +514,31 @@ impl TranscriptView {
                     .rposition(|r| r.is_prompt())
                     .map_or(0, |i| i + 1)
             };
-            turn_end = (turn..self.source.len())
+            building.turn_end = (building.turn..self.source.len())
                 .find(|&i| self.source[i].is_prompt())
                 .unwrap_or(self.source.len());
-            awaiting_answer = (turn..turn_end)
+            building.awaiting_answer = (building.turn..building.turn_end)
                 .rev()
                 .find(|&i| self.source[i].role == "assistant" && self.source[i].first)
                 .filter(|&i| !self.answer_visible(i));
-            final_answer = (turn..turn_end).rev().find(|&i| {
+            building.final_answer = (building.turn..building.turn_end).rev().find(|&i| {
                 self.source[i].role == "assistant" && self.source[i].first && self.answer_visible(i)
             });
-            has_work = final_answer
-                .is_some_and(|answer| self.source[turn..answer].iter().any(|r| r.role == "tool"));
-            ready = final_answer.is_some_and(|answer| self.answer_visible(answer));
-            self.fold_targets
-                .insert(turn, final_answer.filter(|_| has_work && ready));
-            receipt_start = (turn..turn_end).find(|&i| {
+            building.has_work = building.final_answer.is_some_and(|answer| {
+                self.source[building.turn..answer]
+                    .iter()
+                    .any(|r| r.role == "tool")
+            });
+            building.ready = building
+                .final_answer
+                .is_some_and(|answer| self.answer_visible(answer));
+            self.fold_targets.insert(
+                building.turn,
+                building
+                    .final_answer
+                    .filter(|_| building.has_work && building.ready),
+            );
+            building.receipt_start = (building.turn..building.turn_end).find(|&i| {
                 let row = &self.source[i];
                 row.first
                     && !matches!(
@@ -552,30 +554,19 @@ impl TranscriptView {
                     && !(self.bot && row.text.trim().starts_with("<reaction>"))
             });
         }
-
-        building.turn = turn;
-        building.turn_end = turn_end;
-        building.awaiting_answer = awaiting_answer;
-        building.final_answer = final_answer;
-        building.has_work = has_work;
-        building.ready = ready;
-        building.receipt_start = receipt_start;
     }
 
     fn rebuild_work_receipt(&mut self, at: usize, message: usize, building: &Rebuilding) {
-        let receipt_start = building.receipt_start;
-        let turn = building.turn;
-        let has_work = building.has_work;
-        let ready = building.ready;
-        if !self.document && receipt_start == Some(at) {
+        if !self.document && building.receipt_start == Some(at) {
             if self.bot
-                && (self.bot_group_start(turn) == turn
-                    || (self.history_start > 0 && self.prompt_start(turn) == self.history_start))
+                && (self.bot_group_start(building.turn) == building.turn
+                    || (self.history_start > 0
+                        && self.prompt_start(building.turn) == self.history_start))
             {
                 self.rows.push(UiRow {
                     key: (0, 0),
                     body: Body::BotHeader {
-                        turn: self.bot_group_start(turn),
+                        turn: self.bot_group_start(building.turn),
                     },
                     message,
                     first: false,
@@ -588,8 +579,8 @@ impl TranscriptView {
             self.rows.push(UiRow {
                 key: (0, 0),
                 body: Body::WorkLine {
-                    turn,
-                    expandable: has_work && ready,
+                    turn: building.turn,
+                    expandable: building.has_work && building.ready,
                 },
                 message,
                 first: false,
@@ -636,16 +627,16 @@ impl TranscriptView {
         let first = self.rows.len();
 
         self.rebuild_message_turn(at, is_prompt, building);
-        let has_work = building.has_work;
-        let ready = building.ready;
-        let final_answer = building.final_answer;
-        let turn = building.turn;
         let folded = !is_prompt
             && !building.activity.pinned.contains(&at)
-            && has_work
-            && ready
-            && final_answer.is_some_and(|answer| at < answer)
-            && !self.work_folds.get(&turn).copied().unwrap_or(false);
+            && building.has_work
+            && building.ready
+            && building.final_answer.is_some_and(|answer| at < answer)
+            && !self
+                .work_folds
+                .get(&building.turn)
+                .copied()
+                .unwrap_or(false);
 
         self.rebuild_work_receipt(at, message, building);
         let phase = building.activity.at(at);
@@ -708,14 +699,11 @@ impl TranscriptView {
     }
 
     fn rebuild_interjection(&mut self, draft: &RebuildMessage<'_>) {
-        let text = &draft.text;
-        let message = draft.message;
-
-        if let Ok(note) = serde_json::from_str(text) {
+        if let Ok(note) = serde_json::from_str(&draft.text) {
             self.rows.push(UiRow {
                 key: (0, 0),
                 body: Body::Interjection(note),
-                message,
+                message: draft.message,
                 first: false,
                 last: false,
                 work: false,
@@ -726,10 +714,7 @@ impl TranscriptView {
     }
 
     fn rebuild_visual(&mut self, draft: &RebuildMessage<'_>) {
-        let text = &draft.text;
-        let message = draft.message;
-
-        let document = serde_json::from_str::<vorkspace_core::visual::VisualDocument>(text)
+        let document = serde_json::from_str::<vorkspace_core::visual::VisualDocument>(&draft.text)
             .ok()
             .filter(|document| document.validate().is_ok());
         let body = match document {
@@ -739,7 +724,7 @@ impl TranscriptView {
         self.rows.push(UiRow {
             key: (0, 0),
             body,
-            message,
+            message: draft.message,
             first: false,
             last: false,
             work: false,
@@ -749,17 +734,13 @@ impl TranscriptView {
     }
 
     fn rebuild_bot_card(&mut self, draft: &RebuildMessage<'_>, building: &Rebuilding) {
-        let at = draft.at;
-        let text = &draft.text;
-        let message = draft.message;
-
-        if !building.cards.owns(at)
-            && let Ok(value) = serde_json::from_str(text)
+        if !building.cards.owns(draft.at)
+            && let Ok(value) = serde_json::from_str(&draft.text)
         {
             self.rows.push(UiRow {
                 key: (0, 0),
                 body: Body::BotCard(value),
-                message,
+                message: draft.message,
                 first: false,
                 last: false,
                 work: false,
@@ -770,47 +751,36 @@ impl TranscriptView {
     }
 
     fn rebuild_reaction(&mut self, draft: &RebuildMessage<'_>, building: &Rebuilding) {
-        let at = draft.at;
-        let text = &draft.text;
-        let now = building.now;
-
         // BotReactionBadge: the emoji sits on the message it answers.
-        if let Some(emoji) = text
+        if let Some(emoji) = draft
+            .text
             .trim()
             .strip_prefix("<reaction>")
             .and_then(|s| s.strip_suffix("</reaction>"))
             .filter(|e| e.chars().count() <= 16)
-            && let Some(prompt) = self.source[..at].iter().rposition(|r| r.is_prompt())
+            && let Some(prompt) = self.source[..draft.at].iter().rposition(|r| r.is_prompt())
         {
             let prompt = self.source[..=prompt]
                 .iter()
                 .rposition(|r| r.first)
                 .unwrap_or(prompt);
-            let live = self.streaming && at >= self.live_start && self.visible;
+            let live = self.streaming && draft.at >= self.live_start && self.visible;
             match self.reactions.get(&prompt) {
                 Some((current, _)) if current == emoji => {}
                 _ => {
                     self.reactions
-                        .insert(prompt, (emoji.into(), live.then_some(now)));
+                        .insert(prompt, (emoji.into(), live.then_some(building.now)));
                 }
             }
         }
     }
 
     fn rebuild_markdown(&mut self, draft: &mut RebuildMessage<'_>, building: &Rebuilding) {
-        let at = draft.at;
-        let end = draft.end;
-        let message = draft.message;
-        let role = &draft.role;
-        let text = &draft.text;
-        let parser = &mut draft.parser;
-        let now = building.now;
-
-        if role == "reasoning" {
+        if draft.role == "reasoning" {
             self.rows.push(UiRow {
                 key: (0, 0),
                 body: Body::Reasoning,
-                message,
+                message: draft.message,
                 first: false,
                 last: false,
                 work: false,
@@ -818,23 +788,29 @@ impl TranscriptView {
                 thought_phase: None,
             });
         }
-        if role == "assistant" {
-            self.prepare_reveal(at, end, text, now);
+        if draft.role == "assistant" {
+            self.prepare_reveal(draft.at, draft.end, &draft.text, building.now);
         }
-        let paced = self.reveals.active.get(&at).filter(|_| role == "assistant");
-        parser.set_text(paced.map_or(text.as_str(), PacedText::text));
+        let paced = self
+            .reveals
+            .active
+            .get(&draft.at)
+            .filter(|_| draft.role == "assistant");
+        draft
+            .parser
+            .set_text(paced.map_or(draft.text.as_str(), PacedText::text));
         let tree = if paced.is_some_and(PacedText::behind)
-            || (self.streaming && end == self.source.len())
+            || (self.streaming && draft.end == self.source.len())
         {
-            parser.display_tree()
+            draft.parser.display_tree()
         } else {
-            parser.tree().clone()
+            draft.parser.tree().clone()
         };
         let mut word_cursor = 0;
         for block in tree
             .blocks
             .iter()
-            .filter(|_| role != "reasoning" || self.expanded.contains(&at))
+            .filter(|_| draft.role != "reasoning" || self.expanded.contains(&draft.at))
         {
             self.rows
                 .extend(markdown::rows(&block.block).into_iter().map(|mut row| {
@@ -845,7 +821,7 @@ impl TranscriptView {
                     UiRow {
                         key: (0, 0),
                         body: Body::Markdown(row),
-                        message,
+                        message: draft.message,
                         first: false,
                         last: false,
                         work: false,
@@ -857,21 +833,15 @@ impl TranscriptView {
         if let Some(paced) = self
             .reveals
             .active
-            .get_mut(&at)
-            .filter(|_| role == "assistant")
+            .get_mut(&draft.at)
+            .filter(|_| draft.role == "assistant")
         {
-            paced.words(word_cursor, now);
+            paced.words(word_cursor, building.now);
         }
     }
 
     fn rebuild_plain(&mut self, draft: &RebuildMessage<'_>) {
-        let at = draft.at;
-        let end = draft.end;
-        let message = draft.message;
-        let role = &draft.role;
-        let display_text = &draft.display_text;
-
-        let text_rows = if let Some(text) = display_text {
+        let text_rows = if let Some(text) = &draft.display_text {
             let mut transcript = vorkspace_core::transcript::Transcript::default();
             transcript.begin("user");
             transcript.append(text);
@@ -881,25 +851,27 @@ impl TranscriptView {
                 .map(|row| row.text)
                 .collect::<Vec<_>>()
         } else {
-            self.source[at..end]
+            self.source[draft.at..draft.end]
                 .iter()
                 .filter(|r| r.role != "bot-system")
                 .map(|row| row.text.clone())
                 .collect()
         };
         // `line-clamp-4`: a collapsed message shows its first lines only.
-        let clamped = role == "user" && !self.expanded_prompts.contains(&at) && text_rows.len() > 1;
+        let clamped = draft.role == "user"
+            && !self.expanded_prompts.contains(&draft.at)
+            && text_rows.len() > 1;
         if clamped {
-            self.clamped_prompts.insert(at);
+            self.clamped_prompts.insert(draft.at);
         } else {
-            self.clamped_prompts.remove(&at);
+            self.clamped_prompts.remove(&draft.at);
         }
         let shown = if clamped { 1 } else { text_rows.len() };
         for text in text_rows.into_iter().take(shown) {
             self.rows.push(UiRow {
                 key: (0, 0),
                 body: Body::Plain(text.into()),
-                message,
+                message: draft.message,
                 first: false,
                 last: false,
                 work: false,
@@ -910,55 +882,48 @@ impl TranscriptView {
     }
 
     fn rebuild_message_body(&mut self, draft: &mut RebuildMessage<'_>, building: &Rebuilding) {
-        let at = draft.at;
-        let message = draft.message;
-        let phase = draft.phase;
-        let grouped = draft.grouped;
-        let folded = draft.folded;
-        let phase_open = draft.phase_open;
-        let reaction = draft.reaction;
-        let stopped_notice = draft.stopped_notice;
-        let role = &draft.role;
-        let text = &draft.text;
-        let activity = &building.activity;
-        if role == "interjection" {
+        if draft.role == "interjection" {
             self.rebuild_interjection(draft);
-        } else if role == "visual" {
+        } else if draft.role == "visual" {
             self.rebuild_visual(draft);
-        } else if matches!(role.as_str(), "bot-card" | "bot-note") {
+        } else if matches!(draft.role.as_str(), "bot-card" | "bot-note") {
             self.rebuild_bot_card(draft, building);
-        } else if stopped_notice
+        } else if draft.stopped_notice
             || matches!(
-                role.as_str(),
+                draft.role.as_str(),
                 "bot-document" | "bot-launch" | vorkspace_core::transcript::attachments::ROLE
             )
         {
             // Saved work references are rendered once under the settled reply.
-        } else if reaction {
+        } else if draft.reaction {
             self.rebuild_reaction(draft, building);
-        } else if folded || activity.hidden.contains(&at) || !phase_open {
-            if role == "tool" {
-                self.seen_steps.insert(at);
+        } else if draft.folded || building.activity.hidden.contains(&draft.at) || !draft.phase_open
+        {
+            if draft.role == "tool" {
+                self.seen_steps.insert(draft.at);
             }
             // WorkFoldLine puts earlier commentary and work behind its receipt.
-        } else if role == "tool"
-            && let Ok(tool) = serde_json::from_str::<ToolCall>(text)
+        } else if draft.role == "tool"
+            && let Ok(tool) = serde_json::from_str::<ToolCall>(&draft.text)
         {
             self.rows.push(UiRow {
                 key: (0, 0),
                 body: Body::Tool {
                     call: Box::new(tool),
-                    group: phase.filter(|_| grouped).map(|group| group.start),
-                    tail: phase.is_none_or(|group| group.last == at),
+                    group: draft
+                        .phase
+                        .filter(|_| draft.grouped)
+                        .map(|group| group.start),
+                    tail: draft.phase.is_none_or(|group| group.last == draft.at),
                 },
-                message,
+                message: draft.message,
                 first: false,
                 last: false,
                 work: false,
                 work_tail: false,
                 thought_phase: None,
             });
-        } else if matches!(role.as_str(), "assistant" | "reasoning") {
+        } else if matches!(draft.role.as_str(), "assistant" | "reasoning") {
             self.rebuild_markdown(draft, building);
         } else {
             self.rebuild_plain(draft);
@@ -966,22 +931,14 @@ impl TranscriptView {
     }
 
     fn index_rebuild_message(&mut self, draft: &RebuildMessage<'_>, building: &Rebuilding) {
-        let at = draft.at;
-        let first = draft.first;
-        let is_prompt = draft.is_prompt;
-        let phase = draft.phase;
-        let grouped = draft.grouped;
-        let role = &draft.role;
-        let has_work = building.has_work;
-        let ready = building.ready;
-        let final_answer = building.final_answer;
-        let activity = &building.activity;
         let mut prose_ordinal = 16;
-        for row in &mut self.rows[first..] {
-            if role == "reasoning" && matches!(row.body, Body::Reasoning | Body::Markdown(_)) {
-                row.thought_phase = phase
-                    .filter(|_| grouped)
-                    .map(|group| (group.start, group.last == at));
+        for row in &mut self.rows[draft.first..] {
+            if draft.role == "reasoning" && matches!(row.body, Body::Reasoning | Body::Markdown(_))
+            {
+                row.thought_phase = draft
+                    .phase
+                    .filter(|_| draft.grouped)
+                    .map(|group| (group.start, group.last == draft.at));
             }
             let ordinal = match row.body {
                 Body::BotHeader { .. } => 0,
@@ -995,22 +952,24 @@ impl TranscriptView {
                     key
                 }
             };
-            row.key = (at, ordinal);
-            row.work = has_work
-                && ready
-                && !is_prompt
-                && role != "visual"
-                && !activity.pinned.contains(&at)
-                && final_answer.is_some_and(|answer| at < answer)
+            row.key = (draft.at, ordinal);
+            row.work = building.has_work
+                && building.ready
+                && !draft.is_prompt
+                && draft.role != "visual"
+                && !building.activity.pinned.contains(&draft.at)
+                && building
+                    .final_answer
+                    .is_some_and(|answer| draft.at < answer)
                 && !matches!(
                     row.body,
                     Body::WorkLine { .. } | Body::BotHeader { .. } | Body::BotCard(_)
                 );
         }
-        if let Some(row) = self.rows.get_mut(first) {
+        if let Some(row) = self.rows.get_mut(draft.first) {
             row.first = true;
         }
-        if self.rows.len() > first {
+        if self.rows.len() > draft.first {
             self.rows.last_mut().unwrap().last = true;
         }
     }
@@ -1033,54 +992,54 @@ impl TranscriptView {
             peer_origin,
             ..
         } = message;
-        let turn = building.turn;
-        let turn_end = building.turn_end;
-        let has_work = building.has_work;
-        let final_answer = building.final_answer;
-        let last_prompt = building.last_prompt;
-        let cards = &building.cards;
         self.messages.push(Message {
             start: at,
             display_start: None,
             role,
             parser,
-            under_line: has_work && final_answer == Some(at),
-            run: turn,
+            under_line: building.has_work && building.final_answer == Some(at),
+            run: building.turn,
             turn: if self.bot {
-                self.bot_group_start(turn)
+                self.bot_group_start(building.turn)
             } else {
-                turn
+                building.turn
             },
             attachments,
             peer: peer_origin,
         });
-        if is_prompt && last_prompt.is_some_and(|p| end > p) {
+        if is_prompt && building.last_prompt.is_some_and(|p| end > p) {
             // The running turn keeps the user's messages together above its work.
             self.push_pending(at);
         }
-        self.rows
-            .extend(cards.rows(at, turn, !is_prompt && end == turn_end, message));
+        self.rows.extend(building.cards.rows(
+            at,
+            building.turn,
+            !is_prompt && end == building.turn_end,
+            message,
+        ));
         if !self.document
             && !self.source[at].is_prompt()
             && self.source[at].role != "bot-card"
             && self.source[at].role != vorkspace_core::transcript::attachments::ROLE
             && !reaction
-            && end == turn_end
+            && end == building.turn_end
             && !(self.bot
                 && self
                     .source
-                    .get(turn_end)
+                    .get(building.turn_end)
                     .is_some_and(|r| r.role == "bot-system")
-                && !self.bot_opens_stretch(turn_end))
+                && !self.bot_opens_stretch(building.turn_end))
         {
             if !self.bot
                 && self.review_shown
                 && self.review.is_some()
-                && turn_end == self.source.len()
+                && building.turn_end == self.source.len()
             {
                 self.rows.push(UiRow {
                     key: (at, usize::MAX - 2),
-                    body: Body::Review { turn },
+                    body: Body::Review {
+                        turn: building.turn,
+                    },
                     message,
                     first: false,
                     last: false,
@@ -1093,9 +1052,9 @@ impl TranscriptView {
                 key: (at, usize::MAX - 1),
                 body: Body::Actions {
                     turn: if self.bot {
-                        self.bot_group_start(turn)
+                        self.bot_group_start(building.turn)
                     } else {
-                        turn
+                        building.turn
                     },
                     complete: !self.streaming || end < self.source.len(),
                 },
@@ -1112,17 +1071,15 @@ impl TranscriptView {
     }
 
     fn rebuild_pinned_rows(&mut self, building: &Rebuilding) -> HashMap<usize, usize> {
-        let display_start = building.display_start;
-        let activity = &building.activity;
         let mut pinned_answers = HashMap::new();
-        if !activity.pinned.is_empty() {
+        if !building.activity.pinned.is_empty() {
             let mut parked: HashMap<usize, Vec<UiRow>> = HashMap::new();
             let mut ordered = Vec::new();
-            for row in self.rows.drain(display_start..) {
+            for row in self.rows.drain(building.display_start..) {
                 // Pending messages and saved drafts have no history message.
                 // Resolve a run only for the tool rows that can be pinned.
                 if matches!(row.body, Body::Tool { .. })
-                    && activity.pinned.contains(&row.key.0)
+                    && building.activity.pinned.contains(&row.key.0)
                     && let Some(answer) = self
                         .messages
                         .get(row.message)
@@ -1164,39 +1121,39 @@ impl TranscriptView {
         building: &mut Rebuilding,
         pinned_answers: &HashMap<usize, usize>,
     ) -> Vec<UiRow> {
-        let display_start = building.display_start;
-        let streaming_prose = building.streaming_prose;
-        let source_start = building.source_start;
-        let current_turn = building.current_turn;
-        let layout_changed = building.layout_changed;
-        let now = building.now;
         // A phase and its nested steps are one sibling in the outer work tree.
         // Its final outer branch ends at the header, above the inner tool rail.
         let mut next_work_sibling = false;
-        for row in self.rows[display_start..].iter_mut().rev() {
+        for row in self.rows[building.display_start..].iter_mut().rev() {
             row.work_tail = row.work && !next_work_sibling;
             if !row.in_phase() {
                 next_work_sibling = row.work;
             }
         }
-        let target = self.rows.split_off(display_start);
-        if streaming_prose {
+        let target = self.rows.split_off(building.display_start);
+        if building.streaming_prose {
             // A growing answer replaces its presentation rows, but earlier
             // paragraphs can still use the same height at this width.
             self.measurements
-                .rebuild_tail(source_start, &building.old_rows, &target);
+                .rebuild_tail(building.source_start, &building.old_rows, &target);
         } else {
             self.measurements.clear();
         }
         if self.visible {
             let replaced_work = self
                 .fold_targets
-                .get(&current_turn)
+                .get(&building.current_turn)
                 .copied()
                 .flatten()
-                .filter(|_| !self.work_folds.get(&current_turn).copied().unwrap_or(false))
-                .filter(|_| layout_changed)
-                .map(|answer| current_turn..answer);
+                .filter(|_| {
+                    !self
+                        .work_folds
+                        .get(&building.current_turn)
+                        .copied()
+                        .unwrap_or(false)
+                })
+                .filter(|_| building.layout_changed)
+                .map(|answer| building.current_turn..answer);
             if replaced_work.is_some() {
                 // A replacement establishes a new block's baseline. The old
                 // block's removed height is not a scroll animation to replay.
@@ -1205,7 +1162,7 @@ impl TranscriptView {
             self.reconcile(
                 std::mem::take(&mut building.old_rows),
                 target,
-                now,
+                building.now,
                 pinned_answers,
                 replaced_work,
             )
@@ -1251,46 +1208,42 @@ impl TranscriptView {
     }
 
     fn restore_rebuild_scroll(&mut self, building: &Rebuilding) {
-        let old_count = building.old_count;
-        let display_start = building.display_start;
-        let following = building.following;
-        let anchor = building.anchor;
-        let offset = building.offset;
         // Preserve surviving indices and scroll offsets while the tail reflows.
-        let common = old_count.min(self.rows.len());
-        if display_start < common {
-            self.list.remeasure_items(display_start..common);
+        let common = building.old_count.min(self.rows.len());
+        if building.display_start < common {
+            self.list.remeasure_items(building.display_start..common);
         }
-        if old_count != self.rows.len() {
+        if building.old_count != self.rows.len() {
             self.list
-                .splice(common..old_count, self.rows.len() - common);
+                .splice(common..building.old_count, self.rows.len() - common);
         }
         self.list
             .remeasure_items(self.footer_ix()..self.footer_ix() + 1);
-        if self.bot && display_start > 0 {
+        if self.bot && building.display_start > 0 {
             // A new message can stack the one before it, changing its spacing.
-            self.list
-                .remeasure_items(display_start.saturating_sub(8)..display_start.min(common));
+            self.list.remeasure_items(
+                building.display_start.saturating_sub(8)..building.display_start.min(common),
+            );
         }
         if !self.hover_rows.is_empty() {
             let keys: HashSet<_> = self.rows.iter().map(|r| r.key).collect();
             self.hover_rows.retain(|key, _| keys.contains(key));
         }
-        if following {
+        if building.following {
             self.list.scroll_to_end();
-        } else if let Some(key) = anchor
-            && let Some(item_ix) = (offset.item_ix < display_start)
-                .then_some(offset.item_ix)
+        } else if let Some(key) = building.anchor
+            && let Some(item_ix) = (building.offset.item_ix < building.display_start)
+                .then_some(building.offset.item_ix)
                 .or_else(|| {
-                    self.rows[display_start..]
+                    self.rows[building.display_start..]
                         .iter()
                         .position(|r| r.key == key)
-                        .map(|ix| display_start + ix)
+                        .map(|ix| building.display_start + ix)
                 })
         {
             self.list.scroll_to(ListOffset {
                 item_ix,
-                offset_in_item: offset.offset_in_item,
+                offset_in_item: building.offset.offset_in_item,
             });
         }
     }
