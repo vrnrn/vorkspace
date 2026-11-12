@@ -473,8 +473,7 @@ impl Conversation {
     ) -> TurnSource {
         use PromptSource::{Bot, Composer, Queued};
         let queued = matches!(source, PromptSource::Queued { .. });
-        let reset_orchestration = matches!(source, Composer { .. } | Queued { .. } | Bot { .. });
-        let one_shot_mode = matches!(source, Composer { .. } | Queued { .. } | Bot { .. });
+        let is_submitted_message = matches!(source, Composer { .. } | Queued { .. } | Bot { .. });
         let mut composer_origin = None;
         match source {
             PromptSource::Composer { origin } => {
@@ -504,7 +503,7 @@ impl Conversation {
             }
             PromptSource::Direct => {}
         }
-        if reset_orchestration {
+        if is_submitted_message {
             self.planning_orchestration = settings.orchestrator;
             self.orchestration_plan = None;
             self.orchestration_error = None;
@@ -512,7 +511,7 @@ impl Conversation {
         TurnSource {
             composer_origin,
             queued,
-            one_shot_mode,
+            one_shot_mode: is_submitted_message,
         }
     }
 
