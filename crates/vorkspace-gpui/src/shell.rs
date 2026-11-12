@@ -730,39 +730,7 @@ impl Shell {
             notification_state,
             quick: Default::default(),
             unseen_finished: HashSet::new(),
-            sidebar: SidebarState {
-                orchestration_summaries: sidebar_metadata.orchestrations.clone(),
-                started_by: sidebar_metadata.started_by.clone(),
-                slide: None,
-                fraction: if workspace.sidebar_visible { 1. } else { 0. },
-                content_width: workspace.right_panel_width,
-                live_agents,
-                groups: sidebar_metadata
-                    .groups
-                    .iter()
-                    .map(|(project, groups)| {
-                        (
-                            project.clone(),
-                            Arc::new(session_groups::FolderIndex::new(groups.clone())),
-                        )
-                    })
-                    .collect(),
-                renaming: None,
-                link_dialog: None,
-                group_writes: None,
-                selected_sessions: HashSet::new(),
-                selection_anchor: None,
-                context_selection: false,
-                target: None,
-                session_row_bounds: HashMap::new(),
-                filter_anchor: AnchorSlot::default(),
-                query: String::new(),
-                hover: None,
-                project_anchor: AnchorSlot::default(),
-                options_anchor: AnchorSlot::default(),
-                resize: None,
-                skip_session_click: false,
-            },
+            sidebar: Self::initial_sidebar(&workspace, sidebar_metadata, live_agents),
             archiving: HashSet::new(),
             deleting: HashSet::new(),
             session_removal_epoch: 0,
@@ -910,6 +878,26 @@ impl Shell {
         this.scan_external_editors(cx);
         this.adopt_app_core(app_core, cx);
         this.observe_accounts(cx);
+        let bots = this.initial_bot_views(cx);
+        this.bind_initial_bots(&bots, cx);
+        this.bots = Some(bots);
+        this.prune_deleted_bot_tabs(cx);
+        this.initial_voice_view(cx);
+        this.bind_notices(cx);
+        this.init_app_bridge(cx);
+        this.initial_session_order(summaries, cx);
+        this.reveal_active_tab(cx);
+        this.update_chat_visibility(cx);
+        this.update_usage_provider(cx);
+        this.apply_preferences(cx);
+        this.initialize_automations(cx);
+        this.restore_initial_navigation(cx);
+
+        this
+    }
+
+    fn initial_bot_views(&mut self, cx: &mut Context<Self>) -> Entity<crate::bots::Bots> {
+        let this = self;
         let bot_owner: std::rc::Rc<dyn crate::bots::host_api::BotsHost> =
             std::rc::Rc::new(cx.weak_entity());
         let bot_active =
@@ -921,7 +909,7 @@ impl Shell {
                     _ => None,
                 });
         let roster = this.app_core.as_ref().unwrap().read(cx).bot_roster.clone();
-        let bots = cx.new(|cx| {
+        cx.new(|cx| {
             crate::bots::Bots::new(
                 roster,
                 bot_owner,
@@ -931,7 +919,11 @@ impl Shell {
                 this.notification_state.region.clone(),
                 cx,
             )
-        });
+        })
+    }
+
+    fn bind_initial_bots(&mut self, bots: &Entity<crate::bots::Bots>, cx: &mut Context<Self>) {
+        let this = self;
         // Views opened before Bots existed share its team classification.
         this.team_histories = bots.read(cx).team_histories.clone();
         this.bot_conversations = bots.read(cx).conversation_views.clone();
@@ -941,8 +933,8 @@ impl Shell {
                 view.refresh_team_history(cx);
             });
         }
-        this.observations.push(
-            cx.subscribe(&bots, |this, _, _: &crate::bots::Changed, cx| {
+        this.observations
+            .push(cx.subscribe(bots, |this, _, _: &crate::bots::Changed, cx| {
                 if this.prune_deleted_bot_tabs(cx) {
                     this.persist(cx);
                 }
@@ -960,16 +952,15 @@ impl Shell {
                 this.update_usage_provider(cx);
                 this.invalidate_chrome(cx);
                 cx.notify();
-            }),
-        );
+            }));
         this.observations.push(cx.subscribe(
-            &bots,
+            bots,
             |this, _, opened: &crate::bots::TabOpened, cx| {
                 this.bot_opened(opened.0.clone(), cx);
             },
         ));
         this.observations.push(cx.subscribe(
-            &bots,
+            bots,
             |this, _, request: &crate::bots::OpenWorkspacePane, cx| {
                 let request = request.clone();
                 this.navigation_revision += 1;
@@ -985,16 +976,17 @@ impl Shell {
             },
         ));
         let mut bot_error = bots.read(cx).error.clone();
-        this.observations
-            .push(cx.observe(&bots, move |_, bots, cx| {
-                let error = &bots.read(cx).error;
-                if *error != bot_error {
-                    bot_error = error.clone();
-                    cx.notify();
-                }
-            }));
-        this.bots = Some(bots);
-        this.prune_deleted_bot_tabs(cx);
+        this.observations.push(cx.observe(bots, move |_, bots, cx| {
+            let error = &bots.read(cx).error;
+            if *error != bot_error {
+                bot_error = error.clone();
+                cx.notify();
+            }
+        }));
+    }
+
+    fn initial_voice_view(&mut self, cx: &mut Context<Self>) {
+        let this = self;
         let voice_owner: crate::vox::Host = std::rc::Rc::new(cx.weak_entity());
         crate::vox::set_workspace_toggle(
             |cx| {
@@ -1025,8 +1017,10 @@ impl Shell {
                 cx.notify();
             }));
         }
-        this.bind_notices(cx);
-        this.init_app_bridge(cx);
+    }
+
+    fn initial_session_order(&mut self, summaries: &[Session], cx: &mut Context<Self>) {
+        let this = self;
         for summary in summaries {
             if this
                 .bots
@@ -1048,11 +1042,9 @@ impl Shell {
         if let Some(id) = this.workspace.active {
             this.history.record(id);
         }
-        this.reveal_active_tab(cx);
-        this.update_chat_visibility(cx);
-        this.update_usage_provider(cx);
-        this.apply_preferences(cx);
-        this.initialize_automations(cx);
+    }
+
+    fn restore_initial_navigation(&self, cx: &mut Context<Self>) {
         cx.spawn(async move |this, cx| {
             let _ = this.update_in(cx, |this, window, cx| {
                 if this.navigation_revision == 0 {
@@ -1075,8 +1067,48 @@ impl Shell {
             });
         })
         .detach();
-        this
     }
+
+    fn initial_sidebar(
+        workspace: &Workspace,
+        sidebar_metadata: &vorkspace_core::store::SessionSidebarMetadata,
+        live_agents: Entity<live_agents::LiveAgents>,
+    ) -> SidebarState {
+        SidebarState {
+            orchestration_summaries: sidebar_metadata.orchestrations.clone(),
+            started_by: sidebar_metadata.started_by.clone(),
+            slide: None,
+            fraction: if workspace.sidebar_visible { 1. } else { 0. },
+            content_width: workspace.right_panel_width,
+            live_agents,
+            groups: sidebar_metadata
+                .groups
+                .iter()
+                .map(|(project, groups)| {
+                    (
+                        project.clone(),
+                        Arc::new(session_groups::FolderIndex::new(groups.clone())),
+                    )
+                })
+                .collect(),
+            renaming: None,
+            link_dialog: None,
+            group_writes: None,
+            selected_sessions: HashSet::new(),
+            selection_anchor: None,
+            context_selection: false,
+            target: None,
+            session_row_bounds: HashMap::new(),
+            filter_anchor: AnchorSlot::default(),
+            query: String::new(),
+            hover: None,
+            project_anchor: AnchorSlot::default(),
+            options_anchor: AnchorSlot::default(),
+            resize: None,
+            skip_session_click: false,
+        }
+    }
+
     fn update_chat_visibility(&mut self, cx: &mut Context<Self>) {
         if let Some(manager) = self.bots.clone() {
             let context = self.workspace_bot_context();
