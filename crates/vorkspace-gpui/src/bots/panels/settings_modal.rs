@@ -836,7 +836,6 @@ impl Bots {
                     "bot-show-started",
                     "Show sessions in sidebar",
                     bot.show_started_sessions_in_sidebar,
-                    false,
                     |m, on| m.show_started_sessions_in_sidebar = on,
                     cx,
                 ),
@@ -848,15 +847,11 @@ impl Bots {
         id: &'static str,
         label: &'static str,
         on: bool,
-        disabled: bool,
         change: fn(&mut Bot, bool),
         cx: &mut Context<Self>,
     ) -> AnyElement {
-        crate::controls::switch(id, label, on, !disabled)
+        crate::controls::switch(id, label, on, true)
             .on_click(cx.listener(move |this, _, _, cx| {
-                if disabled {
-                    return;
-                }
                 if let Some(id) = this
                     .creation
                     .as_ref()
