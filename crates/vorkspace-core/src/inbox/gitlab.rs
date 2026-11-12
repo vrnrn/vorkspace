@@ -155,7 +155,6 @@ pub fn gitlab_list_work_items(
     app: PathBuf,
     cwd: String,
     kind: String,
-    assigned_to_me: bool,
     state: String,
     limit: Option<u32>,
 ) -> Result<Vec<GitlabWorkItem>, String> {
@@ -165,7 +164,6 @@ pub fn gitlab_list_work_items(
         &config,
         &repo,
         &kind,
-        assigned_to_me,
         &state,
         limit.unwrap_or(DEFAULT_LIMIT),
     )
@@ -241,7 +239,6 @@ fn gitlab_list_work_items_for(
     config: &GitlabConfig,
     repo: &str,
     kind: &str,
-    assigned_to_me: bool,
     state: &str,
     limit: u32,
 ) -> Result<Vec<GitlabWorkItem>, String> {
@@ -253,13 +250,8 @@ fn gitlab_list_work_items_for(
         "opened"
     };
     let limit = limit.clamp(1, 100);
-    let assigned = if assigned_to_me {
-        "&scope=assigned_to_me"
-    } else {
-        "&scope=all"
-    };
     let path = format!(
-        "/projects/{}/{resource}?state={state}&order_by=updated_at&sort=desc&per_page={limit}&with_labels_details=true{assigned}",
+        "/projects/{}/{resource}?state={state}&order_by=updated_at&sort=desc&per_page={limit}&with_labels_details=true&scope=all",
         encode_path_component(repo)
     );
     let response = gitlab_get(config, &path)?;

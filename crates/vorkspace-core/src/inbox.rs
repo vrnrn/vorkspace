@@ -764,7 +764,6 @@ impl Service {
                                     self.data_dir.clone(),
                                     project.to_string_lossy().into_owned(),
                                     kind.into(),
-                                    false,
                                     filters.fetch_state().into(),
                                     Some(limit),
                                 )?)?,
