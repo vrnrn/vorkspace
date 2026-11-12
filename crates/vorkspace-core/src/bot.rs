@@ -558,7 +558,7 @@ pub fn rotation_brief(rows: &[Row]) -> String {
     )
 }
 
-/// Reuse the provider-owned rollout directory prepared by the desktop app.
+/// Reuse the existing provider-owned rollout directory for this account.
 /// Nothing is created or copied when the native UI opens a Bot.
 pub(crate) fn codex_home(root: &Path, account: &str) -> Result<Option<PathBuf>, String> {
     crate::accounts::validate_id(account)?;
@@ -566,6 +566,6 @@ pub(crate) fn codex_home(root: &Path, account: &str) -> Result<Option<PathBuf>, 
         .parent()
         .ok_or("Bot storage has no data directory")?
         .join("codex-bots");
-    let home = crate::compatibility::bot_owner(&family, account, true);
+    let home = family.join(account);
     Ok(home.is_dir().then_some(home))
 }

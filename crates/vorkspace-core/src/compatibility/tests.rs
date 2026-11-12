@@ -4,9 +4,6 @@ use serde_json::json;
 fn earlier_prefix() -> String {
     String::from_utf8(vec![109, 111, 110, 111, 99, 111, 100, 101]).unwrap()
 }
-fn earlier_roster_field() -> String {
-    String::from_utf8(vec![109, 111, 110, 111, 115]).unwrap()
-}
 
 #[test]
 fn normalizes_keys_without_changing_ids_text_or_unknown_metadata() {
@@ -43,69 +40,4 @@ fn historical_command_receipts_remain_visible_but_echo_is_not_an_effect() {
         Some("sessions.start".into())
     );
     assert!(crate::bot::work::command_action(&format!("echo {name} app sessions.start")).is_none());
-}
-#[test]
-fn saved_file_and_provider_home_owners_are_read_and_edited_in_place() {
-    let directory = tempfile::tempdir().unwrap();
-    let old = earlier_roster_field();
-    let current = directory.path().join("bots");
-    let earlier = directory.path().join(&old);
-    std::fs::create_dir_all(current.join("saved-bot")).unwrap();
-    std::fs::create_dir_all(earlier.join("saved-bot/memory")).unwrap();
-    std::fs::write(earlier.join("saved-bot/SOUL.md"), "Private identity").unwrap();
-    std::fs::write(earlier.join("saved-bot/MEMORY.md"), "- Original memory").unwrap();
-    std::fs::write(earlier.join("saved-bot/private-extra.json"), "opaque").unwrap();
-    let before = crate::bot::files::load(&current, "saved-bot", None).unwrap();
-    assert_eq!(before.soul.as_deref(), Some("Private identity"));
-    crate::bot::files::save(
-        &current,
-        "saved-bot",
-        None,
-        "MEMORY.md",
-        "- Edited memory",
-        Some(&before.memory_hash),
-    )
-    .unwrap();
-    assert_eq!(
-        crate::bot::files::load(&current, "saved-bot", None)
-            .unwrap()
-            .memory,
-        "- Edited memory"
-    );
-    assert!(current
-        .join("saved-bot")
-        .read_dir()
-        .unwrap()
-        .next()
-        .is_none());
-    assert_eq!(
-        std::fs::read_to_string(earlier.join("saved-bot/private-extra.json")).unwrap(),
-        "opaque"
-    );
-    // Distinct populated current owners keep their own complete identity.
-    std::fs::create_dir_all(current.join("new-bot")).unwrap();
-    std::fs::create_dir_all(earlier.join("new-bot")).unwrap();
-    std::fs::write(current.join("new-bot/SOUL.md"), "Current identity").unwrap();
-    std::fs::write(earlier.join("new-bot/SOUL.md"), "Earlier identity").unwrap();
-    assert_eq!(
-        crate::bot::files::load(&current, "new-bot", None)
-            .unwrap()
-            .soul
-            .as_deref(),
-        Some("Current identity")
-    );
-    let homes = directory.path().join("codex-bots");
-    let oldhomes = directory.path().join(format!("codex-{old}"));
-    std::fs::create_dir_all(homes.join("default")).unwrap();
-    std::fs::create_dir_all(oldhomes.join("default")).unwrap();
-    std::fs::write(oldhomes.join("default/state_5.sqlite"), "private state").unwrap();
-    assert_eq!(
-        crate::bot::codex_home(&current, "default").unwrap(),
-        Some(oldhomes.join("default"))
-    );
-    assert!(homes.join("default").read_dir().unwrap().next().is_none());
-    assert_eq!(
-        std::fs::read_to_string(oldhomes.join("default/state_5.sqlite")).unwrap(),
-        "private state"
-    );
 }

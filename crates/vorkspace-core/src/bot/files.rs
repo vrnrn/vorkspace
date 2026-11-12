@@ -153,26 +153,38 @@ fn valid_id(id: &str) -> bool {
             .all(|byte| byte.is_ascii_alphanumeric() || byte == b'-')
 }
 
+/// An owner directory with any file below it, so an empty folder does not
+/// replace a project-indexed owner.
+fn has_owner_records(path: &Path, depth: u8) -> bool {
+    if !std::fs::symlink_metadata(path).is_ok_and(|m| m.is_dir() && !m.file_type().is_symlink()) {
+        return false;
+    }
+    std::fs::read_dir(path).ok().is_some_and(|entries| {
+        entries.flatten().any(|entry| {
+            entry.file_type().map_or(true, |kind| {
+                !kind.is_dir() || depth == 0 || has_owner_records(&entry.path(), depth - 1)
+            })
+        })
+    })
+}
+
 /// The Bot's folder, created with an empty memory on first use. A Bot that
 /// was a project's own keeps that project's indexed folder as its owner.
 fn agent_dir(root: &Path, bot: &str, legacy_project: Option<&str>) -> Result<PathBuf, String> {
     if !valid_id(bot) {
         return Err("Not a Bot id".into());
     }
-    let mut dir = crate::compatibility::bot_owner(root, bot, false);
-    if !crate::compatibility::has_owner_records(&dir, 4) {
+    let mut dir = root.join(bot);
+    if !has_owner_records(&dir, 4) {
         if let Some(project) = legacy_project.filter(|project| !project.trim().is_empty()) {
-            for family in crate::compatibility::bot_families(root, false) {
-                if let Some(owner) = read_index(&family)?.agents.iter().find(|entry| {
-                    valid_id(&entry.id) && entry.projects.iter().any(|key| key == project)
-                }) {
-                    let indexed = family.join(&owner.id);
-                    if std::fs::symlink_metadata(&indexed)
-                        .is_ok_and(|m| m.is_dir() && !m.file_type().is_symlink())
-                    {
-                        dir = indexed;
-                        break;
-                    }
+            if let Some(owner) = read_index(root)?.agents.iter().find(|entry| {
+                valid_id(&entry.id) && entry.projects.iter().any(|key| key == project)
+            }) {
+                let indexed = root.join(&owner.id);
+                if std::fs::symlink_metadata(&indexed)
+                    .is_ok_and(|m| m.is_dir() && !m.file_type().is_symlink())
+                {
+                    dir = indexed;
                 }
             }
         }

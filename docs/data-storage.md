@@ -14,7 +14,7 @@ The default production location is `com.vorkspace.desktop/vorkspace.db` under ma
 
 The desktop schema remains readable without the former UI. Preferences, accounts, Bot identities, folders and Inbox choices come from the native settings sidecar; the former UI's WebKit storage and its tab snapshot are not read. Transcript text, arbitrary document JSON, paths, and provider IDs remain untouched. Saving uses atomic sidecar replacement.
 
-Bot memory and habit files use their existing owner directory in the selected data directory. New owners use `bots/`; earlier named or project-indexed owners stay where they are, including their provider homes. Empty placeholder directories do not hide saved owners. No files or rows are moved when reading these aliases.
+Bot memory and habit files use their owner directory under `bots/` in the selected data directory. A project-indexed owner there stays where it is, and an empty placeholder directory does not hide it. Codex Bot homes live under `codex-bots/`. No files are moved when a Bot opens.
 
 New Bot setup stays in memory until the user supplies a name and confirms Create. Cancelling setup creates no roster entry, backing session or Bot files. Confirmation saves the named identity with its selected provider configuration and soul before creating its backing session. Those setup choices remain in the roster until its files and session settings are saved and its session ID is published, so reopening during setup completion retains the selected configuration. Existing Bot names and conversations remain unchanged.
 

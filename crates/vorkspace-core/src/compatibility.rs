@@ -4,19 +4,10 @@
 //! rewrites a transcript, or changes a provider session ID.
 use serde_json::Value;
 use sha2::{Digest, Sha256};
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 fn fingerprint(name: &str) -> String {
     format!("{:x}", Sha256::digest(name.as_bytes()))
-}
-
-fn existing_child(root: &Path, identity: &str) -> Option<PathBuf> {
-    std::fs::read_dir(root)
-        .ok()?
-        .filter_map(Result::ok)
-        .find_map(|entry| {
-            (fingerprint(&entry.file_name().to_string_lossy()) == identity).then(|| entry.path())
-        })
 }
 
 pub fn vorkspace_database() -> Option<PathBuf> {
@@ -36,56 +27,6 @@ pub(crate) fn key(key: &str) -> String {
         prefix
     };
     format!("{replacement}{}", &key[end..])
-}
-
-/// Select an existing complete owner in place. An empty counterpart directory
-/// does not replace a saved owner; two populated owners are never combined.
-pub(crate) fn has_owner_records(path: &Path, depth: u8) -> bool {
-    if !std::fs::symlink_metadata(path).is_ok_and(|m| m.is_dir() && !m.file_type().is_symlink()) {
-        return false;
-    }
-    std::fs::read_dir(path).ok().is_some_and(|entries| {
-        entries.flatten().any(|entry| {
-            entry.file_type().map_or(true, |kind| {
-                !kind.is_dir() || depth == 0 || has_owner_records(&entry.path(), depth - 1)
-            })
-        })
-    })
-}
-
-pub(crate) fn bot_families(root: &Path, provider_home: bool) -> Vec<PathBuf> {
-    let mut paths = vec![root.to_owned()];
-    let identity = if provider_home {
-        "3c5593b09cae5aab4027ccb4da4eaa3d2ab63276e3566466341b6769acc7be1b"
-    } else {
-        "9b9e74c140f4ffe20089b4929a5609a790039039534159550ce45964efe895f2"
-    };
-    if let Some(earlier) = root
-        .parent()
-        .and_then(|base| existing_child(base, identity))
-        .filter(|path| {
-            std::fs::symlink_metadata(path).is_ok_and(|m| m.is_dir() && !m.file_type().is_symlink())
-        })
-    {
-        paths.push(earlier);
-    }
-    paths
-}
-pub(crate) fn bot_owner(root: &Path, owner: &str, provider_home: bool) -> PathBuf {
-    let current = root.join(owner);
-    if has_owner_records(&current, 4) {
-        return current;
-    }
-    for earlier in bot_families(root, provider_home)
-        .into_iter()
-        .skip(1)
-        .map(|p| p.join(owner))
-    {
-        if has_owner_records(&earlier, 4) {
-            return earlier;
-        }
-    }
-    current
 }
 
 pub(crate) fn application_block(block: &Value) -> bool {

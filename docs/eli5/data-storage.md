@@ -4,7 +4,7 @@ All runs open your existing desktop database, kept in your Mac's Application Sup
 
 Use `--check-data` to check a selected database without writing to it. Unsent messages, cursor selections, attachments and MCP tags reopen from the same saved draft. Edits are saved while typing and flushed when the view closes or the app quits. If two windows edit the same draft, neither silently overwrites the other. The conflicting input stays saved separately and appears with a preview when you reopen the chat, so you can choose which version to keep. Once you choose, that banner goes away. A Bot send can keep a saved receipt until it is safely queued, so a crash does not send the same message twice. Missing attachments stay recorded so sending cannot silently drop them. Vox also keeps its saved enabled, silent and microphone choices.
 
-Bot memories stay in the data folder where they were saved, even when an earlier version used a different folder name. The app keeps using that same saved owner when you edit it. Empty newer folders do not hide older memories.
+Bot memories stay in the Bot's folder inside the data folder, and the app edits them there. A Bot that used to belong to a project keeps that project's folder, and an empty newer folder does not hide it.
 
 Adding a Bot opens a setup form with the name field ready to type. You must give it a name and press Create before it is saved. Cancel leaves no new Bot or chat behind. Its chosen model, permissions and soul stay saved while its chat is being prepared, including if the app closes during that preparation. Existing Bots keep their names and chats.
 
