@@ -12,21 +12,6 @@ fn earlier_title_field() -> String {
 }
 
 #[test]
-fn finds_exact_prior_database_without_moving_or_copying_it() {
-    let dir = tempfile::tempdir().unwrap();
-    let folder = dir.path().join(format!("com.{}.desktop", earlier_prefix()));
-    std::fs::create_dir(&folder).unwrap();
-    let database = folder.join(format!("{}.db", earlier_prefix()));
-    std::fs::write(&database, b"original").unwrap();
-    assert_eq!(desktop_database(dir.path()), database);
-    assert_eq!(std::fs::read(&database).unwrap(), b"original");
-    assert!(!dir.path().join("com.vorkspace.desktop").exists());
-    let current = dir.path().join("com.vorkspace.desktop/vorkspace.db");
-    std::fs::create_dir_all(current.parent().unwrap()).unwrap();
-    std::fs::write(&current, b"current").unwrap();
-    assert_eq!(desktop_database(dir.path()), current);
-}
-#[test]
 fn normalizes_keys_without_changing_ids_text_or_unknown_metadata() {
     let old = earlier_prefix();
     assert_eq!(

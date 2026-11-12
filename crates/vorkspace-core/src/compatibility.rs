@@ -24,26 +24,7 @@ fn existing_child(root: &Path, identity: &str) -> Option<PathBuf> {
 
 pub fn vorkspace_database() -> Option<PathBuf> {
     let base = crate::shell_env::home()?.join("Library/Application Support");
-    Some(desktop_database(&base))
-}
-
-pub(crate) fn desktop_database(base: &Path) -> PathBuf {
-    let current = base.join("com.vorkspace.desktop/vorkspace.db");
-    if current.exists() {
-        return current;
-    }
-    existing_child(
-        base,
-        "7bf39d8169a1f5d55d98ef75166e70e97466c5d0762098a86262fb0d419a355b",
-    )
-    .and_then(|directory| {
-        existing_child(
-            &directory,
-            "9347502a9228f0ec32ca7251ae734c7ddf1a0752334291cd08b93c4efa76c087",
-        )
-    })
-    .filter(|path| path.is_file())
-    .unwrap_or(current)
+    Some(base.join("com.vorkspace.desktop/vorkspace.db"))
 }
 
 /// Normalize app-owned persisted identities only. Paths, IDs and user text stay exact.
