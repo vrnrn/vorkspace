@@ -123,168 +123,14 @@ impl Bots {
                             .w_full()
                             .flex()
                             .relative()
-                            .child(
-                                div()
-                                    .id("bot-settings-navigation")
-                                    .debug_selector(|| "bot-settings-navigation".into())
-                                    .role(Role::Navigation)
-                                    .aria_label("Settings sections")
-                                    .w(px(navigation_width))
-                                    .flex_shrink_0()
-                                    .h_full()
-                                    .border_r_1()
-                                    .border_color(content(0.04))
-                                    .p_2()
-                                    .flex()
-                                    .flex_col()
-                                    .gap_px()
-                                    .child(
-                                        div()
-                                            .px_2p5()
-                                            .pt_1p5()
-                                            .pb_2()
-                                            .text_size(px(11.))
-                                            .text_color(content(0.45))
-                                            .child(if creating { "New bot" } else { "Settings" }),
-                                    )
-                                    .children(
-                                        [
-                                            (SettingsSection::General, "General", "settings"),
-                                            (SettingsSection::Soul, "Soul", "sparkles"),
-                                            (SettingsSection::Memory, "Memory", "sticky-note"),
-                                            (SettingsSection::Habits, "Habits", "clock"),
-                                        ]
-                                        .into_iter()
-                                        .filter(|(tab, _, _)| {
-                                            !creating
-                                                || matches!(
-                                                    tab,
-                                                    SettingsSection::General
-                                                        | SettingsSection::Soul
-                                                )
-                                        })
-                                        .map(
-                                            |(tab, label, glyph)| {
-                                                let row_id = format!("bot-settings-{label}");
-                                                div()
-                                                    .id(SharedString::from(row_id.clone()))
-                                                    .debug_selector(move || row_id.clone())
-                                                    .role(Role::Button)
-                                                    .aria_label(label)
-                                                    .w_full()
-                                                    .h(px(32.))
-                                                    .flex_shrink_0()
-                                                    .flex()
-                                                    .flex_row()
-                                                    .items_center()
-                                                    .justify_start()
-                                                    .text_align(gpui::TextAlign::Left)
-                                                    .gap(px(10.))
-                                                    .px(px(10.))
-                                                    .py(px(6.))
-                                                    .rounded(px(radius::CONTROL))
-                                                    .text_size(px(13.))
-                                                    .line_height(px(20.))
-                                                    .text_color(content(if section == tab {
-                                                        1.
-                                                    } else {
-                                                        0.65
-                                                    }))
-                                                    .when(section == tab, |d| d.bg(content(0.08)))
-                                                    .when(section != tab, |d| {
-                                                        d.hover(|d| {
-                                                            d.bg(content(0.05))
-                                                                .text_color(content(1.))
-                                                        })
-                                                    })
-                                                    .child(
-                                                        div()
-                                                            .id(SharedString::from(format!(
-                                                                "bot-settings-icon-{label}"
-                                                            )))
-                                                            .debug_selector(move || {
-                                                                format!("bot-settings-icon-{label}")
-                                                            })
-                                                            .size(px(14.))
-                                                            .flex_shrink_0()
-                                                            .child(icon(glyph, 14.).text_color(
-                                                                content(if section == tab {
-                                                                    1.
-                                                                } else {
-                                                                    0.65
-                                                                }),
-                                                            )),
-                                                    )
-                                                    .child(
-                                                        div()
-                                                            .id(SharedString::from(format!(
-                                                                "bot-settings-label-{label}"
-                                                            )))
-                                                            .debug_selector(move || {
-                                                                format!(
-                                                                    "bot-settings-label-{label}"
-                                                                )
-                                                            })
-                                                            .child(label),
-                                                    )
-                                                    .on_click(cx.listener(
-                                                        move |this, _, window, cx| {
-                                                            this.save_open_file(cx);
-                                                            this.settings = Some(tab);
-                                                            if tab == SettingsSection::Memory
-                                                                && let Some(id) =
-                                                                    this.active.clone()
-                                                            {
-                                                                this.reload_files(&id, cx);
-                                                            }
-                                                            window.focus(&this.settings_focus, cx);
-                                                            cx.notify();
-                                                        },
-                                                    ))
-                                            },
-                                        ),
-                                    )
-                                    .when(!creating, |d| {
-                                        let id = bot.id.clone();
-                                        d.child(div().flex_1()).child(
-                                            div()
-                                                .id("bot-delete")
-                                                .debug_selector(|| "bot-delete".into())
-                                                .role(Role::Button)
-                                                .map(vorkspace_ui::theme::tab_reachable)
-                                                .aria_label("Delete bot")
-                                                .relative()
-                                                .w_full()
-                                                .h(px(32.))
-                                                .flex_shrink_0()
-                                                .flex()
-                                                .items_center()
-                                                .gap(px(10.))
-                                                .px(px(10.))
-                                                .rounded(px(radius::CONTROL))
-                                                .text_size(px(13.))
-                                                .line_height(px(20.))
-                                                .text_color(vorkspace_ui::theme::danger())
-                                                .hover(|d| {
-                                                    d.bg(vorkspace_ui::fluid::wash(
-                                                        vorkspace_ui::theme::danger().opacity(0.08),
-                                                    ))
-                                                })
-                                                .child(delete_anchor.probe())
-                                                .child(
-                                                    icon("trash", 14.)
-                                                        .text_color(vorkspace_ui::theme::danger()),
-                                                )
-                                                .child("Delete bot…")
-                                                .on_click(cx.listener(
-                                                    move |this, _, window, cx| {
-                                                        this.save_open_file(cx);
-                                                        this.delete_bot(&id, window, cx);
-                                                    },
-                                                )),
-                                        )
-                                    }),
-                            )
+                            .child(self.settings_navigation(
+                                bot,
+                                creating,
+                                section,
+                                navigation_width,
+                                &delete_anchor,
+                                cx,
+                            ))
                             .child(
                                 div()
                                     .flex_1()
@@ -323,6 +169,142 @@ impl Bots {
                 )
                 .into_any_element(),
         )
+    }
+    fn settings_navigation(
+        &self,
+        bot: &Bot,
+        creating: bool,
+        section: SettingsSection,
+        navigation_width: f32,
+        delete_anchor: &AnchorSlot,
+        cx: &mut Context<Self>,
+    ) -> gpui::Stateful<gpui::Div> {
+        div()
+            .id("bot-settings-navigation")
+            .debug_selector(|| "bot-settings-navigation".into())
+            .role(Role::Navigation)
+            .aria_label("Settings sections")
+            .w(px(navigation_width))
+            .flex_shrink_0()
+            .h_full()
+            .border_r_1()
+            .border_color(content(0.04))
+            .p_2()
+            .flex()
+            .flex_col()
+            .gap_px()
+            .child(
+                div()
+                    .px_2p5()
+                    .pt_1p5()
+                    .pb_2()
+                    .text_size(px(11.))
+                    .text_color(content(0.45))
+                    .child(if creating { "New bot" } else { "Settings" }),
+            )
+            .children(
+                [
+                    (SettingsSection::General, "General", "settings"),
+                    (SettingsSection::Soul, "Soul", "sparkles"),
+                    (SettingsSection::Memory, "Memory", "sticky-note"),
+                    (SettingsSection::Habits, "Habits", "clock"),
+                ]
+                .into_iter()
+                .filter(|(tab, _, _)| {
+                    !creating || matches!(tab, SettingsSection::General | SettingsSection::Soul)
+                })
+                .map(|(tab, label, glyph)| {
+                    let row_id = format!("bot-settings-{label}");
+                    div()
+                        .id(SharedString::from(row_id.clone()))
+                        .debug_selector(move || row_id.clone())
+                        .role(Role::Button)
+                        .aria_label(label)
+                        .w_full()
+                        .h(px(32.))
+                        .flex_shrink_0()
+                        .flex()
+                        .flex_row()
+                        .items_center()
+                        .justify_start()
+                        .text_align(gpui::TextAlign::Left)
+                        .gap(px(10.))
+                        .px(px(10.))
+                        .py(px(6.))
+                        .rounded(px(radius::CONTROL))
+                        .text_size(px(13.))
+                        .line_height(px(20.))
+                        .text_color(content(if section == tab { 1. } else { 0.65 }))
+                        .when(section == tab, |d| d.bg(content(0.08)))
+                        .when(section != tab, |d| {
+                            d.hover(|d| d.bg(content(0.05)).text_color(content(1.)))
+                        })
+                        .child(
+                            div()
+                                .id(SharedString::from(format!("bot-settings-icon-{label}")))
+                                .debug_selector(move || format!("bot-settings-icon-{label}"))
+                                .size(px(14.))
+                                .flex_shrink_0()
+                                .child(icon(glyph, 14.).text_color(content(if section == tab {
+                                    1.
+                                } else {
+                                    0.65
+                                }))),
+                        )
+                        .child(
+                            div()
+                                .id(SharedString::from(format!("bot-settings-label-{label}")))
+                                .debug_selector(move || format!("bot-settings-label-{label}"))
+                                .child(label),
+                        )
+                        .on_click(cx.listener(move |this, _, window, cx| {
+                            this.save_open_file(cx);
+                            this.settings = Some(tab);
+                            if tab == SettingsSection::Memory
+                                && let Some(id) = this.active.clone()
+                            {
+                                this.reload_files(&id, cx);
+                            }
+                            window.focus(&this.settings_focus, cx);
+                            cx.notify();
+                        }))
+                }),
+            )
+            .when(!creating, |d| {
+                let id = bot.id.clone();
+                d.child(div().flex_1()).child(
+                    div()
+                        .id("bot-delete")
+                        .debug_selector(|| "bot-delete".into())
+                        .role(Role::Button)
+                        .map(vorkspace_ui::theme::tab_reachable)
+                        .aria_label("Delete bot")
+                        .relative()
+                        .w_full()
+                        .h(px(32.))
+                        .flex_shrink_0()
+                        .flex()
+                        .items_center()
+                        .gap(px(10.))
+                        .px(px(10.))
+                        .rounded(px(radius::CONTROL))
+                        .text_size(px(13.))
+                        .line_height(px(20.))
+                        .text_color(vorkspace_ui::theme::danger())
+                        .hover(|d| {
+                            d.bg(vorkspace_ui::fluid::wash(
+                                vorkspace_ui::theme::danger().opacity(0.08),
+                            ))
+                        })
+                        .child(delete_anchor.probe())
+                        .child(icon("trash", 14.).text_color(vorkspace_ui::theme::danger()))
+                        .child("Delete bot…")
+                        .on_click(cx.listener(move |this, _, window, cx| {
+                            this.save_open_file(cx);
+                            this.delete_bot(&id, window, cx);
+                        })),
+                )
+            })
     }
     pub(super) fn settings_footer(
         &self,
