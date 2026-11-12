@@ -1,7 +1,7 @@
 //! Owns automation storage, transactional admission and recovery.
 use super::schema::{ensure_schema, RECOVERABLE_RUN};
 use super::{
-    has_time_trigger, hydrate_triggers, new_id, next_run_at, normalize_triggers, now_millis,
+    has_time_trigger, new_id, next_run_at, normalize_triggers, now_millis, trigger_from_fields,
     validate_id, validate_upsert, Automation, AutomationEventClaim, AutomationRun,
     AutomationUpsert, DueAutomationRun, MAX_PROMPT,
 };
@@ -108,8 +108,16 @@ fn definitions_without_triggers(conn: &Connection) -> Result<Vec<(String, String
 /// Store the trigger the old reader derived on every load. Fields this build
 /// does not know stay in the saved JSON.
 fn with_triggers(raw: &str) -> Result<String, String> {
-    let mut saved: Automation = serde_json::from_str(raw).map_err(|error| error.to_string())?;
-    hydrate_triggers(&mut saved);
+    let saved: Automation = serde_json::from_str(raw).map_err(|error| error.to_string())?;
+    let trigger = trigger_from_fields(
+        &saved.id,
+        &saved.trigger_kind,
+        &saved.trigger_event,
+        &saved.schedule_kind,
+        saved.minute,
+        &saved.time,
+        saved.day_of_week,
+    );
     let mut value: serde_json::Value =
         serde_json::from_str(raw).map_err(|error| error.to_string())?;
     let object = value
@@ -117,7 +125,7 @@ fn with_triggers(raw: &str) -> Result<String, String> {
         .ok_or("An automation definition is not an object.")?;
     object.insert(
         "triggers".into(),
-        serde_json::to_value(&saved.triggers).map_err(|error| error.to_string())?,
+        serde_json::to_value([trigger]).map_err(|error| error.to_string())?,
     );
     Ok(value.to_string())
 }
@@ -157,10 +165,7 @@ fn convert_definition_triggers(conn: &mut Connection, path: &Path) -> Result<(),
 }
 
 fn parse_automation(value: String) -> Result<Automation, String> {
-    let mut automation: Automation =
-        serde_json::from_str(&value).map_err(|error| error.to_string())?;
-    hydrate_triggers(&mut automation);
-    Ok(automation)
+    serde_json::from_str(&value).map_err(|error| error.to_string())
 }
 
 fn list(conn: &Connection, due_by: Option<i64>) -> Result<Vec<Automation>, String> {
@@ -298,7 +303,7 @@ fn has_event_trigger(automation: &Automation, kind: &str, event: &str) -> bool {
         Some(triggers) => triggers
             .iter()
             .any(|trigger| trigger.kind == kind && trigger.event == event),
-        None => automation.trigger_kind == kind && automation.trigger_event == event,
+        None => false,
     }
 }
 

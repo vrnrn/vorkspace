@@ -303,29 +303,10 @@ fn validate_trigger(trigger: &AutomationTrigger) -> Result<(), String> {
     Ok(())
 }
 
-fn hydrate_triggers(automation: &mut Automation) {
-    if automation.triggers.is_some() {
-        return;
-    }
-    automation.triggers = Some(vec![legacy_trigger(automation)]);
-}
-
-fn legacy_trigger(automation: &Automation) -> AutomationTrigger {
-    trigger_from_fields(
-        &automation.id,
-        &automation.trigger_kind,
-        &automation.trigger_event,
-        &automation.schedule_kind,
-        automation.minute,
-        &automation.time,
-        automation.day_of_week,
-    )
-}
-
 fn has_time_trigger(automation: &Automation) -> bool {
     match &automation.triggers {
         Some(triggers) => triggers.iter().any(|trigger| trigger.kind == "time"),
-        None => automation.trigger_kind == "time",
+        None => false,
     }
 }
 

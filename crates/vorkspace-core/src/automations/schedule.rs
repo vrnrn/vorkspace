@@ -1,5 +1,5 @@
 //! Calendar scheduling and trigger descriptions.
-use super::{legacy_trigger, new_id, now_millis, Automation, AutomationTrigger, AutomationUpsert};
+use super::{new_id, now_millis, Automation, AutomationTrigger, AutomationUpsert};
 use chrono::{Datelike, Local, TimeZone, Timelike};
 use std::collections::HashMap;
 
@@ -131,9 +131,7 @@ pub fn next_run_at(triggers: &[AutomationTrigger], after: i64) -> i64 {
 
 impl Automation {
     pub(crate) fn triggers(&self) -> Vec<AutomationTrigger> {
-        self.triggers
-            .clone()
-            .unwrap_or_else(|| vec![legacy_trigger(self)])
+        self.triggers.clone().unwrap_or_default()
     }
     pub fn trigger_label(&self) -> String {
         let triggers = self.triggers();

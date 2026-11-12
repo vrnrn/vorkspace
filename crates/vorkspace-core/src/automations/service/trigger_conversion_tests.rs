@@ -81,15 +81,6 @@ fn assert_loads_like_the_old_reader(service: &Service) {
 
 #[test]
 fn legacy_definitions_convert_once_after_a_verified_backup() {
-    for (id, raw) in [("legacy-event", LEGACY_EVENT), ("legacy-time", LEGACY_TIME)] {
-        let expected = old_reader_output()
-            .into_iter()
-            .find(|(name, _)| *name == id)
-            .unwrap()
-            .1;
-        let old = parse_automation(raw.to_owned()).unwrap();
-        assert_eq!(serde_json::to_value(old).unwrap(), expected);
-    }
     let (directory, path) = fixture(&[LEGACY_EVENT, LEGACY_TIME, CURRENT]);
     let before = saved(&path);
 
