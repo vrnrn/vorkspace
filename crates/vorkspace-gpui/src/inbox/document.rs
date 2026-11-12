@@ -471,7 +471,6 @@ impl Element for CodeLines {
             self.lines.start + start..self.lines.start + end,
             None,
             "",
-            false,
         )
         .into_any_element();
         body.layout_as_root(

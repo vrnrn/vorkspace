@@ -1030,9 +1030,8 @@ pub(crate) fn code_lines(
     range: Range<usize>,
     highlighted: Option<&HighlightedDocument>,
     query: &str,
-    current: bool,
 ) -> Div {
-    code_lines_selected(fence, range, highlighted, query, current, None)
+    code_lines_selected(fence, range, highlighted, query, false, None)
 }
 pub(crate) fn code_lines_selected(
     fence: &Fence,
@@ -1184,7 +1183,7 @@ fn svg_source_preview(source: &str) -> AnyElement {
                 .pr_2()
                 .border_t_1()
                 .border_color(content(0.1))
-                .child(code_lines(&fence, 0..fence.lines.len(), None, "", false)),
+                .child(code_lines(&fence, 0..fence.lines.len(), None, "")),
         )
         .into_any_element()
 }

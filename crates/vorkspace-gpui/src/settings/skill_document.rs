@@ -179,7 +179,7 @@ impl SkillDocument {
                 .border_color(content(0.1))
                 .bg(content(0.03))
                 .py_2()
-                .child(markdown::code_lines(fence, lines.clone(), None, "", false))
+                .child(markdown::code_lines(fence, lines.clone(), None, ""))
                 .into_any_element(),
             _ => markdown::body(row, id, Tone::Normal, None, Instant::now()),
         };
