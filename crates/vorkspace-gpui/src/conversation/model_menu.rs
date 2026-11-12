@@ -565,111 +565,7 @@ impl Conversation {
     ) -> (&'static str, Vec<MenuItem>, f32, MenuStyle) {
         let provider = Kind::from_id(&self.summary.provider);
         match kind {
-            ComposerMenu::CompactSettings => {
-                let bot = self.settings.bot.is_some();
-                let draft = !self.summary.has_messages;
-                let enabled = !self.responding() && !self.preparing_worktree && self.git.is_some();
-                let mut items = vec![MenuItem::Header(
-                    if bot {
-                        "Bot settings"
-                    } else {
-                        "Session settings"
-                    }
-                    .into(),
-                )];
-                if !bot {
-                    let linked = self.git.as_ref().is_some_and(|s| s.linked)
-                        || self.settings.worktree_cwd.is_some();
-                    let label = if draft && self.settings.new_worktree {
-                        "New worktree"
-                    } else if linked {
-                        "Worktree"
-                    } else {
-                        "Current checkout"
-                    };
-                    items.push(MenuItem::Header(format!("Workspace · {label}").into()));
-                    if draft {
-                        let (_, workspace, _, _) =
-                            self.menu_items(ComposerMenu::Workspace, events, window, cx);
-                        items.extend(workspace.into_iter().filter_map(|item| match item {
-                            MenuItem::Action(mut action) => {
-                                action.disabled |= !enabled;
-                                Some(MenuItem::Action(action))
-                            }
-                            _ => None,
-                        }));
-                    }
-                    if let Some(branch) = if draft && self.settings.new_worktree {
-                        self.settings
-                            .worktree_base
-                            .as_ref()
-                            .or(self.branch.as_ref())
-                    } else {
-                        self.branch.as_ref()
-                    } {
-                        items.push(
-                            MenuAction::new(
-                                "compact:branch",
-                                if draft && self.settings.new_worktree {
-                                    "Worktree base"
-                                } else {
-                                    "Branch"
-                                },
-                            )
-                            .value(
-                                if !(draft && self.settings.new_worktree)
-                                    && self.git.as_ref().is_some_and(|git| git.detached)
-                                {
-                                    format!("detached {branch}")
-                                } else if draft && self.settings.new_worktree {
-                                    crate::git_tools::git_picker::base_label(branch).to_owned()
-                                } else {
-                                    branch.clone()
-                                },
-                            )
-                            .disabled(!enabled)
-                            .into(),
-                        );
-                    }
-                }
-                let (_, model, _, _) = self.menu_items(ComposerMenu::Model, events, window, cx);
-                // Combined mode already contains model options; beside mode must expose them here too.
-                if cx
-                    .try_global::<vorkspace_ui::preferences::Preferences>()
-                    .is_some_and(|p| p.model_controls == "beside")
-                {
-                    items.extend(self.bot_model_options());
-                }
-                items.extend(model);
-                if !bot {
-                    let actions = self
-                        .bot_access_options()
-                        .into_iter()
-                        .filter_map(|item| match item {
-                            MenuItem::Action(action) => Some(*action),
-                            _ => None,
-                        })
-                        .collect();
-                    items.push(
-                        MenuAction::new("compact:access", "Access")
-                            .value(self.settings.access.label())
-                            .submenu(actions)
-                            .into(),
-                    );
-                }
-                if self.editing_last_turn.pending() {
-                    items.push(MenuAction::new("compact:cancel-edit", "Cancel edit").into());
-                }
-                if !bot
-                    && self.status != "Ready"
-                    && !self.responding()
-                    && !self.history_loading()
-                    && self.settings.usage_limit.is_none()
-                {
-                    items.push(MenuItem::Note(self.status.clone().into()));
-                }
-                ("Session settings", items, 280., MenuStyle::Settings)
-            }
+            ComposerMenu::CompactSettings => self.compact_settings_items(events, window, cx),
             ComposerMenu::Account => {
                 let items = crate::accounts::get(cx)
                     .map(|center| {
@@ -866,6 +762,116 @@ impl Conversation {
             }
             ComposerMenu::Setting(ix) => self.bot_setting_menu(ix),
         }
+    }
+    fn compact_settings_items(
+        &self,
+        events: &mut Vec<Subscription>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> (&'static str, Vec<MenuItem>, f32, MenuStyle) {
+        let bot = self.settings.bot.is_some();
+        let draft = !self.summary.has_messages;
+        let enabled = !self.responding() && !self.preparing_worktree && self.git.is_some();
+        let mut items = vec![MenuItem::Header(
+            if bot {
+                "Bot settings"
+            } else {
+                "Session settings"
+            }
+            .into(),
+        )];
+        if !bot {
+            let linked =
+                self.git.as_ref().is_some_and(|s| s.linked) || self.settings.worktree_cwd.is_some();
+            let label = if draft && self.settings.new_worktree {
+                "New worktree"
+            } else if linked {
+                "Worktree"
+            } else {
+                "Current checkout"
+            };
+            items.push(MenuItem::Header(format!("Workspace · {label}").into()));
+            if draft {
+                let (_, workspace, _, _) =
+                    self.menu_items(ComposerMenu::Workspace, events, window, cx);
+                items.extend(workspace.into_iter().filter_map(|item| match item {
+                    MenuItem::Action(mut action) => {
+                        action.disabled |= !enabled;
+                        Some(MenuItem::Action(action))
+                    }
+                    _ => None,
+                }));
+            }
+            if let Some(branch) = if draft && self.settings.new_worktree {
+                self.settings
+                    .worktree_base
+                    .as_ref()
+                    .or(self.branch.as_ref())
+            } else {
+                self.branch.as_ref()
+            } {
+                items.push(
+                    MenuAction::new(
+                        "compact:branch",
+                        if draft && self.settings.new_worktree {
+                            "Worktree base"
+                        } else {
+                            "Branch"
+                        },
+                    )
+                    .value(
+                        if !(draft && self.settings.new_worktree)
+                            && self.git.as_ref().is_some_and(|git| git.detached)
+                        {
+                            format!("detached {branch}")
+                        } else if draft && self.settings.new_worktree {
+                            crate::git_tools::git_picker::base_label(branch).to_owned()
+                        } else {
+                            branch.clone()
+                        },
+                    )
+                    .disabled(!enabled)
+                    .into(),
+                );
+            }
+        }
+        let (_, model, _, _) = self.menu_items(ComposerMenu::Model, events, window, cx);
+        // Combined mode already contains model options; beside mode must expose them here too.
+        if cx
+            .try_global::<vorkspace_ui::preferences::Preferences>()
+            .is_some_and(|p| p.model_controls == "beside")
+        {
+            items.extend(self.bot_model_options());
+        }
+        items.extend(model);
+        if !bot {
+            let actions = self
+                .bot_access_options()
+                .into_iter()
+                .filter_map(|item| match item {
+                    MenuItem::Action(action) => Some(*action),
+                    _ => None,
+                })
+                .collect();
+            items.push(
+                MenuAction::new("compact:access", "Access")
+                    .value(self.settings.access.label())
+                    .submenu(actions)
+                    .into(),
+            );
+        }
+        if self.editing_last_turn.pending() {
+            items.push(MenuAction::new("compact:cancel-edit", "Cancel edit").into());
+        }
+        if !bot
+            && self.status != "Ready"
+            && !self.responding()
+            && !self.history_loading()
+            && self.settings.usage_limit.is_none()
+        {
+            items.push(MenuItem::Note(self.status.clone().into()));
+        }
+        ("Session settings", items, 280., MenuStyle::Settings)
     }
     /// The composer's "+" menu, for captures.
     #[cfg(test)]
