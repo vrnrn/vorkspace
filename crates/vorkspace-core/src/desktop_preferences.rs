@@ -17,16 +17,6 @@ pub struct DesktopPreferences {
 }
 
 impl DesktopPreferences {
-    #[cfg(test)]
-    pub(crate) fn from_values(values: &[(&str, Value)]) -> Self {
-        Self {
-            values: values
-                .iter()
-                .map(|(key, value)| ((*key).into(), value.to_string()))
-                .collect(),
-            available: true,
-        }
-    }
     /// Only the actual desktop data directory may read the desktop webview.
     /// Isolated development databases and copies never inherit personal settings.
     /// Read committed SQLite/WAL data once when opening a store. The store owns

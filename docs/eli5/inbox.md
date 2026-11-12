@@ -40,7 +40,7 @@ identify as your own successful comments or actions. Someone else's later update
 still counts as new activity. If a service cannot identify your update, the app
 keeps notifications enabled for it. You can turn sounds off in Settings.
 
-Your existing desktop preferences are kept when using the native app.
+Your connector, Jira filter and default Bot choices are saved for the next launch.
 See the [technical guide](../inbox.md) or [Jira guide](jira.md) for details.
 
 Changes have two views everywhere: **Unified** puts removed and added lines in

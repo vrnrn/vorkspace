@@ -62,9 +62,9 @@ exact revision. Later remote changes remain unread and eligible for a cue, even
 if they arrive before the own revision is polled. Missing receipt metadata is
 treated conservatively and does not suppress an unknown revision.
 
-Old desktop connector switches, Jira filters, and default Bot choices are read
-from existing preferences. Subsequent changes are saved in the native settings
-database. Opening the app does not rewrite or delete existing credential files.
+Connector switches, Jira filters, and default Bot choices are saved in the
+settings sidecar. Opening the app does not rewrite or delete existing credential
+files.
 
 All change reviews use **Unified** or **Side by side**. The choice is shared by
 connector, working-tree, commit, and session reviews and is saved for the next launch.
