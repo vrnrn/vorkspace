@@ -195,24 +195,10 @@ fn hunk_actions_preserve_eof_newlines_and_selected_line_scope() {
         let changes = analyze("a.txt", current, Some(original)).unwrap().changes;
         let at = changes[0].from;
         assert_eq!(
-            chunk_action(original, current, at, at..at, false)
+            chunk_action(original, current, at, at..at)
                 .unwrap()
                 .as_deref(),
             Some(original)
         );
-        assert_eq!(
-            chunk_action(original, current, at, at..at, true)
-                .unwrap()
-                .as_deref(),
-            Some(current)
-        );
     }
-    let original = "one\ntwo\nthree\n";
-    let current = "ONE\nTWO\nthree\n";
-    assert_eq!(
-        chunk_action(original, current, 0, 0..3, true)
-            .unwrap()
-            .as_deref(),
-        Some("ONE\ntwo\nthree\n")
-    );
 }

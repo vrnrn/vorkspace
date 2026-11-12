@@ -25,9 +25,7 @@ impl FileEditor {
             let result = cx
                 .background_executor()
                 .spawn(async move {
-                    vorkspace_editor::editor_analysis::chunk_action(
-                        &original, &text, at, selection, false,
-                    )
+                    vorkspace_editor::editor_analysis::chunk_action(&original, &text, at, selection)
                 })
                 .await;
             let Ok(Some(text)) = result else {

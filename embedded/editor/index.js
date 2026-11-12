@@ -13,10 +13,7 @@ import {
   isLintable,
   syntaxDiagnostics,
 } from "./editorLint.js";
-import {
-  stageChunkText,
-  revertChunkText,
-} from "./editorGit.js";
+import { revertChunkText } from "./editorGit.js";
 import { emmetExtension, tryExpandEmmet } from "./editorEditing.js";
 async function stateFor(path, source, pos = 0, fullParse = false) {
   const language = (await languageForPath(path)) ?? [];
@@ -196,9 +193,9 @@ globalThis.vorkspaceEmmet = async (path, source, pos) => {
   });
   return JSON.stringify(result);
 };
-globalThis.vorkspaceChunkAction = (original, current, pos, start, end, stage) =>
+globalThis.vorkspaceChunkAction = (original, current, pos, start, end) =>
   JSON.stringify(
-    (stage ? stageChunkText : revertChunkText)(
+    revertChunkText(
       original,
       current,
       pos,

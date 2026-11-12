@@ -210,7 +210,6 @@ pub fn chunk_action(
     current: &str,
     at: usize,
     selection: Range<usize>,
-    stage: bool,
 ) -> Result<Option<String>, String> {
     let (_runtime, context) = runtime()?;
     let json = context
@@ -223,7 +222,6 @@ pub fn chunk_action(
                 utf16(current, at),
                 utf16(current, selection.start),
                 utf16(current, selection.end),
-                stage,
             ))
         })
         .map_err(|e| e.to_string())?;

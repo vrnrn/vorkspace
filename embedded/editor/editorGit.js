@@ -8,27 +8,6 @@ export function revertChunkText(original, current, pos, selection) {
   if (!changes) return null;
   return doc.replace(changes.from, changes.to, changes.insert).toString();
 }
-export function stageChunkText(
-  original,
-  current,
-  pos,
-  selection,
-  /** Must match the config that produced `pos`, so the same hunk is found. */
-  diffConfig = DIFF_CONFIG,
-) {
-  const orig = textFromString(original);
-  const doc = textFromString(current);
-  const changes = stageChunkChanges(
-    orig,
-    doc,
-    pos,
-    selection,
-    "\n",
-    diffConfig,
-  );
-  if (!changes) return null;
-  return orig.replace(changes.from, changes.to, changes.insert).toString();
-}
 export function findChunk(doc, chunks, pos) {
   const at = Math.max(0, Math.min(pos, doc.length));
   const covering = chunks.find(
@@ -42,9 +21,9 @@ export function findChunk(doc, chunks, pos) {
     return chunk.fromB >= line.from && chunk.fromB <= line.to + 1;
   });
 }
-function chunksFor(original, current, diffConfig = DIFF_CONFIG) {
+function chunksFor(original, current) {
   if (!original) return [];
-  return Chunk.build(original, current, diffConfig);
+  return Chunk.build(original, current, DIFF_CONFIG);
 }
 function revertChunkChanges(original, doc, pos, selection, lineBreak) {
   const range = actionChunkRange(original, doc, pos, selection);
@@ -59,26 +38,6 @@ function revertChunkChanges(original, doc, pos, selection, lineBreak) {
     lineBreak,
   );
 }
-function stageChunkChanges(
-  original,
-  doc,
-  pos,
-  selection,
-  lineBreak,
-  diffConfig,
-) {
-  const range = actionChunkRange(original, doc, pos, selection, diffConfig);
-  if (!range) return null;
-  return applySide(
-    doc,
-    original,
-    range.fromB,
-    range.toB,
-    range.fromA,
-    range.toA,
-    lineBreak,
-  );
-}
 function applySide(source, target, fromS, toS, fromT, toT, lineBreak) {
   let insert = source.sliceString(fromS, Math.max(fromS, toS - 1));
   if (fromS !== toS && toT <= target.length) {
@@ -90,8 +49,8 @@ function applySide(source, target, fromS, toS, fromT, toT, lineBreak) {
     insert: textFromString(insert),
   };
 }
-function actionChunkRange(original, doc, pos, selection, diffConfig) {
-  const chunk = findChunk(doc, chunksFor(original, doc, diffConfig), pos);
+function actionChunkRange(original, doc, pos, selection) {
+  const chunk = findChunk(doc, chunksFor(original, doc), pos);
   if (!chunk) return null;
   return narrowChunk(original, doc, chunk, selection);
 }
