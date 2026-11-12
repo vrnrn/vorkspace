@@ -735,7 +735,7 @@ pub struct Session {
 }
 
 impl Session {
-    pub fn new(path: &str) -> Option<Self> {
+    pub(crate) fn new(path: &str) -> Option<Self> {
         let lang = language_for_path(path)?;
         let grammar = grammar(lang)?;
         let mut parser = Parser::new();
@@ -752,7 +752,7 @@ impl Session {
         })
     }
 
-    pub fn path(&self) -> &str {
+    pub(crate) fn path(&self) -> &str {
         &self.path
     }
 
@@ -836,7 +836,7 @@ impl Session {
         &self.original.as_ref().unwrap().1
     }
 
-    pub fn analyze(&mut self, text: &str, original: Option<&str>) -> Analysis {
+    pub(crate) fn analyze(&mut self, text: &str, original: Option<&str>) -> Analysis {
         let Some(tree) = self.update(text).cloned() else {
             return Analysis::default();
         };

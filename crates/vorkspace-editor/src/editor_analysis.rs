@@ -343,7 +343,7 @@ impl Edit {
     /// Where `from..to` lands after the edit. Ranges around the edit stretch
     /// over the new text, ranges cut by it are trimmed, and ranges inside the
     /// replaced text are gone.
-    pub fn map(&self, from: usize, to: usize) -> Option<(usize, usize)> {
+    pub(crate) fn map(&self, from: usize, to: usize) -> Option<(usize, usize)> {
         let shift = |at: usize| at - self.old_end + self.new_end;
         if to <= self.start {
             return Some((from, to));
