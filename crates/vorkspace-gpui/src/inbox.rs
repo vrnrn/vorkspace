@@ -1411,7 +1411,7 @@ impl Inbox {
                 .map(|(c, _)| format!("{}: {}", c.author, c.body))
                 .collect::<Vec<_>>()
                 .join("\n\n");
-            let prompt = item.prompt(&format!("{body}\n\n{discussion}"), false);
+            let prompt = item.prompt(&format!("{body}\n\n{discussion}"));
             cx.emit(Event::StartSession {
                 item: Box::new(item),
                 prompt,

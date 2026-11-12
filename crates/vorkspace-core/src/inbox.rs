@@ -170,14 +170,10 @@ impl Item {
             url: self.url.clone(),
         }
     }
-    pub fn prompt(&self, body: &str, ask: bool) -> String {
+    pub fn prompt(&self, body: &str) -> String {
         format!(
             "{}\n\n{} {}: {}\n{}\n\n{}",
-            if ask {
-                "Help me understand and discuss this work item."
-            } else {
-                "Work on this item. Read its description and discussion, inspect the project, and implement the required changes."
-            },
+            "Work on this item. Read its description and discussion, inspect the project, and implement the required changes.",
             provider_label(&self.provider),
             self.reference(),
             self.title,
