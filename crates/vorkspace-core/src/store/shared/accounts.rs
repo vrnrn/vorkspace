@@ -1,33 +1,8 @@
 use super::*;
-use crate::accounts::{Account, Book, DesktopOverrides, DEFAULT};
+use crate::accounts::{Account, Book, DEFAULT};
 
 impl Store {
-    fn shared_desktop_accounts(&self) -> Option<Book> {
-        let preferences = self.desktop_preferences();
-        if !preferences.is_available() {
-            return None;
-        }
-        Book::from_desktop(
-            &preferences
-                .json("vorkspace.providerAccounts.v1")
-                .unwrap_or(json!({})),
-            &preferences
-                .json("vorkspace.providerAccountSelections.v1")
-                .unwrap_or(json!({})),
-        )
-    }
-
     pub fn provider_accounts(&self) -> Result<Book, String> {
-        if let Some(mut desktop) = self.shared_desktop_accounts() {
-            *self.shared.account_source.borrow_mut() = Some(desktop.clone());
-            if let Some(raw) = self.setting("provider-account-overrides")? {
-                desktop.apply_desktop_overrides(parse::<DesktopOverrides>(&raw)?);
-            }
-            // The desktop registry is authoritative. Old profile folders can
-            // survive removing an account and must not recreate it in the UI.
-            return Ok(desktop);
-        }
-
         let mut book: Book = self
             .setting("provider-accounts")?
             .map(|raw| parse(&raw))
@@ -74,21 +49,8 @@ impl Store {
     }
 
     pub fn save_provider_accounts(&self, book: &Book) -> Result<(), String> {
-        let source = self
-            .shared
-            .account_source
-            .borrow()
-            .clone()
-            .or_else(|| self.shared_desktop_accounts());
-        let (key, value) = if let Some(source) = source {
-            (
-                "provider-account-overrides",
-                encode(&book.desktop_overrides(&source))?,
-            )
-        } else {
-            ("provider-accounts", encode(book)?)
-        };
-        self.update_settings(|_| Ok(((), vec![(key.into(), value)])))
+        let value = encode(book)?;
+        self.update_settings(|_| Ok(((), vec![("provider-accounts".into(), value)])))
     }
 }
 
@@ -102,7 +64,6 @@ mod tests {
         let directory = tempfile::tempdir().unwrap();
         let path = directory.path().join("vorkspace.db");
         let store = Store::open_vorkspace(&path).unwrap();
-        assert!(store.shared_desktop_accounts().is_none());
         let mut book = Book::default();
         let account = book.add(Kind::Codex, "My development account").unwrap();
         book.select(Kind::Codex, "/project", &account.id).unwrap();

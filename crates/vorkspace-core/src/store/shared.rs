@@ -45,7 +45,6 @@ pub(super) struct Shared {
     card_revisions: RefCell<HashMap<i64, card::CardRevision>>,
     refreshed_cards: RefCell<HashMap<i64, HashMap<String, HistoryRevision>>>,
     queues: RefCell<HashMap<i64, String>>,
-    account_source: RefCell<Option<crate::accounts::Book>>,
     preferences: std::sync::Arc<crate::desktop_preferences::DesktopPreferences>,
     read_only: bool,
     #[cfg(any(test, feature = "test-support"))]
@@ -381,7 +380,6 @@ impl Store {
                 incremental: RefCell::new(HashMap::new()),
                 history_schema: std::cell::Cell::new(None),
                 queues: RefCell::new(HashMap::new()),
-                account_source: RefCell::new(None),
                 preferences: preferences.unwrap_or_else(|| {
                     std::sync::Arc::new(
                         path.parent()
