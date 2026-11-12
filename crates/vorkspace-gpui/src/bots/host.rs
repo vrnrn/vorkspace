@@ -202,197 +202,17 @@ impl Bots {
         });
     }
     pub(super) fn app_call(&mut self, call: Call, window: &mut Window, cx: &mut Context<Self>) {
-        let bot = self
-            .roster
-            .of_session(call.session)
-            .or_else(|| {
-                self.running
-                    .get(&call.session)
-                    .and_then(|r| self.roster.get(&r.bot))
-            })
-            .cloned();
-
-        let Some(actor) = bot
-            .and_then(|b| self.roster.effective_bot(&b.id))
-            .filter(|b| {
-                self.roster.is_active(&b.id)
-                    && !self.shared_roster.read(cx).removed.contains_key(&b.id)
-                    && (!b.is_minion() || (self.prefs.bots && self.prefs.minions))
-            })
-        else {
-            let _ = call.reply.send(Err(
-                "This Bot no longer owns an active app capability".into()
-            ));
+        let Some((actor, bot, permit)) = self.app_call_actors(&call, cx) else {
             return;
         };
-        let bot = self.roster.storage_owner(&actor.id).unwrap().clone();
-        let permit = if actor.is_minion() {
-            match self
-                .shared_roster
-                .read(cx)
-                .minion_permit(&actor.id, &bot.projects)
-            {
-                Ok(permit) => Some(permit),
-                Err(error) => {
-                    let _ = call.reply.send(Err(error));
-                    return;
-                }
-            }
-        } else {
-            None
-        };
-        if actor.is_minion() && !bot::api::minion_allowed(&call.action) {
-            let _ = call
-                .reply
-                .send(Err(format!("Minions cannot use {}", call.action)));
+        if !self.admit_app_call(&call) {
             return;
-        }
-        if matches!(call.action.as_str(), "minions.spawn" | "minions.hire") && !self.prefs.minions {
-            let _ = call.reply.send(Err(
-                "Minions are experimental; turn them on in Settings › Bots first".into(),
-            ));
-            return;
-        }
-        if call.action.starts_with("habits.")
-            && call.action != "habits.list"
-            && self.running.contains_key(&call.session)
-        {
-            let _ = call
-                .reply
-                .send(Err("A habit run cannot schedule more runs".into()));
-            return;
-        }
-        if let Err(error) = bot::api::validate(&call.action, &call.input) {
-            let _ = call.reply.send(Err(error));
-            return;
-        }
-        let needs_admission = locked(&self.store)
-            .and_then(|store| store.app_command_known(call.session, &call.request_id))
-            .map(|known| known || !bot::api::is_read_only(&call.action));
-        let needs_admission = match needs_admission {
-            Ok(value) => value,
-            Err(error) => {
-                let _ = call.reply.send(Err(error));
-                return;
-            }
-        };
-        if needs_admission {
-            let admission = (|| {
-                let store = locked(&self.store)?;
-                // Existing completed receipts remain read-through compatibility.
-                // A newer admitted receipt always wins over this older cache.
-                if !store.app_command_known(call.session, &call.request_id)? {
-                    let key = format!(
-                        "bot-app-receipt:{}:{}",
-                        call.session,
-                        files::content_hash(&call.request_id)
-                    );
-                    if let Some(raw) = store.setting(&key)? {
-                        let (saved,result):(String,Result<Value,String>)=serde_json::from_str(&raw).map_err(|e|format!("Cannot verify the prior command result; it was not replayed: {e}"))?;
-                        if saved != fingerprint(&call) {
-                            return Err(
-                                "Request ID was already used with different action or input".into(),
-                            );
-                        }
-                        return Ok(vorkspace_core::store::AppCommandAdmission::Completed(
-                            result,
-                        ));
-                    }
-                }
-                store.admit_app_command(call.session, &call.request_id, &call.action, &call.input)
-            })();
-            match admission {
-                Ok(vorkspace_core::store::AppCommandAdmission::Admitted) => (),
-                Ok(vorkspace_core::store::AppCommandAdmission::Completed(result)) => {
-                    let _ = call.reply.send(result);
-                    return;
-                }
-                Err(error) => {
-                    let _ = call.reply.send(Err(error));
-                    return;
-                }
-            }
         }
         if matches!(
             call.action.as_str(),
             "bots.read" | "bots.historyStatus" | "bots.recoverHistory"
         ) {
-            let target = self
-                .roster
-                .resolve_peer(
-                    &actor.id,
-                    call.input["bot"].as_str().unwrap_or_default(),
-                    true,
-                )
-                .and_then(|target| {
-                    if target.id == actor.id {
-                        return Err("Use your own conversation history".into());
-                    }
-                    Ok((
-                        target
-                            .session_id
-                            .ok_or("That Bot's conversation is unavailable")?,
-                        json!({"id":target.id,"name":target.label()}),
-                    ))
-                });
-            let (session, target) = match target {
-                Ok(target) => target,
-                Err(error) => {
-                    self.finish_call(call, Err(error), cx);
-                    return;
-                }
-            };
-            if call.action != "bots.read" {
-                let root = self.root.clone();
-                let recovery = (call.action == "bots.recoverHistory").then(|| {
-                    call.input["expectedHistory"]
-                        .as_str()
-                        .unwrap_or_default()
-                        .to_owned()
-                });
-                self.call_work(
-                    call,
-                    &actor.id,
-                    bot.id.clone(),
-                    move |store| {
-                        if let Some(expected) = recovery {
-                            vorkspace_runtime::runtime::native_history::recover(
-                                &store, session, &root, &expected,
-                            )?;
-                            Ok((json!({"bot":target,"recovered":true}), Effect::None))
-                        } else {
-                            let result = vorkspace_runtime::runtime::native_history::sync(
-                                &store, session, &root,
-                            )?;
-                            Ok((
-                                json!({"bot":target,"unfinished":result.active,
-                            "expectedHistory":result.recovery,"more":result.more,
-                            "superseded":result.superseded}),
-                                Effect::None,
-                            ))
-                        }
-                    },
-                    cx,
-                );
-                return;
-            }
-            let before = call.input["before"].as_u64();
-            let limit = call.input["limit"].as_u64().unwrap_or(40).clamp(1, 100) as usize;
-            let max = call.input["maxChars"]
-                .as_u64()
-                .unwrap_or(24_000)
-                .clamp(100, 100_000) as usize;
-            self.call_work(
-                call,
-                &actor.id,
-                bot.id.clone(),
-                move |store| {
-                    let mut page = locked(&store)?.peer_history(session, before, limit, max)?;
-                    page["bot"] = target;
-                    Ok((page, Effect::None))
-                },
-                cx,
-            );
+            self.app_peer_history(call, &actor, &bot, cx);
             return;
         }
         if call.action.starts_with("bots.") {
@@ -430,20 +250,7 @@ impl Bots {
                     return;
                 }
             };
-            let root = input
-                .get("worktreeCwd")
-                .and_then(Value::as_str)
-                .map(str::to_owned)
-                .or_else(|| {
-                    source.as_ref().and_then(|view| {
-                        let view = view.read(cx);
-                        (vorkspace_core::files::path_key(&view.summary.cwd)
-                            == vorkspace_core::files::path_key(&project))
-                        .then(|| view.settings.worktree_cwd.clone())
-                        .flatten()
-                    })
-                })
-                .unwrap_or_else(|| project.clone());
+            let root = Self::app_codebase_root(&input, &source, &project, cx);
             self.call_work(
                 call,
                 &actor.id,
@@ -702,29 +509,385 @@ impl Bots {
                 },cx);return;
             }
             "soul.read"|"soul.update"|"memory.read"|"memory.search"|"memory.add"|"memory.replace"|"memory.remove"|"habits.list"|"habits.add"|"habits.update"|"habits.run"|"habits.remove"|"worktrees.list"|"worktrees.create"=>{
-                self.call_work(call,&actor.id,target.clone(),move|store|{
-                    let value=match action.as_str(){
-                        "soul.read"=>json!(files::read(&root,&target,None,"SOUL.md")?),
-                        "soul.update"=>{let body=input.get("text").and_then(Value::as_str).filter(|t|t.len()<=128*1024).ok_or("Provide text")?;let expected=text(&input,"expectedHash",128)?;json!({"hash":files::save(&root,&target,None,"SOUL.md",body,Some(&expected))?})},
-                        "memory.read"=>json!(memory::read(&root,&target,input.get("topic").and_then(Value::as_str))?),
-                        "memory.search"=>json!(memory::search(&root,&target,&text(&input,"query",4000)?,input.get("since").and_then(Value::as_str))?),
-                        "memory.add"|"memory.replace"|"memory.remove"=>{let entry=if action=="memory.remove"{None}else{Some(memory::entry(&text(&input,"fact",4000)?,&memory::date(),input.get("until").and_then(Value::as_str))?)};let find=input.get("find").and_then(Value::as_str).unwrap_or_default();let hash=memory::edit(&root,&target,input.get("topic").and_then(Value::as_str),|old|if action=="memory.add"{Ok(memory::add(old,entry.as_deref().unwrap()))}else{memory::replace(old,find,entry.as_deref(),&memory::date())})?;json!({"hash":hash})},
-                        "habits.list"=>json!(habits::load(&root,&target)?),
-                        "habits.add"=>{let schedule:habits::Schedule=serde_json::from_value(input.get("schedule").cloned().ok_or("Provide schedule")?).map_err(|e|e.to_string())?;let h=Habit::new(text(&input,"name",480)?,text(&input,"instructions",32000)?,schedule,now_ms())?;habits::update(&root,&target,|all|{all.push(h.clone());Ok(())})?;json!(h)},
-                        "habits.update"|"habits.run"|"habits.remove"=>{let id=text(&input,"id",128)?;habits::update(&root,&target,|all|{let index=all.iter().position(|h|h.id==id).ok_or("Habit not found")?;if action=="habits.remove"{all.remove(index);return Ok(json!({"removed":true}));}let h=&mut all[index];if action=="habits.run"{h.run_requested=true;}else{if let Some(name)=input.get("name").and_then(Value::as_str){if name.trim().is_empty()||name.chars().count()>120{return Err("Invalid habit name".into());}h.name=name.trim().into();}
-if let Some(instructions)=input.get("instructions").and_then(Value::as_str){if instructions.trim().is_empty()||instructions.len()>32000{return Err("Invalid habit instructions".into());}h.instructions=instructions.into();}
-if let Some(schedule)=input.get("schedule"){h.schedule=serde_json::from_value(schedule.clone()).map_err(|e|e.to_string())?;h.schedule.validate()?;h.next_run_at=h.schedule.next(now_ms())?;}
-if let Some(enabled)=input.get("enabled").and_then(Value::as_bool){h.enabled=enabled;if enabled{h.next_run_at=h.schedule.next(now_ms())?;}}}Ok(json!(h))})?},
-                        "worktrees.list"=>vorkspace_core::store::describe_worktrees(Path::new(&project),&store)?,
-                        "worktrees.create"=>{let branch=text(&input,"branch",240)?;let tree=vorkspace_core::git::create_project_worktree(Path::new(&project),&branch,input.get("base").and_then(Value::as_str),flag(&input,"existing",false))?;json!({"path":tree.path,"branch":tree.branch})},
-                        _=>unreachable!(),
-                    };Ok((value,Effect::None))
-                },cx);return;
+                self.call_work(call,&actor.id,target.clone(),move |store| Self::app_storage_action(store, root, target, project, action, input),cx);return;
             }
             _=>Err("Unknown action. Run app help to see supported actions".into()),
         };
         self.finish_call(call, result, cx);
     }
+
+    fn app_codebase_root(
+        input: &Value,
+        source: &Option<Entity<Conversation>>,
+        project: &str,
+        cx: &App,
+    ) -> String {
+        input
+            .get("worktreeCwd")
+            .and_then(Value::as_str)
+            .map(str::to_owned)
+            .or_else(|| {
+                source.as_ref().and_then(|view| {
+                    let view = view.read(cx);
+                    (vorkspace_core::files::path_key(&view.summary.cwd)
+                        == vorkspace_core::files::path_key(project))
+                    .then(|| view.settings.worktree_cwd.clone())
+                    .flatten()
+                })
+            })
+            .unwrap_or_else(|| project.to_owned())
+    }
+
+    fn app_call_actors(
+        &self,
+        call: &Call,
+        cx: &App,
+    ) -> Option<(Bot, Bot, Option<super::effects::Permit>)> {
+        let bot = self
+            .roster
+            .of_session(call.session)
+            .or_else(|| {
+                self.running
+                    .get(&call.session)
+                    .and_then(|r| self.roster.get(&r.bot))
+            })
+            .cloned();
+
+        let Some(actor) = bot
+            .and_then(|b| self.roster.effective_bot(&b.id))
+            .filter(|b| {
+                self.roster.is_active(&b.id)
+                    && !self.shared_roster.read(cx).removed.contains_key(&b.id)
+                    && (!b.is_minion() || (self.prefs.bots && self.prefs.minions))
+            })
+        else {
+            let _ = call.reply.send(Err(
+                "This Bot no longer owns an active app capability".into()
+            ));
+            return None;
+        };
+        let bot = self.roster.storage_owner(&actor.id).unwrap().clone();
+        let permit = if actor.is_minion() {
+            match self
+                .shared_roster
+                .read(cx)
+                .minion_permit(&actor.id, &bot.projects)
+            {
+                Ok(permit) => Some(permit),
+                Err(error) => {
+                    let _ = call.reply.send(Err(error));
+                    return None;
+                }
+            }
+        } else {
+            None
+        };
+        if actor.is_minion() && !bot::api::minion_allowed(&call.action) {
+            let _ = call
+                .reply
+                .send(Err(format!("Minions cannot use {}", call.action)));
+            return None;
+        }
+        if matches!(call.action.as_str(), "minions.spawn" | "minions.hire") && !self.prefs.minions {
+            let _ = call.reply.send(Err(
+                "Minions are experimental; turn them on in Settings › Bots first".into(),
+            ));
+            return None;
+        }
+        if call.action.starts_with("habits.")
+            && call.action != "habits.list"
+            && self.running.contains_key(&call.session)
+        {
+            let _ = call
+                .reply
+                .send(Err("A habit run cannot schedule more runs".into()));
+            return None;
+        }
+        if let Err(error) = bot::api::validate(&call.action, &call.input) {
+            let _ = call.reply.send(Err(error));
+            return None;
+        }
+
+        Some((actor, bot, permit))
+    }
+
+    fn admit_app_call(&self, call: &Call) -> bool {
+        let needs_admission = locked(&self.store)
+            .and_then(|store| store.app_command_known(call.session, &call.request_id))
+            .map(|known| known || !bot::api::is_read_only(&call.action));
+        let needs_admission = match needs_admission {
+            Ok(value) => value,
+            Err(error) => {
+                let _ = call.reply.send(Err(error));
+                return false;
+            }
+        };
+        if needs_admission {
+            let admission = (|| {
+                let store = locked(&self.store)?;
+                // Existing completed receipts remain read-through compatibility.
+                // A newer admitted receipt always wins over this older cache.
+                if !store.app_command_known(call.session, &call.request_id)? {
+                    let key = format!(
+                        "bot-app-receipt:{}:{}",
+                        call.session,
+                        files::content_hash(&call.request_id)
+                    );
+                    if let Some(raw) = store.setting(&key)? {
+                        let (saved,result):(String,Result<Value,String>)=serde_json::from_str(&raw).map_err(|e|format!("Cannot verify the prior command result; it was not replayed: {e}"))?;
+                        if saved != fingerprint(call) {
+                            return Err(
+                                "Request ID was already used with different action or input".into(),
+                            );
+                        }
+                        return Ok(vorkspace_core::store::AppCommandAdmission::Completed(
+                            result,
+                        ));
+                    }
+                }
+                store.admit_app_command(call.session, &call.request_id, &call.action, &call.input)
+            })();
+            match admission {
+                Ok(vorkspace_core::store::AppCommandAdmission::Admitted) => (),
+                Ok(vorkspace_core::store::AppCommandAdmission::Completed(result)) => {
+                    let _ = call.reply.send(result);
+                    return false;
+                }
+                Err(error) => {
+                    let _ = call.reply.send(Err(error));
+                    return false;
+                }
+            }
+        }
+
+        true
+    }
+
+    fn app_peer_history(&mut self, call: Call, actor: &Bot, bot: &Bot, cx: &mut Context<Self>) {
+        let target = self
+            .roster
+            .resolve_peer(
+                &actor.id,
+                call.input["bot"].as_str().unwrap_or_default(),
+                true,
+            )
+            .and_then(|target| {
+                if target.id == actor.id {
+                    return Err("Use your own conversation history".into());
+                }
+                Ok((
+                    target
+                        .session_id
+                        .ok_or("That Bot's conversation is unavailable")?,
+                    json!({"id":target.id,"name":target.label()}),
+                ))
+            });
+        let (session, target) = match target {
+            Ok(target) => target,
+            Err(error) => {
+                self.finish_call(call, Err(error), cx);
+                return;
+            }
+        };
+        if call.action != "bots.read" {
+            let root = self.root.clone();
+            let recovery = (call.action == "bots.recoverHistory").then(|| {
+                call.input["expectedHistory"]
+                    .as_str()
+                    .unwrap_or_default()
+                    .to_owned()
+            });
+            self.call_work(
+                call,
+                &actor.id,
+                bot.id.clone(),
+                move |store| {
+                    if let Some(expected) = recovery {
+                        vorkspace_runtime::runtime::native_history::recover(
+                            &store, session, &root, &expected,
+                        )?;
+                        Ok((json!({"bot":target,"recovered":true}), Effect::None))
+                    } else {
+                        let result = vorkspace_runtime::runtime::native_history::sync(
+                            &store, session, &root,
+                        )?;
+                        Ok((
+                            json!({"bot":target,"unfinished":result.active,
+                        "expectedHistory":result.recovery,"more":result.more,
+                        "superseded":result.superseded}),
+                            Effect::None,
+                        ))
+                    }
+                },
+                cx,
+            );
+            return;
+        }
+        let before = call.input["before"].as_u64();
+        let limit = call.input["limit"].as_u64().unwrap_or(40).clamp(1, 100) as usize;
+        let max = call.input["maxChars"]
+            .as_u64()
+            .unwrap_or(24_000)
+            .clamp(100, 100_000) as usize;
+        self.call_work(
+            call,
+            &actor.id,
+            bot.id.clone(),
+            move |store| {
+                let mut page = locked(&store)?.peer_history(session, before, limit, max)?;
+                page["bot"] = target;
+                Ok((page, Effect::None))
+            },
+            cx,
+        );
+    }
+
+    fn app_storage_action(
+        store: Database,
+        root: PathBuf,
+        target: String,
+        project: String,
+        action: String,
+        input: Value,
+    ) -> Result<(Value, Effect), String> {
+        let value = match action.as_str() {
+            "soul.read" => json!(files::read(&root, &target, None, "SOUL.md")?),
+            "soul.update" => {
+                let body = input
+                    .get("text")
+                    .and_then(Value::as_str)
+                    .filter(|t| t.len() <= 128 * 1024)
+                    .ok_or("Provide text")?;
+                let expected = text(&input, "expectedHash", 128)?;
+                json!({"hash":files::save(&root,&target,None,"SOUL.md",body,Some(&expected))?})
+            }
+            "memory.read" => json!(memory::read(
+                &root,
+                &target,
+                input.get("topic").and_then(Value::as_str)
+            )?),
+            "memory.search" => json!(memory::search(
+                &root,
+                &target,
+                &text(&input, "query", 4000)?,
+                input.get("since").and_then(Value::as_str)
+            )?),
+            "memory.add" | "memory.replace" | "memory.remove" => {
+                let entry = if action == "memory.remove" {
+                    None
+                } else {
+                    Some(memory::entry(
+                        &text(&input, "fact", 4000)?,
+                        &memory::date(),
+                        input.get("until").and_then(Value::as_str),
+                    )?)
+                };
+                let find = input
+                    .get("find")
+                    .and_then(Value::as_str)
+                    .unwrap_or_default();
+                let hash = memory::edit(
+                    &root,
+                    &target,
+                    input.get("topic").and_then(Value::as_str),
+                    |old| {
+                        if action == "memory.add" {
+                            Ok(memory::add(old, entry.as_deref().unwrap()))
+                        } else {
+                            memory::replace(old, find, entry.as_deref(), &memory::date())
+                        }
+                    },
+                )?;
+                json!({"hash":hash})
+            }
+            "habits.list" => json!(habits::load(&root, &target)?),
+            "habits.add" => {
+                let schedule: habits::Schedule = serde_json::from_value(
+                    input.get("schedule").cloned().ok_or("Provide schedule")?,
+                )
+                .map_err(|e| e.to_string())?;
+                let h = Habit::new(
+                    text(&input, "name", 480)?,
+                    text(&input, "instructions", 32000)?,
+                    schedule,
+                    now_ms(),
+                )?;
+                habits::update(&root, &target, |all| {
+                    all.push(h.clone());
+                    Ok(())
+                })?;
+                json!(h)
+            }
+            "habits.update" | "habits.run" | "habits.remove" => {
+                Self::app_update_habit(root, target, action, input)?
+            }
+            "worktrees.list" => {
+                vorkspace_core::store::describe_worktrees(Path::new(&project), &store)?
+            }
+            "worktrees.create" => {
+                let branch = text(&input, "branch", 240)?;
+                let tree = vorkspace_core::git::create_project_worktree(
+                    Path::new(&project),
+                    &branch,
+                    input.get("base").and_then(Value::as_str),
+                    flag(&input, "existing", false),
+                )?;
+                json!({"path":tree.path,"branch":tree.branch})
+            }
+            _ => unreachable!(),
+        };
+        Ok((value, Effect::None))
+    }
+
+    fn app_update_habit(
+        root: PathBuf,
+        target: String,
+        action: String,
+        input: Value,
+    ) -> Result<Value, String> {
+        let id = text(&input, "id", 128)?;
+        habits::update(&root, &target, |all| {
+            let index = all
+                .iter()
+                .position(|h| h.id == id)
+                .ok_or("Habit not found")?;
+            if action == "habits.remove" {
+                all.remove(index);
+                return Ok(json!({"removed":true}));
+            }
+            let h = &mut all[index];
+            if action == "habits.run" {
+                h.run_requested = true;
+            } else {
+                if let Some(name) = input.get("name").and_then(Value::as_str) {
+                    if name.trim().is_empty() || name.chars().count() > 120 {
+                        return Err("Invalid habit name".into());
+                    }
+                    h.name = name.trim().into();
+                }
+                if let Some(instructions) = input.get("instructions").and_then(Value::as_str) {
+                    if instructions.trim().is_empty() || instructions.len() > 32000 {
+                        return Err("Invalid habit instructions".into());
+                    }
+                    h.instructions = instructions.into();
+                }
+                if let Some(schedule) = input.get("schedule") {
+                    h.schedule =
+                        serde_json::from_value(schedule.clone()).map_err(|e| e.to_string())?;
+                    h.schedule.validate()?;
+                    h.next_run_at = h.schedule.next(now_ms())?;
+                }
+                if let Some(enabled) = input.get("enabled").and_then(Value::as_bool) {
+                    h.enabled = enabled;
+                    if enabled {
+                        h.next_run_at = h.schedule.next(now_ms())?;
+                    }
+                }
+            }
+            Ok(json!(h))
+        })
+    }
+
     pub(super) fn group_launch(&mut self, id: &str, session: i64, cx: &mut Context<Self>) {
         let Some(bot) = self
             .roster
