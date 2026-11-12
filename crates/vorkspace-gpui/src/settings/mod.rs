@@ -893,7 +893,7 @@ impl SettingsView {
     }
 
     /// The breadcrumb, Restore defaults action, and settings search.
-    pub(crate) fn header(&mut self, in_title_bar: bool, cx: &mut Context<Self>) -> AnyElement {
+    pub(crate) fn header(&mut self, cx: &mut Context<Self>) -> AnyElement {
         let results = self.search_results();
         let open = !self.search_query.trim().is_empty();
         let weak = cx.weak_entity();
@@ -913,13 +913,7 @@ impl SettingsView {
                     .items_center()
                     .gap_2()
                     .text_size(px(13.))
-                    .map(|d| {
-                        if in_title_bar {
-                            d.pr_3().pl_1()
-                        } else {
-                            d.px_3()
-                        }
-                    })
+                    .px_3()
                     .child(
                         div()
                             .flex_shrink_0()
@@ -941,7 +935,7 @@ impl SettingsView {
                     .flex()
                     .items_center()
                     .gap(px(6.))
-                    .map(|d| if in_title_bar { d.pr_4() } else { d.pr_2() })
+                    .pr_2()
                     .when(self.section == Section::Appearance, |d| {
                         d.child(self.settings_restore_button(cx))
                     })

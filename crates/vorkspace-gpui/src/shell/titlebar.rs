@@ -89,7 +89,7 @@ impl Shell {
     pub(super) fn titlebar(&mut self, window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
         if let Some(settings) = self.pages.settings.clone() {
             let lead = self.strip_lead(window);
-            let header = settings.update(cx, |view, cx| view.header(false, cx));
+            let header = settings.update(cx, |view, cx| view.header(cx));
             return div()
                 .h(px(TITLE_BAR_HEIGHT))
                 .flex_shrink_0()
