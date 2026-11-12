@@ -2370,7 +2370,6 @@ fn selected_working_session(s: &Setup, cx: &mut TestAppContext) -> i64 {
                     summary,
                     vorkspace_core::agent::Settings::default(),
                     String::new(),
-                    true,
                     cx,
                 )
                 .unwrap();

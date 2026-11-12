@@ -118,7 +118,7 @@ impl Shell {
                 s
             };
             let id = summary.id;
-            self.bot_install(summary, settings, prompt, false, cx)?;
+            self.bot_install(summary, settings, prompt, cx)?;
             if input["reveal"] == true {
                 self.open(id, window, cx);
             }

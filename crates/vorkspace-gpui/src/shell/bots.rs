@@ -75,17 +75,13 @@ impl Shell {
         summary: Session,
         settings: Settings,
         prompt: String,
-        draft: bool,
         cx: &mut Context<Self>,
     ) -> Result<(), String> {
         let view = self
             .add_loaded(summary, cx)
             .ok_or("Could not open the new session")?;
         view.update(cx, |v, cx| {
-            v.install_transfer(settings, (!draft).then(|| prompt.clone()), cx);
-            if draft {
-                v.input.update(cx, |i, cx| i.set_text(prompt, cx));
-            }
+            v.install_transfer(settings, Some(prompt.clone()), cx);
         });
         self.publish_prepared(&view, None, cx);
         self.invalidate_chrome(cx);
