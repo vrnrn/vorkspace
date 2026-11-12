@@ -172,8 +172,7 @@ impl Item {
     }
     pub fn prompt(&self, body: &str) -> String {
         format!(
-            "{}\n\n{} {}: {}\n{}\n\n{}",
-            "Work on this item. Read its description and discussion, inspect the project, and implement the required changes.",
+            "Work on this item. Read its description and discussion, inspect the project, and implement the required changes.\n\n{} {}: {}\n{}\n\n{}",
             provider_label(&self.provider),
             self.reference(),
             self.title,
