@@ -83,7 +83,7 @@ impl Element for Disclosure {
     }
 }
 
-pub const WORD_FADE: Duration = Duration::from_millis(320);
+pub(crate) const WORD_FADE: Duration = Duration::from_millis(320);
 pub struct PacedText {
     target: String,
     shown: usize,

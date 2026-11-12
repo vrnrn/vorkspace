@@ -7,7 +7,7 @@ use std::time::Duration;
 
 /// The spinner repaints at about 30fps so its fades stay smooth.
 /// The spinner's frame step: the dot grid changes no faster than this.
-pub const TICK_MS: u64 = 33;
+pub(crate) const TICK_MS: u64 = 33;
 /// One wave across the grid, as TerminalSpinner's `vorkspace-spinner-wave`.
 const CYCLE_SECS: f32 = 1.2;
 /// Slate, peach and pink, top row to bottom.
@@ -93,12 +93,6 @@ impl SessionMark {
     #[cfg(any(test, feature = "test-support"))]
     pub fn state(&self) -> State {
         self.state
-    }
-    pub fn set_size(&mut self, side: f32, cx: &mut Context<Self>) {
-        if self.side != side {
-            self.side = side;
-            cx.notify();
-        }
     }
     pub fn set_color(&mut self, color: u32, cx: &mut Context<Self>) {
         if self.color != Some(color) {

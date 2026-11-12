@@ -1,6 +1,6 @@
 //! editorScrollbar.ts's geometry, shared by native file and review surfaces.
 pub const WIDTH: f32 = 18.;
-pub const MIN_THUMB: f32 = 32.;
+pub(crate) const MIN_THUMB: f32 = 32.;
 
 pub fn diff_colors(cx: &gpui::App) -> (u32, u32) {
     let palette = cx

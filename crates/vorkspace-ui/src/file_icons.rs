@@ -26,7 +26,7 @@ fn table() -> &'static Table {
 }
 /// The package matches the whole lowercased name, then each compound suffix
 /// (`d.ts`, then `ts`).
-pub fn file_icon_name(name: &str) -> &'static str {
+pub(crate) fn file_icon_name(name: &str) -> &'static str {
     let table = table();
     let key = if name
         .bytes()
