@@ -440,17 +440,7 @@ impl Render for SessionReview {
                         .text_size(px(12.))
                         .child(file.relative.clone()),
                 )
-                .child(if file.exact {
-                    counts(file.additions, file.deletions, 8.).into_any_element()
-                } else {
-                    div()
-                        .flex_shrink_0()
-                        .text_size(px(11.))
-                        .font_weight(FontWeight::MEDIUM)
-                        .text_color(content(0.45))
-                        .child("Diff unavailable")
-                        .into_any_element()
-                })
+                .child(counts(file.additions, file.deletions, 8.).into_any_element())
                 .on_click(cx.listener(move |this, _, _, cx| {
                     this.open(&turn_id, Some(path.clone()), cx);
                 }))

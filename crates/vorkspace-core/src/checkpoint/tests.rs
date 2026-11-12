@@ -86,7 +86,7 @@ fn records_shell_changes_and_preserves_the_index_head_and_saved_result() {
         (status.files[0].additions, status.files[0].deletions),
         (1, 0)
     );
-    assert!(status.files.iter().all(|file| file.exact && file.undoable));
+    assert!(status.files.iter().all(|file| file.undoable));
     assert_eq!(std::fs::read(f.repo.join(".git/index")).unwrap(), index);
     assert_eq!(run_git(&f.repo, &["rev-parse", "HEAD"]).unwrap(), head);
 
@@ -98,7 +98,6 @@ fn records_shell_changes_and_preserves_the_index_head_and_saved_result() {
     assert_eq!(diff.original, "user change\n");
     assert_eq!(diff.current, "user change\nagent change\n");
     let status = reopened.status("session", f.cwd()).unwrap();
-    assert!(status.files[0].exact);
     assert!(!status.files[0].undoable);
     assert!(reopened.undo("session", f.cwd(), "first", None).is_err());
     assert!(f.repo.join("new.txt").exists());
@@ -220,7 +219,6 @@ fn overlapping_turns_keep_exact_diffs_but_cannot_restore_shared_work() {
             (status.files[0].additions, status.files[0].deletions),
             (2, 2)
         );
-        assert!(status.files[0].exact);
         assert!(!status.files[0].undoable);
         assert!(f
             .store
@@ -348,7 +346,6 @@ fn nested_turns_share_work_but_sibling_path_prefixes_do_not() {
     for (id, cwd) in [("parent", f.cwd()), ("child", child_cwd)] {
         let status = f.store.status(id, cwd).unwrap();
         assert_eq!(status.files.len(), 1);
-        assert!(status.files[0].exact);
         assert!(!status.files[0].undoable);
         assert!(f.store.undo(id, cwd, "second", None).is_err());
     }
@@ -519,7 +516,6 @@ fn unrelated_and_partial_commits_preserve_pending_files_and_exact_counts() {
         (status.files[0].additions, status.files[0].deletions),
         (1, 0)
     );
-    assert!(status.files[0].exact);
     assert!(!status.files[0].undoable);
 }
 
@@ -752,7 +748,6 @@ fn preserves_literal_paths_and_records_modes_and_symlinks_safely() {
         .iter()
         .find(|file| file.relative == "link.txt")
         .unwrap();
-    assert!(link.exact);
     assert!(!link.undoable);
     let diff = f.store.file_diff("session", f.cwd(), path).unwrap();
     assert_eq!(diff.original, "baseline\n");
