@@ -157,12 +157,8 @@ impl BotDocumentPane {
             return;
         }
         self.active = active;
-        if let Some(html) = &self.html {
-            if active {
-                html.update(cx, |html, _| html.set_interactive(true));
-            } else {
-                html.read(cx).hide();
-            }
+        if !active && let Some(html) = &self.html {
+            html.read(cx).hide();
         }
         cx.notify();
     }
