@@ -1,6 +1,51 @@
 //! Turning transcript rows into presentation rows, incrementally where possible.
 use super::*;
 
+struct Rebuilding {
+    now: Instant,
+    following: bool,
+    offset: ListOffset,
+    anchor: Option<(usize, usize)>,
+    current_turn: usize,
+    layout_changed: bool,
+    source_start: usize,
+    display_start: usize,
+    old_count: usize,
+    streaming_prose: bool,
+    old_rows: Vec<UiRow>,
+    previous: HashMap<usize, Message>,
+    activity: phases::Phases,
+    cards: cards::Cards,
+    turn: usize,
+    turn_end: usize,
+    final_answer: Option<usize>,
+    awaiting_answer: Option<usize>,
+    has_work: bool,
+    ready: bool,
+    receipt_start: Option<usize>,
+    last_prompt: Option<usize>,
+}
+
+struct RebuildMessage<'a> {
+    at: usize,
+    end: usize,
+    role: String,
+    is_prompt: bool,
+    text: String,
+    peer_origin: Option<vorkspace_core::bot::peers::Origin>,
+    stopped_notice: bool,
+    display_text: Option<String>,
+    attachments: Arc<[attachments::Attachment]>,
+    parser: MarkdownParser,
+    message: usize,
+    first: usize,
+    phase: Option<&'a phases::Group>,
+    grouped: bool,
+    phase_open: bool,
+    folded: bool,
+    reaction: bool,
+}
+
 impl TranscriptView {
     pub(crate) fn patch(&mut self, start: usize, rows: Vec<Row>, cx: &mut Context<Self>) {
         self.patch_with_page(start, rows, None, cx);
@@ -187,15 +232,12 @@ impl TranscriptView {
         self.rebuild(start, cx);
     }
     pub(super) fn rebuild(&mut self, start: usize, cx: &mut Context<Self>) {
-        #[cfg(test)]
-        {
-            self.rebuild_passes += 1;
-        }
-        self.phase_layouts.clear();
-        let now = Instant::now();
-        let following = self.list.is_following_tail();
-        let offset = self.list.logical_scroll_top();
-        let anchor = self.rows.get(offset.item_ix).map(|r| r.key);
+        let mut building = self.begin_rebuild(start);
+        self.rebuild_messages(&mut building);
+        self.finish_rebuild(building, cx);
+    }
+
+    fn rebuild_target(&mut self, start: usize, now: Instant) -> (usize, usize, bool) {
         let current_turn = self.source[..(start + 1).min(self.source.len())]
             .iter()
             .rposition(|r| r.is_prompt())
@@ -229,6 +271,17 @@ impl TranscriptView {
                 .any(|r| r.role == "tool")
         });
         let layout_changed = self.fold_targets.get(&current_turn).copied().flatten() != target;
+
+        (current_turn, current_end, layout_changed)
+    }
+
+    fn rebuild_message_index(
+        &self,
+        start: usize,
+        current_turn: usize,
+        current_end: usize,
+        layout_changed: bool,
+    ) -> usize {
         let known_message = self
             .source
             .get(start)
@@ -272,34 +325,7 @@ impl TranscriptView {
                 message_ix -= 1;
             }
         }
-        let run_message = self.messages.partition_point(|m| m.start < current_turn);
-        let old_run_start = self.messages[run_message..]
-            .iter()
-            .filter_map(|m| m.display_start)
-            .min()
-            .unwrap_or(self.rows.len());
-        if self.source[current_turn..current_end].iter().any(|row| {
-            row.role == "tool"
-                && row.first
-                && serde_json::from_str::<ToolCall>(&row.text)
-                    .is_ok_and(|call| matches!(call.panel().as_deref(), Some(Panel::Agent(_))))
-        }) || self.rows[old_run_start..].iter().any(|row| {
-            self.messages
-                .get(row.message)
-                .is_some_and(|message| message.run == current_turn)
-                && matches!(
-                    &row.body,
-                    Body::Tool { call, .. } if matches!(call.panel().as_deref(), Some(Panel::Agent(_)))
-                )
-        }) {
-            // Pinned runs sit below the fold's work rather than at their
-            // original source offset. Rebuild the whole turn so a suffix
-            // update cannot cut across that reordered stack. Include the old
-            // rows: a patch can remove the run that caused the reordering.
-            while message_ix > 0 && self.messages[message_ix - 1].start >= current_turn {
-                message_ix -= 1;
-            }
-        }
+        message_ix = self.rebuild_pinned_start(message_ix, current_turn, current_end);
         if self.bot
             || self.source[current_turn..current_end]
                 .iter()
@@ -324,6 +350,62 @@ impl TranscriptView {
                 message_ix -= 1;
             }
         }
+
+        message_ix
+    }
+
+    fn rebuild_pinned_start(
+        &self,
+        mut message_ix: usize,
+        current_turn: usize,
+        current_end: usize,
+    ) -> usize {
+        let run_message = self.messages.partition_point(|m| m.start < current_turn);
+        let old_run_start = self.messages[run_message..]
+            .iter()
+            .filter_map(|m| m.display_start)
+            .min()
+            .unwrap_or(self.rows.len());
+        if self.source[current_turn..current_end].iter().any(|row| {
+                    row.role == "tool"
+                        && row.first
+                        && serde_json::from_str::<ToolCall>(&row.text)
+                            .is_ok_and(|call| matches!(call.panel().as_deref(), Some(Panel::Agent(_))))
+                }) || self.rows[old_run_start..].iter().any(|row| {
+                    self.messages
+                        .get(row.message)
+                        .is_some_and(|message| message.run == current_turn)
+                        && matches!(
+                            &row.body,
+                            Body::Tool { call, .. } if matches!(call.panel().as_deref(), Some(Panel::Agent(_)))
+                        )
+                }) {
+                    // Pinned runs sit below the fold's work rather than at their
+                    // original source offset. Rebuild the whole turn so a suffix
+                    // update cannot cut across that reordered stack. Include the old
+                    // rows: a patch can remove the run that caused the reordering.
+                    while message_ix > 0 && self.messages[message_ix - 1].start >= current_turn {
+                        message_ix -= 1;
+                    }
+                }
+
+        message_ix
+    }
+
+    fn begin_rebuild(&mut self, start: usize) -> Rebuilding {
+        #[cfg(test)]
+        {
+            self.rebuild_passes += 1;
+        }
+        self.phase_layouts.clear();
+        let now = Instant::now();
+        let following = self.list.is_following_tail();
+        let offset = self.list.logical_scroll_top();
+        let anchor = self.rows.get(offset.item_ix).map(|r| r.key);
+
+        let (current_turn, current_end, layout_changed) = self.rebuild_target(start, now);
+        let message_ix =
+            self.rebuild_message_index(start, current_turn, current_end, layout_changed);
         let source_start = if message_ix == 0 {
             self.history_start
         } else {
@@ -356,7 +438,7 @@ impl TranscriptView {
         self.invalidate_message_indices(display_start);
         let old_rows = self.rows.split_off(display_start);
         let previous_cards = cards::Previous::new(&old_rows, &self.messages);
-        let mut previous: HashMap<_, _> = self
+        let previous: HashMap<_, _> = self
             .messages
             .split_off(message_ix)
             .into_iter()
@@ -376,456 +458,124 @@ impl TranscriptView {
         }
         let activity = phases::collect(&self.source, source_start, self.streaming);
         let cards = cards::Cards::collect(self, source_start, previous_cards);
-        let mut at = source_start;
-        let mut turn = 0;
-        let mut turn_end = 0;
-        let mut final_answer = None;
-        let mut awaiting_answer = None;
-        let mut has_work = false;
-        let mut ready = false;
-        let mut receipt_start = None;
+        let turn = 0;
+        let turn_end = 0;
+        let final_answer = None;
+        let awaiting_answer = None;
+        let has_work = false;
+        let ready = false;
+        let receipt_start = None;
         let last_prompt = (self.bot && self.streaming)
             .then(|| self.source.iter().rposition(Row::is_prompt))
             .flatten();
+
+        Rebuilding {
+            now,
+            following,
+            offset,
+            anchor,
+            current_turn,
+            layout_changed,
+            source_start,
+            display_start,
+            old_count,
+            streaming_prose,
+            old_rows,
+            previous,
+            activity,
+            cards,
+            turn,
+            turn_end,
+            final_answer,
+            awaiting_answer,
+            has_work,
+            ready,
+            receipt_start,
+            last_prompt,
+        }
+    }
+
+    fn rebuild_messages(&mut self, building: &mut Rebuilding) {
+        let mut at = building.source_start;
         while at < self.source.len() {
-            let mut end = at + 1;
-            while end < self.source.len() && !self.source[end].first {
-                end += 1;
-            }
-            let role = self.source[at].role.clone();
-            let is_prompt = self.source[at].is_prompt();
-            let text: String = self.source[at..end]
-                .iter()
-                .map(|r| r.text.as_str())
-                .collect();
-            let peer = (role == "bot-system")
-                .then(|| vorkspace_core::bot::peers::presentation(&text))
-                .flatten();
-            let peer_origin = peer.as_ref().map(|(origin, _)| origin.clone());
-            // Older native versions saved user cancellation as an error row.
-            let stopped_notice = role == "error" && text.trim() == "Stopped";
-            let (display_text, attachments) = if let Some((_, body)) = peer {
-                (Some(body.to_owned()), Arc::default())
-            } else if role == "user" {
-                attachments::message(&self.source, end, &text)
+            at = self.rebuild_message(at, building);
+        }
+    }
+
+    fn rebuild_message_turn(&mut self, at: usize, is_prompt: bool, building: &mut Rebuilding) {
+        let mut turn = building.turn;
+        let mut turn_end = building.turn_end;
+        let mut awaiting_answer = building.awaiting_answer;
+        let mut final_answer = building.final_answer;
+        let mut has_work = building.has_work;
+        let mut ready = building.ready;
+        let mut receipt_start = building.receipt_start;
+        if at >= turn_end {
+            turn = if is_prompt {
+                (at..self.source.len())
+                    .find(|&i| !self.source[i].is_prompt())
+                    .unwrap_or(self.source.len())
             } else {
-                (None, Arc::default())
-            };
-            let mut parser = previous
-                .remove(&at)
-                .filter(|p| p.role == role)
-                .map(|p| p.parser)
-                .or_else(|| self.prepared_parsers.remove(&at))
-                .unwrap_or_default();
-            let message = self.messages.len();
-            let first = self.rows.len();
-            if at >= turn_end {
-                turn = if is_prompt {
-                    (at..self.source.len())
-                        .find(|&i| !self.source[i].is_prompt())
-                        .unwrap_or(self.source.len())
-                } else {
-                    self.source[..at]
-                        .iter()
-                        .rposition(|r| r.is_prompt())
-                        .map_or(0, |i| i + 1)
-                };
-                turn_end = (turn..self.source.len())
-                    .find(|&i| self.source[i].is_prompt())
-                    .unwrap_or(self.source.len());
-                awaiting_answer = (turn..turn_end)
-                    .rev()
-                    .find(|&i| self.source[i].role == "assistant" && self.source[i].first)
-                    .filter(|&i| !self.answer_visible(i));
-                final_answer = (turn..turn_end).rev().find(|&i| {
-                    self.source[i].role == "assistant"
-                        && self.source[i].first
-                        && self.answer_visible(i)
-                });
-                has_work = final_answer.is_some_and(|answer| {
-                    self.source[turn..answer].iter().any(|r| r.role == "tool")
-                });
-                ready = final_answer.is_some_and(|answer| self.answer_visible(answer));
-                self.fold_targets
-                    .insert(turn, final_answer.filter(|_| has_work && ready));
-                receipt_start = (turn..turn_end).find(|&i| {
-                    let row = &self.source[i];
-                    row.first
-                        && !matches!(
-                            row.role.as_str(),
-                            "bot-card"
-                                | "visual"
-                                | "bot-document"
-                                | "bot-note"
-                                | "bot-launch"
-                                | vorkspace_core::transcript::attachments::ROLE
-                        )
-                        && !(row.role == "error" && row.text.trim() == "Stopped")
-                        && !(self.bot && row.text.trim().starts_with("<reaction>"))
-                });
-            }
-            let folded = !is_prompt
-                && !activity.pinned.contains(&at)
-                && has_work
-                && ready
-                && final_answer.is_some_and(|answer| at < answer)
-                && !self.work_folds.get(&turn).copied().unwrap_or(false);
-            if !self.document && receipt_start == Some(at) {
-                if self.bot
-                    && (self.bot_group_start(turn) == turn
-                        || (self.history_start > 0
-                            && self.prompt_start(turn) == self.history_start))
-                {
-                    self.rows.push(UiRow {
-                        key: (0, 0),
-                        body: Body::BotHeader {
-                            turn: self.bot_group_start(turn),
-                        },
-                        message,
-                        first: false,
-                        last: false,
-                        work: false,
-                        work_tail: false,
-                        thought_phase: None,
-                    });
-                }
-                self.rows.push(UiRow {
-                    key: (0, 0),
-                    body: Body::WorkLine {
-                        turn,
-                        expandable: has_work && ready,
-                    },
-                    message,
-                    first: false,
-                    last: false,
-                    work: false,
-                    work_tail: false,
-                    thought_phase: None,
-                });
-            }
-            let phase = activity.at(at);
-            let grouped = phase.is_some_and(|group| group.steps > 1);
-            let active = phase.is_some_and(|group| {
-                self.streaming
-                    && (group.end == self.source.len() || awaiting_answer == Some(group.end))
-            });
-            let phase_open = phase.is_none_or(|group| {
-                !grouped || self.phases.get(&group.start).copied().unwrap_or(active)
-            });
-            if !folded && grouped && phase.is_some_and(|group| group.start == at) {
-                let group = phase.unwrap();
-                let (title, icon) = if group.calls.is_empty() {
-                    (if active { "Thinking…" } else { "Thought" }.into(), "minus")
-                } else {
-                    crate::activity::summary(&group.calls, active)
-                };
-                self.rows.push(UiRow {
-                    key: (0, 0),
-                    body: Body::Phase {
-                        title,
-                        group: group.start,
-                        icon,
-                        active,
-                    },
-                    message,
-                    first: false,
-                    last: false,
-                    work: false,
-                    work_tail: false,
-                    thought_phase: None,
-                });
-            }
-            let reaction = self.bot && role == "assistant" && text.trim().starts_with("<reaction>");
-            if role == "interjection" {
-                if let Ok(note) = serde_json::from_str(&text) {
-                    self.rows.push(UiRow {
-                        key: (0, 0),
-                        body: Body::Interjection(note),
-                        message,
-                        first: false,
-                        last: false,
-                        work: false,
-                        work_tail: false,
-                        thought_phase: None,
-                    });
-                }
-            } else if role == "visual" {
-                let document =
-                    serde_json::from_str::<vorkspace_core::visual::VisualDocument>(&text)
-                        .ok()
-                        .filter(|document| document.validate().is_ok());
-                let body = match document {
-                    Some(document) => Body::Visual(Arc::new(document)),
-                    None => Body::Plain("This visual could not be loaded.".into()),
-                };
-                self.rows.push(UiRow {
-                    key: (0, 0),
-                    body,
-                    message,
-                    first: false,
-                    last: false,
-                    work: false,
-                    work_tail: false,
-                    thought_phase: None,
-                });
-            } else if matches!(role.as_str(), "bot-card" | "bot-note") {
-                if !cards.owns(at)
-                    && let Ok(value) = serde_json::from_str(&text)
-                {
-                    self.rows.push(UiRow {
-                        key: (0, 0),
-                        body: Body::BotCard(value),
-                        message,
-                        first: false,
-                        last: false,
-                        work: false,
-                        work_tail: false,
-                        thought_phase: None,
-                    });
-                }
-            } else if stopped_notice
-                || matches!(
-                    role.as_str(),
-                    "bot-document" | "bot-launch" | vorkspace_core::transcript::attachments::ROLE
-                )
-            {
-                // Saved work references are rendered once under the settled reply.
-            } else if reaction {
-                // BotReactionBadge: the emoji sits on the message it answers.
-                if let Some(emoji) = text
-                    .trim()
-                    .strip_prefix("<reaction>")
-                    .and_then(|s| s.strip_suffix("</reaction>"))
-                    .filter(|e| e.chars().count() <= 16)
-                    && let Some(prompt) = self.source[..at].iter().rposition(|r| r.is_prompt())
-                {
-                    let prompt = self.source[..=prompt]
-                        .iter()
-                        .rposition(|r| r.first)
-                        .unwrap_or(prompt);
-                    let live = self.streaming && at >= self.live_start && self.visible;
-                    match self.reactions.get(&prompt) {
-                        Some((current, _)) if current == emoji => {}
-                        _ => {
-                            self.reactions
-                                .insert(prompt, (emoji.into(), live.then_some(now)));
-                        }
-                    }
-                }
-            } else if folded || activity.hidden.contains(&at) || !phase_open {
-                if role == "tool" {
-                    self.seen_steps.insert(at);
-                }
-                // WorkFoldLine puts earlier commentary and work behind its receipt.
-            } else if role == "tool"
-                && let Ok(tool) = serde_json::from_str::<ToolCall>(&text)
-            {
-                self.rows.push(UiRow {
-                    key: (0, 0),
-                    body: Body::Tool {
-                        call: Box::new(tool),
-                        group: phase.filter(|_| grouped).map(|group| group.start),
-                        tail: phase.is_none_or(|group| group.last == at),
-                    },
-                    message,
-                    first: false,
-                    last: false,
-                    work: false,
-                    work_tail: false,
-                    thought_phase: None,
-                });
-            } else if matches!(role.as_str(), "assistant" | "reasoning") {
-                if role == "reasoning" {
-                    self.rows.push(UiRow {
-                        key: (0, 0),
-                        body: Body::Reasoning,
-                        message,
-                        first: false,
-                        last: false,
-                        work: false,
-                        work_tail: false,
-                        thought_phase: None,
-                    });
-                }
-                if role == "assistant" {
-                    self.prepare_reveal(at, end, &text, now);
-                }
-                let paced = self.reveals.active.get(&at).filter(|_| role == "assistant");
-                parser.set_text(paced.map_or(text.as_str(), PacedText::text));
-                let tree = if paced.is_some_and(PacedText::behind)
-                    || (self.streaming && end == self.source.len())
-                {
-                    parser.display_tree()
-                } else {
-                    parser.tree().clone()
-                };
-                let mut word_cursor = 0;
-                for block in tree
-                    .blocks
+                self.source[..at]
                     .iter()
-                    .filter(|_| role != "reasoning" || self.expanded.contains(&at))
-                {
-                    self.rows
-                        .extend(markdown::rows(&block.block).into_iter().map(|mut row| {
-                            if paced.is_some() {
-                                row.word_start = word_cursor;
-                                word_cursor += markdown::word_count(&row);
-                            }
-                            UiRow {
-                                key: (0, 0),
-                                body: Body::Markdown(row),
-                                message,
-                                first: false,
-                                last: false,
-                                work: false,
-                                work_tail: false,
-                                thought_phase: None,
-                            }
-                        }));
-                }
-                if let Some(paced) = self
-                    .reveals
-                    .active
-                    .get_mut(&at)
-                    .filter(|_| role == "assistant")
-                {
-                    paced.words(word_cursor, now);
-                }
-            } else {
-                let text_rows = if let Some(text) = display_text {
-                    let mut transcript = vorkspace_core::transcript::Transcript::default();
-                    transcript.begin("user");
-                    transcript.append(&text);
-                    transcript
-                        .rows
-                        .into_iter()
-                        .map(|row| row.text)
-                        .collect::<Vec<_>>()
-                } else {
-                    self.source[at..end]
-                        .iter()
-                        .filter(|r| r.role != "bot-system")
-                        .map(|row| row.text.clone())
-                        .collect()
-                };
-                // `line-clamp-4`: a collapsed message shows its first lines only.
-                let clamped =
-                    role == "user" && !self.expanded_prompts.contains(&at) && text_rows.len() > 1;
-                if clamped {
-                    self.clamped_prompts.insert(at);
-                } else {
-                    self.clamped_prompts.remove(&at);
-                }
-                let shown = if clamped { 1 } else { text_rows.len() };
-                for text in text_rows.into_iter().take(shown) {
-                    self.rows.push(UiRow {
-                        key: (0, 0),
-                        body: Body::Plain(text.into()),
-                        message,
-                        first: false,
-                        last: false,
-                        work: false,
-                        work_tail: false,
-                        thought_phase: None,
-                    });
-                }
-            }
-            let mut prose_ordinal = 16;
-            for row in &mut self.rows[first..] {
-                if role == "reasoning" && matches!(row.body, Body::Reasoning | Body::Markdown(_)) {
-                    row.thought_phase = phase
-                        .filter(|_| grouped)
-                        .map(|group| (group.start, group.last == at));
-                }
-                let ordinal = match row.body {
-                    Body::BotHeader { .. } => 0,
-                    Body::WorkLine { .. } => usize::from(self.bot),
-                    Body::Phase { .. } => 1 + usize::from(self.bot),
-                    Body::Tool { .. } => 2 + usize::from(self.bot),
-                    Body::Reasoning => 4,
-                    _ => {
-                        let key = prose_ordinal;
-                        prose_ordinal += 1;
-                        key
-                    }
-                };
-                row.key = (at, ordinal);
-                row.work = has_work
-                    && ready
-                    && !is_prompt
-                    && role != "visual"
-                    && !activity.pinned.contains(&at)
-                    && final_answer.is_some_and(|answer| at < answer)
-                    && !matches!(
-                        row.body,
-                        Body::WorkLine { .. } | Body::BotHeader { .. } | Body::BotCard(_)
-                    );
-            }
-            if let Some(row) = self.rows.get_mut(first) {
-                row.first = true;
-            }
-            if self.rows.len() > first {
-                self.rows.last_mut().unwrap().last = true;
-            }
-            self.messages.push(Message {
-                start: at,
-                display_start: None,
-                role,
-                parser,
-                under_line: has_work && final_answer == Some(at),
-                run: turn,
-                turn: if self.bot {
-                    self.bot_group_start(turn)
-                } else {
-                    turn
-                },
-                attachments,
-                peer: peer_origin,
+                    .rposition(|r| r.is_prompt())
+                    .map_or(0, |i| i + 1)
+            };
+            turn_end = (turn..self.source.len())
+                .find(|&i| self.source[i].is_prompt())
+                .unwrap_or(self.source.len());
+            awaiting_answer = (turn..turn_end)
+                .rev()
+                .find(|&i| self.source[i].role == "assistant" && self.source[i].first)
+                .filter(|&i| !self.answer_visible(i));
+            final_answer = (turn..turn_end).rev().find(|&i| {
+                self.source[i].role == "assistant" && self.source[i].first && self.answer_visible(i)
             });
-            if is_prompt && last_prompt.is_some_and(|p| end > p) {
-                // The running turn keeps the user's messages together above its work.
-                self.push_pending(at);
-            }
-            self.rows
-                .extend(cards.rows(at, turn, !is_prompt && end == turn_end, message));
-            if !self.document
-                && !self.source[at].is_prompt()
-                && self.source[at].role != "bot-card"
-                && self.source[at].role != vorkspace_core::transcript::attachments::ROLE
-                && !reaction
-                && end == turn_end
-                && !(self.bot
-                    && self
-                        .source
-                        .get(turn_end)
-                        .is_some_and(|r| r.role == "bot-system")
-                    && !self.bot_opens_stretch(turn_end))
+            has_work = final_answer
+                .is_some_and(|answer| self.source[turn..answer].iter().any(|r| r.role == "tool"));
+            ready = final_answer.is_some_and(|answer| self.answer_visible(answer));
+            self.fold_targets
+                .insert(turn, final_answer.filter(|_| has_work && ready));
+            receipt_start = (turn..turn_end).find(|&i| {
+                let row = &self.source[i];
+                row.first
+                    && !matches!(
+                        row.role.as_str(),
+                        "bot-card"
+                            | "visual"
+                            | "bot-document"
+                            | "bot-note"
+                            | "bot-launch"
+                            | vorkspace_core::transcript::attachments::ROLE
+                    )
+                    && !(row.role == "error" && row.text.trim() == "Stopped")
+                    && !(self.bot && row.text.trim().starts_with("<reaction>"))
+            });
+        }
+
+        building.turn = turn;
+        building.turn_end = turn_end;
+        building.awaiting_answer = awaiting_answer;
+        building.final_answer = final_answer;
+        building.has_work = has_work;
+        building.ready = ready;
+        building.receipt_start = receipt_start;
+    }
+
+    fn rebuild_work_receipt(&mut self, at: usize, message: usize, building: &Rebuilding) {
+        let receipt_start = building.receipt_start;
+        let turn = building.turn;
+        let has_work = building.has_work;
+        let ready = building.ready;
+        if !self.document && receipt_start == Some(at) {
+            if self.bot
+                && (self.bot_group_start(turn) == turn
+                    || (self.history_start > 0 && self.prompt_start(turn) == self.history_start))
             {
-                if !self.bot
-                    && self.review_shown
-                    && self.review.is_some()
-                    && turn_end == self.source.len()
-                {
-                    self.rows.push(UiRow {
-                        key: (at, usize::MAX - 2),
-                        body: Body::Review { turn },
-                        message,
-                        first: false,
-                        last: false,
-                        work: false,
-                        work_tail: false,
-                        thought_phase: None,
-                    });
-                }
                 self.rows.push(UiRow {
-                    key: (at, usize::MAX - 1),
-                    body: Body::Actions {
-                        turn: if self.bot {
-                            self.bot_group_start(turn)
-                        } else {
-                            turn
-                        },
-                        complete: !self.streaming || end < self.source.len(),
+                    key: (0, 0),
+                    body: Body::BotHeader {
+                        turn: self.bot_group_start(turn),
                     },
                     message,
                     first: false,
@@ -835,13 +585,535 @@ impl TranscriptView {
                     thought_phase: None,
                 });
             }
-            at = end;
+            self.rows.push(UiRow {
+                key: (0, 0),
+                body: Body::WorkLine {
+                    turn,
+                    expandable: has_work && ready,
+                },
+                message,
+                first: false,
+                last: false,
+                work: false,
+                work_tail: false,
+                thought_phase: None,
+            });
         }
-        self.prepared_parsers.clear();
-        if self.bot && !self.rows.iter().any(|r| matches!(r.body, Body::Pending(_))) {
-            self.push_pending(self.source.len());
+    }
+
+    fn rebuild_message(&mut self, at: usize, building: &mut Rebuilding) -> usize {
+        let mut end = at + 1;
+        while end < self.source.len() && !self.source[end].first {
+            end += 1;
         }
-        self.push_saved_draft();
+        let role = self.source[at].role.clone();
+        let is_prompt = self.source[at].is_prompt();
+        let text: String = self.source[at..end]
+            .iter()
+            .map(|r| r.text.as_str())
+            .collect();
+        let peer = (role == "bot-system")
+            .then(|| vorkspace_core::bot::peers::presentation(&text))
+            .flatten();
+        let peer_origin = peer.as_ref().map(|(origin, _)| origin.clone());
+        // Older native versions saved user cancellation as an error row.
+        let stopped_notice = role == "error" && text.trim() == "Stopped";
+        let (display_text, attachments) = if let Some((_, body)) = peer {
+            (Some(body.to_owned()), Arc::default())
+        } else if role == "user" {
+            attachments::message(&self.source, end, &text)
+        } else {
+            (None, Arc::default())
+        };
+        let parser = building
+            .previous
+            .remove(&at)
+            .filter(|p| p.role == role)
+            .map(|p| p.parser)
+            .or_else(|| self.prepared_parsers.remove(&at))
+            .unwrap_or_default();
+        let message = self.messages.len();
+        let first = self.rows.len();
+
+        self.rebuild_message_turn(at, is_prompt, building);
+        let has_work = building.has_work;
+        let ready = building.ready;
+        let final_answer = building.final_answer;
+        let turn = building.turn;
+        let folded = !is_prompt
+            && !building.activity.pinned.contains(&at)
+            && has_work
+            && ready
+            && final_answer.is_some_and(|answer| at < answer)
+            && !self.work_folds.get(&turn).copied().unwrap_or(false);
+
+        self.rebuild_work_receipt(at, message, building);
+        let phase = building.activity.at(at);
+        let grouped = phase.is_some_and(|group| group.steps > 1);
+        let active = phase.is_some_and(|group| {
+            self.streaming
+                && (group.end == self.source.len() || building.awaiting_answer == Some(group.end))
+        });
+        let phase_open = phase.is_none_or(|group| {
+            !grouped || self.phases.get(&group.start).copied().unwrap_or(active)
+        });
+
+        if !folded && grouped && phase.is_some_and(|group| group.start == at) {
+            let group = phase.unwrap();
+            let (title, icon) = if group.calls.is_empty() {
+                (if active { "Thinking…" } else { "Thought" }.into(), "minus")
+            } else {
+                crate::activity::summary(&group.calls, active)
+            };
+            self.rows.push(UiRow {
+                key: (0, 0),
+                body: Body::Phase {
+                    title,
+                    group: group.start,
+                    icon,
+                    active,
+                },
+                message,
+                first: false,
+                last: false,
+                work: false,
+                work_tail: false,
+                thought_phase: None,
+            });
+        }
+
+        let reaction = self.bot && role == "assistant" && text.trim().starts_with("<reaction>");
+
+        let mut message = RebuildMessage {
+            at,
+            end,
+            role,
+            is_prompt,
+            text,
+            peer_origin,
+            stopped_notice,
+            display_text,
+            attachments,
+            parser,
+            message,
+            first,
+            phase,
+            grouped,
+            phase_open,
+            folded,
+            reaction,
+        };
+        self.rebuild_message_body(&mut message, building);
+        self.finish_rebuild_message(message, building)
+    }
+
+    fn rebuild_interjection(&mut self, draft: &RebuildMessage<'_>) {
+        let text = &draft.text;
+        let message = draft.message;
+
+        if let Ok(note) = serde_json::from_str(text) {
+            self.rows.push(UiRow {
+                key: (0, 0),
+                body: Body::Interjection(note),
+                message,
+                first: false,
+                last: false,
+                work: false,
+                work_tail: false,
+                thought_phase: None,
+            });
+        }
+    }
+
+    fn rebuild_visual(&mut self, draft: &RebuildMessage<'_>) {
+        let text = &draft.text;
+        let message = draft.message;
+
+        let document = serde_json::from_str::<vorkspace_core::visual::VisualDocument>(text)
+            .ok()
+            .filter(|document| document.validate().is_ok());
+        let body = match document {
+            Some(document) => Body::Visual(Arc::new(document)),
+            None => Body::Plain("This visual could not be loaded.".into()),
+        };
+        self.rows.push(UiRow {
+            key: (0, 0),
+            body,
+            message,
+            first: false,
+            last: false,
+            work: false,
+            work_tail: false,
+            thought_phase: None,
+        });
+    }
+
+    fn rebuild_bot_card(&mut self, draft: &RebuildMessage<'_>, building: &Rebuilding) {
+        let at = draft.at;
+        let text = &draft.text;
+        let message = draft.message;
+
+        if !building.cards.owns(at)
+            && let Ok(value) = serde_json::from_str(text)
+        {
+            self.rows.push(UiRow {
+                key: (0, 0),
+                body: Body::BotCard(value),
+                message,
+                first: false,
+                last: false,
+                work: false,
+                work_tail: false,
+                thought_phase: None,
+            });
+        }
+    }
+
+    fn rebuild_reaction(&mut self, draft: &RebuildMessage<'_>, building: &Rebuilding) {
+        let at = draft.at;
+        let text = &draft.text;
+        let now = building.now;
+
+        // BotReactionBadge: the emoji sits on the message it answers.
+        if let Some(emoji) = text
+            .trim()
+            .strip_prefix("<reaction>")
+            .and_then(|s| s.strip_suffix("</reaction>"))
+            .filter(|e| e.chars().count() <= 16)
+            && let Some(prompt) = self.source[..at].iter().rposition(|r| r.is_prompt())
+        {
+            let prompt = self.source[..=prompt]
+                .iter()
+                .rposition(|r| r.first)
+                .unwrap_or(prompt);
+            let live = self.streaming && at >= self.live_start && self.visible;
+            match self.reactions.get(&prompt) {
+                Some((current, _)) if current == emoji => {}
+                _ => {
+                    self.reactions
+                        .insert(prompt, (emoji.into(), live.then_some(now)));
+                }
+            }
+        }
+    }
+
+    fn rebuild_markdown(&mut self, draft: &mut RebuildMessage<'_>, building: &Rebuilding) {
+        let at = draft.at;
+        let end = draft.end;
+        let message = draft.message;
+        let role = &draft.role;
+        let text = &draft.text;
+        let parser = &mut draft.parser;
+        let now = building.now;
+
+        if role == "reasoning" {
+            self.rows.push(UiRow {
+                key: (0, 0),
+                body: Body::Reasoning,
+                message,
+                first: false,
+                last: false,
+                work: false,
+                work_tail: false,
+                thought_phase: None,
+            });
+        }
+        if role == "assistant" {
+            self.prepare_reveal(at, end, text, now);
+        }
+        let paced = self.reveals.active.get(&at).filter(|_| role == "assistant");
+        parser.set_text(paced.map_or(text.as_str(), PacedText::text));
+        let tree = if paced.is_some_and(PacedText::behind)
+            || (self.streaming && end == self.source.len())
+        {
+            parser.display_tree()
+        } else {
+            parser.tree().clone()
+        };
+        let mut word_cursor = 0;
+        for block in tree
+            .blocks
+            .iter()
+            .filter(|_| role != "reasoning" || self.expanded.contains(&at))
+        {
+            self.rows
+                .extend(markdown::rows(&block.block).into_iter().map(|mut row| {
+                    if paced.is_some() {
+                        row.word_start = word_cursor;
+                        word_cursor += markdown::word_count(&row);
+                    }
+                    UiRow {
+                        key: (0, 0),
+                        body: Body::Markdown(row),
+                        message,
+                        first: false,
+                        last: false,
+                        work: false,
+                        work_tail: false,
+                        thought_phase: None,
+                    }
+                }));
+        }
+        if let Some(paced) = self
+            .reveals
+            .active
+            .get_mut(&at)
+            .filter(|_| role == "assistant")
+        {
+            paced.words(word_cursor, now);
+        }
+    }
+
+    fn rebuild_plain(&mut self, draft: &RebuildMessage<'_>) {
+        let at = draft.at;
+        let end = draft.end;
+        let message = draft.message;
+        let role = &draft.role;
+        let display_text = &draft.display_text;
+
+        let text_rows = if let Some(text) = display_text {
+            let mut transcript = vorkspace_core::transcript::Transcript::default();
+            transcript.begin("user");
+            transcript.append(text);
+            transcript
+                .rows
+                .into_iter()
+                .map(|row| row.text)
+                .collect::<Vec<_>>()
+        } else {
+            self.source[at..end]
+                .iter()
+                .filter(|r| r.role != "bot-system")
+                .map(|row| row.text.clone())
+                .collect()
+        };
+        // `line-clamp-4`: a collapsed message shows its first lines only.
+        let clamped = role == "user" && !self.expanded_prompts.contains(&at) && text_rows.len() > 1;
+        if clamped {
+            self.clamped_prompts.insert(at);
+        } else {
+            self.clamped_prompts.remove(&at);
+        }
+        let shown = if clamped { 1 } else { text_rows.len() };
+        for text in text_rows.into_iter().take(shown) {
+            self.rows.push(UiRow {
+                key: (0, 0),
+                body: Body::Plain(text.into()),
+                message,
+                first: false,
+                last: false,
+                work: false,
+                work_tail: false,
+                thought_phase: None,
+            });
+        }
+    }
+
+    fn rebuild_message_body(&mut self, draft: &mut RebuildMessage<'_>, building: &Rebuilding) {
+        let at = draft.at;
+        let message = draft.message;
+        let phase = draft.phase;
+        let grouped = draft.grouped;
+        let folded = draft.folded;
+        let phase_open = draft.phase_open;
+        let reaction = draft.reaction;
+        let stopped_notice = draft.stopped_notice;
+        let role = &draft.role;
+        let text = &draft.text;
+        let activity = &building.activity;
+        if role == "interjection" {
+            self.rebuild_interjection(draft);
+        } else if role == "visual" {
+            self.rebuild_visual(draft);
+        } else if matches!(role.as_str(), "bot-card" | "bot-note") {
+            self.rebuild_bot_card(draft, building);
+        } else if stopped_notice
+            || matches!(
+                role.as_str(),
+                "bot-document" | "bot-launch" | vorkspace_core::transcript::attachments::ROLE
+            )
+        {
+            // Saved work references are rendered once under the settled reply.
+        } else if reaction {
+            self.rebuild_reaction(draft, building);
+        } else if folded || activity.hidden.contains(&at) || !phase_open {
+            if role == "tool" {
+                self.seen_steps.insert(at);
+            }
+            // WorkFoldLine puts earlier commentary and work behind its receipt.
+        } else if role == "tool"
+            && let Ok(tool) = serde_json::from_str::<ToolCall>(text)
+        {
+            self.rows.push(UiRow {
+                key: (0, 0),
+                body: Body::Tool {
+                    call: Box::new(tool),
+                    group: phase.filter(|_| grouped).map(|group| group.start),
+                    tail: phase.is_none_or(|group| group.last == at),
+                },
+                message,
+                first: false,
+                last: false,
+                work: false,
+                work_tail: false,
+                thought_phase: None,
+            });
+        } else if matches!(role.as_str(), "assistant" | "reasoning") {
+            self.rebuild_markdown(draft, building);
+        } else {
+            self.rebuild_plain(draft);
+        }
+    }
+
+    fn index_rebuild_message(&mut self, draft: &RebuildMessage<'_>, building: &Rebuilding) {
+        let at = draft.at;
+        let first = draft.first;
+        let is_prompt = draft.is_prompt;
+        let phase = draft.phase;
+        let grouped = draft.grouped;
+        let role = &draft.role;
+        let has_work = building.has_work;
+        let ready = building.ready;
+        let final_answer = building.final_answer;
+        let activity = &building.activity;
+        let mut prose_ordinal = 16;
+        for row in &mut self.rows[first..] {
+            if role == "reasoning" && matches!(row.body, Body::Reasoning | Body::Markdown(_)) {
+                row.thought_phase = phase
+                    .filter(|_| grouped)
+                    .map(|group| (group.start, group.last == at));
+            }
+            let ordinal = match row.body {
+                Body::BotHeader { .. } => 0,
+                Body::WorkLine { .. } => usize::from(self.bot),
+                Body::Phase { .. } => 1 + usize::from(self.bot),
+                Body::Tool { .. } => 2 + usize::from(self.bot),
+                Body::Reasoning => 4,
+                _ => {
+                    let key = prose_ordinal;
+                    prose_ordinal += 1;
+                    key
+                }
+            };
+            row.key = (at, ordinal);
+            row.work = has_work
+                && ready
+                && !is_prompt
+                && role != "visual"
+                && !activity.pinned.contains(&at)
+                && final_answer.is_some_and(|answer| at < answer)
+                && !matches!(
+                    row.body,
+                    Body::WorkLine { .. } | Body::BotHeader { .. } | Body::BotCard(_)
+                );
+        }
+        if let Some(row) = self.rows.get_mut(first) {
+            row.first = true;
+        }
+        if self.rows.len() > first {
+            self.rows.last_mut().unwrap().last = true;
+        }
+    }
+
+    fn finish_rebuild_message(
+        &mut self,
+        message: RebuildMessage<'_>,
+        building: &Rebuilding,
+    ) -> usize {
+        self.index_rebuild_message(&message, building);
+        let RebuildMessage {
+            at,
+            end,
+            role,
+            parser,
+            message,
+            is_prompt,
+            reaction,
+            attachments,
+            peer_origin,
+            ..
+        } = message;
+        let turn = building.turn;
+        let turn_end = building.turn_end;
+        let has_work = building.has_work;
+        let final_answer = building.final_answer;
+        let last_prompt = building.last_prompt;
+        let cards = &building.cards;
+        self.messages.push(Message {
+            start: at,
+            display_start: None,
+            role,
+            parser,
+            under_line: has_work && final_answer == Some(at),
+            run: turn,
+            turn: if self.bot {
+                self.bot_group_start(turn)
+            } else {
+                turn
+            },
+            attachments,
+            peer: peer_origin,
+        });
+        if is_prompt && last_prompt.is_some_and(|p| end > p) {
+            // The running turn keeps the user's messages together above its work.
+            self.push_pending(at);
+        }
+        self.rows
+            .extend(cards.rows(at, turn, !is_prompt && end == turn_end, message));
+        if !self.document
+            && !self.source[at].is_prompt()
+            && self.source[at].role != "bot-card"
+            && self.source[at].role != vorkspace_core::transcript::attachments::ROLE
+            && !reaction
+            && end == turn_end
+            && !(self.bot
+                && self
+                    .source
+                    .get(turn_end)
+                    .is_some_and(|r| r.role == "bot-system")
+                && !self.bot_opens_stretch(turn_end))
+        {
+            if !self.bot
+                && self.review_shown
+                && self.review.is_some()
+                && turn_end == self.source.len()
+            {
+                self.rows.push(UiRow {
+                    key: (at, usize::MAX - 2),
+                    body: Body::Review { turn },
+                    message,
+                    first: false,
+                    last: false,
+                    work: false,
+                    work_tail: false,
+                    thought_phase: None,
+                });
+            }
+            self.rows.push(UiRow {
+                key: (at, usize::MAX - 1),
+                body: Body::Actions {
+                    turn: if self.bot {
+                        self.bot_group_start(turn)
+                    } else {
+                        turn
+                    },
+                    complete: !self.streaming || end < self.source.len(),
+                },
+                message,
+                first: false,
+                last: false,
+                work: false,
+                work_tail: false,
+                thought_phase: None,
+            });
+        }
+
+        end
+    }
+
+    fn rebuild_pinned_rows(&mut self, building: &Rebuilding) -> HashMap<usize, usize> {
+        let display_start = building.display_start;
+        let activity = &building.activity;
         let mut pinned_answers = HashMap::new();
         if !activity.pinned.is_empty() {
             let mut parked: HashMap<usize, Vec<UiRow>> = HashMap::new();
@@ -883,6 +1155,21 @@ impl TranscriptView {
             }
             self.rows.extend(ordered);
         }
+
+        pinned_answers
+    }
+
+    fn reconcile_rebuilt_rows(
+        &mut self,
+        building: &mut Rebuilding,
+        pinned_answers: &HashMap<usize, usize>,
+    ) -> Vec<UiRow> {
+        let display_start = building.display_start;
+        let streaming_prose = building.streaming_prose;
+        let source_start = building.source_start;
+        let current_turn = building.current_turn;
+        let layout_changed = building.layout_changed;
+        let now = building.now;
         // A phase and its nested steps are one sibling in the outer work tree.
         // Its final outer branch ends at the header, above the inner tool rail.
         let mut next_work_sibling = false;
@@ -897,11 +1184,11 @@ impl TranscriptView {
             // A growing answer replaces its presentation rows, but earlier
             // paragraphs can still use the same height at this width.
             self.measurements
-                .rebuild_tail(source_start, &old_rows, &target);
+                .rebuild_tail(source_start, &building.old_rows, &target);
         } else {
             self.measurements.clear();
         }
-        let merged = if self.visible {
+        if self.visible {
             let replaced_work = self
                 .fold_targets
                 .get(&current_turn)
@@ -915,11 +1202,20 @@ impl TranscriptView {
                 // block's removed height is not a scroll animation to replay.
                 self.follow.measured = None;
             }
-            self.reconcile(old_rows, target, now, &pinned_answers, replaced_work)
+            self.reconcile(
+                std::mem::take(&mut building.old_rows),
+                target,
+                now,
+                pinned_answers,
+                replaced_work,
+            )
         } else {
             self.motions.clear();
             target
-        };
+        }
+    }
+
+    fn index_rebuilt_rows(&mut self, display_start: usize, merged: Vec<UiRow>) {
         self.phase_toggle = None;
         self.rows.extend(merged);
         self.measurements.rebuilt(self.rows.len());
@@ -947,11 +1243,19 @@ impl TranscriptView {
         // settled, an explicitly opened group returns to virtualized rows.
         for (&group, scroll) in &mut self.phase_scrolls {
             let enabled = self.visible && self.rows.iter().any(|row| {
-                matches!(row.body, Body::Phase { group: id, active: true, .. } if id == group)
-            }) && self.phases.get(&group).copied().unwrap_or(true);
+                        matches!(row.body, Body::Phase { group: id, active: true, .. } if id == group)
+                    }) && self.phases.get(&group).copied().unwrap_or(true);
             scroll.enable(enabled);
         }
         self.index_messages_from(display_start);
+    }
+
+    fn restore_rebuild_scroll(&mut self, building: &Rebuilding) {
+        let old_count = building.old_count;
+        let display_start = building.display_start;
+        let following = building.following;
+        let anchor = building.anchor;
+        let offset = building.offset;
         // Preserve surviving indices and scroll offsets while the tail reflows.
         let common = old_count.min(self.rows.len());
         if display_start < common {
@@ -989,6 +1293,19 @@ impl TranscriptView {
                 offset_in_item: offset.offset_in_item,
             });
         }
+    }
+
+    fn finish_rebuild(&mut self, mut building: Rebuilding, cx: &mut Context<Self>) {
+        self.prepared_parsers.clear();
+        if self.bot && !self.rows.iter().any(|r| matches!(r.body, Body::Pending(_))) {
+            self.push_pending(self.source.len());
+        }
+        self.push_saved_draft();
+
+        let pinned_answers = self.rebuild_pinned_rows(&building);
+        let merged = self.reconcile_rebuilt_rows(&mut building, &pinned_answers);
+        self.index_rebuilt_rows(building.display_start, merged);
+        self.restore_rebuild_scroll(&building);
         cx.notify();
     }
     pub(super) fn invalidate_message_indices(&mut self, start: usize) {
