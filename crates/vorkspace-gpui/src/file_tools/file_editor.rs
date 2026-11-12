@@ -94,7 +94,6 @@ pub(crate) struct FileEditor {
     // and diff actions share its bytes instead of copying the entire file.
     git_original: Option<Arc<str>>,
     git_staged: bool,
-    git_line_ending: &'static str,
     git_task: Option<Task<()>>,
     analysis: Option<Task<()>>,
     /// The Tree-sitter parser and last tree, reused by each incremental pass.
@@ -173,14 +172,6 @@ impl FileEditor {
         }
         let mut subscriptions = vec![
             cx.subscribe(&input, |this, _, _: &input::Changed, cx| this.edited(cx)),
-            cx.subscribe(&input, |this, _, action: &input::CodeAction, cx| {
-                let (index, stage) = match action {
-                    input::CodeAction::Stage(index) => (*index, true),
-                    input::CodeAction::Revert(index) => (*index, false),
-                };
-                this.change_index = index;
-                this.apply_change(stage, cx);
-            }),
             cx.observe(&input, |this, _, cx| {
                 this.observe_code_selection(cx);
                 cx.notify();
@@ -257,7 +248,6 @@ impl FileEditor {
             checkout,
             git_original: None,
             git_staged: false,
-            git_line_ending: "\n",
             git_task: None,
             analysis: None,
             syntax: Default::default(),
@@ -405,29 +395,18 @@ impl FileEditor {
         let work = cx.background_executor().spawn(async move {
             let (original, staged) =
                 vorkspace_core::scm::editor_baseline(&cwd, &relative).ok()??;
-            let line_ending = if original.contains("\r\n") {
-                "\r\n"
-            } else if original.contains('\r') {
-                "\r"
-            } else {
-                "\n"
-            };
             Some((
                 Arc::<str>::from(original.replace("\r\n", "\n").replace('\r', "\n")),
                 staged,
-                line_ending,
             ))
         });
         self.git_task = Some(cx.spawn(async move |this, cx| {
             let result = work.await;
             let _ = this.update(cx, |this, cx| {
-                let (original, staged, ending) = result
-                    .map_or((None, false, "\n"), |(original, staged, ending)| {
-                        (Some(original), staged, ending)
-                    });
+                let (original, staged) =
+                    result.map_or((None, false), |(original, staged)| (Some(original), staged));
                 let side_changed = this.git_staged != staged;
                 this.git_staged = staged;
-                this.git_line_ending = ending;
                 if this.git_original != original {
                     this.git_original = original;
                     this.schedule_analysis(cx);
@@ -572,7 +551,7 @@ impl FileEditor {
         cx.notify();
     }
     fn revert_change(&mut self, cx: &mut Context<Self>) {
-        self.apply_change(false, cx);
+        self.apply_change(cx);
     }
 }
 impl gpui::Render for FileEditor {
@@ -591,8 +570,6 @@ impl gpui::Render for FileEditor {
                 .into_any_element()
         });
         let selection_menu = self.code_selection_menu(window, cx);
-        self.input
-            .update(cx, |i, _| i.set_editor_diff(false, !self.git_staged));
         if ((!ready || self.preview) && self.input.focus_handle(cx).is_focused(window))
             || (!self.search_open
                 && (self.search.focus_handle(cx).is_focused(window)

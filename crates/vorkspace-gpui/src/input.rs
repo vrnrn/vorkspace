@@ -73,10 +73,6 @@ actions!(
 );
 pub struct Submitted;
 pub struct Changed;
-pub(crate) enum CodeAction {
-    Stage(usize),
-    Revert(usize),
-}
 pub struct Rejected(pub &'static str);
 
 pub fn bind(cx: &mut App) {
@@ -215,7 +211,6 @@ pub struct Input {
 impl EventEmitter<Submitted> for Input {}
 impl EventEmitter<Changed> for Input {}
 impl EventEmitter<Rejected> for Input {}
-impl EventEmitter<CodeAction> for Input {}
 impl Focusable for Input {
     fn focus_handle(&self, _: &App) -> FocusHandle {
         self.focus.clone()
@@ -1075,7 +1070,6 @@ impl Input {
         self.code_scrollbar_up();
     }
     fn mouse_move(&mut self, e: &MouseMoveEvent, _: &mut Window, cx: &mut Context<Self>) {
-        self.code_hover(e, cx);
         if self.code_scrollbar_move(e, cx) {
             return;
         }
@@ -1711,7 +1705,6 @@ impl Render for Input {
             })
             .children(self.code_tooltip())
             .children(self.completion_popup(cx))
-            .children(self.hunk_actions(cx))
     }
 }
 

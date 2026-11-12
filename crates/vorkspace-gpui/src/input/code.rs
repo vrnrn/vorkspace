@@ -19,17 +19,8 @@ struct MarkerHit {
 }
 
 pub(super) struct Code {
-    hovered_change: Option<usize>,
-    can_stage: bool,
     suppress_completion: bool,
     document_bytes: Option<usize>,
-    deleted_rows: Vec<(
-        f32,
-        f32,
-        String,
-        usize,
-        Vec<vorkspace_editor::editor_analysis::Token>,
-    )>,
     path: String,
     completions: Vec<vorkspace_editor::editor_analysis::Completion>,
     completion_index: usize,
@@ -57,11 +48,8 @@ pub(super) struct Code {
 impl Code {
     fn new() -> Self {
         Self {
-            hovered_change: None,
-            can_stage: false,
             suppress_completion: false,
             document_bytes: None,
-            deleted_rows: Vec::new(),
             path: String::new(),
             completions: Vec::new(),
             completion_index: 0,
@@ -95,7 +83,6 @@ struct Geometry {
     offsets: Rc<Vec<usize>>,
     tops: Rc<Vec<f32>>,
     folded: Rc<Vec<vorkspace_editor::editor_analysis::Fold>>,
-    diff: bool,
 }
 
 impl Geometry {
@@ -104,7 +91,6 @@ impl Geometry {
             offsets: Rc::new(vec![0]),
             tops: Rc::new(vec![TOP_PADDING, TOP_PADDING + 20.]),
             folded: Rc::default(),
-            diff: false,
         }
     }
 
@@ -156,11 +142,8 @@ impl Geometry {
     }
     fn gutter(&self) -> f32 {
         let digits = (self.offsets.len().ilog10() + 1) as f32;
-        if self.diff {
-            4. + 12. + digits * 7.5 + 5. + 16. + 1. + 6.
-        } else {
-            4. + (digits * 7.5 + 12.).max(36.) + 12. + 1. + 6.
-        }
+
+        4. + (digits * 7.5 + 12.).max(36.) + 12. + 1. + 6.
     }
     fn top(&self, row: usize, line_height: f32) -> f32 {
         self.tops
@@ -210,17 +193,6 @@ impl Input {
         input
     }
 
-    pub(crate) fn set_editor_diff(&mut self, diff: bool, can_stage: bool) {
-        if let Some(code) = &mut self.code {
-            code.can_stage = can_stage;
-        }
-        if let Some(code) = &mut self.code
-            && code.geometry.diff != diff
-        {
-            code.geometry.diff = diff;
-            code.layout_width = None;
-        }
-    }
     pub(crate) fn set_editor_path(&mut self, path: String) {
         if let Some(code) = &mut self.code {
             code.path = path;
@@ -761,8 +733,6 @@ impl Input {
             code.completions.clear();
             code.completion_task = None;
             code.completion_source = None;
-            code.deleted_rows.clear();
-            code.hovered_change = None;
             code.geometry.offsets = Rc::new(
                 std::iter::once(0)
                     .chain(self.content.match_indices('\n').map(|(at, _)| at + 1))
@@ -1121,75 +1091,6 @@ impl Input {
             code.drag_offset = None;
         }
     }
-    pub(super) fn code_hover(&mut self, e: &MouseMoveEvent, cx: &mut Context<Self>) {
-        let (Some(code), Some(bounds)) = (&mut self.code, self.bounds) else {
-            return;
-        };
-        if !code.geometry.diff {
-            return;
-        }
-        let y = (e.position.y - bounds.top() + self.scroll_y).as_f32();
-        let row = code.geometry.row_at_y(y);
-        let hovered = if e.position.x >= bounds.left() - px(code.geometry.gutter())
-            && e.position.x <= bounds.right()
-            && e.position.y >= bounds.top()
-            && e.position.y <= bounds.bottom()
-        {
-            code.analysis
-                .changes
-                .iter()
-                .position(|c| code.geometry.row(c.from) <= row && code.geometry.row(c.to) >= row)
-        } else {
-            None
-        };
-        if hovered != code.hovered_change {
-            code.hovered_change = hovered;
-            cx.notify();
-        }
-    }
-    pub(super) fn hunk_actions(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
-        let code = self.code.as_ref()?;
-        let index = code.hovered_change?;
-        let change = code.analysis.changes.get(index)?;
-        let row = code.geometry.row(change.from);
-        let top = (code.geometry.top(row, self.line_height) - self.scroll_y.as_f32()).max(0.);
-        Some(
-            div()
-                .id("editor-hunk-actions")
-                .absolute()
-                .left(px(code.geometry.gutter() - 18.))
-                .top(px(top))
-                .w(px(18.))
-                .flex()
-                .flex_col()
-                .overflow_hidden()
-                .rounded(px(radius::SMALL))
-                .border_1()
-                .border_color(vorkspace_ui::theme::content(0.14))
-                .bg(vorkspace_ui::theme::shell_fill().opacity(0.92))
-                .shadow_md()
-                .when(code.can_stage, |d| {
-                    d.child(
-                        crate::panel_kit::icon_action("stage-change", "Stage change", "plus", true)
-                            .size(px(18.))
-                            .on_click(
-                                cx.listener(move |_, _, _, cx| cx.emit(CodeAction::Stage(index))),
-                            ),
-                    )
-                })
-                .child(
-                    crate::panel_kit::icon_action(
-                        "revert-change",
-                        "Revert change",
-                        "rotate-ccw",
-                        true,
-                    )
-                    .size(px(18.))
-                    .on_click(cx.listener(move |_, _, _, cx| cx.emit(CodeAction::Revert(index)))),
-                )
-                .into_any_element(),
-        )
-    }
     pub(super) fn code_tooltip(&self) -> Option<AnyElement> {
         let code = self.code.as_ref()?;
         let marker = code.markers.get(code.hovered_marker?)?;
@@ -1374,7 +1275,6 @@ pub(super) struct CodeElement {
 }
 pub(super) struct CodePaint {
     lines: Vec<(usize, WrappedLine)>,
-    deleted: Vec<(f32, WrappedLine, usize)>,
     scroll: Point<Pixels>,
     text_bounds: Bounds<Pixels>,
     text_hitbox: gpui::Hitbox,
@@ -1384,73 +1284,6 @@ impl IntoElement for CodeElement {
     fn into_element(self) -> Self {
         self
     }
-}
-fn plain_line(
-    text: &str,
-    width: Option<Pixels>,
-    font_size: f32,
-    w: &mut Window,
-    color: Hsla,
-) -> WrappedLine {
-    w.text_system()
-        .shape_text(
-            text.to_owned().into(),
-            px(font_size),
-            &[TextRun {
-                len: text.len(),
-                font: gpui::font(vorkspace_ui::fonts::FIXED_FONT),
-                color,
-                background_color: None,
-                underline: None,
-                strikethrough: None,
-            }],
-            width,
-            None,
-        )
-        .unwrap()
-        .remove(0)
-}
-fn token_line(
-    text: &str,
-    tokens: &[vorkspace_editor::editor_analysis::Token],
-    width: Option<Pixels>,
-    font_size: f32,
-    w: &mut Window,
-) -> WrappedLine {
-    let base = TextRun {
-        len: 0,
-        font: gpui::font(vorkspace_ui::fonts::FIXED_FONT),
-        color: vorkspace_ui::theme::content(1.),
-        background_color: None,
-        underline: None,
-        strikethrough: None,
-    };
-    let mut runs = Vec::new();
-    let mut at = 0;
-    for token in tokens {
-        if token.from > at {
-            runs.push(TextRun {
-                len: token.from - at,
-                ..base.clone()
-            });
-        }
-        runs.push(TextRun {
-            len: token.to - token.from,
-            color: vorkspace_ui::theme::syntax_color(token.kind.as_ref()),
-            ..base.clone()
-        });
-        at = token.to;
-    }
-    if at < text.len() || runs.is_empty() {
-        runs.push(TextRun {
-            len: text.len() - at,
-            ..base
-        });
-    }
-    w.text_system()
-        .shape_text(text.to_owned().into(), px(font_size), &runs, width, None)
-        .unwrap()
-        .remove(0)
 }
 fn shape(i: &Input, row: usize, width: Option<Pixels>, w: &mut Window) -> WrappedLine {
     let code = i.code.as_ref().unwrap();
@@ -1656,13 +1489,6 @@ impl Element for CodeElement {
             if code.layout_width != Some(width) {
                 let mut tops = Vec::with_capacity(code.geometry.offsets.len() + 1);
                 let mut y = TOP_PADDING;
-                let mut deleted_rows = Vec::new();
-                let mut deletion_changes = code
-                    .analysis
-                    .changes
-                    .iter()
-                    .filter(|c| c.kind != "add")
-                    .peekable();
                 let sample = w.text_system().shape_line(
                     "M".into(),
                     px(i.font_size),
@@ -1677,56 +1503,6 @@ impl Element for CodeElement {
                     None,
                 );
                 for row in 0..code.geometry.offsets.len() {
-                    while deletion_changes
-                        .peek()
-                        .is_some_and(|c| code.geometry.row(c.from) < row)
-                    {
-                        deletion_changes.next();
-                    }
-                    if !code.geometry.hidden(row) && code.geometry.diff {
-                        while deletion_changes
-                            .peek()
-                            .is_some_and(|c| code.geometry.row(c.from) == row)
-                        {
-                            let change = deletion_changes.next().unwrap();
-                            let mut offset = 0;
-                            for (n, text) in change
-                                .original
-                                .strip_suffix('\n')
-                                .unwrap_or(&change.original)
-                                .split('\n')
-                                .enumerate()
-                            {
-                                let tokens: Vec<_> = change
-                                    .tokens
-                                    .iter()
-                                    .filter(|t| t.to > offset && t.from < offset + text.len())
-                                    .map(|t| vorkspace_editor::editor_analysis::Token {
-                                        from: t.from.saturating_sub(offset),
-                                        to: t.to.min(offset + text.len()) - offset,
-                                        kind: t.kind,
-                                    })
-                                    .collect();
-                                offset += text.len() + 1;
-                                let line = token_line(
-                                    text,
-                                    &tokens,
-                                    code.wrap.then_some(width),
-                                    i.font_size,
-                                    w,
-                                );
-                                let height = line.size(i.line_height()).height.as_f32();
-                                deleted_rows.push((
-                                    y,
-                                    height,
-                                    text.to_owned(),
-                                    change.old_line + n,
-                                    tokens,
-                                ));
-                                y += height;
-                            }
-                        }
-                    }
                     tops.push(y);
                     if code.geometry.hidden(row) {
                         continue;
@@ -1751,7 +1527,6 @@ impl Element for CodeElement {
                 tops.push(y);
                 let code = i.code.as_mut().unwrap();
                 code.geometry.tops = Rc::new(tops);
-                code.deleted_rows = deleted_rows;
                 code.layout_width = Some(width);
             }
         });
@@ -1807,24 +1582,8 @@ impl Element for CodeElement {
             .filter(|row| !code.geometry.hidden(*row))
             .map(|row| (row, shape(i, row, wrap, w)))
             .collect();
-        let deleted = code
-            .deleted_rows
-            .iter()
-            .filter(|(top, height, _, _, _)| {
-                *top + *height >= scroll.y.as_f32()
-                    && *top < (scroll.y + bounds.size.height).as_f32()
-            })
-            .map(|(top, _, text, number, tokens)| {
-                (
-                    *top,
-                    token_line(text, tokens, wrap, i.font_size, w),
-                    *number,
-                )
-            })
-            .collect();
         CodePaint {
             lines,
-            deleted,
             scroll,
             text_bounds,
             text_hitbox: w.insert_hitbox(text_bounds, gpui::HitboxBehavior::Normal),
@@ -1868,87 +1627,6 @@ impl Element for CodeElement {
             cx,
         );
         w.with_content_mask(Some(ContentMask { bounds }), |w| {
-            if geometry.diff {
-                for (top, line, number) in &state.deleted {
-                    let y = bounds.top() + px(*top) - state.scroll.y;
-                    w.paint_quad(fill(
-                        Bounds::new(
-                            point(bounds.left(), y),
-                            size(bounds.size.width - px(WIDTH), line.size(lh).height),
-                        ),
-                        vorkspace_ui::theme::diff_background(false, false),
-                    ));
-                    w.paint_quad(fill(
-                        Bounds::new(
-                            point(bounds.left(), y),
-                            size(px(geometry.gutter() - 22.), line.size(lh).height),
-                        ),
-                        vorkspace_ui::theme::diff_background(false, true),
-                    ));
-                    let number = plain_line(
-                        &number.to_string(),
-                        None,
-                        11.,
-                        w,
-                        vorkspace_ui::theme::diff_foreground(false),
-                    );
-                    let _ = number.paint(
-                        point(state.text_bounds.left() - px(26.) - number.width(), y),
-                        lh,
-                        TextAlign::Left,
-                        None,
-                        w,
-                        cx,
-                    );
-                    let minus = plain_line(
-                        "−",
-                        None,
-                        12.,
-                        w,
-                        vorkspace_ui::theme::diff_foreground(false),
-                    );
-                    let _ = minus.paint(
-                        point(state.text_bounds.left() - px(12.), y),
-                        lh,
-                        TextAlign::Left,
-                        None,
-                        w,
-                        cx,
-                    );
-                }
-                for (row, line) in &state.lines {
-                    let start = geometry.offsets[*row];
-                    if analysis
-                        .changes
-                        .iter()
-                        .any(|c| c.kind != "del" && start >= c.from && start <= c.to)
-                    {
-                        let y = bounds.top() + px(geometry.top(*row, line_height)) - state.scroll.y;
-                        w.paint_quad(fill(
-                            Bounds::new(
-                                point(bounds.left(), y),
-                                size(bounds.size.width - px(WIDTH), line.size(lh).height),
-                            ),
-                            vorkspace_ui::theme::diff_background(true, false),
-                        ));
-                        let plus = plain_line(
-                            "+",
-                            None,
-                            12.,
-                            w,
-                            vorkspace_ui::theme::diff_foreground(true),
-                        );
-                        let _ = plus.paint(
-                            point(state.text_bounds.left() - px(12.), y),
-                            lh,
-                            TextAlign::Left,
-                            None,
-                            w,
-                            cx,
-                        );
-                    }
-                }
-            }
             for (row, _) in &state.lines {
                 let top = geometry.top(*row, line_height);
                 if analysis.folds.iter().any(|f| geometry.row(f.from) == *row) {
@@ -2020,19 +1698,6 @@ impl Element for CodeElement {
                 bounds: state.text_bounds,
             }),
             |w| {
-                for (top, line, _) in &state.deleted {
-                    let _ = line.paint(
-                        point(
-                            state.text_bounds.left() - state.scroll.x,
-                            bounds.top() + px(*top) - state.scroll.y,
-                        ),
-                        lh,
-                        TextAlign::Left,
-                        None,
-                        w,
-                        cx,
-                    );
-                }
                 for (row, line) in &state.lines {
                     let start = geometry.offsets[*row];
                     let top = geometry.top(*row, line_height);
@@ -2199,9 +1864,7 @@ mod feature_tests {
             .unwrap();
     }
     #[gpui::test]
-    fn autocomplete_accepts_with_tab_and_deleted_diff_rows_remain_outside_the_document(
-        cx: &mut TestAppContext,
-    ) {
+    fn autocomplete_accepts_with_tab(cx: &mut TestAppContext) {
         let window = editor(cx);
         window
             .update(cx, |i, _, cx| {
@@ -2223,25 +1886,6 @@ mod feature_tests {
                 assert_eq!(i.content.as_ref(), "const");
                 i.undo(&Undo, w, cx);
                 assert_eq!(i.content.as_ref(), "cons");
-                i.set_text("const value = 2;\n".into(), cx);
-                i.set_editor_diff(true, true);
-                let analysis = vorkspace_editor::editor_analysis::analyze(
-                    "a.ts",
-                    &i.content,
-                    Some("const value = 1;\n"),
-                )
-                .unwrap();
-                i.set_editor_analysis(analysis, cx);
-            })
-            .unwrap();
-        cx.run_until_parked();
-        window
-            .update(cx, |i, _, _| {
-                let code = i.code.as_ref().unwrap();
-                assert_eq!(code.deleted_rows.len(), 1);
-                assert_eq!(code.deleted_rows[0].2, "const value = 1;");
-                assert_eq!(code.geometry.tops[0], TOP_PADDING + i.line_height);
-                assert_eq!(i.content.as_ref(), "const value = 2;\n");
             })
             .unwrap();
     }
