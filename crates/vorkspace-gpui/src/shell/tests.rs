@@ -181,7 +181,7 @@ fn hover_preview_waits_and_never_materializes_a_conversation(cx: &mut TestAppCon
                 gpui::size(px(20.), px(20.)),
             )));
             let count = shell.sessions.len();
-            shell.hover_session(id, anchor, true, true, window, cx);
+            shell.hover_session(id, anchor, true, window, cx);
             assert!(shell.preview.session_preview.is_none());
             (id, count)
         })

@@ -83,7 +83,6 @@ impl Shell {
         id: i64,
         anchor: AnchorSlot,
         hovered: bool,
-        compact: bool,
         window: &Window,
         cx: &mut Context<Self>,
     ) {
@@ -102,7 +101,7 @@ impl Shell {
             self.invalidate_chrome(cx);
             cx.notify();
         }
-        if hovered && compact {
+        if hovered {
             self.preview.close = None;
             if self
                 .preview

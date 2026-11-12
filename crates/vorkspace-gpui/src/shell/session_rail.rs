@@ -474,7 +474,7 @@ impl Shell {
             .relative()
             .child(anchor.probe())
             .on_hover(cx.listener(move |this, hovered, window, cx| {
-                this.hover_session(id, anchor.clone(), *hovered, true, window, cx);
+                this.hover_session(id, anchor.clone(), *hovered, window, cx);
                 this.invalidate_chrome(cx);
             }))
             .on_click(
