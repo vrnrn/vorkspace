@@ -79,7 +79,6 @@ impl DesktopPreferences {
             ("quick_composer", "quickComposerEnabled", false),
             ("working_agents", "liveAgentsEnabled", true),
             ("close_to_tray", "closeToTray", true),
-            ("inset_glass", "insetGlass", true),
             ("body_glass", "bodyGlass", true),
             ("show_excluded_files", "showExcludedFiles", false),
             ("anchor_prompts", "transcriptAnchor", true),

@@ -29,9 +29,6 @@ pub struct Preferences {
     // Appearance
     pub theme: String,
     pub workspace_theme: String,
-    // Retain the legacy inset-only key when reading and saving preferences.
-    // Window materials now use the shared opacity and main-pane glass values.
-    pub inset_glass: bool,
     pub accent_color: Option<String>,
     pub diff_palette: String,
     pub theme_hue: u32,
@@ -142,7 +139,6 @@ impl Default for Preferences {
             close_to_tray: true,
             theme: "dark".into(),
             workspace_theme: "default".into(),
-            inset_glass: true,
             accent_color: None,
             diff_palette: "default".into(),
             theme_hue: 240,
@@ -292,7 +288,6 @@ impl Preferences {
         self.theme_saturation = d.theme_saturation;
         self.theme_dark_lightness = d.theme_dark_lightness;
         self.body_glass = d.body_glass;
-        self.inset_glass = d.inset_glass;
         self.show_excluded_files = d.show_excluded_files;
         self.chat_background_empty = d.chat_background_empty;
         self.chat_background_session = d.chat_background_session;

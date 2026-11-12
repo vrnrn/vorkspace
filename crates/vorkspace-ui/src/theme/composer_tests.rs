@@ -13,7 +13,6 @@ fn status_ink_follows_appearance_and_has_contrast_on_solid_surfaces() {
                 for accent in [None, Some("#ffff00".into())] {
                     let mut preferences = crate::preferences::Preferences {
                         theme: appearance.into(),
-                        inset_glass: glass,
                         body_glass: glass,
                         accent_color: accent,
                         ..Default::default()
