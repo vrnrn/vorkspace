@@ -29,7 +29,7 @@ fn running_bundle(exe: &Path) -> Option<&Path> {
         .filter(|path| path.extension().is_some_and(|ext| ext == "app"))
 }
 
-pub fn wait_and_relaunch(pid: u32, exe: &Path, args: &[OsString]) -> io::Result<()> {
+pub(crate) fn wait_and_relaunch(pid: u32, exe: &Path, args: &[OsString]) -> io::Result<()> {
     let mut command = {
         let mut command = Command::new("/bin/sh");
         // Paths and app arguments are positional parameters, never shell source.
