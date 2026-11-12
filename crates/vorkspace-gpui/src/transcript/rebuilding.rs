@@ -154,7 +154,7 @@ impl TranscriptView {
                 }
             }
         }
-        // React pins on a change to lastUserId, including an accepted steer
+        // Pin on a change of the last user message, including an accepted steer
         // inside the current provider turn. Continuation rows and replayed
         // snapshots must not move the anchor or resume following the tail.
         if self.streaming
@@ -163,7 +163,7 @@ impl TranscriptView {
                 .rfind(|&ix| self.source[ix].first && self.source[ix].is_prompt())
         {
             self.anchor_turn = self.anchor_prompts.then_some(prompt);
-            // React's ordinary transcript introduces a sent prompt itself.
+            // The ordinary transcript introduces a sent prompt itself.
             // Start a fresh follow baseline instead of adding a second glide.
             self.follow = Follow::default();
             self.show_jump = false;
@@ -1310,7 +1310,7 @@ impl TranscriptView {
         let source = &self.source;
         let windowed = &self.windowed_phases;
         let keep_old = |row: &UiRow, motions: &mut HashMap<_, Motion>| -> bool {
-            // "Show less" hides the rest of a message at once, as in React.
+            // "Show less" hides the rest of a message at once.
             if matches!(row.body, Body::Plain(_))
                 && wanted.contains(&(row.key.0, 16))
                 && source.get(row.key.0).is_some_and(|r| r.role == "user")
@@ -1336,7 +1336,7 @@ impl TranscriptView {
             if row.key.1 >= usize::MAX / 2 && matches!(row.body, Body::BotCard(_)) {
                 return false;
             }
-            // React replaces the live prose/work block when its answer moves
+            // Replace the live prose/work block when its answer moves
             // on. Keeping both blocks in layout for an exit animation can
             // temporarily overflow an otherwise short anchored turn.
             // Explicit disclosure toggles still animate in place.

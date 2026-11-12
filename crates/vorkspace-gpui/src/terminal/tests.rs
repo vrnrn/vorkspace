@@ -162,7 +162,7 @@ fn keys_encode_like_xterm_with_the_macos_editing_shortcuts() {
     assert_eq!(bytes("pagedown"), Some(b"\x1b[6~".to_vec()));
     assert_eq!(bytes("f5"), Some(b"\x1b[15~".to_vec()));
     assert_eq!(bytes("shift-tab"), Some(b"\x1b[Z".to_vec()));
-    // terminalKeys.ts
+    // macOS editing shortcuts
     assert_eq!(bytes("alt-left"), Some(b"\x1bb".to_vec()));
     assert_eq!(bytes("alt-right"), Some(b"\x1bf".to_vec()));
     assert_eq!(bytes("cmd-left"), Some(b"\x01".to_vec()));

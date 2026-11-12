@@ -1,4 +1,4 @@
-//! Display-path helpers ported from paths.ts and fileTree.ts. Paths use `/`;
+//! Display-path helpers for the explorer and file trees. Paths use `/`;
 //! Windows drive and UNC paths compare without case.
 use super::name::path_segments;
 

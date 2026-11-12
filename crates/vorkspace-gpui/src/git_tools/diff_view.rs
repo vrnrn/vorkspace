@@ -1,4 +1,4 @@
-//! UnifiedDiffView.tsx and unifiedDiffDocument.ts: every file's hunks in one
+//! The unified diff view: every file's hunks in one
 //! virtualized review, with sticky file headers, a fixed gutter beside code
 //! lanes that scroll horizontally together, hunk navigation, per-file and
 //! per-hunk staging, and line comments for the chat. Highlighting runs off
@@ -435,7 +435,7 @@ impl DiffView {
         let weak = cx.weak_entity();
         list.set_scroll_handler(move |_, _, cx| {
             let _ = weak.update(cx, |this, cx| {
-                // A wheel or drag ends a pending jump, as React's capture does.
+                // A wheel or drag ends a pending jump.
                 this.pending = None;
                 cx.notify();
             });
@@ -869,8 +869,8 @@ impl DiffView {
     fn clamp_scroll_x(&mut self) {
         self.scroll_x = self.scroll_x.clamp(0., self.max_scroll_x());
     }
-    /// Runs before the list sees the wheel. Any wheel ends a pending jump,
-    /// as React's `stopJump`. Each gesture keeps to the axis it started on:
+    /// Runs before the list sees the wheel. Any wheel ends a pending jump.
+    /// Each gesture keeps to the axis it started on:
     /// a sideways one scrolls the code lanes and never the list, a vertical
     /// one never drifts the lanes. Returns whether it took the event.
     fn wheel(&mut self, event: &ScrollWheelEvent, cx: &mut Context<Self>) -> bool {

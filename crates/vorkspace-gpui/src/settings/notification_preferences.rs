@@ -1,4 +1,4 @@
-//! Exact project identity and timestamp semantics of notificationPreferences.ts.
+//! Notification preferences, keeping the saved project identity and timestamp semantics exactly.
 use super::{Preferences, SettingsView, widgets::secondary_button};
 
 use crate::{

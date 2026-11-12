@@ -1,4 +1,4 @@
-//! Bounded file reads and atomic editor saves, extracted from Tauri's fs service.
+//! Bounded file reads and atomic editor saves.
 use super::*;
 use std::io::Read;
 

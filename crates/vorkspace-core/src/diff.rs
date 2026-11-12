@@ -1,13 +1,12 @@
-//! The unified review's diff model: unifiedDiff.ts, lineDiff.ts and the hunk
-//! staging in editorGit.ts. Files are compared line by line (each line with
-//! its newline, as git and lineDiff.ts do), then grouped into chunks exactly
+//! The unified review's diff model and hunk staging. Files are compared line
+//! by line (each line with its newline, as git does), then grouped into chunks exactly
 //! as CodeMirror's `Chunk.build` with `presentableDiff` does: changes less
 //! than three UTF-16 units apart merge, and chunks cover whole lines.
 use similar::{capture_diff_deadline, Algorithm, DiffOp};
 use std::time::{Duration, Instant};
 
 pub const CONTEXT_DEFAULT: usize = 3;
-/// lineDiff.ts's line pass budget. Past it, Myers replaces whatever range it
+/// The line pass budget. Past it, Myers replaces whatever range it
 /// has not finished as a whole: still a valid diff, but coarser, and a matter
 /// of wall-clock timing. Chunks are therefore kept, never derived twice.
 const LINE_PASS_TIMEOUT: Duration = Duration::from_millis(200);
@@ -249,7 +248,7 @@ pub fn stage_chunk(original: &str, current: &str, change: Change) -> String {
     text
 }
 
-/// diffComment.ts's `diffCommentLocation`: `path:line`.
+/// Where a diff comment points: `path:line`.
 pub fn comment_location(path: &str, line: &Line) -> String {
     let number = if line.kind == LineKind::Del {
         line.old_number
@@ -378,7 +377,7 @@ struct UnitChange {
     to_b: usize,
 }
 
-/// lineDiff.ts: each line with its newline is one symbol; the result maps
+/// Each line with its newline is one symbol; the result maps
 /// back to UTF-16 offsets.
 fn line_changes(old: &Doc, new: &Doc, deadline: Option<Instant>) -> Vec<UnitChange> {
     fn tokens(source: &str) -> Vec<&str> {

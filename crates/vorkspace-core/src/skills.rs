@@ -1,4 +1,4 @@
-//! Skill discovery ported from the retired Tauri backend. No UI or transport dependencies.
+//! Skill discovery. No UI or transport dependencies.
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 
@@ -559,7 +559,7 @@ pub fn slug_name(raw: &str) -> String {
     out
 }
 
-/// Create the same starter SKILL.md as React. Existing skills are never overwritten.
+/// Create a starter SKILL.md. Existing skills are never overwritten.
 pub fn create_blank(cwd: &str, raw: &str, personal: bool) -> Result<PathBuf, String> {
     let name = slug_name(raw)
         .chars()

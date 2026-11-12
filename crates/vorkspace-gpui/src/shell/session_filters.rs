@@ -1,4 +1,4 @@
-//! SessionFiltersMenu.tsx: persisted status, time and provider checkboxes.
+//! The session filters menu: persisted status, time and provider checkboxes.
 use super::*;
 use vorkspace_core::session_filters::{BotFilter, TimeFilter};
 

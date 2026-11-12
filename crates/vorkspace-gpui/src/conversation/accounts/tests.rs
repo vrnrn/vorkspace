@@ -172,7 +172,7 @@ fn usage_banner_matches_the_composer_and_can_arm_cancel_and_dismiss(cx: &mut gpu
     );
 
     // Unknown or elapsed reset times keep a manual Resume control and the
-    // same right-aligned actions, as in React's composer variant.
+    // same right-aligned actions in the composer variant.
     for resets_at in [None, Some(usage::now_ms() - 1_000)] {
         window
             .update(visual, |v, _, cx| {

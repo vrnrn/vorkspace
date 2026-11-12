@@ -1,5 +1,4 @@
-//! App-wide preferences the Settings pages edit. Defaults are the React
-//! app's (`settings.ts`, `appearance.ts`, `displayPrefs.ts`, `sounds.ts`).
+//! App-wide preferences the Settings pages edit, with their defaults.
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 

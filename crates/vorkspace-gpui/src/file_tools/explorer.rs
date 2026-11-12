@@ -1,4 +1,4 @@
-//! FileTree.tsx: the Explorer header, project root row and lazily listed
+//! The Explorer: its header, project root row and lazily listed
 //! tree with Git colours, inline create/rename, clipboard, context menu,
 //! dropped files and VS Code-style keyboard navigation. Directory reads and
 //! every file operation run off the UI thread.

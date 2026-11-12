@@ -378,7 +378,7 @@ pub(crate) struct Workspace {
     pub restored_new_projects: Vec<String>,
 }
 
-/// Port of src/features/projects/model/projectTerminal.ts.
+/// Where a project's terminal dock sits.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub(crate) enum DockSide {
@@ -1417,7 +1417,7 @@ fn fresh_terminal_tab_id(used: &HashSet<u64>) -> u64 {
     }
 }
 
-/// Port of src/features/workspace/model/tabVisitHistory.ts. Closed tabs are
+/// Back/Forward history of visited tabs. Closed tabs are
 /// pruned rather than reopened by Back, and a new visit discards Forward.
 #[derive(Default)]
 pub(crate) struct VisitHistory {

@@ -541,7 +541,7 @@ impl Protocol {
                     tool.state = ToolState::Running;
                 }
                 if let Some(run) = tool.agent_mut() {
-                    // Match React: keep the run's name once its trail starts.
+                    // Keep the run's name once its trail starts.
                     if run.steps.is_empty() {
                         if let Some(description) = text(&patch["description"]) {
                             run.brief = description.into();

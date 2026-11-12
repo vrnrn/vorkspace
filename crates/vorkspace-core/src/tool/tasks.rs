@@ -264,7 +264,7 @@ impl AgentRun {
             .or_else(|| self.brief.lines().next().filter(|s| !s.is_empty()))
             .unwrap_or("Subagent")
     }
-    /// The entire brief belongs on the row's tooltip, as in the React transcript.
+    /// The entire brief belongs on the row's tooltip.
     pub fn display_brief(&self) -> String {
         let brief = self
             .name
@@ -296,7 +296,7 @@ impl AgentRun {
         if name.encode_utf16().count() <= LIMIT {
             return name.into();
         }
-        // Keep React's UTF-16 length while never cutting a surrogate pair in half.
+        // Count UTF-16 units while never cutting a surrogate pair in half.
         let mut units = 0;
         let cut: String = name
             .chars()
@@ -406,7 +406,7 @@ fn is_false(value: &bool) -> bool {
     !*value
 }
 
-// The React model picker's built-in labels; live catalogs take precedence.
+// Built-in labels for known model ids; live catalogs take precedence.
 fn desktop_model_name(id: &str) -> Option<&'static str> {
     Some(match id {
         "claude:sonnet-5" | "claude-sonnet-5" => "Claude Sonnet 5",

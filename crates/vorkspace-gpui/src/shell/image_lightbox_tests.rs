@@ -132,7 +132,7 @@ fn image_lightbox_opens_from_composer_and_sent_images_and_restores_focus(cx: &mu
     visual.simulate_click(sent.center(), Default::default());
     assert!(visual.debug_bounds("image-lightbox").is_some());
     assert!(visual.debug_bounds("lightbox-image").is_some());
-    // A press on the backdrop closes immediately, just like onMouseDown in React.
+    // A press on the backdrop closes immediately, on mouse down.
     visual.simulate_mouse_down(point(px(4.), px(4.)), MouseButton::Left, Default::default());
     visual.simulate_mouse_up(point(px(4.), px(4.)), MouseButton::Left, Default::default());
     assert!(visual.debug_bounds("image-lightbox").is_none());

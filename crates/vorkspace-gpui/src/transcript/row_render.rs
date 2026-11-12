@@ -614,8 +614,8 @@ impl TranscriptView {
             && let Some(born) = self.entrances.get(&message_start)
         {
             // The identity line and footer persist while only the message body
-            // enters, matching React's data-chat-message boundary.
-            // useBottomChatMotion's entrance: a sent message rises 16px over
+            // enters.
+            // Entrance: a sent message rises 16px over
             // 360ms, a reply 10px over 280ms.
             let (rise, duration) = if user { (16., 0.36) } else { (10., 0.28) };
             let t = vorkspace_ui::reveal::ease_move(

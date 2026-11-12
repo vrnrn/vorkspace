@@ -643,7 +643,7 @@ impl Conversation {
                     MenuStyle::Settings,
                 )
             }
-            // Composer.tsx's plus menu with native mode and attachment actions.
+            // The composer's plus menu with mode and attachment actions.
             ComposerMenu::Add => {
                 let mut items = vec![MenuItem::Header("Add to message".into())];
                 items.extend(

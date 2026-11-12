@@ -1,4 +1,4 @@
-//! GPUI port of AgentMarkdown.tsx and its .agent-markdown CSS.
+//! Markdown rendering for agent messages.
 use vorkspace_ui::radius;
 mod accessibility;
 mod document;

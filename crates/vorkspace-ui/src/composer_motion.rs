@@ -1,4 +1,4 @@
-//! useComposerDockMotion.ts: move the first submitted composer's painted surface
+//! Composer dock motion: move the first submitted composer's painted surface
 //! from its empty-session slot to the dock, without moving the transcript layout.
 use crate::clock::Instant;
 use gpui::{

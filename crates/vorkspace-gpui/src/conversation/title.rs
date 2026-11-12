@@ -3,7 +3,7 @@ use super::*;
 use vorkspace_core::session_title::display_title;
 
 impl Conversation {
-    /// Tauri's sessionDisplayTitle: the harness prefix belongs to persistence,
+    /// The harness prefix belongs to persistence,
     /// while every conversation headline shows only the user's title.
     pub(crate) fn display_title(&self) -> String {
         display_title(&self.summary.title, &self.summary.provider).replace('\n', " ")

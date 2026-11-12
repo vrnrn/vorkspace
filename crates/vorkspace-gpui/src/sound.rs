@@ -1,4 +1,4 @@
-//! Cuelume's success/arrival recipes used by React, rendered as quiet PCM cues.
+//! Cuelume's success/arrival recipes, rendered as quiet PCM cues.
 //! Recipe attribution: Daniel Belyi, cuelume (MIT); see NOTICE.
 use vorkspace_runtime::runtime::Database;
 

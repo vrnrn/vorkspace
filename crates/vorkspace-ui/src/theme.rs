@@ -310,7 +310,7 @@ pub fn provider_icon(provider: &str, side: f32) -> Div {
         "omp" => ("omp.svg", false, 1.),
         _ => ("codex.svg", false, 1.),
     };
-    // Like React's currentColor / CSS masks, GPUI's SVG mask follows the theme.
+    // Like a CSS currentColor mask, GPUI's SVG mask follows the theme.
     // Image rendering preserves brand colors but has no inherited currentColor.
     let mark = if monochrome {
         svg()

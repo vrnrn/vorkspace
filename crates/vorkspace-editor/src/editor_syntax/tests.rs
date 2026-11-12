@@ -200,7 +200,7 @@ fn syntax_errors_are_reported_where_the_parse_fails() {
     // Fixing it clears them on the incremental pass.
     let fixed = "const a = {\n  b: 1,\n};\nfunction g() {}\n";
     assert!(session.analyze(fixed, None).diagnostics.is_empty());
-    // Rust is highlighted but, as in editorLint.ts, not linted.
+    // Rust is highlighted but not linted.
     assert!(
         Session::new("a.rs")
             .unwrap()

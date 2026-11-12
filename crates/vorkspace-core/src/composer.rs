@@ -10,7 +10,7 @@ use std::{
 pub const MAX_ATTACHMENTS: usize = 20;
 pub const MAX_EMBED_BYTES: u64 = 20 * 1024 * 1024;
 
-/// quoteDraft.ts: append selected rendered text without replacing a live draft.
+/// Quote selected rendered text into the draft without replacing what is there.
 pub fn append_selection_quote(draft: &str, text: &str) -> String {
     let normalized = text.replace("\r\n", "\n").replace('\r', "\n");
     let text = normalized.trim();

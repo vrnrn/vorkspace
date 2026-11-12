@@ -1,4 +1,4 @@
-//! App.tsx / handoffTurn.ts's bounded recap from the outgoing bound provider.
+//! A handoff's bounded recap from the outgoing bound provider.
 use super::*;
 use std::time::Instant;
 use std::{path::Path, sync::mpsc};

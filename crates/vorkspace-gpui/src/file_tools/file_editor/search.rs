@@ -1,4 +1,4 @@
-//! editorSearch.ts's two-row Find/Replace panel, using the same query engine.
+//! The editor's two-row Find/Replace panel and its query engine.
 use super::*;
 use vorkspace_editor::editor_analysis::{self, SearchMatch};
 use vorkspace_ui::radius;

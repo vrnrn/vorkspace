@@ -10,7 +10,7 @@ use vorkspace_ui::theme::*;
 const MARKER: &str = "vorkspace.installedUpdate";
 const VERSION: &str = "vorkspace.lastSeenAppVersion";
 
-/// Consume before parsing, matching React's one-launch marker semantics. The
+/// Consume before parsing, so the marker applies to one launch only. The
 /// settings abstraction has no delete operation, so an empty value is cleared.
 pub(crate) fn consume_installed_update(store: &Store) -> Result<Option<String>, String> {
     observe_version(store, env!("CARGO_PKG_VERSION"))

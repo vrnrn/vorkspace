@@ -1,9 +1,9 @@
-//! The sidebar's session grouping: sessionFolders.ts, sessionReminders.ts and
-//! sessionWorkItem.ts's URL parsing, without their storage.
+//! The sidebar's session grouping: folders, reminders and work-item URL
+//! parsing, without their storage.
 use chrono::{Datelike, Duration, NaiveDateTime, NaiveTime};
 use serde::{Deserialize, Serialize};
 
-/// sessionFolders.ts's `SessionFolder`.
+/// A session folder in a project's groups.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Folder {
     pub id: String,
@@ -226,7 +226,7 @@ pub fn format_reminder(at: NaiveDateTime) -> String {
     at.format("%a, %b %-d, %-H:%M").to_string()
 }
 
-/// session.ts's `LinkedWorkItem`.
+/// A work item linked to a session.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct WorkItem {
     /// "issue" or "pr".

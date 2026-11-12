@@ -747,7 +747,7 @@ impl Accounts {
     }
 }
 
-/// Back arrow and title, as at the top of React's account popovers.
+/// Back arrow and title at the top of an account popover.
 fn back_header(
     id: &'static str,
     label: &'static str,
@@ -795,7 +795,7 @@ fn organization_tag(identity: &accounts::Identity) -> Option<String> {
     }
 }
 
-/// React's barClass, shared with the footer chip and usage cards.
+/// Usage bar colour by percent used, shared with the footer chip and usage cards.
 pub(crate) fn bar_color(used: f64) -> gpui::Hsla {
     if used >= 90. {
         vorkspace_ui::theme::danger()
@@ -852,7 +852,7 @@ pub(crate) fn status_label(status: &Status) -> Div {
         }))
 }
 
-/// UsageMeter with React's short "5h · 3h 10m" title for account rows.
+/// A usage meter with a short "5h · 3h 10m" title for account rows.
 fn meter(w: &usage::Window, now: i64, show_remaining: bool) -> Div {
     let used = w.used_percent.clamp(0., 100.);
     let remaining = 100. - used;

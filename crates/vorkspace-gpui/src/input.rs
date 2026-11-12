@@ -362,7 +362,7 @@ impl Input {
         self.placeholder = self.label.clone();
         cx.notify();
     }
-    /// NewHabitPage's three-row AutoTextarea, capped like React's AutoTextarea.
+    /// The new-habit instructions field: a capped, auto-growing three-row textarea.
     pub(crate) fn habit_instructions(cx: &mut Context<Self>) -> Self {
         let mut input = Self::commit_message(cx);
         input.label = "What it does".into();
@@ -427,7 +427,7 @@ impl Input {
         input.secondary_submit = false;
         input
     }
-    /// MessageQueue.tsx keeps its one-row textarea height while Shift+Enter
+    /// A queued message keeps its one-row textarea height while Shift+Enter
     /// inserts newlines; the field scrolls to the caret within that row.
     pub(crate) fn queued_message(cx: &mut Context<Self>) -> Self {
         let mut input = Self::memory_fact("Edit queued message", cx);
@@ -459,8 +459,7 @@ impl Input {
         Some(text)
     }
     /// An empty composer hands its document and line keys (Cmd+arrows) on to
-    /// the workspace's session and project navigation, as React's
-    /// `emptyComposer` condition does. Returns whether it did.
+    /// the workspace's session and project navigation. Returns whether it did.
     fn yields_navigation(&self, cx: &mut Context<Self>) -> bool {
         let yields = self.code.is_none()
             && !self.single_line

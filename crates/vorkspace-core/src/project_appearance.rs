@@ -1,4 +1,4 @@
-//! Project appearance and the image treatments from React's background worker.
+//! Project appearance and the image treatments for project backgrounds.
 use image::{imageops, ImageReader, RgbaImage};
 use serde::{Deserialize, Serialize};
 use std::{
@@ -312,7 +312,7 @@ pub fn background_fade(y: f32, empty: bool, haze: bool) -> f32 {
     0.
 }
 
-/// View-independent artwork, matching the React worker. Crop, fade and Haze
+/// View-independent artwork. Crop, fade and Haze
 /// belong to the view and must not trigger another texture job during resize.
 pub fn background_texture(source: &RgbaImage, effect: Effect) -> RgbaImage {
     if matches!(effect, Effect::None | Effect::GradientBlur) {

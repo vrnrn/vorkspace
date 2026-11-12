@@ -175,7 +175,7 @@ impl TranscriptView {
             .gap_1p5()
             .py_1()
             .line_height(px(20.))
-            // React's activity rows are always bare: no status glyph, only
+            // Activity rows are always bare: no status glyph, only
             // a failure stays marked.
             .when(shown.action != "Run", |d| {
                 d.child(

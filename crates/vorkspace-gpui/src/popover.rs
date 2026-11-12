@@ -1,7 +1,6 @@
 use vorkspace_ui::radius;
-// Anchored popovers and menus, ported from src/shared/ui/Popover.tsx, its
-// placement math in src/shared/lib/popover.ts, and the row/keyboard model of
-// src/features/files/ui/ExplorerMenu.tsx.
+// Anchored popovers and menus: their placement math and the menus' row and
+// keyboard model.
 use gpui::{
     AnyElement, AnyView, App, Bounds, BoxShadow, Context, CursorStyle, DispatchPhase, Display,
     Element, ElementId, Entity, EventEmitter, FocusHandle, Focusable, GlobalElementId, Hsla,
@@ -268,7 +267,7 @@ impl Anchor {
 
 type Dismiss = Rc<dyn Fn(&mut Window, &mut App)>;
 
-// Popover.tsx / .popover-open: 170ms, cubic-bezier(.16, 1, .3, 1),
+// Opening: 170ms, cubic-bezier(.16, 1, .3, 1),
 // fading and travelling 8px from the resolved anchor side. The whole card
 // moves together so content cannot slide inside its frame. Dismissal is immediate.
 const MENU_IN: f32 = 0.17;
@@ -291,9 +290,8 @@ fn entrance_offset(side: Side, progress: f32) -> Point<Pixels> {
 }
 
 /// A menu, dropdown or flyout drawn above everything else in the window,
-/// placed against its anchor with viewport flipping (Popover.tsx's
-/// placement). The glass frame, 10% border and shadow follow the React
-/// component; the whole card fades and slides from the anchored edge.
+/// placed against its anchor with viewport flipping. It has a glass frame,
+/// 10% border and shadow; the whole card fades and slides from the anchored edge.
 /// Pressing outside it (and outside its anchor)
 /// dismisses it, and that press reaches nothing else.
 #[derive(IntoElement)]
@@ -350,7 +348,7 @@ impl Popover {
         self.animate = false;
         self
     }
-    /// Modal.tsx: 16px corners, a 7% rule and the shared dialog tint.
+    /// A modal: 16px corners, a 7% rule and the shared dialog tint.
     pub(crate) fn modal_surface(mut self) -> Self {
         self.modal = true;
         self
@@ -695,7 +693,7 @@ pub(crate) fn bind(cx: &mut App) {
     ]);
 }
 
-/// Which React menu a [`Menu`] draws like. Each has its own row metrics.
+/// Which kind of menu a [`Menu`] draws as. Each has its own row metrics.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub(crate) enum MenuStyle {
     /// ExplorerMenu: tab and session context menus, and every submenu.

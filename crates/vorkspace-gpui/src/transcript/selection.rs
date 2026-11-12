@@ -305,8 +305,7 @@ impl TranscriptView {
     }
 }
 const MENU_DELAY: std::time::Duration = std::time::Duration::from_millis(300);
-/// The top centre of the selection's first line, as React anchors to the
-/// range's first client rect rather than the pointer.
+/// The top centre of the selection's first line, rather than the pointer.
 fn menu_anchor(state: &State) -> Option<Point<Pixels>> {
     let (a, b) = (state.anchor?, state.head?);
     let (start, end) = if a < b { (a, b) } else { (b, a) };

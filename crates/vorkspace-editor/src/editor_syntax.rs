@@ -13,7 +13,7 @@ use streaming_iterator::StreamingIterator;
 use tree_sitter::{InputEdit, Language, Node, Parser, Point, Query, QueryCursor, Tree};
 use tree_sitter_language::LanguageFn;
 
-/// Mirrors editorLint.ts: past this a file is a viewer, not linted.
+/// Past this a file is a viewer, not linted.
 const MAX_LINT_BYTES: usize = 512 * 1024;
 /// One bad character can strand the rest of the file behind follow-on errors.
 const MAX_DIAGNOSTICS: usize = 50;
@@ -39,8 +39,8 @@ enum Lang {
     Ruby,
 }
 
-/// The same file → language decisions as `languageForPath` in editorLanguage.ts,
-/// for the languages that have a Tree-sitter grammar here.
+/// The file → language decision, for the languages that have a Tree-sitter
+/// grammar here.
 fn language_for_path(path: &str) -> Option<Lang> {
     let name = path
         .rsplit(['/', '\\'])
@@ -78,7 +78,7 @@ pub fn supports(path: &str) -> bool {
     language_for_path(path).is_some()
 }
 
-/// Same list as LINTABLE_EXTENSIONS in editorLint.ts.
+/// Files whose extension gets parser diagnostics.
 fn lintable(path: &str) -> bool {
     let name = path
         .rsplit(['/', '\\'])
@@ -113,8 +113,7 @@ enum Capture {
     Color(TokenKind),
 }
 
-/// Tree-sitter capture names → the editor's `--syntax-*` groups, matching the
-/// Lezer tag groups in editorLanguage.ts.
+/// Tree-sitter capture names → the editor's `--syntax-*` groups.
 fn capture(name: &str, attribute_is_property: bool) -> Capture {
     let group = |name: &str| name.split('.').next().unwrap_or(name).to_owned();
     Capture::Color(match name {
@@ -495,8 +494,7 @@ fn folds(tree: &Tree, text: &str) -> Vec<Fold> {
     folds
 }
 
-/// Error and missing nodes left by the parser's recovery, worded as
-/// editorLint.ts words Lezer's.
+/// Error and missing nodes left by the parser's recovery, as diagnostics.
 fn diagnostics(tree: &Tree, text: &str) -> Vec<Diagnostic> {
     let mut found = Vec::new();
     if text.len() > MAX_LINT_BYTES || !tree.root_node().has_error() {

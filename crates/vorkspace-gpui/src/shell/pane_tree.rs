@@ -33,7 +33,7 @@ impl Shell {
             })
     }
 
-    /// The session pane's split header (SessionPane.tsx): grip, focus dot,
+    /// The session pane's split header: grip, focus dot,
     /// title and a close button. The header moves the chat independently of
     /// its review; closing a lone chat leaves the review in the tab.
     /// `shown` is the review split's progress: the header grows and fades
@@ -353,7 +353,7 @@ impl Shell {
             }))
             .into_any_element()
     }
-    /// PaneTree.tsx: absolutely placed panes, sashes on shared edges and a
+    /// The pane tree: absolutely placed panes, sashes on shared edges and a
     /// drop hint on the pane under a drag.
     pub(super) fn pane_tree(
         &mut self,
@@ -884,7 +884,7 @@ impl Shell {
                     )
                     // Ride the moving leading edge at a fixed layout width.
                     // Pinning to the outer right edge would only uncover the
-                    // contents, losing the slide React gives the whole surface.
+                    // contents, losing the slide of the whole surface.
                     .map(|d| {
                         // The same progress drives both directions, so a
                         // reversal cannot flash from a faded exit to opaque.

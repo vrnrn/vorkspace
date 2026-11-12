@@ -504,7 +504,7 @@ impl BackgroundDialog {
                     .child(
                         div()
                             .text_size(px(13.))
-                            // React's inline label sits in a 16px / 24px line box.
+                            // The inline label sits in a 16px / 24px line box.
                             .line_height(px(24.))
                             .font_weight(gpui::FontWeight::MEDIUM)
                             .child("Background effect"),

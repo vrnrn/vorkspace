@@ -1,4 +1,4 @@
-//! Port of src/features/settings/model/settings.ts: the pages, their rail
+//! The Settings model: the pages, their rail
 //! groups and the index Settings search jumps through.
 use serde::{Deserialize, Serialize};
 
@@ -180,7 +180,7 @@ impl Section {
             Section::Worktrees => "git branch worktree working copy project create delete",
         }
     }
-    /// SettingsRail.tsx's SECTION_ICONS.
+    /// The page's icon in the Settings rail.
     pub(crate) fn icon(self) -> &'static str {
         match self {
             Section::General => "sliders",

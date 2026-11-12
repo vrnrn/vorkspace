@@ -40,7 +40,7 @@ impl AccessMode {
             _ => Self::Supervised,
         }
     }
-    /// codexProtocol.ts::runtimeModeToCodexConfig.
+    /// Codex's approval and sandbox settings for this access mode.
     pub(crate) fn codex(self) -> (Value, &'static str, Value, &'static str) {
         match self {
             Self::ReadOnly => (

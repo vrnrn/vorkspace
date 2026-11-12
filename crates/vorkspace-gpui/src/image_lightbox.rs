@@ -1,4 +1,4 @@
-//! Native port of `src/shared/ui/ImageLightbox.tsx`.
+//! A full-window image lightbox.
 use crate::render_pixels::to_render_image;
 use vorkspace_ui::radius;
 mod annotation;

@@ -272,7 +272,7 @@ pub(crate) fn bind_keys(cx: &mut App) {
     ]);
 }
 
-/// tabKeys.ts's `adjacentItemId`: the next or previous item, wrapping; from
+/// The next or previous item, wrapping; from
 /// outside the list, the first or last.
 fn adjacent<T: PartialEq + Clone>(items: &[T], current: Option<&T>, step: isize) -> Option<T> {
     if items.is_empty() {
@@ -325,7 +325,7 @@ const SELECTED_TAB_MIN_WIDTH: f32 = 112.;
 const TAB_CLOSE_MIN_WIDTH: f32 = 72.;
 /// The new-tab button and its leading margin.
 const STRIP_NEW_TAB: f32 = TAB_PLATE_HEIGHT + 2.;
-// TitleBar.tsx's labels, with their shortcuts.
+// Title bar labels, with their shortcuts.
 const TOGGLE_SIDEBAR_LABEL: &str = "Toggle Rail (⌘B)";
 const TOGGLE_EXPLORER_LABEL: &str = "Toggle Sidebar (⇧⌘B)";
 const MOD: &str = "⌘";
@@ -362,7 +362,7 @@ impl DragSource {
         }
     }
 }
-/// PaneTree.tsx's pane drag and the external drops from TitleBar/Sidebar.
+/// A pane drag, and drops onto panes from the title bar or sidebar.
 struct PaneDrag {
     source: DragSource,
     start: Point<Pixels>,
@@ -1596,7 +1596,7 @@ impl Shell {
             self.tabs.scroll.scroll_to_item(ix);
         }
     }
-    /// Sidebar.tsx's `gitRoot`: the active session's worktree or folder.
+    /// Point Git at the active session's worktree or folder.
     fn sync_git(&mut self, cx: &mut Context<Self>) {
         let session = self
             .workspace

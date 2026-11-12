@@ -1,4 +1,4 @@
-//! Native counterpart of HarnessUpdateNotice.tsx. The parent positions this
+//! The provider update notice. The parent positions this
 //! entity in the shared top-right notification stack.
 use gpui::{Context, EventEmitter, Render, Role, Window, div, prelude::*, px};
 use std::collections::HashMap;

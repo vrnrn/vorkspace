@@ -1,4 +1,4 @@
-//! Unix file-name checks for the explorer, ported from fileName.ts.
+//! Unix file-name checks for the explorer.
 use serde::{Deserialize, Serialize};
 
 use crate::js_text::{js_len, js_space};

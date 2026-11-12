@@ -99,8 +99,8 @@ impl Transcript {
     }
 }
 
-/// Port of integrations/harness/core/streamText.ts::snapshotRemainder.
-/// Tokens append verbatim. Completed snapshots contribute only missing suffixes.
+/// What a streamed snapshot adds to the text already shown. Tokens append
+/// verbatim. Completed snapshots contribute only missing suffixes.
 pub(crate) fn snapshot_remainder<'a>(already: &str, snapshot: &'a str) -> &'a str {
     if let Some(suffix) = snapshot.strip_prefix(already) {
         suffix

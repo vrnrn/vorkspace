@@ -1,4 +1,4 @@
-//! GitChangesPanel.tsx in the inset layout: the Changes header with branch
+//! The Changes panel in the inset layout: its header with branch
 //! actions, the commit box, sync and pull-request actions, and the staged
 //! and unstaged files as a list or a tree. Every Git call runs off-thread,
 //! one mutation at a time per checkout.
@@ -1970,8 +1970,7 @@ pub(crate) fn create_pr_blocking(
     scm::pr_create(cwd, &title, &body, &range.base, &range.head)
 }
 
-/// A read-only one-shot turn, as the React text harness runs: the final
-/// assistant message's text.
+/// A read-only one-shot turn, returning the final assistant message's text.
 fn text_prompt(
     kind: Kind,
     binary: PathBuf,

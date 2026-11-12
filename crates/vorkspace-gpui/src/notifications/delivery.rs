@@ -30,8 +30,8 @@ impl Default for ProjectRule {
 }
 
 impl ProjectRule {
-    /// Read the exact React preference schema, including indefinite null mutes.
-    /// Invalid fields are ignored, as in loadNotificationPreferences.
+    /// Read the saved preference schema exactly, including indefinite null mutes.
+    /// Invalid fields are ignored.
     pub fn from_preferences(preferences: &Value, project: &str, category: &str) -> Self {
         let preference = &preferences[project];
         let disabled = preference["disabled"]

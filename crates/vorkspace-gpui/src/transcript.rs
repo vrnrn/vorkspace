@@ -222,7 +222,7 @@ struct Follow {
     /// Growth keeps easing this long after a reply ends.
     until: Option<Instant>,
 }
-/// Units are px per 60fps frame, as in useBottomChatMotion.ts.
+/// Units are px per 60fps frame.
 const SPRING_FRAME: f32 = 1000. / 60.;
 /// Bot replies can appear together; keep their glide below 1080px/second.
 const CHAT_FOLLOW_MAX_SPEED: f32 = 18.;
@@ -244,7 +244,7 @@ impl FollowMeasure {
     fn resized_from(&self, previous: &Self) -> bool {
         self.viewport.width != previous.viewport.width || self.window_size != previous.window_size
     }
-    /// Compare the suffix below a surviving row, like React's connected anchor.
+    /// Compare the suffix below a surviving row, which anchors the glide.
     /// The composer's height moves that anchor too. Window resizing and changes
     /// to wrapping start a fresh baseline; internal vertical layout joins the glide.
     fn shift_from(&self, previous: &Self) -> f32 {
@@ -384,8 +384,8 @@ pub(crate) fn is_emoji_only(text: &str) -> bool {
     count > 0
 }
 
-/// A single clipping boundary across virtualized siblings, matching React's
-/// grid body. Fully revealed steps keep their height; only the boundary row clips.
+/// A single clipping boundary across virtualized siblings. Fully revealed
+/// steps keep their height; only the boundary row clips.
 struct PhaseLayout {
     width: Pixels,
     height: f32,
@@ -1001,7 +1001,7 @@ impl TranscriptView {
         crate::notifications::delivery::clip_body(&text)
     }
 
-    /// Tauri's appendUser: paint the prompt and working receipt in the send
+    /// Paint the prompt and working receipt in the send
     /// handler. The worker replaces these same rows after saving them. Build
     /// the attachment manifest without touching the filesystem on the UI thread.
     pub(crate) fn submit_prompt(

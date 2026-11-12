@@ -1,4 +1,4 @@
-//! Composer.tsx / MessageQueue.tsx's durable follow-ups and saved user draft.
+//! The composer's durable follow-up queue and saved user draft.
 use super::*;
 use vorkspace_core::follow_up::{Message, State};
 use vorkspace_ui::radius;
@@ -645,8 +645,7 @@ impl Conversation {
         {
             return;
         }
-        // Resume the interrupted provider turn before releasing its outbox,
-        // matching App.tsx's queueStatus = "resuming" continuation.
+        // Resume the interrupted provider turn before releasing its outbox.
         self.follow_ups.resuming = true;
         self.launch_prompt("Continue from where you left off.".into(), cx);
         if !self.responding() {

@@ -693,7 +693,7 @@ impl Shell {
         );
         // Every tab fits: they share the strip, however many there are. A tab
         // easing in or out holds its share of a slot, so the others give way
-        // to it gradually, as flex-shrink does in TitleBar.tsx.
+        // to it gradually, like CSS flex-shrink.
         let share: f32 = slots
             .iter()
             .map(|s| match s {

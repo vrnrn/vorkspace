@@ -1,6 +1,6 @@
 use vorkspace_ui::radius;
-// The pickers that open as flyouts beside a menu row: ModelPicker.tsx's
-// ModelFlyout and SearchableProjectPicker.tsx's ProjectPickerPopover. Each
+// The pickers that open as flyouts beside a menu row: the model flyout and
+// the searchable project picker. Each
 // owns a search field; arrows and Enter in it move and pick in the list.
 use crate::{input, workspace::project_name};
 use gpui::{

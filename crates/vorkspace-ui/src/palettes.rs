@@ -1,4 +1,4 @@
-//! Preset colors from workspaceThemes.ts, including surface tints and accents.
+//! Preset workspace theme colors, including surface tints and accents.
 #[derive(Clone, Copy)]
 pub struct Palette {
     pub surface: u32,

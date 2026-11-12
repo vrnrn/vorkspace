@@ -1,5 +1,5 @@
 //! Persistent Bot identities and app-owned context, shared by native views,
-//! scheduled runs and the local app CLI. React's bots/model is the reference.
+//! scheduled runs and the local app CLI.
 pub mod api;
 pub mod bridge;
 pub mod cards;

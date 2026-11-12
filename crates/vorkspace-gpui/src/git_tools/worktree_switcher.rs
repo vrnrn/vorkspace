@@ -1,4 +1,4 @@
-//! SidebarWorktreeSwitcher.tsx's Working copies flyout. The composer keeps its
+//! The sidebar's Working copies flyout. The composer keeps its
 //! own branch picker; this panel selects the project's workspace scope.
 use crate::{input, popover};
 use gpui::{

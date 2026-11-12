@@ -1,5 +1,5 @@
-//! Response actions use the same prose and recap rules as transcriptActivity.ts,
-//! secondOpinion.ts and handoff.ts. Tool chrome and private reasoning aren't copied.
+//! Prose and recap rules for response actions (copy, second opinion, handoff).
+//! Tool chrome and private reasoning aren't copied.
 use crate::{tool::ToolCall, transcript::Row};
 use serde::{Deserialize, Serialize};
 

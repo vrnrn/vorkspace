@@ -98,7 +98,7 @@ enum FileState {
 }
 
 /// Per-session recordings under the app's data directory. Every operation
-/// runs under one lock, as the Tauri `CheckpointStore` did.
+/// runs under one lock.
 #[derive(Clone)]
 pub struct Store {
     root: PathBuf,

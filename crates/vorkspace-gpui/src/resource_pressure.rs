@@ -358,7 +358,7 @@ impl ResourceMonitor {
                     cx.stop_propagation();
                 }
             }))
-            // Modal.tsx's header.
+            // The modal's header.
             .child(
                 div()
                     .flex_shrink_0()

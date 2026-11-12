@@ -1,4 +1,4 @@
-//! EditorSelectionMenu + editorSelection.ts: share a compact file/line reference.
+//! The editor selection menu: share a compact file/line reference.
 use super::{FileEditor, FileEvent};
 use crate::{
     input::Input,

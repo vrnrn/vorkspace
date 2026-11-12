@@ -137,7 +137,7 @@ impl Render for Tooltip {
 #[cfg(test)]
 pub(crate) mod tests;
 
-/// SecondaryButton.tsx.
+/// A secondary (outlined) button.
 pub(crate) fn secondary_button(
     id: impl Into<ElementId>,
     label: impl Into<SharedString>,

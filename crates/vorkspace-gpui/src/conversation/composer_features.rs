@@ -69,7 +69,7 @@ impl Conversation {
     }
     pub(super) fn clear_submitted_mode(&mut self, cx: &mut Context<Self>) {
         // The accepted turn or queue item already owns its mode. The empty
-        // composer starts a fresh draft, matching Composer.tsx's submit reset.
+        // composer starts a fresh draft.
         self.settings.plan = false;
         self.settings.operator = false;
         self.settings.orchestrator = false;

@@ -1,4 +1,4 @@
-//! ReminderNotices.tsx. Persistence and opening sessions belong to the host.
+//! Reminder notices. Persistence and opening sessions belong to the host.
 use crate::popover::{Anchor, AnchorSlot, Menu, MenuAction, MenuEvent, menu_popover};
 use chrono::{Local, TimeZone};
 use gpui::{Context, Entity, EventEmitter, Role, Subscription, Window, div, prelude::*, px};

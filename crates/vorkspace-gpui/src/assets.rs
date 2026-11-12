@@ -22,7 +22,7 @@ impl AssetSource for Assets {
    "gauge"=>include_bytes!("../assets/hugeicons/gauge.svg"),
    "chatting"=>include_bytes!("../assets/hugeicons/chatting.svg"),
    "check-circle"=>include_bytes!("../assets/hugeicons/check-circle.svg"),
-   // The title tab's done check, at the React tab's 2 stroke.
+   // The title tab's done check, at a 2 stroke.
    "check-circle-2"=>include_bytes!("../assets/hugeicons/check-circle-2.svg"),
    "circle-x"=>include_bytes!("../assets/hugeicons/circle-x.svg"),
    "alert-circle"=>include_bytes!("../assets/hugeicons/alert-circle.svg"),
@@ -59,8 +59,8 @@ impl AssetSource for Assets {
    "zap"=>include_bytes!("../assets/zap.svg"),
    "filter"=>include_bytes!("../assets/filter.svg"),
    "settings"=>include_bytes!("../assets/settings.svg"),
-   // Hugeicons as the React app draws them: their own caps and joins,
-   // at its 1.75 stroke (checks at 2 and 2.25).
+   // Hugeicons with their own caps and joins, at a 1.75 stroke
+   // (checks at 2 and 2.25).
    "ai-idea"=>include_bytes!("../assets/hugeicons/ai-idea.svg"),
    "app-window"=>include_bytes!("../assets/hugeicons/app-window.svg"),
    "archive"=>include_bytes!("../assets/hugeicons/archive.svg"),
@@ -115,7 +115,7 @@ impl AssetSource for Assets {
    "fold-vertical"=>include_bytes!("../assets/hugeicons/fold-vertical.svg"),
    "git-branch-2"=>include_bytes!("../assets/hugeicons/git-branch-2.svg"),
    "git-branch-dot"=>include_bytes!("../assets/hugeicons/git-branch-dot.svg"),
-   // Settings: its rail, rows and page actions (SettingsRail.tsx, SettingsView.tsx).
+   // Settings: its rail, rows and page actions.
    "mic"=>include_bytes!("../assets/mic.svg"),
    "internet"=>include_bytes!("../assets/hugeicons/internet.svg"),
    "palette"=>include_bytes!("../assets/hugeicons/palette.svg"),

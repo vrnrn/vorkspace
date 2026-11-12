@@ -1,4 +1,4 @@
-//! Project content search ported from the Tauri search service.
+//! Project content search.
 use crate::files::list_project_files_sync_cancellable;
 use serde::{Deserialize, Serialize};
 use std::{

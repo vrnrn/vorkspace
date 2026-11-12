@@ -66,7 +66,7 @@ impl Conversation {
         cx.emit(SessionChanged::Turn);
         cx.notify();
     }
-    // Composer.tsx in the inset layout: a frosted, rounded box holding the
+    // The composer in the inset layout: a frosted, rounded box holding the
     // field and its toolbar, with the workspace bar sitting under it.
     pub(super) fn composer(&mut self, window: &Window, cx: &mut Context<Self>) -> AnyElement {
         let command = if self.follow_ups.draft_selected {
@@ -842,7 +842,7 @@ impl Conversation {
                 }
             }))
     }
-    // EmptySession.tsx: the composer centred under its question, or resting
+    // An empty session: the composer centred under its question, or resting
     // where it will dock once a neighbouring pane squeezes it narrower than
     // the column. A narrow window alone keeps it centred.
     pub(super) fn empty(&mut self, window: &Window, cx: &mut Context<Self>) -> AnyElement {

@@ -729,7 +729,7 @@ fn model_menu_picks_by_keyboard_and_returns_focus(cx: &mut TestAppContext) {
         .update(cx, |c, _, _| {
             assert!(c.menu.is_none());
             assert_eq!(c.model.as_deref(), Some("sonnet"));
-            // The pill drops the catalog's "Claude " prefix, as React's does.
+            // The pill drops the catalog's "Claude " prefix.
             assert_eq!(c.model_label(), "Sonnet");
         })
         .unwrap();

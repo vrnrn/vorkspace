@@ -1,4 +1,4 @@
-//! BtwSheet.tsx's isolated side threads. Their transcript and cancellation never
+//! Isolated side threads ("btw"). Their transcript and cancellation never
 //! share the parent provider session, turn queue, or main transcript rows.
 use super::*;
 use gpui::{AnyElement, App, Render};

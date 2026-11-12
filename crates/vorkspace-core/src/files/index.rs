@@ -1,5 +1,4 @@
 //! Bounded, cancellable project listing shared by mentions and Quick Open.
-//! Ported from the retired Tauri filesystem service.
 use super::Ignore;
 use crate::scm::git_output_capped;
 use crate::shell_env::dirs_home;

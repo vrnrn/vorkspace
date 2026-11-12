@@ -1,4 +1,4 @@
-//! SessionReview.tsx: the latest turn's recorded workspace changes, under its
+//! Session review: the latest turn's recorded workspace changes, under its
 //! reply, with Undo, Keep and Review. The checkpoint runs off the UI thread.
 use crate::panel_kit::{format_integer, tabular};
 use gpui::{

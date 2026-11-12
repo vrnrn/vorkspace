@@ -922,7 +922,7 @@ impl Shell {
         let target = ResizeTarget::Dock(self.workspace.project.clone());
         self.drag_resize(target, size + signed, cx);
     }
-    /// App.tsx's dock grid: the project's terminal dock on its side of the
+    /// The dock grid: the project's terminal dock on its side of the
     /// workspace. Opening or closing slides the track while the terminal
     /// keeps its full size and rides the moving edge, so it fits once.
     pub(super) fn with_dock(

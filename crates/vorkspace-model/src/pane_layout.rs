@@ -1,4 +1,4 @@
-//! Port of src/features/workspace/model/layout.ts: a tab's split tree.
+//! A tab's split tree.
 //! Same-direction splits share a group so new panes divide space equally
 //! until a sash moves. A pane dropped on another pane's edge reorders
 //! same-axis siblings, nests a perpendicular split, or relocates into the

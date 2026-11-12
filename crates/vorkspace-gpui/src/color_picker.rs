@@ -1,4 +1,4 @@
-//! ColorPickerPopover.tsx's saturation/value surface, hue track and hex field.
+//! The colour picker popover: saturation/value surface, hue track and hex field.
 use crate::{
     input::{self, Input},
     popover::AnchorSlot,

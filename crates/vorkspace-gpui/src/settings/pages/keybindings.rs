@@ -1,4 +1,4 @@
-//! React's command names, defaults, scopes, filter and shortcut recorder.
+//! Keybinding command names, defaults, scopes, filter and shortcut recorder.
 
 use crate::settings::{Preferences, SettingsView};
 use gpui::{AnyElement, Context, Focusable, FontWeight, Role, Window, div, prelude::*, px};

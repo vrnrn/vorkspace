@@ -1,4 +1,4 @@
-//! Context-window accounting, matching sessions/model/contextUsage.ts.
+//! Context-window accounting for a conversation.
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 

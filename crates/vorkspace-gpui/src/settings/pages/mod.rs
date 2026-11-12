@@ -1,4 +1,4 @@
-//! One file per Settings page, each a port of its SettingsView.tsx function.
+//! One file per Settings page.
 mod appearance;
 mod archive;
 mod bots;

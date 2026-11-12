@@ -1,4 +1,4 @@
-//! ProjectSearch.tsx: content search inside the Explorer, scoped to its checkout.
+//! Content search inside the Explorer, scoped to its checkout.
 use crate::{
     input::{self, Input},
     panel_kit::{spinner, stroke, tabular},

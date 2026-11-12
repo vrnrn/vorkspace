@@ -268,7 +268,7 @@ pub(crate) fn summary(tools: &[ToolCall], live: bool) -> (String, &'static str) 
         })
         .collect::<Vec<String>>()
         .join(" · ");
-    // React breaks equal call counts towards edit, run, agent, then research.
+    // Equal call counts break towards edit, run, agent, then research.
     let mut dominant = "terminal";
     let mut most = 0;
     for (count, icon) in [

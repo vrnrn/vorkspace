@@ -1,5 +1,4 @@
-// The prompt outline rail, ported from src/features/sessions/ui/PromptOutline.tsx
-// and its model in src/features/sessions/model/promptOutline.ts.
+// The prompt outline rail and its model.
 use super::TranscriptView;
 use crate::popover::{Align, Anchor, AnchorSlot, Side, popover};
 use gpui::{Context, ListOffset, Role, SharedString, Task, Window, div, prelude::*, px};
@@ -21,7 +20,7 @@ const BAR_GAP: f32 = 10.;
 const BAR_GAP_MIN: f32 = 1.;
 const BAR_STACK_MAX: f32 = 330.;
 const BAR_STACK_PANE_SHARE: f32 = 0.75;
-// The React rail hides below a 58rem container.
+// The rail hides below a 58rem container.
 const MIN_PANE_WIDTH: f32 = 928.;
 const NEAR_END: f32 = 16.;
 /// How far the hover ripple reaches, in bars on each side.
@@ -92,7 +91,7 @@ impl TranscriptView {
         let end = self.message_display_start(message + 1);
         (end > first).then_some((first, end))
     }
-    /// Read after the list lays out, like the React rail's deferred measure.
+    /// Read after the list lays out, so it measures the laid-out rows.
     pub(super) fn update_outline(&mut self, cx: &mut Context<Self>) {
         if self.bot || !self.visible || self.viewport.size.height <= px(0.) {
             return;

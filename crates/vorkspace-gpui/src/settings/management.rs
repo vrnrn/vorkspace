@@ -1,4 +1,4 @@
-//! React Settings forms and their asynchronous actions.
+//! Settings forms and their asynchronous actions.
 use super::widgets::{note, primary_button, red, secondary_button};
 use super::*;
 

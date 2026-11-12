@@ -1,4 +1,4 @@
-//! The React Bot habit schedule, claiming and run-history policy.
+//! Bot habit schedules, run claiming and run-history policy.
 use super::files;
 use chrono::{DateTime, Datelike, Duration, Local, Timelike};
 use serde::{Deserialize, Serialize};

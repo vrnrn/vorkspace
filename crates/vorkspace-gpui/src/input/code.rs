@@ -1213,7 +1213,7 @@ fn paint_rail(
             cursor_color,
         ));
         let (add, del) = vorkspace_ui::editor_scrollbar::diff_colors(cx);
-        // Git's layer is above the cursor/diagnostic layer in editorGit.ts.
+        // Git's layer is above the cursor/diagnostic layer.
         for change in &code.analysis.changes {
             let row = code.geometry.row(change.from);
             let top = code.geometry.top(row, i.line_height);

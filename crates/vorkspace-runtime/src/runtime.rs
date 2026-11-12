@@ -178,7 +178,6 @@ fn turn_prompt(
     }
 }
 
-/// checkpointEdits.ts's sessionEditPaths: files named by successful edit tools.
 /// A turn's prompt with whatever the provider's thread lacks: a handoff's
 /// brief, or a bounded recap of `prior` when a thread starts fresh mid-way,
 /// such as after a first turn failed before the provider assigned an ID.

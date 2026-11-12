@@ -141,7 +141,7 @@ impl Render for SessionMark {
                 .role(Role::Image)
                 .aria_label("Working")
                 .into_any_element(),
-            // Tailwind teal-400 and amber-400, as TitleBar.tsx.
+            // Tailwind teal-400 and amber-400.
             State::Done => div()
                 .id("session-done")
                 .role(Role::Image)

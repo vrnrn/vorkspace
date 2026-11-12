@@ -104,7 +104,7 @@ pub(crate) fn collect(rows: &[Row], from: usize, streaming: bool) -> Phases {
                 flush(end, &mut members, &mut calls, &mut result);
             }
         } else {
-            // React's first assistant message replaces the initial private think.
+            // The first assistant message replaces the initial private think.
             if role == "assistant" && leading && calls.is_empty() {
                 result.hidden.extend(members.drain(..));
             }

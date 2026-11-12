@@ -1,4 +1,4 @@
-//! Port of src/features/source-control/model/gitGraph.ts, itself derived from
+//! Commit graph lanes, derived from
 //! Visual Studio Code's `scmHistory.ts` (MIT, Copyright (c) Microsoft
 //! Corporation). Previous row `output` lanes become the next row's `input`.
 use std::collections::HashMap;

@@ -128,7 +128,7 @@ impl TranscriptView {
             self.reveals.settled_before = 0;
             // The provider starts before its prompt arrives. Keep an ordinary
             // chat's existing spacer and scroll position until patch accepts
-            // that prompt, just as React pins on lastUserId rather than busy.
+            // that prompt: pin on the last user message, not on busy.
             // Otherwise the old spacer collapses for a frame before the new
             // prompt gets its own anchor and entrance.
             if self.bot {

@@ -315,7 +315,7 @@ impl Accounts {
     pub(crate) fn selected(&self, kind: Kind, project: &str) -> Profile {
         self.profile(&self.book.selected(kind, project))
     }
-    /// React's `accountStatus`: a tone, a word, and an optional detail.
+    /// An account's status: a tone, a word, and an optional detail.
     pub(crate) fn status(&self, kind: Kind, id: &str) -> Status {
         let key = Key::new(kind, self.profile(id), None);
         let checking = Status {

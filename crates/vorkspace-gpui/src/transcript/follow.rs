@@ -12,7 +12,7 @@ impl TranscriptView {
             return;
         }
         if !self.list.is_following_tail() {
-            // Hand the painted position to native scrolling once, like React's pause.
+            // Hand the painted position to native scrolling once.
             self.list.scroll_by(px(-self.follow.offset));
             self.follow = Follow::default();
             return;
@@ -145,7 +145,7 @@ impl TranscriptView {
         if let Some(overflow) = prompt_overflow {
             self.follow.offset = self.follow.offset.min(overflow);
         }
-        // As in React's measure/tick split, the first growth frame only
+        // The first growth frame only
         // records distance. Sample its velocity after real frame time passes.
         if elapsed == 0. {
             return;

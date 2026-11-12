@@ -143,7 +143,7 @@ pub fn command_action(command: &str) -> Option<String> {
 }
 
 /// One receipt list per source block. Listings supply details for accepted sends
-/// but never create launch cards by themselves (botSpawnedSessions.ts).
+/// but never create launch cards by themselves.
 pub(crate) fn block_launches(blocks: &[Value]) -> Vec<Vec<Value>> {
     let mut result = Vec::new();
     let mut known = HashMap::new();

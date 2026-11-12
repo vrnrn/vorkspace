@@ -76,8 +76,7 @@ const COMPOSER_COLUMN: f32 = COLUMN;
 const SHORT_EMPTY_HEIGHT: f32 = 520.;
 const UNCONFIRMED_TURN: &str =
     "Provider connection ended before completion was confirmed. This turn was not replayed.";
-// RUNTIME_MODE_LABEL and RUNTIME_MODE_HINT from the React session model,
-// with AccessPicker's icons; Full access is amber.
+// Each access mode's id, label, hint and icon; Full access is amber.
 const ACCESS_MODES: &[(&str, &str, &str, &str)] = &[
     (
         "supervised",
@@ -355,8 +354,7 @@ impl Conversation {
             cx.notify();
         }
     }
-    /// SessionCardPreview.tsx's compact model/status header and workspace details.
-    /// Its latest message is saved as a draft, not sent (`session.draft`).
+    /// Whether its latest message is saved as a draft, not sent (`session.draft`).
     pub(crate) fn has_saved_draft(&self) -> bool {
         if self.loaded {
             self.follow_ups.state.draft.is_some()

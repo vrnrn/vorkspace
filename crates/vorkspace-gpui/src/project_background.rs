@@ -1,4 +1,4 @@
-//! Prepare the React worker's texture once. Cover cropping, corner clipping and
+//! Prepare a project background's texture once. Cover cropping, corner clipping and
 //! view-relative masks happen while painting, including during live resize.
 use crate::popover::AnchorSlot;
 use crate::render_pixels::to_render_image;

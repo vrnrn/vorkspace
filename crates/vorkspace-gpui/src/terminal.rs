@@ -1086,7 +1086,7 @@ fn indexed_rgb(index: u8) -> u32 {
     }
 }
 /// Bytes a keystroke sends, or None to leave it to the app's bindings.
-/// Includes terminalKeys.ts's macOS editing shortcuts.
+/// Includes the macOS editing shortcuts.
 #[cfg(test)]
 fn key_bytes(keystroke: &Keystroke, term: &mut Engine) -> Option<Vec<u8>> {
     encode_key(keystroke, term, KeyAction::Press)

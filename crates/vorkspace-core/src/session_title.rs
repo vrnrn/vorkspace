@@ -1,4 +1,4 @@
-//! Generated sidebar titles, following sessions/model/sessionTitle.ts.
+//! Generated sidebar titles.
 use crate::{
     agent::Settings,
     kind::Kind,
