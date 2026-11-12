@@ -2512,6 +2512,47 @@ fn enter_from(leaf: &LayoutLeaf) -> (Edge, Rect) {
 }
 impl Render for Shell {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        self.prepare_shell_frame(window, cx);
+        self.configure_shell_window(window, cx);
+        let sidebar_width = self.prepare_shell_sidebar(window, cx);
+        self.observe_shell_window(window, cx);
+        self.sync_shell_panels(window, cx);
+        let management_open = self.management_modal_focus(cx).is_some();
+        let background = self.background_modal(window, cx);
+        let (workspace_background, management_background) = if management_open {
+            (None, background)
+        } else {
+            (background, None)
+        };
+
+        let workspace = self.shell_workspace_root(management_open, cx);
+        let workspace = self.shell_file_and_page_actions(workspace, cx);
+        let workspace = self.shell_window_and_create_actions(workspace, cx);
+        let workspace = self.shell_tab_actions(workspace, cx);
+        let workspace = self.shell_session_actions(workspace, cx);
+        let workspace = self.shell_dismiss_action(workspace, cx);
+        let workspace = self.shell_panel_actions(workspace, cx);
+        let workspace = self.shell_pane_actions(workspace, cx);
+        let workspace = self.shell_drag_handlers(workspace, cx);
+        let workspace = self.shell_workspace_surfaces(
+            workspace,
+            sidebar_width,
+            workspace_background,
+            window,
+            cx,
+        );
+        self.shell_management_surface(
+            workspace,
+            management_open,
+            management_background,
+            window,
+            cx,
+        )
+    }
+}
+
+impl Shell {
+    fn prepare_shell_frame(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let scale = self.workspace.preferences.interface_scale();
         if window.ui_scale() != scale {
             window.set_ui_scale(scale, cx);
@@ -2550,6 +2591,9 @@ impl Render for Shell {
             self.focus_pane(id, window, cx);
             self.open_review(tab, window, cx);
         }
+    }
+
+    fn configure_shell_window(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         // Native fullscreen transitions resize the window, which redraws it.
         self.window.fullscreen = window.is_fullscreen();
         let p = &self.workspace.preferences;
@@ -2568,6 +2612,9 @@ impl Render for Shell {
             vorkspace_macos::window_appearance::apply(window, glass, blur);
         }
         self.sync_settings(cx);
+    }
+
+    fn prepare_shell_sidebar(&mut self, window: &mut Window, cx: &mut Context<Self>) -> f32 {
         self.sidebar.fraction = match &self.sidebar.slide {
             Some(slide) => {
                 let (fraction, done) = slide.at(vorkspace_ui::clock::Instant::now());
@@ -2607,6 +2654,11 @@ impl Render for Shell {
             self.window.native_title = name.to_owned();
             window.set_window_title(name);
         }
+
+        sidebar_width
+    }
+
+    fn observe_shell_window(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if !self.window.observed {
             self.window.observed = true;
             self.window.native_window = window.window_handle().downcast();
@@ -2673,6 +2725,9 @@ impl Render for Shell {
                     cx.notify();
                 }));
         }
+    }
+
+    fn sync_shell_panels(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.window.viewport_width = window.viewport_size().width.as_f32();
         self.window.viewport_height = window.viewport_size().height.as_f32();
         self.ensure_right_panel(window, cx);
@@ -2687,14 +2742,14 @@ impl Render for Shell {
         }
         self.sync_right_panel(cx);
         self.sync_notices(cx);
-        let management_open = self.management_modal_focus(cx).is_some();
-        let background = self.background_modal(window, cx);
-        let (workspace_background, management_background) = if management_open {
-            (None, background)
-        } else {
-            (background, None)
-        };
-        let workspace = div()
+    }
+
+    fn shell_workspace_root(
+        &mut self,
+        management_open: bool,
+        cx: &Context<Self>,
+    ) -> gpui::Stateful<gpui::Div> {
+        div()
             .id("vorkspace-workspace")
             .role(Role::Application)
             .aria_label("vorkspace Native")
@@ -2739,6 +2794,14 @@ impl Render for Shell {
                     this.close_preview(cx);
                 }
             }))
+    }
+
+    fn shell_file_and_page_actions(
+        &mut self,
+        workspace: gpui::Stateful<gpui::Div>,
+        cx: &Context<Self>,
+    ) -> gpui::Stateful<gpui::Div> {
+        workspace
             .on_action(
                 cx.listener(|this, event: &crate::file_link::OpenPath, window, cx| {
                     let cwd = this.git.read(cx).project().to_owned();
@@ -2780,6 +2843,14 @@ impl Render for Shell {
             .on_action(cx.listener(|this, _: &OpenAppearance, window, cx| {
                 this.open_settings(crate::settings::Section::Appearance, window, cx)
             }))
+    }
+
+    fn shell_window_and_create_actions(
+        &mut self,
+        workspace: gpui::Stateful<gpui::Div>,
+        cx: &Context<Self>,
+    ) -> gpui::Stateful<gpui::Div> {
+        workspace
             .on_action(|_: &MinimizeWindow, window, _| window.minimize_window())
             .on_action(|_: &ZoomWindow, window, _| window.zoom_window())
             .on_action(|_: &ToggleFullScreen, window, _| window.toggle_fullscreen())
@@ -2812,6 +2883,14 @@ impl Render for Shell {
             ))
             .on_action(cx.listener(|this, _: &NewClaude, _, cx| this.create(Kind::Claude, cx)))
             .on_action(cx.listener(|this, _: &OpenProject, _, cx| this.open_project(cx)))
+    }
+
+    fn shell_tab_actions(
+        &mut self,
+        workspace: gpui::Stateful<gpui::Div>,
+        cx: &Context<Self>,
+    ) -> gpui::Stateful<gpui::Div> {
+        workspace
             .on_action(cx.listener(|this, _: &CloseTab, window, cx| {
                 if this.pages.settings.is_some() {
                     this.close_settings(window, cx);
@@ -2854,6 +2933,14 @@ impl Render for Shell {
             .on_action(cx.listener(|this, action: &ActivateTab, window, cx| {
                 this.activate_tab(action.0, window, cx)
             }))
+    }
+
+    fn shell_session_actions(
+        &mut self,
+        workspace: gpui::Stateful<gpui::Div>,
+        cx: &Context<Self>,
+    ) -> gpui::Stateful<gpui::Div> {
+        workspace
             .on_action(cx.listener(|this, _: &PreviousSession, window, cx| {
                 this.step_session(-1, false, window, cx)
             }))
@@ -2877,78 +2964,92 @@ impl Render for Shell {
                     view.update(cx, |v, cx| v.toggle_recent_models(window, cx));
                 }
             }))
-            .on_action(
-                cx.listener(|this, _: &vorkspace_ui::actions::DismissMenu, window, cx| {
-                    if this.quick_open.is_some() {
-                        this.close_quick_open(window, cx);
+    }
+
+    fn shell_dismiss_action(
+        &mut self,
+        workspace: gpui::Stateful<gpui::Div>,
+        cx: &Context<Self>,
+    ) -> gpui::Stateful<gpui::Div> {
+        workspace.on_action(cx.listener(
+            |this, _: &vorkspace_ui::actions::DismissMenu, window, cx| {
+                if this.quick_open.is_some() {
+                    this.close_quick_open(window, cx);
+                    return;
+                }
+                if this.pages.search.is_some() {
+                    this.close_app_search(window, cx);
+                    return;
+                }
+                if this.sidebar.link_dialog.is_some() {
+                    this.close_link_dialog(window, cx);
+                    return;
+                }
+                if this.project_settings.background_dialog.is_some() {
+                    this.close_background_dialog(window, cx);
+                    return;
+                }
+                if this.project_settings.vorkspace_dialog.is_some() {
+                    this.close_vorkspace_dialog(window, cx);
+                    return;
+                }
+                if let Some(settings) = this.pages.settings.clone() {
+                    if !settings.update(cx, |s, cx| s.dismiss_transient(window, cx)) {
+                        this.close_settings(window, cx);
+                    }
+                    return;
+                }
+                if let Some(bots) = this.bots.clone()
+                    && bots.update(cx, |m, cx| m.dismiss_settings(window, cx))
+                {
+                    return;
+                }
+                if this.app_view_open() {
+                    this.close_app_view(window, cx);
+                    return;
+                }
+                if this.preview.session_preview.is_some() {
+                    this.close_preview(cx);
+                    return;
+                }
+                if this.rail.search_open {
+                    this.close_rail_search(window, cx);
+                    return;
+                }
+                if this.menu.is_none()
+                    && this.workspace.sidebar_visible
+                    && !this.bot_active(cx)
+                    && this.classic_tool_tab() == Some(crate::panel_kit::RightTab::Files)
+                    && let Some(panel) = &this.right_panel
+                {
+                    let explorer = panel.read(cx).explorer.clone();
+                    if explorer.update(cx, |explorer, cx| explorer.close_search(window, cx)) {
+                        cx.stop_propagation();
                         return;
                     }
-                    if this.pages.search.is_some() {
-                        this.close_app_search(window, cx);
-                        return;
-                    }
-                    if this.sidebar.link_dialog.is_some() {
-                        this.close_link_dialog(window, cx);
-                        return;
-                    }
-                    if this.project_settings.background_dialog.is_some() {
-                        this.close_background_dialog(window, cx);
-                        return;
-                    }
-                    if this.project_settings.vorkspace_dialog.is_some() {
-                        this.close_vorkspace_dialog(window, cx);
-                        return;
-                    }
-                    if let Some(settings) = this.pages.settings.clone() {
-                        if !settings.update(cx, |s, cx| s.dismiss_transient(window, cx)) {
-                            this.close_settings(window, cx);
-                        }
-                        return;
-                    }
-                    if let Some(bots) = this.bots.clone()
-                        && bots.update(cx, |m, cx| m.dismiss_settings(window, cx))
-                    {
-                        return;
-                    }
-                    if this.app_view_open() {
-                        this.close_app_view(window, cx);
-                        return;
-                    }
-                    if this.preview.session_preview.is_some() {
-                        this.close_preview(cx);
-                        return;
-                    }
-                    if this.rail.search_open {
-                        this.close_rail_search(window, cx);
-                        return;
-                    }
-                    if this.menu.is_none()
-                        && this.workspace.sidebar_visible
-                        && !this.bot_active(cx)
-                        && this.classic_tool_tab() == Some(crate::panel_kit::RightTab::Files)
-                        && let Some(panel) = &this.right_panel
-                    {
-                        let explorer = panel.read(cx).explorer.clone();
-                        if explorer.update(cx, |explorer, cx| explorer.close_search(window, cx)) {
-                            cx.stop_propagation();
-                            return;
-                        }
-                    }
-                    // `Session: Stop` when no menu is open to close.
-                    if this.menu.is_none()
-                        && let Some(view) =
-                            this.workspace.active.and_then(|id| this.sessions.get(&id))
-                    {
-                        view.update(cx, |v, cx| v.stop_if_busy(cx));
-                    }
-                    this.close_menu(cx);
-                    this.tabs.drag = None;
-                    this.cancel_pane_drag(cx);
-                    this.panes.sash = None;
-                    this.invalidate_chrome(cx);
-                    cx.notify();
-                }),
-            )
+                }
+                // `Session: Stop` when no menu is open to close.
+                if this.menu.is_none()
+                    && let Some(view) = this.workspace.active.and_then(|id| this.sessions.get(&id))
+                {
+                    view.update(cx, |v, cx| v.stop_if_busy(cx));
+                }
+                this.close_menu(cx);
+                this.tabs.drag = None;
+                this.cancel_pane_drag(cx);
+                this.panes.sash = None;
+                this.invalidate_chrome(cx);
+                cx.notify();
+            },
+        ))
+    }
+
+    fn shell_panel_actions(
+        &mut self,
+        workspace: gpui::Stateful<gpui::Div>,
+        cx: &Context<Self>,
+    ) -> gpui::Stateful<gpui::Div> {
+        workspace
             .on_action(
                 cx.listener(|this, _: &crate::git_tools::diff_view::Unified, _, cx| {
                     this.workspace.preferences.diff_view = "unified".into();
@@ -2985,6 +3086,14 @@ impl Render for Shell {
             .on_action(
                 cx.listener(|this, _: &FocusSearch, window, cx| this.focus_search(window, cx)),
             )
+    }
+
+    fn shell_pane_actions(
+        &mut self,
+        workspace: gpui::Stateful<gpui::Div>,
+        cx: &Context<Self>,
+    ) -> gpui::Stateful<gpui::Div> {
+        workspace
             .on_action(
                 cx.listener(|this, _: &ToggleTerminal, window, cx| {
                     this.toggle_terminal(window, cx)
@@ -3011,6 +3120,14 @@ impl Render for Shell {
             .on_action(cx.listener(|this, _: &FocusPaneDown, window, cx| {
                 this.focus_neighbor(Edge::Bottom, window, cx)
             }))
+    }
+
+    fn shell_drag_handlers(
+        &mut self,
+        workspace: gpui::Stateful<gpui::Div>,
+        cx: &Context<Self>,
+    ) -> gpui::Stateful<gpui::Div> {
+        workspace
             .on_mouse_move(cx.listener(|this, event: &MouseMoveEvent, _, cx| {
                 if let Some(bots) = &this.bots {
                     bots.update(cx, |m, cx| m.move_rail_drag(event, cx));
@@ -3059,6 +3176,17 @@ impl Render for Shell {
                     }
                 }),
             )
+    }
+
+    fn shell_workspace_surfaces(
+        &mut self,
+        workspace: gpui::Stateful<gpui::Div>,
+        sidebar_width: f32,
+        workspace_background: Option<AnyElement>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> gpui::Stateful<gpui::Div> {
+        workspace
             .relative()
             .child(self.layout_body(sidebar_width, window, cx))
             .children(self.classic_session_preview(cx))
@@ -3091,7 +3219,17 @@ impl Render for Shell {
                 self.image_lightbox
                     .as_ref()
                     .map(|(view, _)| crate::image_lightbox::overlay(view)),
-            );
+            )
+    }
+
+    fn shell_management_surface(
+        &mut self,
+        workspace: gpui::Stateful<gpui::Div>,
+        management_open: bool,
+        management_background: Option<AnyElement>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> gpui::Div {
         // Management is a sibling of the workspace so native menu actions
         // and custom shortcuts cannot bubble into the obscured workspace.
         div()
