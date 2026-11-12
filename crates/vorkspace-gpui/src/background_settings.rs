@@ -158,7 +158,7 @@ impl BackgroundDialog {
                                 .data_dir()
                                 .map(|path| path.join("project-images"))
                                 .ok_or("Background images need a database on disk.")?;
-                            import_image(&source, &directory, &namespace, false).map(Some)
+                            import_image(&source, &directory, &namespace).map(Some)
                         })
                         .await
                 }

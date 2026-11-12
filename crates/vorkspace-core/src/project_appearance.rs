@@ -259,28 +259,14 @@ pub fn read_image(path: &Path) -> Result<RgbaImage, String> {
 }
 
 /// Own a validated copy, so moving or deleting the original does not break it.
-pub fn import_image(
-    source: &Path,
-    directory: &Path,
-    project: &str,
-    logo: bool,
-) -> Result<String, String> {
+pub fn import_image(source: &Path, directory: &Path, project: &str) -> Result<String, String> {
     let image = read_image(source)?;
-    let image = if logo && (image.width() > 256 || image.height() > 256) {
-        imageops::thumbnail(&image, 256, 256)
-    } else {
-        image
-    };
     std::fs::create_dir_all(directory).map_err(|e| e.to_string())?;
     let mut hash = DefaultHasher::new();
     project.hash(&mut hash);
     image.dimensions().hash(&mut hash);
     image.as_raw().hash(&mut hash);
-    let path: PathBuf = directory.join(format!(
-        "{}-{:016x}.png",
-        if logo { "logo" } else { "background" },
-        hash.finish()
-    ));
+    let path: PathBuf = directory.join(format!("background-{:016x}.png", hash.finish()));
     if !path.exists() {
         image
             .save(&path)

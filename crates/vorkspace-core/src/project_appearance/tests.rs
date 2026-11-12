@@ -77,8 +77,7 @@ fn importing_owns_the_image_and_rejects_invalid_files() {
     RgbaImage::from_pixel(12, 8, image::Rgba([100, 180, 90, 255]))
         .save(&source)
         .unwrap();
-    let imported =
-        import_image(&source, &directory.path().join("assets"), "/project", false).unwrap();
+    let imported = import_image(&source, &directory.path().join("assets"), "/project").unwrap();
     std::fs::remove_file(source).unwrap();
     assert_eq!(
         read_image(Path::new(&imported)).unwrap().dimensions(),
@@ -88,13 +87,7 @@ fn importing_owns_the_image_and_rejects_invalid_files() {
     RgbaImage::from_pixel(8, 12, image::Rgba([100, 180, 90, 255]))
         .save(&rotated)
         .unwrap();
-    let other = import_image(
-        &rotated,
-        &directory.path().join("assets"),
-        "/project",
-        false,
-    )
-    .unwrap();
+    let other = import_image(&rotated, &directory.path().join("assets"), "/project").unwrap();
     assert_ne!(
         imported, other,
         "equal pixel bytes with a different shape need separate assets"
@@ -102,7 +95,7 @@ fn importing_owns_the_image_and_rejects_invalid_files() {
     assert_eq!(read_image(Path::new(&other)).unwrap().dimensions(), (8, 12));
     let bad = directory.path().join("bad.png");
     std::fs::write(&bad, b"not an image").unwrap();
-    assert!(import_image(&bad, &directory.path().join("assets"), "/project", false).is_err());
+    assert!(import_image(&bad, &directory.path().join("assets"), "/project").is_err());
 }
 
 #[test]

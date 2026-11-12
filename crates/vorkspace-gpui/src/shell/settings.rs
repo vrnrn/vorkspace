@@ -502,9 +502,7 @@ impl Shell {
                         .data_dir()
                         .map(|path| path.join("backgrounds"))
                         .ok_or("Background images need a database on disk.")?;
-                    vorkspace_core::project_appearance::import_image(
-                        &source, &directory, "global", false,
-                    )
+                    vorkspace_core::project_appearance::import_image(&source, &directory, "global")
                 });
                 let result = work.await;
                 let _ = this.update_in(cx, |this, window, cx| match result {
