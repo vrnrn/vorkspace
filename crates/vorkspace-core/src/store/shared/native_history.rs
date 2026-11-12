@@ -49,7 +49,7 @@ impl Store {
             }))?
         {
             let mut projected = HashMap::new();
-            project_turn(&parse_block(&sql(raw)?)?, 0, &mut projected)?;
+            project_turn(&parse::<Value>(&sql(raw)?)?, 0, &mut projected)?;
             owners.extend(projected.into_values());
         }
         // Older desktop settings can carry turn metadata keyed by projected

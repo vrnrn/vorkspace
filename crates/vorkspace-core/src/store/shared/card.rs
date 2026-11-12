@@ -55,7 +55,7 @@ impl Store {
         let Some((key, raw)) = saved else {
             return Ok(None);
         };
-        let mut block = parse_block(&raw)?;
+        let mut block = parse::<Value>(&raw)?;
         if block["id"].as_str() != Some(id) || !block["botCard"].is_object() {
             return Ok(None);
         }

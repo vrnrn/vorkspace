@@ -523,7 +523,7 @@ impl Store {
             index.kind.position()
         )))?;
         let previous = sql(query.query_map(params![original, key], |row| row.get::<_, String>(0)))?
-            .map(|raw| parse_block(&sql(raw)?))
+            .map(|raw| parse::<Value>(&sql(raw)?))
             .collect::<Result<Vec<Value>, String>>()?;
         drop(query);
         let next = blocks::merge(&previous, start - offset, rows)?;

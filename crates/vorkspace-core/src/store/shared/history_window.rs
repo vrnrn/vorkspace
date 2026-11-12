@@ -112,7 +112,7 @@ impl Store {
                 positions.update(seq.to_le_bytes());
                 positions.update((block_id.len() as u64).to_le_bytes());
                 positions.update(block_id.as_bytes());
-                let block = parse_block(&sql(row.get::<_, String>(1))?)?;
+                let block = parse::<Value>(&sql(row.get::<_, String>(1))?)?;
                 HistoryRevision::push(&mut hash, &block);
                 if start.is_some_and(|start| seq < start) {
                     older = true;

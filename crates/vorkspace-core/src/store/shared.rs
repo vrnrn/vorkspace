@@ -190,18 +190,6 @@ pub(super) fn encode<T: serde::Serialize>(value: &T) -> Result<String, String> {
     Ok(encoded)
 }
 pub(crate) use crate::session::desktop_session_handle as handle;
-fn parse_block(raw: &str) -> Result<Value, String> {
-    let mut value = parse(raw)?;
-    crate::compatibility::block(&mut value);
-    Ok(value)
-}
-fn parse_blocks(raw: &str) -> Result<Vec<Value>, String> {
-    let mut blocks: Vec<Value> = parse(raw)?;
-    for block in &mut blocks {
-        crate::compatibility::block(block);
-    }
-    Ok(blocks)
-}
 pub(super) fn has_table(conn: &Connection, table: &str) -> Result<bool, String> {
     sql(conn.query_row(
         "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type='table' AND name=?1)",
@@ -932,7 +920,7 @@ impl Store {
             )))?;
             let mut result = Vec::new();
             for row in sql(query.query_map([&original], |r| r.get::<_, String>(0)))? {
-                result.push(parse_block(&sql(row)?)?);
+                result.push(parse::<Value>(&sql(row)?)?);
             }
             Ok(result)
         } else if self.shared_ordinary_indexed(&original)? {
@@ -943,7 +931,7 @@ impl Store {
                 [original],
                 |r| r.get(0),
             ))?;
-            parse_blocks(&raw)
+            parse::<Vec<Value>>(&raw)
         }
     }
     fn shared_indexed_query(&self, original: &str) -> Result<Option<String>, String> {
@@ -978,7 +966,7 @@ impl Store {
         let mut offset = 0;
         while let Some(record) = sql(records.next())? {
             let raw: String = sql(record.get(0))?;
-            let block: Value = parse_block(&raw)?;
+            let block: Value = parse::<Value>(&raw)?;
             offset += project_turn(&block, offset, &mut turns)?;
         }
         Ok(turns)
@@ -1022,7 +1010,7 @@ impl Store {
                     first = false;
                 }
                 let raw: String = sql(record.get(0))?;
-                let block: Value = parse_block(&raw)?;
+                let block: Value = parse::<Value>(&raw)?;
                 HistoryRevision::push(&mut digest, &block);
                 append(&block)?;
             }
@@ -1083,7 +1071,7 @@ impl Store {
         }))? {
             let (seq, id, raw) = sql(row)?;
             max_seq = max_seq.max(seq);
-            old.insert(id, (seq, parse_block(&raw)?));
+            old.insert(id, (seq, parse::<Value>(&raw)?));
         }
         let retained: HashSet<_> = blocks.iter().filter_map(|b| b["id"].as_str()).collect();
         if retained.len() != blocks.len() {
