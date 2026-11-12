@@ -212,7 +212,7 @@ impl Inbox {
         let connect_email = cx.new(|cx| Input::field("Email", "you@example.com", placeholder, cx));
         let connect_token = cx.new(|cx| {
             let mut input = Input::field("API token", "Personal access token", placeholder, cx);
-            input.set_secret(true);
+            input.set_secret();
             input
         });
         let diff_view = cx.new(DiffView::new);

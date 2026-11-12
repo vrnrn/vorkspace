@@ -377,7 +377,7 @@ fn secret_fields_preserve_unicode_value_and_mask_drawing_ime_and_clipboard(
     replace(window, secret, cx);
     window
         .update(cx, |input, window, cx| {
-            input.set_secret(true);
+            input.set_secret();
             let rendered = input.render(window, cx).into_element();
             assert_eq!(
                 gpui::Element::a11y_role(&rendered),
@@ -401,7 +401,7 @@ fn secret_fields_preserve_unicode_value_and_mask_drawing_ime_and_clipboard(
                 cx.read_from_clipboard().unwrap().text().as_deref(),
                 Some("existing clipboard")
             );
-            input.set_secret(false);
+            input.secret = false;
             assert_eq!(input.display_text().0.as_ref(), secret);
             input.copy(&Copy, window, cx);
             assert_eq!(

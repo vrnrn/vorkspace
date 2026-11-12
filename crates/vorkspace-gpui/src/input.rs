@@ -226,8 +226,8 @@ impl Input {
     }
 
     /// Keep authentication text out of drawing, accessibility and clipboard.
-    pub(crate) fn set_secret(&mut self, secret: bool) {
-        self.secret = secret;
+    pub(crate) fn set_secret(&mut self) {
+        self.secret = true;
     }
     pub fn new(cx: &mut Context<Self>) -> Self {
         Self {
