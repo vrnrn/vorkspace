@@ -1218,7 +1218,6 @@ impl Explorer {
         id: &'static str,
         label: SharedString,
         path: &'static str,
-        enabled: bool,
     ) -> gpui::Stateful<gpui::Div> {
         div()
             .id(id)
@@ -1233,13 +1232,12 @@ impl Explorer {
             .items_center()
             .justify_center()
             .rounded(px(radius::CONTROL))
-            .when(!enabled, |d| d.opacity(0.4))
-            .when(enabled, |d| {
-                d.hover(|s| s.bg(vorkspace_ui::fluid::hover(0.05)))
-            })
-            .child(icon(path, 14.).text_color(content(0.5)).when(enabled, |i| {
-                i.group_hover(id, |s| s.text_color(content(1.)))
-            }))
+            .hover(|s| s.bg(vorkspace_ui::fluid::hover(0.05)))
+            .child(
+                icon(path, 14.)
+                    .text_color(content(0.5))
+                    .group_hover(id, |s| s.text_color(content(1.))),
+            )
     }
 
     fn line(&self, ix: usize, focused: bool, cx: &mut Context<Self>) -> AnyElement {
@@ -1612,28 +1610,22 @@ impl Render for Explorer {
                     .gap_1()
                     .on_mouse_down(MouseButton::Right, |_, _, cx| cx.stop_propagation())
                     .child(
-                        Self::header_icon("explorer-new-file", "New File".into(), "file-add", true)
+                        Self::header_icon("explorer-new-file", "New File".into(), "file-add")
                             .on_click(cx.listener(|this, _, window, cx| {
                                 this.start_create(false, None, window, cx)
                             })),
                     )
                     .child(
-                        Self::header_icon(
-                            "explorer-new-folder",
-                            "New Folder".into(),
-                            "folder-add",
-                            true,
-                        )
-                        .on_click(cx.listener(|this, _, window, cx| {
-                            this.start_create(true, None, window, cx)
-                        })),
+                        Self::header_icon("explorer-new-folder", "New Folder".into(), "folder-add")
+                            .on_click(cx.listener(|this, _, window, cx| {
+                                this.start_create(true, None, window, cx)
+                            })),
                     )
                     .child(
                         Self::header_icon(
                             "explorer-collapse",
                             "Collapse All".into(),
                             "fold-vertical",
-                            true,
                         )
                         .on_click(cx.listener(|this, _, _, cx| this.collapse_all(cx))),
                     )
@@ -1642,7 +1634,6 @@ impl Render for Explorer {
                             "explorer-search",
                             format!("Search in files ({MOD}Shift+F)").into(),
                             "search",
-                            true,
                         )
                         .on_click(cx.listener(|this, _, window, cx| this.open_search(window, cx))),
                     ),
