@@ -38,7 +38,7 @@ fn executable(stream: &UnixStream) -> Option<PathBuf> {
         .canonicalize()
         .ok()
 }
-pub fn trusted(stream: &UnixStream) -> bool {
+pub(crate) fn trusted(stream: &UnixStream) -> bool {
     let Ok(helper) = std::env::current_exe() else {
         return false;
     };

@@ -4,7 +4,7 @@ use vorkspace_helper::{DictationPhase, DictationStatus};
 use vorkspace_macos::notch::{self, Geometry, Placement};
 use vorkspace_ui::radius;
 
-pub struct Panel {
+pub(crate) struct Panel {
     pub status: DictationStatus,
     pub level: f32,
     pub placement: Placement,
@@ -13,7 +13,7 @@ pub struct Panel {
     #[cfg(test)]
     geometry: Option<Geometry>,
 }
-pub fn open(status: DictationStatus, cx: &mut App) -> Result<WindowHandle<Panel>> {
+pub(crate) fn open(status: DictationStatus, cx: &mut App) -> Result<WindowHandle<Panel>> {
     cx.open_window(notch::window_options(Geometry::read()), |_, cx| {
         cx.new(|cx| {
             let (watch, receiver) = notch::ScreenChanges::new();
