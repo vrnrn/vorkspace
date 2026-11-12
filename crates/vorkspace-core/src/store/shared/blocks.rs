@@ -13,19 +13,10 @@ use std::{
 fn tool(block: &Value) -> ToolCall {
     let meta = &block["tool"];
     // Rich display metadata must supplement even a sparse nativeInput without
-    // changing the recorded arguments. Older native envelopes remain readable.
-    let native = meta["nativeInput"]
-        .as_str()
-        .and_then(|text| serde_json::from_str::<Value>(text).ok());
+    // changing the recorded arguments.
     let presentation = meta
         .get("nativePresentation")
         .filter(|value| value.is_object())
-        .or_else(|| {
-            native
-                .as_ref()
-                .and_then(|value| value.get("__desktop"))
-                .filter(|value| value.is_object())
-        })
         .unwrap_or(meta);
     let presentation = presentation_metadata(presentation);
     let mut call = tool_fields(block);
