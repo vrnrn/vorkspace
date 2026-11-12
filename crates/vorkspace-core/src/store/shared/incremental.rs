@@ -254,22 +254,11 @@ impl Store {
 
     pub(in crate::store) fn shared_has_user_message(&self) -> Result<String, String> {
         if self.shared.columns.contains("has_user_message") {
-            if let Some(tables) = &self.shared.earlier_bot_tables {
-                let current = self.current_bot_owner_predicate("sessions.id")?;
-                return Ok(format!(
-                    "CASE WHEN EXISTS(SELECT 1 FROM {roots} WHERE session_id=sessions.id) AND NOT({current}) THEN EXISTS(SELECT 1 FROM {blocks} WHERE session_id=sessions.id AND is_user=1) ELSE has_user_message END",
-                    roots = tables.transcripts,
-                    blocks = tables.blocks
-                ));
-            }
             return Ok("has_user_message".into());
         }
         let mut source = String::from("CASE ");
         if has_table(&self.conn, "bot_transcripts")? {
             source.push_str(&format!("WHEN {} THEN EXISTS(SELECT 1 FROM bot_blocks WHERE session_id=sessions.id AND is_user=1) ",self.current_bot_owner_predicate("sessions.id")?));
-        }
-        if let Some(tables) = &self.shared.earlier_bot_tables {
-            source.push_str(&format!("WHEN EXISTS(SELECT 1 FROM {roots} WHERE session_id=sessions.id) THEN EXISTS(SELECT 1 FROM {blocks} WHERE session_id=sessions.id AND is_user=1) ",roots=tables.transcripts,blocks=tables.blocks));
         }
         if has_table(&self.conn, "bot_transcripts")? {
             source.push_str("WHEN EXISTS(SELECT 1 FROM bot_transcripts WHERE session_id=sessions.id) THEN EXISTS(SELECT 1 FROM bot_blocks WHERE session_id=sessions.id AND is_user=1) ");
@@ -326,30 +315,26 @@ impl Store {
              CREATE INDEX IF NOT EXISTS ordinary_blocks_order ON ordinary_blocks(session_id,position);
              CREATE INDEX IF NOT EXISTS ordinary_blocks_flags ON ordinary_blocks(session_id,has_user,is_draft);"
         ))?;
-        let mut guarded = vec![
+        let guarded = [
             (
-                "ordinary_blocks".to_owned(),
+                "ordinary_blocks",
                 "session_id",
                 "OLD.block_json IS NOT NEW.block_json OR OLD.position IS NOT NEW.position OR OLD.block_id IS NOT NEW.block_id",
             ),
             (
-                "ordinary_transcripts".to_owned(),
+                "ordinary_transcripts",
                 "session_id",
                 "OLD.normalized IS NOT NEW.normalized",
             ),
             (
-                "bot_blocks".to_owned(),
+                "bot_blocks",
                 "session_id",
                 "OLD.block_json IS NOT NEW.block_json OR OLD.seq IS NOT NEW.seq OR OLD.block_id IS NOT NEW.block_id",
             ),
-            ("bot_transcripts".to_owned(), "session_id", "1"),
+            ("bot_transcripts", "session_id", "1"),
         ];
-        if let Some(tables) = &self.shared.earlier_bot_tables {
-            guarded.push((tables.blocks.clone(),"session_id","OLD.block_json IS NOT NEW.block_json OR OLD.seq IS NOT NEW.seq OR OLD.block_id IS NOT NEW.block_id"));
-            guarded.push((tables.transcripts.clone(), "session_id", "1"));
-        }
         for (table, key, changed) in guarded {
-            if !has_table(&self.conn, &table)? {
+            if !has_table(&self.conn, table)? {
                 continue;
             }
             sql(tx.execute_batch(&format!("CREATE TRIGGER IF NOT EXISTS history_{table}_owner BEFORE UPDATE OF {key} ON {table}

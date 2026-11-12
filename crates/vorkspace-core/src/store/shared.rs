@@ -36,7 +36,6 @@ use std::{
 
 pub(super) struct Shared {
     columns: HashSet<String>,
-    earlier_bot_tables: Option<bot_tables::BotTables>,
     ids: RefCell<HashMap<i64, String>>,
     settings: settings::Sidecar,
     snapshots: RefCell<HashMap<i64, HistoryRevision>>,
@@ -345,7 +344,6 @@ impl Store {
             ))
         });
         let settings = settings::Sidecar::open(extras_path)?;
-        let earlier_bot_tables = bot_tables::BotTables::discover(&conn)?;
         let store = Self {
             conn,
             path: path.into(),
@@ -353,7 +351,6 @@ impl Store {
             #[cfg(any(test, feature = "test-support"))]
             test_directory: None,
             shared: Shared {
-                earlier_bot_tables,
                 columns,
                 ids: RefCell::new(HashMap::new()),
                 settings,
@@ -1528,14 +1525,6 @@ impl Store {
             self.check_app_target(caller, id, project)?;
         }
         self.delete_local_submissions(&original)?;
-        if let Some(tables) = &self.shared.earlier_bot_tables {
-            for table in [&tables.blocks, &tables.turns, &tables.transcripts] {
-                sql(self.conn.execute(
-                    &format!("DELETE FROM {table} WHERE session_id=?1"),
-                    [&original],
-                ))?;
-            }
-        }
         for (table, column) in [
             ("session_reminders", "session_id"),
             ("bot_blocks", "session_id"),

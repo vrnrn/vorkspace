@@ -200,7 +200,7 @@ impl Store {
         } else {
             "SELECT value AS block,key AS seq FROM sessions,json_each(sessions.blocks_json) WHERE sessions.id=?1".to_owned()
         };
-        let spawned = self.shared_earlier_bot_field("botSpawnedSessions").map(|old|format!("COALESCE(json_extract(block,'$.botSpawnedSessions'),json_extract(block,'$.{old}'))")).unwrap_or_else(||"json_extract(block,'$.botSpawnedSessions')".into());
+        let spawned = "json_extract(block,'$.botSpawnedSessions')";
         let query = format!(
             r#"SELECT json_object('id',json_extract(block,'$.id'),'role',json_extract(block,'$.role'),
             'artifactCards',json_extract(block,'$.artifactCards'),'botSpawnedSessions',{spawned},
