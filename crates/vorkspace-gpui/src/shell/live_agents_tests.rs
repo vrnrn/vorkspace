@@ -267,18 +267,6 @@ fn native_activity_capture() {
                         let view = shell.ensure_session(id, cx).unwrap();
                         view.update(cx, |view, cx| {
                             view.set_running_for_test(!single || ix == 2);
-                            view.activity = if matches!(name, "plain" | "done" | "motion") {
-                                None
-                            } else {
-                                Some(
-                                    if view.summary.provider == "codex" {
-                                        "Run cargo test"
-                                    } else {
-                                        "Read src/main.rs"
-                                    }
-                                    .into(),
-                                )
-                            };
                             cx.emit(SessionChanged::Loaded);
                         });
                     }
@@ -390,7 +378,6 @@ fn tool_notifications_update_only_the_receipt_preserving_focus_draft_and_run_clo
         visual.run_until_parked();
         window
             .update(visual, |shell, _, cx| {
-                assert_eq!(shell.sessions[&a].read(cx).activity.as_deref(), label);
                 let activity = shell.sidebar.live_agents.read(cx);
                 assert_eq!(
                     activity.snapshots, snapshots,

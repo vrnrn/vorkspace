@@ -91,7 +91,6 @@ impl TurnProjection {
         let history_recovery = settlement
             .as_ref()
             .and_then(|settlement| settlement.history_recovery);
-        this.activity = update.activity.take();
         let inputs_changed = (!stopping
             && (!update.approvals.is_empty() || !update.questions.is_empty()))
             || !update.approvals_resolved.is_empty()

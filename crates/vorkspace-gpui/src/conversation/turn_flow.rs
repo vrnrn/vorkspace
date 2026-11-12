@@ -695,7 +695,6 @@ impl Conversation {
         if !self.summary.has_messages {
             self.composer_motion.capture(self.composer_anchor.get());
         }
-        self.activity = None;
         self.turn_state = TurnState::Running;
         self.notification_cancelled = false;
         self.review
