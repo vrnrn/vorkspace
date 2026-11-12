@@ -746,16 +746,16 @@ impl<F: FnMut(Vec<Event>) -> Result<(), String>> RunningOperation<'_, F> {
             let item = &value["params"]["item"];
             if !method.is_empty() && !method.ends_with("Delta") && !method.ends_with("/delta") {
                 eprintln!(
-                                        "provider-frame method={method} type={} status={} id={} output_bytes={} keys={:?} legacy={}",
-                                        item["type"],
-                                        item["status"],
-                                        item["id"],
-                                        item["aggregatedOutput"].as_str().map_or(0, str::len),
-                                        value["params"]
-                                            .as_object()
-                                            .map(|o| o.keys().collect::<Vec<_>>()),
-                                        value["params"]["msg"]["type"]
-                                    );
+                    "provider-frame method={method} type={} status={} id={} output_bytes={} keys={:?} legacy={}",
+                    item["type"],
+                    item["status"],
+                    item["id"],
+                    item["aggregatedOutput"].as_str().map_or(0, str::len),
+                    value["params"]
+                        .as_object()
+                        .map(|o| o.keys().collect::<Vec<_>>()),
+                    value["params"]["msg"]["type"]
+                );
             }
         }
 
