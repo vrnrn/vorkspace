@@ -335,7 +335,6 @@ pub(crate) struct Workspace {
     pub sidebar_notes_visible: bool,
     pub sidebar_automations_visible: bool,
     pub sidebar_todos_visible: bool,
-    pub sidebar_inbox_visible: bool,
     /// Show qualifying running and unseen finished sessions in the project rail.
     pub sidebar_activity_visible: bool,
     pub sidebar_subscriptions_visible: bool,
@@ -525,7 +524,6 @@ impl Default for Workspace {
             sidebar_notes_visible: true,
             sidebar_automations_visible: true,
             sidebar_todos_visible: true,
-            sidebar_inbox_visible: true,
             sidebar_activity_visible: true,
             sidebar_subscriptions_visible: true,
             right_panel_open: false,

@@ -110,7 +110,6 @@ fn sidebar_visibility_switches_stay_open_preserve_notes_and_survive_restart(
             let restored = Workspace::restore(Some(&saved), &[], "/work/vorkspace");
             assert!(!restored.sidebar_notes_visible);
             assert!(!restored.sidebar_automations_visible);
-            assert!(restored.sidebar_inbox_visible);
             assert!(!restored.sidebar_subscriptions_visible);
             assert!(!restored.preferences.bots);
         })
