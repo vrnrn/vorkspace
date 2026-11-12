@@ -2,7 +2,7 @@
 use super::Store;
 use crate::bot::{
     launch::{CreatedWorktree, Launch, Workspace},
-    merge_roster_value, new_id, overlay_roster_value, Bot, Roster,
+    merge_roster_value, new_id, overlay_roster_value, Roster,
 };
 use serde_json::Value;
 use std::{
@@ -198,8 +198,6 @@ impl Launch {
         Ok(summary)
     }
 }
-
-impl Bot {}
 
 pub fn root(store: &Store) -> PathBuf {
     store
