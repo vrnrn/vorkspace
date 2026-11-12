@@ -81,7 +81,7 @@ impl Shell {
             .add_loaded(summary, cx)
             .ok_or("Could not open the new session")?;
         view.update(cx, |v, cx| {
-            v.install_transfer(settings, Some(prompt.clone()), cx);
+            v.install_transfer(settings, Some(prompt), cx);
         });
         self.publish_prepared(&view, None, cx);
         self.invalidate_chrome(cx);
