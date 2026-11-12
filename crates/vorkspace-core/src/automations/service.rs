@@ -13,6 +13,7 @@ mod execution;
 const MAX_RUNS_PER_AUTOMATION: i64 = 100;
 
 const EVENT_CLAIMS_BACKFILL: &str = "event-claims-v1";
+const DEFINITION_TRIGGERS: &str = "definition-triggers-v1";
 const DEFINITION_CHANGED: &str =
     "This automation changed in another view. Use Reset to load the saved version.";
 
@@ -75,6 +76,84 @@ fn prepare_storage(conn: &mut Connection) -> rusqlite::Result<()> {
         [EVENT_CLAIMS_BACKFILL],
     )?;
     tx.commit()
+}
+
+fn triggers_converted(conn: &Connection) -> rusqlite::Result<bool> {
+    conn.query_row(
+        "SELECT EXISTS(SELECT 1 FROM automation_migrations WHERE name = ?1)",
+        [DEFINITION_TRIGGERS],
+        |row| row.get(0),
+    )
+}
+
+/// Definitions saved before the trigger list existed. Unreadable rows are left
+/// alone: they fail to load whether or not they are converted.
+fn definitions_without_triggers(conn: &Connection) -> Result<Vec<(String, String)>, String> {
+    let mut statement = conn
+        .prepare("SELECT id, definition_json FROM automations ORDER BY id")
+        .map_err(|error| error.to_string())?;
+    let rows = statement
+        .query_map([], |row| Ok((row.get(0)?, row.get(1)?)))
+        .map_err(|error| error.to_string())?
+        .collect::<rusqlite::Result<Vec<(String, String)>>>()
+        .map_err(|error| error.to_string())?;
+    Ok(rows
+        .into_iter()
+        .filter(|(_, raw)| {
+            serde_json::from_str::<Automation>(raw).is_ok_and(|saved| saved.triggers.is_none())
+        })
+        .collect())
+}
+
+/// Store the trigger the old reader derived on every load. Fields this build
+/// does not know stay in the saved JSON.
+fn with_triggers(raw: &str) -> Result<String, String> {
+    let mut saved: Automation = serde_json::from_str(raw).map_err(|error| error.to_string())?;
+    hydrate_triggers(&mut saved);
+    let mut value: serde_json::Value =
+        serde_json::from_str(raw).map_err(|error| error.to_string())?;
+    let object = value
+        .as_object_mut()
+        .ok_or("An automation definition is not an object.")?;
+    object.insert(
+        "triggers".into(),
+        serde_json::to_value(&saved.triggers).map_err(|error| error.to_string())?,
+    );
+    Ok(value.to_string())
+}
+
+/// Back up the database, then rewrite every definition without a trigger list
+/// in one transaction that publishes its marker last.
+fn convert_definition_triggers(conn: &mut Connection, path: &Path) -> Result<(), String> {
+    if triggers_converted(conn).map_err(|error| error.to_string())? {
+        return Ok(());
+    }
+    let pending = definitions_without_triggers(conn)?;
+    if !pending.is_empty() && path != Path::new(":memory:") {
+        crate::database_backup::write(conn, path, DEFINITION_TRIGGERS)?;
+    }
+    let tx = conn
+        .transaction_with_behavior(TransactionBehavior::Immediate)
+        .map_err(|error| error.to_string())?;
+    if triggers_converted(&tx).map_err(|error| error.to_string())? {
+        return tx.commit().map_err(|error| error.to_string());
+    }
+    if definitions_without_triggers(&tx)? != pending {
+        return Err("Automations changed while being converted. Reopen to try again.".into());
+    }
+    for (id, raw) in &pending {
+        tx.execute(
+            "UPDATE automations SET definition_json = ?2 WHERE id = ?1",
+            params![id, with_triggers(raw)?],
+        )
+        .map_err(|error| error.to_string())?;
+    }
+    tx.execute(
+        "INSERT INTO automation_migrations(name) VALUES (?1)",
+        [DEFINITION_TRIGGERS],
+    )
+    .map_err(|error| error.to_string())?;
+    tx.commit().map_err(|error| error.to_string())
 }
 
 fn parse_automation(value: String) -> Result<Automation, String> {
@@ -306,6 +385,7 @@ impl Service {
         conn.execute_batch("PRAGMA foreign_keys=ON;")
             .map_err(|e| e.to_string())?;
         prepare_storage(&mut conn).map_err(|e| e.to_string())?;
+        convert_definition_triggers(&mut conn, path)?;
         Ok(Self {
             conn,
             execution_path: execution::lock_path(path)?,
@@ -759,3 +839,5 @@ impl Service {
 
 #[cfg(test)]
 mod tests;
+#[cfg(test)]
+mod trigger_conversion_tests;
