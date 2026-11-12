@@ -110,7 +110,6 @@ for line in sys.stdin:
             .any(|row| row.role == "tool")
             && !receipt_seen
         {
-            assert_eq!(update.activity.as_deref(), Some("Run cargo check"));
             tool_seen = true;
         }
         if update.turn_ready {
@@ -122,10 +121,6 @@ for line in sys.stdin:
                 .unwrap();
         }
         if !update.finished() && update.follow_up_delivered.contains(&message.id) {
-            assert!(
-                update.activity.is_none(),
-                "a delivered steer resets latest tool activity"
-            );
             let prompt = update
                 .transcript
                 .rows()

@@ -34,7 +34,6 @@ struct RunningTurn {
     binding: ProviderBinding,
     provider_reset: bool,
     start: usize,
-    activity: activity::ToolActivity,
     turn_info: Option<(usize, TurnInfo)>,
     bot_context: Option<BotContextReceipt>,
     bot: Option<BotContext>,
@@ -108,7 +107,6 @@ impl RunningTurn {
             binding: ProviderBinding::Unchanged,
             provider_reset: false,
             start: 0,
-            activity: activity::ToolActivity::default(),
             turn_info: None,
             bot_context: None,
             bot: settings.bot.clone(),
@@ -350,7 +348,6 @@ impl RunningTurn {
         let creating_worktree = settings.new_worktree && settings.worktree_cwd.is_none();
         let bot_snapshot = self.bot.is_some();
         self.publish(Update {
-            activity: self.activity.label(),
             delivered: settings.bot_message_id.clone(),
             // A native import may have committed while its idle UI refresh
             // was superseded by this submission. Publish the admitted Bot
@@ -400,7 +397,6 @@ impl RunningTurn {
                 store.save_agent_preferences(summary.id, &persisted)?;
             }
             self.publish(Update {
-                activity: self.activity.label(),
                 worktree_cwd: Some(cwd),
                 status: "Connecting…".into(),
                 ..Default::default()
@@ -420,7 +416,6 @@ impl RunningTurn {
             .filter(|data_dir| worktree_setup::is_due(data_dir, Path::new(&working)))
         {
             self.publish(Update {
-                activity: self.activity.label(),
                 status: "Preparing worktree…".into(),
                 ..Default::default()
             })?;
@@ -469,7 +464,6 @@ impl RunningTurn {
             self.handoff = Some(prepared.clone());
             self.provider_id = None;
             self.publish(Update {
-                activity: self.activity.label(),
                 handoff: Some(Some(prepared)),
                 status: "Connecting…".into(),
                 ..Default::default()
@@ -840,7 +834,6 @@ impl RunningTurn {
         // Final status must still arrive after cancellation. Dropping a window closes
         // the receiver, so the worker never keeps a closed viewport alive.
         let _ = self.tx.send_blocking(Update {
-            activity: self.activity.label(),
             // A stop can make the UI skip intermediate updates. Keep the created
             // checkout in the final receipt so the next Send cannot create it twice.
             worktree_cwd: self.created_worktree,
@@ -891,7 +884,6 @@ pub(super) fn run_turn_using(
             )
         })?;
         let (request, visual_bridge) = turn.prepare_request(kind, binary, &mut setup_notice)?;
-        let activity_cwd = request.cwd.to_string_lossy().into_owned();
         if turn.cancel.load(Ordering::Relaxed) {
             return Err("Stopped".into());
         }
@@ -903,7 +895,6 @@ pub(super) fn run_turn_using(
             turn.tx
                 .send_blocking(Update {
                     transition: TurnTransition::AcceptedComposer(origin),
-                    activity: turn.activity.label(),
                     transcript: TranscriptPatch::tail(
                         turn.start,
                         turn.transcript.rows[turn.start..].to_vec(),
@@ -917,7 +908,7 @@ pub(super) fn run_turn_using(
         // The running-work list attributes the provider and its tools to this session.
         let result = process::owned_turn(turn.session, &cancel, || {
             provider::run_with_controls(request, cancel.clone(), Some(controls), |events| {
-                turn.events(events, kind, &activity_cwd, visual_bridge.as_ref())
+                turn.events(events, kind, visual_bridge.as_ref())
             })
         });
         if result.is_ok() {

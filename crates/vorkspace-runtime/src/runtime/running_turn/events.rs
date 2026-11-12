@@ -4,7 +4,6 @@ impl RunningTurn {
         &mut self,
         events: Vec<Event>,
         kind: Kind,
-        activity_cwd: &str,
         visual_bridge: Option<&Server>,
     ) -> Result<(), String> {
         // Cancellation freezes the transcript, even while the native
@@ -55,7 +54,7 @@ impl RunningTurn {
                 Event::BeginAssistant => self.begin_assistant(),
                 Event::Text(text) => self.text(text),
                 Event::Reasoning(text) => self.reasoning(text),
-                Event::Tool(tool) => self.tool(tool, activity_cwd)?,
+                Event::Tool(tool) => self.tool(tool)?,
                 Event::SessionId(id) => self.session_id(id)?,
                 Event::Model(id) => self.model(id),
                 Event::ConfigChanged {
@@ -99,7 +98,6 @@ impl RunningTurn {
     }
     fn follow_up(&mut self, message: Message, kind: Kind) -> Result<(), String> {
         let at = self.transcript.begin("user");
-        self.activity.prompt(at);
         self.from = self.from.min(at);
         self.transcript.append(&message.text);
         self.transcript.attach_files(&message.attachments);
@@ -184,7 +182,7 @@ impl RunningTurn {
         self.from = self.from.min(at);
         self.pending.changed(at);
     }
-    fn tool(&mut self, tool: ToolCall, activity_cwd: &str) -> Result<(), String> {
+    fn tool(&mut self, tool: ToolCall) -> Result<(), String> {
         if tool.is_compaction() {
             self.update.status = if tool.state == ToolState::Running {
                 "Compacting context…"
@@ -197,7 +195,6 @@ impl RunningTurn {
             .tool_rows
             .entry(tool.id.clone())
             .or_insert_with(|| self.transcript.begin("tool"));
-        self.activity.tool(ix, &tool, activity_cwd);
         self.transcript.rows[ix].text = serde_json::to_string(&tool).map_err(|e| e.to_string())?;
         self.from = self.from.min(ix);
         self.pending.changed(ix);
@@ -332,7 +329,6 @@ impl RunningTurn {
                 self.provider_completed = true;
             }
             let mut update = std::mem::take(&mut self.update);
-            update.activity = self.activity.label();
             update.transcript =
                 TranscriptPatch::tail(self.from, self.transcript.rows[self.from..].to_vec());
             update.context = self.context_changed.then_some(self.context);

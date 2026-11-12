@@ -550,10 +550,9 @@ impl Conversation {
     }
 }
 
-pub(crate) fn sidebar_tool_update(label: Option<&str>) -> vorkspace_runtime::runtime::Update {
+pub(crate) fn sidebar_tool_update() -> vorkspace_runtime::runtime::Update {
     let mut update = update(0, false);
     update.transcript = TranscriptPatch::Unchanged;
-    update.activity = label.map(str::to_owned);
     update
 }
 

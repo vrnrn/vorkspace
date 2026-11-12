@@ -367,13 +367,8 @@ fn tool_notifications_update_only_the_receipt_preserving_focus_draft_and_run_clo
             (activity.snapshots, activity.runs[&a].started)
         })
         .unwrap();
-    for label in [
-        Some("Run cargo check"),
-        Some("Read src/main.rs"),
-        Some("Read src/main.rs"),
-        None,
-    ] {
-        tx.try_send(sidebar_tool_update(label)).unwrap();
+    for _ in 0..4 {
+        tx.try_send(sidebar_tool_update()).unwrap();
         visual.executor().advance_clock(Duration::from_millis(1));
         visual.run_until_parked();
         window
@@ -400,11 +395,8 @@ fn tool_notifications_update_only_the_receipt_preserving_focus_draft_and_run_clo
             shell.sessions[&a].update(cx, |view, cx| view.sidebar_test_receiver(cx))
         })
         .unwrap();
-    tx.try_send(sidebar_tool_update(Some("Run stale command")))
-        .unwrap();
-    successor
-        .try_send(sidebar_tool_update(Some("Run current command")))
-        .unwrap();
+    tx.try_send(sidebar_tool_update()).unwrap();
+    successor.try_send(sidebar_tool_update()).unwrap();
     visual.executor().advance_clock(Duration::from_millis(1));
     visual.run_until_parked();
 }

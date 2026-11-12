@@ -9,7 +9,6 @@ use vorkspace_core::{
     store::{ComposerOrigin, Session, Store},
     transcript::{Row, Transcript},
 };
-mod activity;
 pub mod card_persistence;
 #[cfg(test)]
 mod compaction_tests;

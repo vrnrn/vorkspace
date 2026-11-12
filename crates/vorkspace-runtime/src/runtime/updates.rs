@@ -4,8 +4,6 @@ use vorkspace_core::{agent::Approval, provider, transcript::Row};
 #[derive(Default)]
 pub struct Update {
     pub transition: TurnTransition,
-    /// Full, bounded latest-tool label for this run; None means no known tool.
-    pub activity: Option<String>,
     pub transcript: TranscriptPatch,
     pub worktree_cwd: Option<String>,
     pub commands: Option<Vec<provider::NativeCommand>>,
