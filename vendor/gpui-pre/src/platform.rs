@@ -16,11 +16,7 @@ mod test;
 mod visual_test;
 
 
-#[cfg(not(feature = "screen-capture"))]
 pub(crate) type PlatformScreenCaptureFrame = ();
-#[cfg(feature = "screen-capture")]
-pub(crate) type PlatformScreenCaptureFrame =
-    objc2_core_foundation::CFRetained<objc2_core_video::CVImageBuffer>;
 
 use crate::{
     Action, AnyWindowHandle, App, AsyncWindowContext, BackgroundExecutor, Bounds,

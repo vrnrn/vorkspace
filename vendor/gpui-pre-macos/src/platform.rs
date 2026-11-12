@@ -742,19 +742,6 @@ impl Platform for MacPlatform {
         self.0.lock().on_displays_changed = Some(callback);
     }
 
-    #[cfg(feature = "screen-capture")]
-    fn is_screen_capture_supported(&self) -> bool {
-        let min_version = cocoa::foundation::NSOperatingSystemVersion::new(12, 3, 0);
-        crate::is_macos_version_at_least(min_version)
-    }
-
-    #[cfg(feature = "screen-capture")]
-    fn screen_capture_sources(
-        &self,
-    ) -> oneshot::Receiver<Result<Vec<Rc<dyn gpui::ScreenCaptureSource>>>> {
-        crate::screen_capture::get_sources(self.1)
-    }
-
     fn active_window(&self) -> Option<AnyWindowHandle> {
         MacWindow::active_window()
     }

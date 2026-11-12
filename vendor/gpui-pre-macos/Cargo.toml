@@ -34,12 +34,6 @@ zed-rev = "93d745668805029476e6d7fbb19652116fed51de"
 [features]
 default = ["gpui/default"]
 font-kit = ["gpui_apple/font-kit"]
-screen-capture = [
-    "gpui/screen-capture",
-    "dep:objc2-core-graphics",
-    "dep:objc2-core-media",
-    "dep:objc2-screen-capture-kit",
-]
 test-support = [
     "gpui/test-support",
     "gpui_apple/test-support",
@@ -170,21 +164,6 @@ features = [
 ]
 default-features = false
 
-[target.'cfg(target_os = "macos")'.dependencies.objc2-core-graphics]
-version = "0.3.2"
-features = ["CGDirectDisplay"]
-optional = true
-default-features = false
-
-[target.'cfg(target_os = "macos")'.dependencies.objc2-core-media]
-version = "0.3.2"
-features = [
-    "CMSampleBuffer",
-    "objc2-core-video",
-]
-optional = true
-default-features = false
-
 [target.'cfg(target_os = "macos")'.dependencies.objc2-core-video]
 version = "0.3.2"
 features = [
@@ -219,20 +198,6 @@ features = [
     "objc2-core-foundation",
     "std",
 ]
-default-features = false
-
-[target.'cfg(target_os = "macos")'.dependencies.objc2-screen-capture-kit]
-version = "0.3.2"
-features = [
-    "block2",
-    "dispatch2",
-    "objc2-core-graphics",
-    "objc2-core-media",
-    "SCShareableContent",
-    "SCStream",
-    "std",
-]
-optional = true
 default-features = false
 
 [target.'cfg(target_os = "macos")'.dependencies.objc2-user-notifications]
