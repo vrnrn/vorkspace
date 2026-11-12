@@ -141,7 +141,6 @@ impl Conversation {
                 cx.notify();
                 return;
             }
-            let selection = self.input.read(cx).selection_utf16();
             if self
                 .bot_ui
                 .direct_sending
@@ -162,7 +161,7 @@ impl Conversation {
                     return;
                 }
             };
-            self.submit_bot_input(raw, attachments, selection, recovery, cx);
+            self.submit_bot_input(raw, attachments, recovery, cx);
         }
     }
 
@@ -170,7 +169,6 @@ impl Conversation {
         &mut self,
         raw: String,
         attachments: Vec<PathBuf>,
-        selection: std::ops::Range<usize>,
         recovery: Option<ComposerRecovery>,
         cx: &mut Context<Self>,
     ) {
@@ -197,7 +195,6 @@ impl Conversation {
             id: id.clone(),
             text: raw,
             attachments: attachments.clone(),
-            selection,
             retry: false,
         });
         cx.emit(bot::Submitted {

@@ -10,7 +10,6 @@ pub(super) struct DirectSubmission {
     pub(super) id: String,
     pub(super) text: String,
     pub(super) attachments: Vec<PathBuf>,
-    pub(super) selection: std::ops::Range<usize>,
     pub(super) retry: bool,
 }
 
@@ -106,7 +105,6 @@ impl Conversation {
             .is_some_and(|pending| &pending.id == id)
         {
             let pending = self.bot_ui.direct_sending.take().unwrap();
-            let _selection = pending.selection;
             let unchanged = self.input.read(cx).content.as_ref() == pending.text
                 && self.attachments == pending.attachments;
             if unchanged {
