@@ -442,7 +442,7 @@ impl Shell {
                     .when(s.pinned, |d| {
                         d.child(icon("pin", 11.).flex_shrink_0().text_color(content(0.45)))
                     })
-                    .children(self.work_item_badge(id, true, cx))
+                    .children(self.work_item_badge(id, cx))
                     .child(div().flex_shrink_0().text_size(px(11.)).child(status)),
             )
             .child(

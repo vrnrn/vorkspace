@@ -673,12 +673,7 @@ impl Shell {
     }
 
     /// SessionCard's linked issue or PR; Cmd/Ctrl-click and click both open it.
-    pub(super) fn work_item_badge(
-        &self,
-        id: i64,
-        compact: bool,
-        cx: &mut Context<Self>,
-    ) -> Option<AnyElement> {
+    pub(super) fn work_item_badge(&self, id: i64, cx: &mut Context<Self>) -> Option<AnyElement> {
         let item = self.session_metadata(id, cx).summary.work_item.clone()?;
         let noun = if item.kind == "pr" { "PR" } else { "issue" };
         let url = item.url.clone();
@@ -706,7 +701,6 @@ impl Shell {
                     )
                     .text_color(rgb(ACCENT)),
                 )
-                .when(!compact, |d| d.child(format!("#{}", item.number)))
                 .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
                 .on_click(cx.listener(move |_, _, _, cx| {
                     cx.stop_propagation();
