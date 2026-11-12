@@ -315,39 +315,9 @@ impl ProjectSearch {
             .child(div().min_w_0().flex_1().child(input))
             .into_any_element()
     }
-}
 
-impl Render for ProjectSearch {
-    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        if self.cwd.is_empty() || self.cwd == "~" {
-            return div()
-                .px_3()
-                .py_2()
-                .text_size(px(12.))
-                .text_color(content(0.5))
-                .child("No project folder")
-                .into_any_element();
-        }
-        let status = if self.loading {
-            "Searching…".to_owned()
-        } else if let Some(error) = &self.error {
-            error.clone()
-        } else if self.query.read(cx).content.trim().is_empty() {
-            "Type to search across the project".to_owned()
-        } else if self.count == 0 {
-            "No results".to_owned()
-        } else {
-            format!(
-                "{} result{} in {} file{}{}",
-                self.count,
-                if self.count == 1 { "" } else { "s" },
-                self.groups.len(),
-                if self.groups.len() == 1 { "" } else { "s" },
-                if self.truncated { " (limited)" } else { "" }
-            )
-        };
-        let groups = self
-            .groups
+    fn result_groups(&self, cx: &mut Context<Self>) -> Vec<AnyElement> {
+        self.groups
             .iter()
             .enumerate()
             .map(|(group_index, group)| {
@@ -456,7 +426,40 @@ impl Render for ProjectSearch {
                     }))
                     .into_any_element()
             })
-            .collect::<Vec<_>>();
+            .collect::<Vec<_>>()
+    }
+}
+
+impl Render for ProjectSearch {
+    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        if self.cwd.is_empty() || self.cwd == "~" {
+            return div()
+                .px_3()
+                .py_2()
+                .text_size(px(12.))
+                .text_color(content(0.5))
+                .child("No project folder")
+                .into_any_element();
+        }
+        let status = if self.loading {
+            "Searching…".to_owned()
+        } else if let Some(error) = &self.error {
+            error.clone()
+        } else if self.query.read(cx).content.trim().is_empty() {
+            "Type to search across the project".to_owned()
+        } else if self.count == 0 {
+            "No results".to_owned()
+        } else {
+            format!(
+                "{} result{} in {} file{}{}",
+                self.count,
+                if self.count == 1 { "" } else { "s" },
+                self.groups.len(),
+                if self.groups.len() == 1 { "" } else { "s" },
+                if self.truncated { " (limited)" } else { "" }
+            )
+        };
+        let groups = self.result_groups(cx);
         div()
             .id("explorer-project-search")
             .debug_selector(|| "explorer-project-search".into())
