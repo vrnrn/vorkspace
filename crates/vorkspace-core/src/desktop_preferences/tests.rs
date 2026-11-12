@@ -60,7 +60,7 @@ fn skips_empty_normalized_origins_and_keeps_the_source_unchanged() {
         &[("vorkspace.modelControls", "beside")],
     );
     let preferences = DesktopPreferences::load_webkit(root.path());
-    assert!(preferences.is_available());
+    assert!(preferences.available);
     assert_eq!(preferences.get("vorkspace.modelControls"), Some("beside"));
     assert_eq!(std::fs::read(empty).unwrap(), empty_bytes);
     assert_eq!(std::fs::read(populated).unwrap(), populated_bytes);
@@ -68,7 +68,7 @@ fn skips_empty_normalized_origins_and_keeps_the_source_unchanged() {
     let all_empty = tempfile::tempdir().unwrap();
     let (path, bytes) = create_origin_under(all_empty.path(), "only-empty", &[]);
     let preferences = DesktopPreferences::load_webkit(all_empty.path());
-    assert!(!preferences.is_available());
+    assert!(!preferences.available);
     let mut workspace = json!({
         "projects": ["/code/native"],
         "project": "/code/native",

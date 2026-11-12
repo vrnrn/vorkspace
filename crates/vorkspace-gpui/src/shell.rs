@@ -2375,12 +2375,10 @@ impl Shell {
                 let store = locked(&store)?;
                 let summary = store.create(kind.id(), &cwd)?;
                 install.track(summary.id);
-                let mut settings = session_loading::new_session_settings(
-                    store
-                        .desktop_preferences()
-                        .session_defaults(kind.id(), &cwd),
+                let mut settings = vorkspace_core::agent::Settings {
                     model,
-                );
+                    ..Default::default()
+                };
                 settings.access = access;
                 if let Some(effort) = effort {
                     settings.model_settings.retain(|key, _| {

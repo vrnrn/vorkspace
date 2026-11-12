@@ -116,29 +116,6 @@ fn whole_project_sidebar_keeps_seven_today_sessions_across_worktrees_lazy(cx: &m
         .unwrap();
 }
 
-#[test]
-fn remembered_controls_survive_the_mapped_native_model_default() {
-    let remembered = Settings {
-        model: Some("model-a".into()),
-        effort: Some("high".into()),
-        model_settings: [("reasoningEffort".into(), "high".into())].into(),
-        ..Default::default()
-    };
-    let selected = new_session_settings(Some(remembered.clone()), Some("model-a".into()));
-    assert_eq!(selected.effort.as_deref(), Some("high"));
-    assert_eq!(
-        selected
-            .model_settings
-            .get("reasoningEffort")
-            .map(String::as_str),
-        Some("high")
-    );
-    let changed = new_session_settings(Some(remembered), Some("model-b".into()));
-    assert_eq!(changed.model.as_deref(), Some("model-b"));
-    assert!(changed.effort.is_none());
-    assert!(changed.model_settings.is_empty());
-}
-
 #[gpui::test]
 fn restoring_large_history_materializes_only_visible_chats(cx: &mut TestAppContext) {
     let store = Store::test(std::path::Path::new(":memory:")).unwrap();

@@ -1,5 +1,4 @@
 //! Read desktop webview preferences without modifying WebKit storage or its schema.
-mod session_defaults;
 mod workspace_preferences;
 mod workspace_snapshot;
 
@@ -49,9 +48,6 @@ impl DesktopPreferences {
         Self::default()
     }
 
-    pub(crate) fn is_available(&self) -> bool {
-        self.available
-    }
     pub fn get(&self, key: &str) -> Option<&str> {
         self.values.get(key).map(String::as_str)
     }

@@ -192,27 +192,5 @@ impl Shell {
 
 /// Preserve remembered source controls when they refer to the selected model.
 /// A deliberate native model override starts with fresh model-specific controls.
-pub(super) fn new_session_settings(
-    source: Option<vorkspace_core::agent::Settings>,
-    model: Option<String>,
-) -> vorkspace_core::agent::Settings {
-    let mut settings = source.unwrap_or_default();
-    if let Some(model) = model {
-        if settings
-            .model
-            .as_ref()
-            .is_some_and(|source| source != &model)
-        {
-            settings.effort = None;
-            settings.fast = false;
-            settings.thinking = None;
-            settings.service_tier = None;
-            settings.model_settings.clear();
-        }
-        settings.model = Some(model);
-    }
-    settings
-}
-
 #[cfg(test)]
 mod tests;

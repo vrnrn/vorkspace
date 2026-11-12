@@ -51,12 +51,7 @@ impl Store {
                     .into_iter()
                     .map(|name| self.shared_field(name, "NULL")),
             )
-            .chain([
-                "cwd".to_owned(),
-                "provider_session_id".to_owned(),
-                self.shared_has_user_message()?,
-                native.to_owned(),
-            ])
+            .chain(["provider_session_id".to_owned(), native.to_owned()])
             .collect::<Vec<_>>()
             .join(",");
         let raw = sql(self
@@ -73,31 +68,18 @@ impl Store {
                         r.get::<_, Option<String>>(4)?,
                         r.get::<_, Option<bool>>(5)?,
                         r.get::<_, Option<String>>(6)?,
-                        r.get::<_, String>(7)?,
+                        r.get::<_, Option<String>>(7)?,
                         r.get::<_, Option<String>>(8)?,
-                        r.get::<_, bool>(9)?,
-                        r.get::<_, Option<String>>(10)?,
                     ))
                 },
             )
             .optional())?;
-        let Some((
-            provider,
-            model,
-            controls,
-            access,
-            cwd,
-            removed,
-            account,
-            project,
-            provider_id,
-            has_messages,
-            native,
-        )) = raw
+        let Some((provider, model, controls, access, cwd, removed, account, provider_id, native)) =
+            raw
         else {
             return Ok(None);
         };
-        let mut controls: HashMap<String, String> = parse(&controls)?;
+        let controls: HashMap<String, String> = parse(&controls)?;
         let native = match native {
             Some(raw) => Some(raw),
             None => self.setting(&format!("agent:{id}"))?,
@@ -107,25 +89,6 @@ impl Store {
             .transpose()?
             .unwrap_or_default();
         settings.model = crate::session::native_model(&model, &provider);
-        // A prior native launch may have created an untouched default blank.
-        // Seed only that blank, never a saved or resumed conversation's model.
-        let default_controls = controls.iter().all(|(key, value)| {
-            (key == "fast" && value == "false") || (key == "serviceTier" && value == "default")
-        });
-        if settings.model.is_none()
-            && default_controls
-            && settings.revision == 0
-            && !has_messages
-            && provider_id.is_none()
-        {
-            if let Some(defaults) = self
-                .desktop_preferences()
-                .session_defaults(&provider, &project)
-            {
-                settings.model = defaults.model;
-                controls = defaults.model_settings;
-            }
-        }
         settings.access = crate::agent::AccessMode::from_id(&access);
         settings.effort = [
             "effort",
