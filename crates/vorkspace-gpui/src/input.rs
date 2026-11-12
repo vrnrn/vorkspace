@@ -410,8 +410,8 @@ impl Input {
     pub(crate) fn set_font_size(&mut self, size: f32) {
         self.font_size = size;
     }
-    pub(crate) fn set_centered(&mut self, centered: bool) {
-        self.centered = centered;
+    pub(crate) fn set_centered(&mut self) {
+        self.centered = true;
     }
     pub(crate) fn set_line_height(&mut self, height: f32) {
         self.line_height = height;

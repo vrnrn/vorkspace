@@ -63,7 +63,7 @@ impl Shell {
         });
         let icon_letters = cx.new(|cx| {
             let mut field = input::Input::field("Icon letters", "Auto", content(0.45), cx);
-            field.set_centered(true);
+            field.set_centered();
             field.set_text(letters, cx);
             field
         });

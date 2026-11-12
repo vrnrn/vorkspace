@@ -419,7 +419,7 @@ impl Bots {
         name.update(cx, |f, cx| {
             f.set_font_size(15.);
             f.set_line_height(20.);
-            f.set_centered(true);
+            f.set_centered();
             f.set_placeholder(
                 if creating {
                     "Name your bot".into()
