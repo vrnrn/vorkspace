@@ -1272,54 +1272,7 @@ impl TodoBoardView {
                 .flex()
                 .flex_col()
                 .child(
-                    div()
-                        .h(px(52.))
-                        .px_3()
-                        .flex_shrink_0()
-                        .flex()
-                        .items_center()
-                        .gap_2()
-                        .border_b_1()
-                        .border_color(page::divider())
-                        .child(
-                            labeled_secondary("todo-details-close", "Close", false, false)
-                                .debug_selector(|| "todo-details-close".into())
-                                .flex_shrink_0()
-                                .on_click(cx.listener(|this, _, window, cx| {
-                                    this.dismiss_details(window, cx);
-                                })),
-                        )
-                        .child(
-                            div()
-                                .flex_1()
-                                .min_w_0()
-                                .truncate()
-                                .text_size(px(page::META_SIZE))
-                                .text_color(page::secondary_ink())
-                                .child(if let Some(issue) = &issue {
-                                    if pending_edit {
-                                        format!("GitHub issue #{} · edit unconfirmed", issue.number)
-                                    } else {
-                                        format!("GitHub issue #{}", issue.number)
-                                    }
-                                } else if uncertain {
-                                    format!(
-                                        "GitHub creation unconfirmed · check {}",
-                                        item.pending_repo
-                                            .as_deref()
-                                            .unwrap_or("the original repository")
-                                    )
-                                } else {
-                                    "Local project to-do".into()
-                                }),
-                        )
-                        .when_some(issue.clone(), |d, issue| {
-                            d.child(
-                                labeled_secondary("todo-open-issue", "Open on GitHub", false, false)
-                                    .flex_shrink_0()
-                                    .on_click(move |_, _, cx| cx.open_url(&issue.url)),
-                            )
-                        }),
+                    self.todo_details_header(item, &issue, pending_edit, uncertain, cx),
                 )
                 .child(
                     div()
@@ -1431,28 +1384,7 @@ impl TodoBoardView {
                     selected_dependencies
                         .iter()
                         .enumerate()
-                        .map(|(index, reference)| {
-                            let reference = reference.clone();
-                            div()
-                                .id(SharedString::from(format!("todo-selected-dependency-{index}")))
-                                .flex()
-                                .items_start()
-                                .gap_2()
-                                .px_2()
-                                .py_1()
-                                .rounded(px(radius::CONTROL))
-                                .bg(content(0.05))
-                                .child(div().flex_1().min_w_0().text_size(px(page::LABEL_SIZE)).child(self.dependency_label(item, &reference)))
-                                .when(!dependencies_truncated, |d| {
-                                    d.child(page::icon_action(
-                                        SharedString::from(format!("todo-remove-dependency-{index}")),
-                                        "Remove dependency",
-                                        true,
-                                    )
-                                    .child(icon("close", page::ICON_SIZE))
-                                    .on_click(cx.listener(move |this, _, _, cx| this.toggle_dependency(reference.clone(), cx))))
-                                })
-                        }),
+                        .map(|(index, reference)| self.todo_selected_dependency(item, reference.clone(), index, dependencies_truncated, cx)),
                 )
                 .when(dependencies_truncated, |d| {
                     d.child(page::meta().child("Additional dependencies are on GitHub. Edit dependency links there."))
@@ -1475,54 +1407,7 @@ impl TodoBoardView {
                         })),
                     )
                 })
-                .when(self.show_dependency_choices && !dependencies_truncated, |d| {
-                    let selected_keys = selected_dependencies
-                        .iter()
-                        .map(|reference| self.dependency_key(item, reference))
-                        .collect::<std::collections::HashSet<_>>();
-                    let own_reference = Self::dependency_ref(item);
-                    let choices = self.items.iter()
-                        .filter(|candidate| !remote || candidate.issue.is_some())
-                        .filter_map(|candidate| {
-                            let reference = Self::dependency_ref(candidate);
-                            if reference == own_reference {
-                                return None;
-                            }
-                            let selected = selected_keys.contains(reference.as_str());
-                            Some((reference, Self::dependency_item_label(candidate), selected))
-                        })
-                        .collect::<Vec<_>>();
-                    let choices_empty = choices.is_empty();
-                    d.child(
-                        div()
-                            .id("todo-dependency-choices")
-                            .max_h(px(150.))
-                            .overflow_y_scroll()
-                            .flex()
-                            .flex_col()
-                            .gap_1()
-                            .children(choices.into_iter().enumerate().map(
-                                |(index, (reference, label, selected))| {
-                                    labeled_secondary(
-                                        SharedString::from(format!(
-                                            "todo-dependency-choice-{index}"
-                                        )),
-                                        format!("{} {label}", if selected { "✓" } else { "+" }),
-                                        false,
-                                        false,
-                                    )
-                                    .on_click(cx.listener(
-                                        move |this, _, _, cx| {
-                                            this.toggle_dependency(reference.clone(), cx)
-                                        },
-                                    ))
-                                },
-                            ))
-                            .when(choices_empty, |d| {
-                                d.child("No other tasks on this board")
-                            }),
-                    )
-                })
+                .when(self.show_dependency_choices && !dependencies_truncated, |d| self.todo_dependency_choices(d, item, &selected_dependencies, remote, cx))
                             ),
                 )
                 .child(
@@ -1580,73 +1465,231 @@ impl TodoBoardView {
                                 .debug_selector(|| "todo-publish".into())
                                 .on_click(cx.listener(|this, _, _, cx| this.publish_details(cx))),
                             )
-                        })
-                        .when(uncertain || pending_edit, |d| {
-                            d.child(
-                                labeled_secondary(
-                                    "todo-reconcile",
-                                    if pending_edit {
-                                        "Check issue for edit"
-                                    } else {
-                                        "Check for created issue"
-                                    },
-                                    false,
-                                    self.pending_changes > 0,
-                                )
-                                .on_click(cx.listener(|this, _, _, cx| this.reconcile_detail(cx))),
-                            )
-                        })
-                        .when(uncertain || pending_edit, |d| {
-                            d.child(
-                                labeled_secondary(
-                                    "todo-retry",
-                                    if self.confirm_retry {
-                                        "I checked GitHub: retry"
-                                    } else {
-                                        "Retry after checking GitHub"
-                                    },
-                                    false,
-                                    self.pending_changes > 0,
-                                )
-                                .on_click(cx.listener(|this, _, _, cx| this.retry_detail(cx))),
-                            )
-                        })
-                        .when(uncertain, |d| {
-                            d.child(
-                                labeled_secondary(
-                                    "todo-cancel-publish",
-                                    if self.confirm_cancel {
-                                        "I checked: keep local"
-                                    } else {
-                                        "Keep as local task"
-                                    },
-                                    false,
-                                    self.pending_changes > 0,
-                                )
-                                .on_click(
-                                    cx.listener(|this, _, _, cx| this.cancel_publish_detail(cx)),
-                                ),
-                            )
-                        })
-                        .when(pending_edit, |d| {
-                            d.child(
-                                labeled_secondary(
-                                    "todo-discard-edit",
-                                    if self.confirm_discard {
-                                        "I checked: discard draft"
-                                    } else {
-                                        "Discard saved edit"
-                                    },
-                                    true,
-                                    self.pending_changes > 0,
-                                )
-                                .on_click(cx.listener(|this, _, _, cx| this.discard_detail(cx))),
-                            )
-                        }),
+                        }).map(|d| self.todo_recovery_actions(d, uncertain, pending_edit, cx)),
                         ),
                 )
                 .into_any_element(),
         )
+    }
+
+    fn todo_details_header(
+        &self,
+        item: &TodoItem,
+        issue: &Option<vorkspace_core::todos::TodoIssue>,
+        pending_edit: bool,
+        uncertain: bool,
+        cx: &Context<Self>,
+    ) -> Div {
+        div()
+            .h(px(52.))
+            .px_3()
+            .flex_shrink_0()
+            .flex()
+            .items_center()
+            .gap_2()
+            .border_b_1()
+            .border_color(page::divider())
+            .child(
+                labeled_secondary("todo-details-close", "Close", false, false)
+                    .debug_selector(|| "todo-details-close".into())
+                    .flex_shrink_0()
+                    .on_click(cx.listener(|this, _, window, cx| {
+                        this.dismiss_details(window, cx);
+                    })),
+            )
+            .child(
+                div()
+                    .flex_1()
+                    .min_w_0()
+                    .truncate()
+                    .text_size(px(page::META_SIZE))
+                    .text_color(page::secondary_ink())
+                    .child(if let Some(issue) = &issue {
+                        if pending_edit {
+                            format!("GitHub issue #{} · edit unconfirmed", issue.number)
+                        } else {
+                            format!("GitHub issue #{}", issue.number)
+                        }
+                    } else if uncertain {
+                        format!(
+                            "GitHub creation unconfirmed · check {}",
+                            item.pending_repo
+                                .as_deref()
+                                .unwrap_or("the original repository")
+                        )
+                    } else {
+                        "Local project to-do".into()
+                    }),
+            )
+            .when_some(issue.clone(), |d, issue| {
+                d.child(
+                    labeled_secondary("todo-open-issue", "Open on GitHub", false, false)
+                        .flex_shrink_0()
+                        .on_click(move |_, _, cx| cx.open_url(&issue.url)),
+                )
+            })
+    }
+
+    fn todo_dependency_choices(
+        &self,
+        d: Div,
+        item: &TodoItem,
+        selected_dependencies: &[String],
+        remote: bool,
+        cx: &Context<Self>,
+    ) -> Div {
+        let selected_keys = selected_dependencies
+            .iter()
+            .map(|reference| self.dependency_key(item, reference))
+            .collect::<std::collections::HashSet<_>>();
+        let own_reference = Self::dependency_ref(item);
+        let choices = self
+            .items
+            .iter()
+            .filter(|candidate| !remote || candidate.issue.is_some())
+            .filter_map(|candidate| {
+                let reference = Self::dependency_ref(candidate);
+                if reference == own_reference {
+                    return None;
+                }
+                let selected = selected_keys.contains(reference.as_str());
+                Some((reference, Self::dependency_item_label(candidate), selected))
+            })
+            .collect::<Vec<_>>();
+        let choices_empty = choices.is_empty();
+        d.child(
+            div()
+                .id("todo-dependency-choices")
+                .max_h(px(150.))
+                .overflow_y_scroll()
+                .flex()
+                .flex_col()
+                .gap_1()
+                .children(choices.into_iter().enumerate().map(
+                    |(index, (reference, label, selected))| {
+                        labeled_secondary(
+                            SharedString::from(format!("todo-dependency-choice-{index}")),
+                            format!("{} {label}", if selected { "✓" } else { "+" }),
+                            false,
+                            false,
+                        )
+                        .on_click(cx.listener(move |this, _, _, cx| {
+                            this.toggle_dependency(reference.clone(), cx)
+                        }))
+                    },
+                ))
+                .when(choices_empty, |d| d.child("No other tasks on this board")),
+        )
+    }
+
+    fn todo_selected_dependency(
+        &self,
+        item: &TodoItem,
+        reference: String,
+        index: usize,
+        dependencies_truncated: bool,
+        cx: &Context<Self>,
+    ) -> gpui::Stateful<Div> {
+        div()
+            .id(SharedString::from(format!(
+                "todo-selected-dependency-{index}"
+            )))
+            .flex()
+            .items_start()
+            .gap_2()
+            .px_2()
+            .py_1()
+            .rounded(px(radius::CONTROL))
+            .bg(content(0.05))
+            .child(
+                div()
+                    .flex_1()
+                    .min_w_0()
+                    .text_size(px(page::LABEL_SIZE))
+                    .child(self.dependency_label(item, &reference)),
+            )
+            .when(!dependencies_truncated, |d| {
+                d.child(
+                    page::icon_action(
+                        SharedString::from(format!("todo-remove-dependency-{index}")),
+                        "Remove dependency",
+                        true,
+                    )
+                    .child(icon("close", page::ICON_SIZE))
+                    .on_click(cx.listener(move |this, _, _, cx| {
+                        this.toggle_dependency(reference.clone(), cx)
+                    })),
+                )
+            })
+    }
+
+    fn todo_recovery_actions(
+        &self,
+        d: Div,
+        uncertain: bool,
+        pending_edit: bool,
+        cx: &Context<Self>,
+    ) -> Div {
+        d.when(uncertain || pending_edit, |d| {
+            d.child(
+                labeled_secondary(
+                    "todo-reconcile",
+                    if pending_edit {
+                        "Check issue for edit"
+                    } else {
+                        "Check for created issue"
+                    },
+                    false,
+                    self.pending_changes > 0,
+                )
+                .on_click(cx.listener(|this, _, _, cx| this.reconcile_detail(cx))),
+            )
+        })
+        .when(uncertain || pending_edit, |d| {
+            d.child(
+                labeled_secondary(
+                    "todo-retry",
+                    if self.confirm_retry {
+                        "I checked GitHub: retry"
+                    } else {
+                        "Retry after checking GitHub"
+                    },
+                    false,
+                    self.pending_changes > 0,
+                )
+                .on_click(cx.listener(|this, _, _, cx| this.retry_detail(cx))),
+            )
+        })
+        .when(uncertain, |d| {
+            d.child(
+                labeled_secondary(
+                    "todo-cancel-publish",
+                    if self.confirm_cancel {
+                        "I checked: keep local"
+                    } else {
+                        "Keep as local task"
+                    },
+                    false,
+                    self.pending_changes > 0,
+                )
+                .on_click(cx.listener(|this, _, _, cx| this.cancel_publish_detail(cx))),
+            )
+        })
+        .when(pending_edit, |d| {
+            d.child(
+                labeled_secondary(
+                    "todo-discard-edit",
+                    if self.confirm_discard {
+                        "I checked: discard draft"
+                    } else {
+                        "Discard saved edit"
+                    },
+                    true,
+                    self.pending_changes > 0,
+                )
+                .on_click(cx.listener(|this, _, _, cx| this.discard_detail(cx))),
+            )
+        })
     }
 
     fn status_mark(status: TodoStatus) -> gpui::AnyElement {
