@@ -5,18 +5,15 @@ use rusqlite::{Transaction, TransactionBehavior};
 
 impl Store {
     pub fn groups(&self, cwd: &str) -> Result<Groups, String> {
-        self.groups_from(cwd, self.setting(&format!("groups:{cwd}"))?.as_deref())
+        self.groups_from(self.setting(&format!("groups:{cwd}"))?.as_deref())
     }
 
-    fn groups_from(&self, cwd: &str, saved: Option<&str>) -> Result<Groups, String> {
+    fn groups_from(&self, saved: Option<&str>) -> Result<Groups, String> {
         if let Some(saved) = saved {
             let decoded = serde_json::from_str(saved);
             return decoded.map_err(|error| error.to_string());
         }
-        Ok(self
-            .desktop_preferences()
-            .groups(cwd, |id| self.resolve_existing_session_id(id))
-            .unwrap_or_default())
+        Ok(Groups::default())
     }
 
     /// Merge with the latest project folders across independent stores.
@@ -27,7 +24,7 @@ impl Store {
     ) -> Result<(), String> {
         let key = format!("groups:{cwd}");
         self.update_settings(|settings| {
-            let mut groups = self.groups_from(cwd, settings.get(&key).map(String::as_str))?;
+            let mut groups = self.groups_from(settings.get(&key).map(String::as_str))?;
             edit(&mut groups)?;
             Ok(((), vec![(key, shared::encode(&groups)?)]))
         })

@@ -628,7 +628,7 @@ fn model_choice(provider: &str, model: &str) -> Option<Value> {
     Some(json!({"provider":provider, "model":crate::session::native_model(model, provider)}))
 }
 
-pub(super) fn valid_hex(color: &str) -> bool {
+fn valid_hex(color: &str) -> bool {
     color.len() == 7 && color.starts_with('#') && color[1..].bytes().all(|b| b.is_ascii_hexdigit())
 }
 pub(super) fn providers(value: &Value) -> Vec<String> {
