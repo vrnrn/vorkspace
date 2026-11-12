@@ -21,7 +21,7 @@ use recording::{State, Transcript, atomic_json, read_json};
 const MAX_TITLE_CHARS: usize = 200;
 // JSON may encode a single ASCII control byte as a six-byte escape. Bound
 // every edit field before allowing it into the draft or document store.
-pub const MAX_EDIT_MESSAGE_BYTES: usize =
+pub(crate) const MAX_EDIT_MESSAGE_BYTES: usize =
     6 * (recording::MAX_TRANSCRIPT + MAX_SUMMARY_BYTES + 4 * MAX_TITLE_CHARS) + 4096;
 // The canonical document also includes provider and model values, whose
 // encoded size is bounded by the settings reader.
@@ -266,7 +266,7 @@ impl Meetings {
         self.save(&meeting)?;
         Ok(meeting)
     }
-    pub fn delete(&self, id: &str, expected_revision: u64) -> Result<(), String> {
+    pub(crate) fn delete(&self, id: &str, expected_revision: u64) -> Result<(), String> {
         self.delete_with_commit(id, Some(expected_revision), || Ok(()))
     }
 

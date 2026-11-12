@@ -126,7 +126,7 @@ pub struct Transcript {
     pub segments: Vec<Segment>,
 }
 impl Transcript {
-    pub fn sequence(&self) -> u64 {
+    pub(crate) fn sequence(&self) -> u64 {
         self.segments.last().map_or(0, |segment| segment.sequence)
     }
 }
@@ -136,13 +136,13 @@ pub fn now_ms() -> u64 {
         .unwrap_or_default()
         .as_millis() as u64
 }
-pub fn directory(base: &Path, id: &str) -> Result<PathBuf, String> {
+pub(crate) fn directory(base: &Path, id: &str) -> Result<PathBuf, String> {
     if !valid_id(id) {
         return Err("Invalid recording id".into());
     }
     Ok(base.join("recordings").join(id))
 }
-pub fn atomic_json(path: &Path, value: &impl Serialize) -> Result<(), String> {
+pub(crate) fn atomic_json(path: &Path, value: &impl Serialize) -> Result<(), String> {
     let dir = parent(path, true)?;
     atomic_json_in(&dir, name(path)?, value)
 }
@@ -181,7 +181,10 @@ fn atomic_json_in(dir: &Directory, name: &OsStr, value: &impl Serialize) -> Resu
     result
 }
 
-pub fn read_json<T: serde::de::DeserializeOwned>(path: &Path, limit: usize) -> Result<T, String> {
+pub(crate) fn read_json<T: serde::de::DeserializeOwned>(
+    path: &Path,
+    limit: usize,
+) -> Result<T, String> {
     read_json_in(&parent(path, false)?, name(path)?, limit)
 }
 
