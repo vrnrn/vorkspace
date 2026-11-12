@@ -118,13 +118,13 @@ impl PendingSave {
     }
     pub(super) fn accept(
         &mut self,
-        target: (&Database, i64),
+        store: &Database,
+        session: i64,
         from: usize,
         transcript: &Transcript,
         message: &str,
         now: Instant,
     ) -> Result<(), String> {
-        let (store, session) = target;
         let from = self.from.map_or(from, |old| old.min(from));
         self.write(
             &mut *locked(store)?,

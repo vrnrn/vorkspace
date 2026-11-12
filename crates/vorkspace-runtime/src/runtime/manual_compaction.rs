@@ -31,7 +31,8 @@ pub(super) fn run(
     started: impl FnOnce(Started),
 ) -> Finished {
     run_using(
-        (summary, settings),
+        summary,
+        settings,
         store,
         cancel,
         started,
@@ -41,7 +42,8 @@ pub(super) fn run(
 }
 
 pub(super) fn run_using(
-    conversation: (Session, Settings),
+    summary: Session,
+    mut settings: Settings,
     store: Database,
     cancel: Arc<AtomicBool>,
     started: impl FnOnce(Started),
@@ -52,7 +54,6 @@ pub(super) fn run_using(
         &mut dyn FnMut(Vec<Event>) -> Result<(), String>,
     ) -> Result<(), String>,
 ) -> Finished {
-    let (summary, mut settings) = conversation;
     let id = summary.id;
     let account = settings.account.id.clone();
     let cwd = settings

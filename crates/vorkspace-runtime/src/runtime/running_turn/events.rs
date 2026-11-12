@@ -107,7 +107,8 @@ impl RunningTurn {
         // even when the provider has no new output yet.
         let turn = self.transcript.begin("assistant");
         self.pending.accept(
-            (&self.store, self.session),
+            &self.store,
+            self.session,
             at,
             &self.transcript,
             &message.id,
