@@ -17,11 +17,10 @@ pub struct Conversation {
     pub thread_id: Option<String>,
 }
 pub fn conversation(store: &Store) -> Result<Conversation, String> {
-    decode_conversation(store, store.setting(KEY)?.as_deref())
+    decode_conversation(store.setting(KEY)?.as_deref())
 }
 
-fn decode_conversation(store: &Store, native: Option<&str>) -> Result<Conversation, String> {
-    let raw = native.or_else(|| store.desktop_preferences().get(KEY));
+fn decode_conversation(raw: Option<&str>) -> Result<Conversation, String> {
     match raw {
         None => Ok(Conversation {
             revision: "initial".into(),
@@ -41,7 +40,7 @@ pub fn save(store: &Store, expected: &Conversation, thread: &str) -> Result<(), 
         return Err("Invalid Vox thread identity".into());
     }
     let native = store.setting(KEY)?;
-    let current = decode_conversation(store, native.as_deref())?;
+    let current = decode_conversation(native.as_deref())?;
     if &current != expected {
         return Err("Vox conversation changed; start the call again".into());
     }
