@@ -697,191 +697,109 @@ impl Shell {
         let owner = cx.weak_entity();
         let live_agents = cx.new(|cx| live_agents::LiveAgents::new(owner, cx));
 
-        // Evaluate fields in their original order before assembling the groups,
-        // preserving both construction effects and cleanup if construction unwinds.
-        let init_orchestrations = HashMap::new();
-        let init_orchestration_summaries = sidebar_metadata.orchestrations.clone();
-        let init_started_by = sidebar_metadata.started_by.clone();
+        // Keep context mutations and the clock sample in their original order.
         let init_usage_footer = cx.new(|cx| UsageFooter::new(active_kind, cx));
-        let init_resources = resources;
-        let init_sidebar_frame = sidebar_frame;
-        let init_project_rail_frame = project_rail_frame;
-        let init_sidebar_search = sidebar_search;
-        let init_sidebar_fraction = if workspace.sidebar_visible { 1. } else { 0. };
-        let init_sidebar_content_width = workspace.right_panel_width;
-        let init_tabs_frame = tabs_frame;
-        let init_store = store;
-        let init_sessions = HashMap::new();
-        let init_directory = directory;
-        let init_visible_chats = HashSet::new();
-        let init_history_recency = HashMap::new();
-        let init_session_marks = HashMap::new();
-        let init_tab_marks = HashMap::new();
-        let init_busy_sessions = HashSet::new();
-        let init_notification_state = notification_state;
-        let init_quick = Default::default();
-        let init_unseen_finished = HashSet::new();
-        let init_live_agents = live_agents;
-        let init_archiving = HashSet::new();
-        let init_groups = sidebar_metadata
-            .groups
-            .iter()
-            .map(|(project, groups)| {
-                (
-                    project.clone(),
-                    Arc::new(session_groups::FolderIndex::new(groups.clone())),
-                )
-            })
-            .collect();
-        let init_deleting = HashSet::new();
-        let init_selected_sessions = HashSet::new();
-        let init_session_row_bounds = HashMap::new();
-        let init_filter_anchor = AnchorSlot::default();
-        let init_codebase_tabs = HashMap::new();
-        let init_note_tabs = HashMap::new();
-        let init_item_tabs = HashMap::new();
-        let init_bot_document_tabs = HashMap::new();
-        let init_bot_pane_views = HashMap::new();
-        let init_team_histories = Default::default();
-        let init_bot_conversations = Default::default();
-        let init_connector_pages = HashMap::new();
-        let init_terminal_tabs = HashMap::new();
-        let init_app_view_events = Vec::new();
-        let init_automation_state = Default::default();
-        let init_order = Vec::new();
-        let init_workspace = workspace;
-        let init_deleting_projects = HashSet::new();
         let init_focus = cx.focus_handle();
         let init_project_rail_toggle_focus = cx.focus_handle().tab_stop(true);
         let init_sidebar_focus = cx.focus_handle();
-        let init_query = String::new();
-        let init_title_tab_motion = Default::default();
         let init_title_tab_selection = (None, None, vorkspace_ui::clock::Instant::now());
-        let init_preparing_sessions = Default::default();
-        let init_vorkspace_baseline = Arc::default();
         let init_window_layout =
             window_layout.unwrap_or_else(|| app_core.update(cx, |core, _| core.allocate_window()));
-        let init_window_shared = window_shared;
-        let init_native_title = String::new();
-        let init_rail_list = gpui::ListState::new(0, gpui::ListAlignment::Top, px(96.));
-        let init_rail_list_ids = Default::default();
-        let init_vorkspace_anchor = AnchorSlot::default();
-        let init_backgrounds = HashMap::new();
-        let init_project_anchor = AnchorSlot::default();
-        let init_sidebar_options_anchor = AnchorSlot::default();
-        let init_history = VisitHistory::default();
-        let init_pending_project_blanks = HashSet::new();
-        let init_pending_project_creations = HashMap::new();
-        let init_worktree_focus = worktree_focus;
-        let init_worktree_returns = HashMap::new();
-        let init_tab_shifts = HashMap::new();
-        let init_pane_ticks = HashMap::new();
-        let init_tab_scroll = ScrollHandle::new();
-        let init_tab_switcher_anchor = AnchorSlot::default();
-        let init_git = git;
-        let init_reviews = HashMap::new();
-        let init_review_cache = Default::default();
-        let init_split_bounds = HashMap::new();
-        let init_pane_bounds = AnchorSlot::default();
-        let init_pane_viewport = AnchorSlot::default();
-        let init_pane_scroll = ScrollHandle::new();
-        let init_terminals = HashMap::new();
-        let init_dock_tab_motion = Default::default();
-        let init_dock_shifts = HashMap::new();
-        let init_dock_tab_scroll = ScrollHandle::new();
-        let init_move_terminal_anchor = AnchorSlot::default();
-        let init_observations = vec![
-            resource_observation,
-            resource_stops,
-            sidebar_search_events,
-            git_head,
-        ];
 
         let mut this = Self {
             bots: None,
             vox: None,
             quick_open: None,
             image_lightbox: None,
-            orchestrations: init_orchestrations,
+            orchestrations: HashMap::new(),
             usage_footer: init_usage_footer,
-            resources: init_resources,
-            sidebar_frame: init_sidebar_frame,
-            project_rail_frame: init_project_rail_frame,
-            sidebar_search: init_sidebar_search,
-            tabs_frame: init_tabs_frame,
-            store: init_store,
-            sessions: init_sessions,
-            directory: init_directory,
-            visible_chats: init_visible_chats,
-            history_recency: init_history_recency,
+            resources,
+            sidebar_frame,
+            project_rail_frame,
+            sidebar_search,
+            tabs_frame,
+            store,
+            sessions: HashMap::new(),
+            directory,
+            visible_chats: HashSet::new(),
+            history_recency: HashMap::new(),
             history_clock: 0,
-            session_marks: init_session_marks,
-            tab_marks: init_tab_marks,
-            busy_sessions: init_busy_sessions,
-            notification_state: init_notification_state,
-            quick: init_quick,
-            unseen_finished: init_unseen_finished,
+            session_marks: HashMap::new(),
+            tab_marks: HashMap::new(),
+            busy_sessions: HashSet::new(),
+            notification_state,
+            quick: Default::default(),
+            unseen_finished: HashSet::new(),
             sidebar: SidebarState {
-                orchestration_summaries: init_orchestration_summaries,
-                started_by: init_started_by,
+                orchestration_summaries: sidebar_metadata.orchestrations.clone(),
+                started_by: sidebar_metadata.started_by.clone(),
                 slide: None,
-                fraction: init_sidebar_fraction,
-                content_width: init_sidebar_content_width,
-                live_agents: init_live_agents,
-                groups: init_groups,
+                fraction: if workspace.sidebar_visible { 1. } else { 0. },
+                content_width: workspace.right_panel_width,
+                live_agents,
+                groups: sidebar_metadata
+                    .groups
+                    .iter()
+                    .map(|(project, groups)| {
+                        (
+                            project.clone(),
+                            Arc::new(session_groups::FolderIndex::new(groups.clone())),
+                        )
+                    })
+                    .collect(),
                 renaming: None,
                 link_dialog: None,
                 group_writes: None,
-                selected_sessions: init_selected_sessions,
+                selected_sessions: HashSet::new(),
                 selection_anchor: None,
                 context_selection: false,
                 target: None,
-                session_row_bounds: init_session_row_bounds,
-                filter_anchor: init_filter_anchor,
-                query: init_query,
+                session_row_bounds: HashMap::new(),
+                filter_anchor: AnchorSlot::default(),
+                query: String::new(),
                 hover: None,
-                project_anchor: init_project_anchor,
-                options_anchor: init_sidebar_options_anchor,
+                project_anchor: AnchorSlot::default(),
+                options_anchor: AnchorSlot::default(),
                 resize: None,
                 skip_session_click: false,
             },
-            archiving: init_archiving,
-            deleting: init_deleting,
+            archiving: HashSet::new(),
+            deleting: HashSet::new(),
             session_removal_epoch: 0,
             page_tabs: PageTabs {
                 notes: None,
-                codebase_tabs: init_codebase_tabs,
-                note_tabs: init_note_tabs,
-                item_tabs: init_item_tabs,
-                bot_document_tabs: init_bot_document_tabs,
-                bot_pane_views: init_bot_pane_views,
+                codebase_tabs: HashMap::new(),
+                note_tabs: HashMap::new(),
+                item_tabs: HashMap::new(),
+                bot_document_tabs: HashMap::new(),
+                bot_pane_views: HashMap::new(),
                 todos_page: None,
             },
             project_todos: None,
-            team_histories: init_team_histories,
-            bot_conversations: init_bot_conversations,
+            team_histories: Default::default(),
+            bot_conversations: Default::default(),
             pages: AppPages {
                 inbox: None,
-                connector_pages: init_connector_pages,
+                connector_pages: HashMap::new(),
                 automations: None,
                 active_app_view: None,
                 active_terminal_tab: None,
-                terminal_tabs: init_terminal_tabs,
-                view_events: init_app_view_events,
-                automation_state: init_automation_state,
+                terminal_tabs: HashMap::new(),
+                view_events: Vec::new(),
+                automation_state: Default::default(),
                 settings: None,
                 settings_events: None,
                 search: None,
                 parked_search: None,
                 saved_search: None,
             },
-            order: init_order,
-            workspace: init_workspace,
+            order: Vec::new(),
+            workspace,
             external_editor: ExternalEditorState {
                 editors: None,
                 scan: 0,
             },
-            deleting_projects: init_deleting_projects,
+            deleting_projects: HashSet::new(),
             active_worktree_removals: 0,
             focus: init_focus,
             project_rail_toggle_focus: init_project_rail_toggle_focus,
@@ -904,7 +822,7 @@ impl Shell {
                 layout: init_window_layout,
                 closing: false,
                 native_window: None,
-                native_title: init_native_title,
+                native_title: String::new(),
                 viewport_width: 1200.,
                 viewport_height: 800.,
                 render_passes: 0,
@@ -915,43 +833,43 @@ impl Shell {
                 vorkspace_dialog: None,
             },
             app_core: None,
-            preparing_sessions: init_preparing_sessions,
-            vorkspace_baseline: init_vorkspace_baseline,
-            window_shared: init_window_shared,
+            preparing_sessions: Default::default(),
+            vorkspace_baseline: Arc::default(),
+            window_shared,
             rail: ProjectRailState {
                 drag: None,
                 sessions_expanded: false,
-                list: init_rail_list,
-                list_ids: init_rail_list_ids,
+                list: gpui::ListState::new(0, gpui::ListAlignment::Top, px(96.)),
+                list_ids: Default::default(),
                 search_open: false,
-                vorkspace_anchor: init_vorkspace_anchor,
+                vorkspace_anchor: AnchorSlot::default(),
             },
-            backgrounds: init_backgrounds,
-            history: init_history,
+            backgrounds: HashMap::new(),
+            history: VisitHistory::default(),
             navigation_revision: 0,
-            pending_project_creations: init_pending_project_creations,
+            pending_project_creations: HashMap::new(),
             tabs: TabStripState {
                 hover: None,
-                motion: init_title_tab_motion,
+                motion: Default::default(),
                 selection: init_title_tab_selection,
-                pending_project_blanks: init_pending_project_blanks,
+                pending_project_blanks: HashSet::new(),
                 new_tab_task: None,
                 drag: None,
-                shifts: init_tab_shifts,
-                pane_ticks: init_pane_ticks,
+                shifts: HashMap::new(),
+                pane_ticks: HashMap::new(),
                 skip_tab_click: false,
-                scroll: init_tab_scroll,
-                switcher_anchor: init_tab_switcher_anchor,
+                scroll: ScrollHandle::new(),
+                switcher_anchor: AnchorSlot::default(),
                 scroll_task: None,
             },
-            worktree_focus: init_worktree_focus,
-            worktree_returns: init_worktree_returns,
+            worktree_focus,
+            worktree_returns: HashMap::new(),
             error: None,
-            git: init_git,
+            git,
             right_panel: None,
             review: ReviewState {
-                reviews: init_reviews,
-                cache: init_review_cache,
+                reviews: HashMap::new(),
+                cache: Default::default(),
                 slide: None,
                 pending_review: None,
                 focused: false,
@@ -960,30 +878,35 @@ impl Shell {
             pending_composer_focus: None,
             panes: PaneState {
                 preparing_panes: false,
-                split_bounds: init_split_bounds,
-                bounds: init_pane_bounds,
-                viewport: init_pane_viewport,
-                scroll: init_pane_scroll,
+                split_bounds: HashMap::new(),
+                bounds: AnchorSlot::default(),
+                viewport: AnchorSlot::default(),
+                scroll: ScrollHandle::new(),
                 scroll_focus: None,
                 drag: None,
                 sash: None,
                 motion: None,
             },
             dock: TerminalDockState {
-                terminals: init_terminals,
+                terminals: HashMap::new(),
                 slide: None,
                 resize: None,
                 hover: None,
-                tab_motion: init_dock_tab_motion,
+                tab_motion: Default::default(),
                 drag: None,
-                shifts: init_dock_shifts,
+                shifts: HashMap::new(),
                 skip_click: false,
-                tab_scroll: init_dock_tab_scroll,
-                move_terminal_anchor: init_move_terminal_anchor,
+                tab_scroll: ScrollHandle::new(),
+                move_terminal_anchor: AnchorSlot::default(),
             },
             resize_settle: None,
             resize_pinned: false,
-            observations: init_observations,
+            observations: vec![
+                resource_observation,
+                resource_stops,
+                sidebar_search_events,
+                git_head,
+            ],
         };
         this.scan_external_editors(cx);
         this.adopt_app_core(app_core, cx);
