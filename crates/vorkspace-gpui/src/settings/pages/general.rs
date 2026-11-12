@@ -83,22 +83,8 @@ impl SettingsView {
     fn general_workspace_rows(&self, p: &Preferences, cx: &mut Context<Self>) -> Vec<AnyElement> {
         vec![
             self.row(
-                Some("file-tabs"),
-                true,
-                "File tabs",
-                Some("Choose where files open.".into()),
-                vec![self.segmented(
-                    "file-tabs",
-                    "File tabs",
-                    &p.file_tabs,
-                    &[("pane", "Beside chat"), ("workspace", "Top bar")],
-                    cx,
-                    |this, v, cx| this.update(cx, |p| p.file_tabs = v.into()),
-                )],
-            ),
-            self.row(
                 Some("file-word-wrap"),
-                false,
+                true,
                 "Word wrap",
                 Some("Wrap long lines to fit the editor.".into()),
                 vec![self.toggle(

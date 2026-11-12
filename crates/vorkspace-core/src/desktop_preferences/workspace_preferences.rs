@@ -119,12 +119,6 @@ impl DesktopPreferences {
                 "dark",
             ),
             (
-                "file_tabs",
-                "fileTabMode",
-                &["pane", "workspace"][..],
-                "pane",
-            ),
-            (
                 "file_view_mode",
                 "fileViewMode",
                 &["preview", "source"][..],

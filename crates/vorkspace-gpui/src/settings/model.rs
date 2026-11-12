@@ -291,12 +291,6 @@ pub(crate) const INDEX: &[(&str, Section, &str, &str)] = &[
         "dictation vocabulary preferred spelling dictionary aliases corrections",
     ),
     (
-        "file-tabs",
-        Section::General,
-        "File tabs",
-        "editor open top workspace normal session pane beside chat",
-    ),
-    (
         "file-word-wrap",
         Section::General,
         "Word wrap",
