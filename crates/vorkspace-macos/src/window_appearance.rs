@@ -44,8 +44,8 @@ mod macos {
             if set.is_null() || connection.is_null() {
                 return None;
             }
-            // These optional WindowServer entry points have the same ABI used
-            // by the earlier desktop app. Missing support keeps AppKit's blur.
+            // These WindowServer entry points are optional. Missing support
+            // keeps AppKit's blur.
             Some((
                 std::mem::transmute::<*mut libc::c_void, Connection>(connection),
                 std::mem::transmute::<*mut libc::c_void, SetBlur>(set),
