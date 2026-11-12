@@ -517,7 +517,6 @@ impl Shell {
         self.tabs.drag = None;
         self.tabs.shifts.clear();
         self.tabs.hover = None;
-        self.tabs.scroll_task = None;
         self.cancel_pane_drag(cx);
         let session_active = self.workspace.active;
         for tab in &closing {

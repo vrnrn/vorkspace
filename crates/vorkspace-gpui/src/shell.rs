@@ -860,7 +860,6 @@ impl Shell {
                 skip_tab_click: false,
                 scroll: ScrollHandle::new(),
                 switcher_anchor: AnchorSlot::default(),
-                scroll_task: None,
             },
             worktree_focus,
             worktree_returns: HashMap::new(),

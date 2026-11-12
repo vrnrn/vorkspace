@@ -114,7 +114,6 @@ pub(super) struct TabStripState {
     pub(super) skip_tab_click: bool,
     pub(super) scroll: ScrollHandle,
     pub(super) switcher_anchor: AnchorSlot,
-    pub(super) scroll_task: Option<gpui::Task<()>>,
 }
 
 pub(super) struct ReviewState {
