@@ -217,7 +217,7 @@ fn restore_workspace_windows(
 ) -> gpui::Result<()> {
     let core = shell::AppCore::get(&db, cx);
     core.update(cx, |core, cx| {
-        core.reconcile_session_directory(&sessions, &metadata, true, cx);
+        core.reconcile_session_directory(&sessions, &metadata, cx);
     });
     // Open the last focused layout last so it comes to the front.
     layouts

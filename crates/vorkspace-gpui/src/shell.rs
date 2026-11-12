@@ -604,7 +604,7 @@ impl Shell {
             .unwrap_or_default();
         let core = app_core::AppCore::get(&store, cx);
         core.update(cx, |core, cx| {
-            core.reconcile_session_directory(&summaries, &metadata, false, cx);
+            core.reconcile_session_directory(&summaries, &metadata, cx);
         });
         Self::new_with_metadata(store, &summaries, cwd, saved, &metadata, None, cx)
     }

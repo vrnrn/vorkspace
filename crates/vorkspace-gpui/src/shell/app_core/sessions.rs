@@ -21,7 +21,6 @@ impl AppCore {
         &mut self,
         sessions: &[Session],
         metadata: &vorkspace_core::store::SessionSidebarMetadata,
-        remove_missing: bool,
         cx: &mut Context<Self>,
     ) {
         let protected: HashSet<_> = self
@@ -34,17 +33,15 @@ impl AppCore {
         let (saved, deleted) = self.directory.update(cx, |directory, _| {
             let saved = directory.reconcile(sessions, metadata, &protected, &internal);
             let mut deleted = Vec::new();
-            if remove_missing {
-                let visible: HashSet<_> = sessions.iter().map(|row| row.id).collect();
-                directory.rows.retain(|&id, _| {
-                    let keep = (visible.contains(&id) && !internal.contains(&id))
-                        || protected.contains(&id);
-                    if !keep {
-                        deleted.push(id);
-                    }
-                    keep
-                });
-            }
+            let visible: HashSet<_> = sessions.iter().map(|row| row.id).collect();
+            directory.rows.retain(|&id, _| {
+                let keep =
+                    (visible.contains(&id) && !internal.contains(&id)) || protected.contains(&id);
+                if !keep {
+                    deleted.push(id);
+                }
+                keep
+            });
             (saved, deleted)
         });
         self.session_catalog_changed(None, saved, deleted, cx);
