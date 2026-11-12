@@ -409,16 +409,7 @@ impl TranscriptView {
         let body = match row.body {
             Body::Visual(document) => self.visual_row(message_start, document, cx),
             Body::Interjection(ref note) => self.interjection_row(note, message_start, cx),
-            Body::BotCard(ref value) => {
-                if value["type"] == "session"
-                    && let Some(id) = cards::session(&value["sessionId"])
-                    && let Some(view) = self.launches.get(&id)
-                {
-                    bot_cards::launch(id, Some(view), cx)
-                } else {
-                    bot_cards::render(value, cx)
-                }
-            }
+            Body::BotCard(ref value) => self.bot_card_row(value, cx),
             Body::OlderHistory
             | Body::Pending(_)
             | Body::Launch(_)
@@ -435,18 +426,9 @@ impl TranscriptView {
                 icon: glyph,
                 active,
             } => self.phase_row(title, group, glyph, active, cx),
-            Body::Tool { call, group, tail } => div()
-                .relative()
-                .w_full()
-                .when(group.is_some(), |d| {
-                    d.pl(px(20.)).child(crate::activity::rail(tail))
-                })
-                .child(
-                    div()
-                        .opacity(step_opacity)
-                        .child(self.tool(*call, message_start, cx)),
-                )
-                .into_any_element(),
+            Body::Tool { call, group, tail } => {
+                self.tool_row(call, group, tail, step_opacity, message_start, cx)
+            }
             Body::Reasoning => self.reasoning_row(&row, message_start, nested_phase, cx),
             Body::Markdown(ref md) => self.markdown_row(md, &row, ix, look, cx),
             Body::Plain(ref text)
@@ -457,32 +439,13 @@ impl TranscriptView {
                     && attachments.is_empty()
                     && is_emoji_only(text) =>
             {
-                // In a Bot's chat a few emoji stand alone: no bubble or actions.
-                div()
-                    .relative()
-                    .text_size(px(60.))
-                    .line_height(px(60.))
-                    .child(text.trim().to_owned())
-                    .children(self.reaction_badge(message_start))
-                    .into_any_element()
+                self.emoji_row(text, message_start)
             }
             Body::Plain(ref text) => {
                 self.plain_row(text.clone(), &row, attachment_body, look, window, cx)
             }
         };
-        let body = if let Some((_, tail)) = row.thought_phase {
-            div()
-                .relative()
-                .w_full()
-                .pl(px(20.))
-                .when(!tail || thought_header, |d| {
-                    d.child(crate::activity::rail_branch(tail, thought_header))
-                })
-                .child(body)
-                .into_any_element()
-        } else {
-            body
-        };
+        let body = Self::thought_phase_body(row.thought_phase, thought_header, body);
         let body = if let Some(peer) = peer {
             self.peer_message_body(message_start, &peer, first, last, body)
         } else {
@@ -687,6 +650,71 @@ impl TranscriptView {
             .opacity(opacity)
             .child(body)
             .into_any_element()
+    }
+
+    fn bot_card_row(&self, value: &serde_json::Value, cx: &mut Context<Self>) -> gpui::AnyElement {
+        if value["type"] == "session"
+            && let Some(id) = cards::session(&value["sessionId"])
+            && let Some(view) = self.launches.get(&id)
+        {
+            bot_cards::launch(id, Some(view), cx)
+        } else {
+            bot_cards::render(value, cx)
+        }
+    }
+
+    fn tool_row(
+        &mut self,
+        call: Box<ToolCall>,
+        group: Option<usize>,
+        tail: bool,
+        step_opacity: f32,
+        message_start: usize,
+        cx: &mut Context<Self>,
+    ) -> gpui::AnyElement {
+        div()
+            .relative()
+            .w_full()
+            .when(group.is_some(), |d| {
+                d.pl(px(20.)).child(crate::activity::rail(tail))
+            })
+            .child(
+                div()
+                    .opacity(step_opacity)
+                    .child(self.tool(*call, message_start, cx)),
+            )
+            .into_any_element()
+    }
+
+    fn emoji_row(&self, text: &SharedString, message_start: usize) -> gpui::AnyElement {
+        // In a Bot's chat a few emoji stand alone: no bubble or actions.
+        div()
+            .relative()
+            .text_size(px(60.))
+            .line_height(px(60.))
+            .child(text.trim().to_owned())
+            .children(self.reaction_badge(message_start))
+            .into_any_element()
+    }
+
+    fn thought_phase_body(
+        thought_phase: Option<(usize, bool)>,
+        thought_header: bool,
+        body: gpui::AnyElement,
+    ) -> gpui::AnyElement {
+        if let Some((_, tail)) = thought_phase {
+            div()
+                .relative()
+                .w_full()
+                .pl(px(20.))
+                .when(!tail || thought_header, |d| {
+                    d.child(crate::activity::rail_branch(tail, thought_header))
+                })
+                .child(body)
+                .into_any_element()
+        } else {
+            body
+        }
     }
 
     pub(super) fn anchor_row(&self) -> Option<usize> {
