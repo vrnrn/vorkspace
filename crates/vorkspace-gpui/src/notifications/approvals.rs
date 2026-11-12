@@ -32,7 +32,6 @@ pub(crate) struct SessionInputs {
     pub harness: String,
     /// Approvals in transcript order, followed by the pending question(s).
     pub pending: Vec<PendingInput>,
-    pub inbox_ask: bool,
     pub orchestration_worker: bool,
     /// Active tab, focused pane, and focused composer must all match.
     pub conversation_focused: bool,
@@ -89,12 +88,11 @@ impl InputAnnouncements {
     ) -> Vec<(SessionInputs, PendingInput)> {
         let pending: HashSet<_> = sessions
             .iter()
-            .filter(|s| !s.inbox_ask)
             .flat_map(|s| s.pending.iter().map(|p| s.key(p)))
             .collect();
         self.notified.retain(|key| pending.contains(key));
         let mut announcements = Vec::new();
-        for session in sessions.iter().filter(|s| !s.inbox_ask) {
+        for session in sessions {
             if let Some(input) = session
                 .pending
                 .iter()
@@ -140,7 +138,7 @@ impl ApprovalNotices {
         self.track_pending(sessions);
         self.notices.clear();
         for session in sessions {
-            if session.inbox_ask || session.orchestration_worker || session.conversation_focused {
+            if session.orchestration_worker || session.conversation_focused {
                 continue;
             }
             let Some(input) = session.notice() else {
@@ -337,7 +335,6 @@ mod tests {
                 label: "Approve".into(),
                 detail: String::new(),
             }],
-            inbox_ask: false,
             orchestration_worker: false,
             conversation_focused: false,
         }];

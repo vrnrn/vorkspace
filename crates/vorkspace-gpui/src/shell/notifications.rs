@@ -356,7 +356,6 @@ impl Shell {
             provider: chat.summary.provider.clone(),
             harness: Kind::display_label(&chat.summary.provider).to_owned(),
             pending,
-            inbox_ask: false,
             orchestration_worker: self.orchestration_worker(id),
             // An on-screen conversation already shows its request inline.
             conversation_focused: check_visibility && self.notice_session_visible(id, cx),
