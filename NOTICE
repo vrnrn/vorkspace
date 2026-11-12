@@ -63,6 +63,9 @@ dispatching actions and validation callbacks.
 The vendored manifests omit the unused zed-scap dependency and its feature links,
 and the macOS ScreenCaptureKit source is removed.
 The gpui-pre build script rejects screen-capture builds pending license review.
+Unused benchmark support, the randomized element tree, spring animations,
+default colors, container queries, the CoreVideo surface element and style
+reflection are removed.
 Font fallback and text tests use the underlying Lilex family directly.
 The retained framework code remains Apache-2.0.
 Unused upstream examples and their demo assets are omitted, together with four
