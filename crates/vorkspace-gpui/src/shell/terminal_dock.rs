@@ -461,231 +461,7 @@ impl Shell {
                     .pr(px(10.))
                     // Every tab fits, sharing the strip however many there are.
                     .overflow_hidden()
-                    .children({
-                        let mut tabs: Vec<Option<AnyElement>> = live
-                            .iter()
-                            .enumerate()
-                            .map(|(ix, terminal)| {
-                                let id = terminal.entity_id();
-                                let t = terminal.read(cx);
-                                let label: SharedString = t.title.clone().into();
-                                let description =
-                                    SharedString::from(format!("{} — {}", t.title, t.cwd));
-                                let active = ix == dock.active;
-                                let held = dragged == Some(ix);
-                                let hovered = self.dock.hover == Some(ix) && dragged.is_none();
-                                div()
-                                    .id(("terminal-tab", ix))
-                                    .debug_selector(move || format!("terminal-tab-{ix}"))
-                                    .relative()
-                                    .left(px(shifts[ix]))
-                                    .when(held, |d| d.cursor_grabbing())
-                                    .h_full()
-                                    .w(px(224.))
-                                    .min_w_0()
-                                    .flex_shrink(1.)
-                                    .flex()
-                                    .items_center()
-                                    .on_hover(cx.listener(move |this, hovering: &bool, _, cx| {
-                                        let next = if *hovering {
-                                            Some(ix)
-                                        } else if this.dock.hover == Some(ix) {
-                                            None
-                                        } else {
-                                            this.dock.hover
-                                        };
-                                        if next != this.dock.hover {
-                                            this.dock.hover = next;
-                                            cx.notify();
-                                        }
-                                    }))
-                                    .on_mouse_down(
-                                        MouseButton::Left,
-                                        cx.listener(
-                                            move |this, event: &MouseDownEvent, window, cx| {
-                                                this.start_dock_drag(id, event, window, cx)
-                                            },
-                                        ),
-                                    )
-                                    .on_mouse_down(
-                                        MouseButton::Middle,
-                                        cx.listener(move |this, _, window, cx| {
-                                            this.request_dock_close(id, None, window, cx)
-                                        }),
-                                    )
-                                    .on_mouse_down(
-                                        MouseButton::Right,
-                                        cx.listener(
-                                            move |this, event: &MouseDownEvent, window, cx| {
-                                                cx.stop_propagation();
-                                                let Some(ix) = this.dock_terminal_index(id) else {
-                                                    return;
-                                                };
-                                                this.select_terminal(ix, window, cx);
-                                                this.open_menu(
-                                                    MenuTarget::TerminalTab(id),
-                                                    Anchor::Point(event.position),
-                                                    window,
-                                                    cx,
-                                                );
-                                            },
-                                        ),
-                                    )
-                                    .child(
-                                        div()
-                                            .id(("terminal-tab-button", ix))
-                                            .role(Role::Tab)
-                                            .aria_label(label.clone())
-                                            .aria_description(description)
-                                            .aria_selected(active)
-                                            .h(px(TAB_PLATE_HEIGHT))
-                                            .min_w_0()
-                                            .flex_1()
-                                            .flex()
-                                            .items_center()
-                                            .gap(px(6.))
-                                            .px_2()
-                                            .pr(px(28.))
-                                            .rounded(px(radius::CONTROL))
-                                            .text_size(px(13.))
-                                            .map(|d| {
-                                                if active {
-                                                    d.bg(crate::panel_kit::selection())
-                                                        .text_color(content(1.))
-                                                } else if hovered {
-                                                    d.bg(content(0.05)).text_color(content(1.))
-                                                } else {
-                                                    d.text_color(content(0.5))
-                                                }
-                                            })
-                                            .child(icon("terminal", 14.).text_color(
-                                                if active || hovered {
-                                                    content(1.)
-                                                } else {
-                                                    content(0.5)
-                                                },
-                                            ))
-                                            .child(
-                                                div()
-                                                    .flex_1()
-                                                    .min_w_0()
-                                                    .truncate()
-                                                    .child(label.clone()),
-                                            )
-                                            .on_click(cx.listener(move |this, _, window, cx| {
-                                                if std::mem::take(&mut this.dock.skip_click) {
-                                                    return;
-                                                }
-                                                if let Some(ix) = this.dock_terminal_index(id) {
-                                                    this.select_terminal(ix, window, cx);
-                                                }
-                                            })),
-                                    )
-                                    .child(
-                                        div()
-                                            .id(("terminal-tab-close", ix))
-                                            .role(Role::Button)
-                                            .map(vorkspace_ui::theme::tab_reachable)
-                                            .aria_label(SharedString::from(format!(
-                                                "Close {label}"
-                                            )))
-                                            .group("terminal-tab-close")
-                                            .absolute()
-                                            .right_1()
-                                            .top(px(8.))
-                                            .size(px(20.))
-                                            .rounded(px(radius::SMALL))
-                                            .flex()
-                                            .items_center()
-                                            .justify_center()
-                                            .opacity(if (active || hovered) && !held {
-                                                1.
-                                            } else {
-                                                0.
-                                            })
-                                            .hover(|s| s.bg(vorkspace_ui::fluid::hover(0.1)))
-                                            .child(
-                                                icon("x", 12.)
-                                                    .text_color(content(0.5))
-                                                    .group_hover("terminal-tab-close", |s| {
-                                                        s.text_color(content(1.))
-                                                    }),
-                                            )
-                                            .on_mouse_down(MouseButton::Left, |_, _, cx| {
-                                                cx.stop_propagation()
-                                            })
-                                            .on_click(cx.listener(move |this, _, window, cx| {
-                                                cx.stop_propagation();
-                                                this.request_dock_close(id, None, window, cx);
-                                            })),
-                                    )
-                                    .into_any_element()
-                            })
-                            .map(Some)
-                            .collect();
-                        let ids: Vec<_> = live.iter().map(|t| t.entity_id()).collect();
-                        // TabWidthMotion: `w-56` eases in from nothing, or out to it.
-                        let slot = |open: f32| {
-                            div()
-                                .h_full()
-                                .w(px(224. * open))
-                                .min_w_0()
-                                .flex_shrink(1.)
-                                .mr(px(-vorkspace_ui::tab_motion::GAP * (1. - open)))
-                                .overflow_hidden()
-                                .flex()
-                        };
-                        slots
-                            .into_iter()
-                            .filter_map(move |s| match s {
-                                vorkspace_ui::tab_motion::Slot::Live { key, open } => {
-                                    let ix = ids.iter().position(|id| *id == key)?;
-                                    let tab = tabs.get_mut(ix)?.take()?;
-                                    Some(if open >= 1. {
-                                        tab
-                                    } else {
-                                        slot(open).child(tab).into_any_element()
-                                    })
-                                }
-                                vorkspace_ui::tab_motion::Slot::Closing { ghost, open, .. } => {
-                                    Some(
-                                        slot(open)
-                                            .child(
-                                                div()
-                                                    .w(px(224.))
-                                                    .h_full()
-                                                    .flex_shrink_0()
-                                                    .flex()
-                                                    .items_center()
-                                                    .child(
-                                                        div()
-                                                            .h(px(TAB_PLATE_HEIGHT))
-                                                            .w_full()
-                                                            .flex()
-                                                            .items_center()
-                                                            .gap(px(6.))
-                                                            .px_2()
-                                                            .rounded(px(radius::CONTROL))
-                                                            .text_size(px(13.))
-                                                            .text_color(content(0.5))
-                                                            .child(
-                                                                icon("terminal", 14.)
-                                                                    .text_color(content(0.5)),
-                                                            )
-                                                            .child(
-                                                                div()
-                                                                    .min_w_0()
-                                                                    .truncate()
-                                                                    .child(ghost),
-                                                            ),
-                                                    ),
-                                            )
-                                            .into_any_element(),
-                                    )
-                                }
-                            })
-                            .collect::<Vec<_>>()
-                    }),
+                    .children(self.dock_tabs(dock, &live, dragged, &shifts, slots, cx)),
             )
             .child(
                 div()
@@ -725,6 +501,208 @@ impl Shell {
                     ),
             )
             .into_any_element()
+    }
+
+    fn dock_tabs(
+        &self,
+        dock: &TerminalDock,
+        live: &[Entity<Terminal>],
+        dragged: Option<usize>,
+        shifts: &[f32],
+        slots: Vec<vorkspace_ui::tab_motion::Slot<EntityId, SharedString>>,
+        cx: &mut Context<Self>,
+    ) -> Vec<AnyElement> {
+        let mut tabs: Vec<Option<AnyElement>> = live
+            .iter()
+            .enumerate()
+            .map(|(ix, terminal)| {
+                let id = terminal.entity_id();
+                let t = terminal.read(cx);
+                let label: SharedString = t.title.clone().into();
+                let description = SharedString::from(format!("{} — {}", t.title, t.cwd));
+                let active = ix == dock.active;
+                let held = dragged == Some(ix);
+                let hovered = self.dock.hover == Some(ix) && dragged.is_none();
+                div()
+                    .id(("terminal-tab", ix))
+                    .debug_selector(move || format!("terminal-tab-{ix}"))
+                    .relative()
+                    .left(px(shifts[ix]))
+                    .when(held, |d| d.cursor_grabbing())
+                    .h_full()
+                    .w(px(224.))
+                    .min_w_0()
+                    .flex_shrink(1.)
+                    .flex()
+                    .items_center()
+                    .on_hover(cx.listener(move |this, hovering: &bool, _, cx| {
+                        let next = if *hovering {
+                            Some(ix)
+                        } else if this.dock.hover == Some(ix) {
+                            None
+                        } else {
+                            this.dock.hover
+                        };
+                        if next != this.dock.hover {
+                            this.dock.hover = next;
+                            cx.notify();
+                        }
+                    }))
+                    .on_mouse_down(
+                        MouseButton::Left,
+                        cx.listener(move |this, event: &MouseDownEvent, window, cx| {
+                            this.start_dock_drag(id, event, window, cx)
+                        }),
+                    )
+                    .on_mouse_down(
+                        MouseButton::Middle,
+                        cx.listener(move |this, _, window, cx| {
+                            this.request_dock_close(id, None, window, cx)
+                        }),
+                    )
+                    .on_mouse_down(
+                        MouseButton::Right,
+                        cx.listener(move |this, event: &MouseDownEvent, window, cx| {
+                            cx.stop_propagation();
+                            let Some(ix) = this.dock_terminal_index(id) else {
+                                return;
+                            };
+                            this.select_terminal(ix, window, cx);
+                            this.open_menu(
+                                MenuTarget::TerminalTab(id),
+                                Anchor::Point(event.position),
+                                window,
+                                cx,
+                            );
+                        }),
+                    )
+                    .child(
+                        div()
+                            .id(("terminal-tab-button", ix))
+                            .role(Role::Tab)
+                            .aria_label(label.clone())
+                            .aria_description(description)
+                            .aria_selected(active)
+                            .h(px(TAB_PLATE_HEIGHT))
+                            .min_w_0()
+                            .flex_1()
+                            .flex()
+                            .items_center()
+                            .gap(px(6.))
+                            .px_2()
+                            .pr(px(28.))
+                            .rounded(px(radius::CONTROL))
+                            .text_size(px(13.))
+                            .map(|d| {
+                                if active {
+                                    d.bg(crate::panel_kit::selection()).text_color(content(1.))
+                                } else if hovered {
+                                    d.bg(content(0.05)).text_color(content(1.))
+                                } else {
+                                    d.text_color(content(0.5))
+                                }
+                            })
+                            .child(icon("terminal", 14.).text_color(if active || hovered {
+                                content(1.)
+                            } else {
+                                content(0.5)
+                            }))
+                            .child(div().flex_1().min_w_0().truncate().child(label.clone()))
+                            .on_click(cx.listener(move |this, _, window, cx| {
+                                if std::mem::take(&mut this.dock.skip_click) {
+                                    return;
+                                }
+                                if let Some(ix) = this.dock_terminal_index(id) {
+                                    this.select_terminal(ix, window, cx);
+                                }
+                            })),
+                    )
+                    .child(
+                        div()
+                            .id(("terminal-tab-close", ix))
+                            .role(Role::Button)
+                            .map(vorkspace_ui::theme::tab_reachable)
+                            .aria_label(SharedString::from(format!("Close {label}")))
+                            .group("terminal-tab-close")
+                            .absolute()
+                            .right_1()
+                            .top(px(8.))
+                            .size(px(20.))
+                            .rounded(px(radius::SMALL))
+                            .flex()
+                            .items_center()
+                            .justify_center()
+                            .opacity(if (active || hovered) && !held { 1. } else { 0. })
+                            .hover(|s| s.bg(vorkspace_ui::fluid::hover(0.1)))
+                            .child(
+                                icon("x", 12.)
+                                    .text_color(content(0.5))
+                                    .group_hover("terminal-tab-close", |s| {
+                                        s.text_color(content(1.))
+                                    }),
+                            )
+                            .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+                            .on_click(cx.listener(move |this, _, window, cx| {
+                                cx.stop_propagation();
+                                this.request_dock_close(id, None, window, cx);
+                            })),
+                    )
+                    .into_any_element()
+            })
+            .map(Some)
+            .collect();
+        let ids: Vec<_> = live.iter().map(|t| t.entity_id()).collect();
+        // TabWidthMotion: `w-56` eases in from nothing, or out to it.
+        let slot = |open: f32| {
+            div()
+                .h_full()
+                .w(px(224. * open))
+                .min_w_0()
+                .flex_shrink(1.)
+                .mr(px(-vorkspace_ui::tab_motion::GAP * (1. - open)))
+                .overflow_hidden()
+                .flex()
+        };
+        slots
+            .into_iter()
+            .filter_map(move |s| match s {
+                vorkspace_ui::tab_motion::Slot::Live { key, open } => {
+                    let ix = ids.iter().position(|id| *id == key)?;
+                    let tab = tabs.get_mut(ix)?.take()?;
+                    Some(if open >= 1. {
+                        tab
+                    } else {
+                        slot(open).child(tab).into_any_element()
+                    })
+                }
+                vorkspace_ui::tab_motion::Slot::Closing { ghost, open, .. } => Some(
+                    slot(open)
+                        .child(
+                            div()
+                                .w(px(224.))
+                                .h_full()
+                                .flex_shrink_0()
+                                .flex()
+                                .items_center()
+                                .child(
+                                    div()
+                                        .h(px(TAB_PLATE_HEIGHT))
+                                        .w_full()
+                                        .flex()
+                                        .items_center()
+                                        .gap(px(6.))
+                                        .px_2()
+                                        .rounded(px(radius::CONTROL))
+                                        .text_size(px(13.))
+                                        .text_color(content(0.5))
+                                        .child(icon("terminal", 14.).text_color(content(0.5)))
+                                        .child(div().min_w_0().truncate().child(ghost)),
+                                ),
+                        )
+                        .into_any_element(),
+                ),
+            })
+            .collect::<Vec<_>>()
     }
 }
 
