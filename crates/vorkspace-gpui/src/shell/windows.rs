@@ -625,7 +625,6 @@ mod compatibility_tests {
         let mut local = Workspace {
             project: "/workspace/first".into(),
             projects: vec!["/workspace/first".into()],
-            right_panel_open: true,
             ..Workspace::default()
         };
         local.preferences.ui_scale = 135;
@@ -662,7 +661,6 @@ mod compatibility_tests {
         );
         assert_eq!(restored.preferences.ui_scale, 135);
         assert_eq!(restored.project, local.project);
-        assert!(restored.right_panel_open);
         assert_eq!(
             restored.desktop_project_preferences,
             updated.desktop_project_preferences

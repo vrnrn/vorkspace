@@ -338,8 +338,7 @@ pub(crate) struct Workspace {
     /// Show qualifying running and unseen finished sessions in the project rail.
     pub sidebar_activity_visible: bool,
     pub sidebar_subscriptions_visible: bool,
-    /// The inset right panel: open state, tab, width and tab order.
-    pub right_panel_open: bool,
+    /// The inset right panel: tab, width and tab order.
     pub right_panel_tab: crate::panel_kit::RightTab,
     /// Shared width for project tools and Bot details, independent of visibility.
     pub right_panel_width: f32,
@@ -526,7 +525,6 @@ impl Default for Workspace {
             sidebar_todos_visible: true,
             sidebar_activity_visible: true,
             sidebar_subscriptions_visible: true,
-            right_panel_open: false,
             right_panel_tab: Default::default(),
             right_panel_width: crate::right_panel::WIDTH_DEFAULT,
             right_panel_tabs: crate::panel_kit::RightTab::normalize(&[]),

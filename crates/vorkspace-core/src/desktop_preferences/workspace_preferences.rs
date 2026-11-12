@@ -459,13 +459,6 @@ impl DesktopPreferences {
             target,
             old,
             &mut source,
-            "right_panel_open",
-            json!(self.flag("rightPanelOpen").unwrap_or(false)),
-        );
-        reconcile_preference(
-            target,
-            old,
-            &mut source,
             "right_panel_width",
             json!(self
                 .number("rightPanelWidth")

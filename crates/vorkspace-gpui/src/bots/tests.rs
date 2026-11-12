@@ -1342,7 +1342,6 @@ fn setup_bot(cx: &mut TestAppContext) -> Setup {
     cx.run_until_parked();
     let manager = window
         .update(cx, |shell, _, cx| {
-            shell.workspace.right_panel_open = true;
             cx.notify();
             shell.bot_manager()
         })
@@ -2173,8 +2172,7 @@ fn bot_work_disclosure_stays_in_chat_and_leaves_details_on_their_page(cx: &mut T
     let s = setup(cx);
     vorkspace_ui::clock::use_test_clock(cx);
     s.window
-        .update(cx, |shell, window, cx| {
-            shell.workspace.right_panel_open = false;
+        .update(cx, |_, window, cx| {
             s.manager.update(cx, |manager, cx| {
                 manager.settings = None;
                 manager.focus_active(window, cx);
@@ -2220,11 +2218,7 @@ fn bot_work_disclosure_stays_in_chat_and_leaves_details_on_their_page(cx: &mut T
         assert_eq!(visual.debug_bounds("tool-2").is_some(), open);
         assert!(visual.debug_bounds("bot-activity").is_none());
         s.window
-            .update(visual, |shell, _, cx| {
-                assert!(
-                    !shell.workspace.right_panel_open,
-                    "disclosure must not open the sidebar"
-                );
+            .update(visual, |_, _, cx| {
                 let manager = s.manager.read(cx);
                 assert!(manager.open_islands.is_empty());
                 assert!(manager.route.is_none());

@@ -656,7 +656,6 @@ fn fluid_capture() {
                 let new = *name == "bot-new";
                 window
                     .update(&mut cx, |shell, w, cx| {
-                        shell.workspace.right_panel_open = true;
                         let manager = shell.bot_manager();
                         manager.update(cx, |manager, cx| {
                             if new {

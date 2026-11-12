@@ -962,7 +962,6 @@ fn project_tools_shortcut_keeps_working_after_hiding_focused_history(cx: &mut Te
             .update(cx, |shell, _, _| {
                 assert_eq!(shell.workspace.sidebar_tab(), SidebarTab::Graph);
                 assert_eq!(shell.workspace.sidebar_visible, visible);
-                assert!(!shell.workspace.right_panel_open);
             })
             .unwrap();
     }
@@ -987,7 +986,6 @@ fn removed_layout_shortcut_preserves_the_original_workspace_and_composer(cx: &mu
         .update(cx, |shell, _, cx| {
             let session = shell.sessions[&shell.workspace.active.unwrap()].read(cx);
             assert_eq!(session.input.read(cx).content, "Keep this draft");
-            assert!(!shell.workspace.right_panel_open);
         })
         .unwrap();
 }
