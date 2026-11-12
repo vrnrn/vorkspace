@@ -332,8 +332,6 @@ pub(crate) struct Workspace {
     pub sidebar_navigation_order: Vec<String>,
     /// Sidebar visibility only; connector enablement, polling and tabs are independent.
     pub sidebar_hidden_connectors: HashSet<String>,
-    /// Inert legacy density preference. Session cards use the current default.
-    pub compact_session_cards: bool,
     pub sidebar_notes_visible: bool,
     pub sidebar_automations_visible: bool,
     pub sidebar_todos_visible: bool,
@@ -524,7 +522,6 @@ impl Default for Workspace {
                 .map(|item| item.id().into())
                 .collect(),
             sidebar_hidden_connectors: HashSet::new(),
-            compact_session_cards: true,
             sidebar_notes_visible: true,
             sidebar_automations_visible: true,
             sidebar_todos_visible: true,

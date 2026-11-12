@@ -232,7 +232,6 @@ fn sidebar_navigation_normalizes_ids_and_preserves_disabled_slots_and_hidden_sta
         restored.sidebar_hidden_connectors,
         state.sidebar_hidden_connectors
     );
-    assert!(!restored.compact_session_cards);
     assert_eq!(SidebarNavigation::normalize(&[]), SidebarNavigation::ALL);
     assert!(state.reorder_sidebar_navigation(
         Provider(Connector::Gitlab),
@@ -665,10 +664,6 @@ fn restore_prunes_stale_tabs_and_preserves_an_intentionally_empty_workspace() {
     assert_eq!(s.projects, vec!["/work/b"]);
     let s = Workspace::restore(Some("{}"), &[(1, "/work/a".into())], "/work/a");
     assert!(s.tabs.is_empty());
-    assert!(
-        s.compact_session_cards,
-        "older workspaces retain compact cards"
-    );
     assert!(
         s.sidebar_activity_visible,
         "the retired activity preference remains readable"
