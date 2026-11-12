@@ -19,7 +19,7 @@ fn status_ink_follows_appearance_and_has_contrast_on_solid_surfaces() {
                         ..Default::default()
                     };
                     preferences.apply_workspace_theme(preset.into());
-                    let _restore = test_appearance(&preferences, system_light, false);
+                    let _restore = test_appearance(&preferences, system_light);
                     assert_eq!(is_light(), light);
                     for role in [
                         StatusColor::Danger,
@@ -63,7 +63,7 @@ fn status_dark_palette_is_preserved_and_light_palette_is_distinct() {
         theme: "dark".into(),
         ..Default::default()
     };
-    let _restore = test_appearance(&preferences, false, true);
+    let _restore = test_appearance(&preferences, false);
     for (role, expected) in [
         (StatusColor::Danger, 0xf87171),
         (StatusColor::Warning, 0xfbbf24),
@@ -76,7 +76,7 @@ fn status_dark_palette_is_preserved_and_light_palette_is_distinct() {
             ..Default::default()
         };
         {
-            let _light = test_appearance(&light_preferences, false, true);
+            let _light = test_appearance(&light_preferences, false);
             assert_ne!(dark, status(role, 1.));
         }
         assert_eq!(dark, status(role, 1.));
@@ -87,10 +87,10 @@ fn status_dark_palette_is_preserved_and_light_palette_is_distinct() {
 fn cached_diff_tokens_follow_live_light_dark_and_custom_palettes() {
     let saved = TOKENS.with(|tokens| *tokens.borrow());
     let mut preferences = crate::preferences::Preferences::default();
-    configure(&preferences, false, true);
+    configure(&preferences, false);
     let dark = diff_syntax_color(0xd4d4d4);
     preferences.theme = "light".into();
-    configure(&preferences, false, true);
+    configure(&preferences, false);
     let light = diff_syntax_color(0xd4d4d4);
     assert!(dark.l > 0.6 && light.l < 0.3);
     assert_eq!(
@@ -99,7 +99,7 @@ fn cached_diff_tokens_follow_live_light_dark_and_custom_palettes() {
     );
     let keyword = diff_syntax_color(0x569cd6);
     preferences.workspace_theme = "harbor".into();
-    configure(&preferences, false, true);
+    configure(&preferences, false);
     assert_ne!(keyword, diff_syntax_color(0x569cd6));
     assert_eq!(
         diff_syntax_color(0x6a9955),
@@ -120,7 +120,7 @@ fn accent_reset_and_theme_switch_preserve_readable_controls() {
     let mut preferences = crate::preferences::Preferences::default();
     for theme in ["dark", "light", "dark"] {
         preferences.theme = theme.into();
-        configure(&preferences, false, true);
+        configure(&preferences, false);
         assert_eq!(user_bubble_fill(), content(0.1));
         assert_eq!(primary_action(true), None);
         assert_eq!(floating_fill().a, 1.);
@@ -130,7 +130,7 @@ fn accent_reset_and_theme_switch_preserve_readable_controls() {
         );
         for (color, ink) in [("#ffff00", black(1.)), ("#000080", white(1.))] {
             preferences.accent_color = Some(color.into());
-            configure(&preferences, false, true);
+            configure(&preferences, false);
             let accent = accent_color();
             assert_eq!(primary_action(true), Some((accent, ink)));
             assert_eq!(
@@ -140,38 +140,10 @@ fn accent_reset_and_theme_switch_preserve_readable_controls() {
             assert_eq!(user_bubble_fill(), accent.opacity(0.24));
         }
         preferences.accent_color = None;
-        configure(&preferences, false, true);
+        configure(&preferences, false);
         assert_eq!(primary_action(true), None);
         assert_eq!(user_bubble_fill(), content(0.1));
     }
-}
-
-#[test]
-fn both_layouts_share_opacity_and_keep_dark_glass_preferences_when_disabled() {
-    let before = TOKENS.with(|tokens| *tokens.borrow());
-    let mut preferences = crate::preferences::Preferences {
-        theme: "dark".into(),
-        sidebar_opacity: 43,
-        sidebar_blur: 57,
-        ..Default::default()
-    };
-    for classic in [true, false] {
-        configure(&preferences, false, classic);
-        let alpha = TOKENS.with(|tokens| tokens.borrow().unwrap().shell.a);
-        assert_eq!(alpha, 0.43);
-    }
-    preferences.inset_glass = false;
-    assert!(!window_glass(&preferences, false, false));
-    assert!(window_glass(&preferences, false, true));
-    configure(&preferences, false, false);
-    assert_eq!(TOKENS.with(|tokens| tokens.borrow().unwrap().shell.a), 1.);
-    preferences.theme = "light".into();
-    for classic in [true, false] {
-        assert!(!window_glass(&preferences, false, classic));
-    }
-    assert_eq!(preferences.sidebar_opacity, 43);
-    assert_eq!(preferences.sidebar_blur, 57);
-    TOKENS.with(|tokens| *tokens.borrow_mut() = before);
 }
 
 #[test]
@@ -184,7 +156,7 @@ fn composer_surface_matches_react_dark_ink_and_solid_light_background() {
     }
     let _restore = Restore(TOKENS.with(|tokens| *tokens.borrow()));
     let mut preferences = crate::preferences::Preferences::default();
-    configure(&preferences, false, true);
+    configure(&preferences, false);
     assert_eq!(composer_fill(), content(0.03));
     assert_eq!(composer_blur(), 24.);
     assert_eq!(composer_border(false), content(0.1));
@@ -193,7 +165,7 @@ fn composer_surface_matches_react_dark_ink_and_solid_light_background() {
     preferences.theme = "light".into();
     preferences.theme_hue = 180;
     preferences.theme_saturation = 20;
-    configure(&preferences, false, true);
+    configure(&preferences, false);
     assert_eq!(composer_fill(), gpui::hsla(0.5, 0.2, 0.97, 1.));
     assert_eq!(composer_blur(), 0.);
     assert_eq!(composer_border(false), content(0.1));

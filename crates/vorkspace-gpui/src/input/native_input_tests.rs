@@ -7,7 +7,7 @@ fn existing_field_and_composer_reink_after_theme_changes_without_losing_text(
 ) {
     cx.update(|cx| {
         let mut preferences = vorkspace_ui::preferences::Preferences::default();
-        vorkspace_ui::theme::configure(&preferences, false, true);
+        vorkspace_ui::theme::configure(&preferences, false);
         let field = cx.new(|cx| {
             Input::field(
                 "Search",
@@ -26,7 +26,7 @@ fn existing_field_and_composer_reink_after_theme_changes_without_losing_text(
         });
         for theme in ["light", "dark"] {
             preferences.theme = theme.into();
-            vorkspace_ui::theme::configure(&preferences, false, true);
+            vorkspace_ui::theme::configure(&preferences, false);
             let input = field.read(cx);
             assert_eq!(
                 input.text_color(true, vorkspace_ui::theme::content(1.)),
@@ -51,7 +51,7 @@ fn existing_field_and_composer_reink_after_theme_changes_without_losing_text(
                 );
             }
         }
-        vorkspace_ui::theme::configure(&Default::default(), false, true);
+        vorkspace_ui::theme::configure(&Default::default(), false);
     });
 }
 

@@ -70,7 +70,6 @@ fn native_automations_capture() {
                     ..Default::default()
                 },
                 theme == "light",
-                true,
             );
         });
         for (width, suffix, detail) in [
@@ -120,5 +119,5 @@ fn native_automations_capture() {
             cx.run_until_parked();
         }
     }
-    cx.update(|_| configure(&Preferences::default(), false, true));
+    cx.update(|_| configure(&Preferences::default(), false));
 }

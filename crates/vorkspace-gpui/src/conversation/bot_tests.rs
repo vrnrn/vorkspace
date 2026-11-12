@@ -818,7 +818,7 @@ fn native_bot_draft_and_add_menu_capture() {
             theme: if light { "light" } else { "dark" }.into(),
             ..Default::default()
         };
-        vorkspace_ui::theme::configure(&prefs, false, true);
+        vorkspace_ui::theme::configure(&prefs, false);
         cx.update(|cx| {
             cx.set_global(prefs);
             input::bind(cx);
@@ -890,7 +890,7 @@ fn native_bot_draft_and_add_menu_capture() {
         cx.update_window(window.into(), |_, window, _| window.remove_window())
             .unwrap();
     }
-    vorkspace_ui::theme::configure(&Default::default(), false, true);
+    vorkspace_ui::theme::configure(&Default::default(), false);
 }
 
 #[gpui::test]

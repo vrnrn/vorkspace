@@ -163,7 +163,6 @@ fn native_inbox_capture() {
                     ..Default::default()
                 },
                 theme == "light",
-                true,
             );
         });
         for provider in model::PROVIDERS {

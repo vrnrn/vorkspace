@@ -399,7 +399,6 @@ fn native_bot_header_three_state_capture() {
                 ..Default::default()
             },
             false,
-            true,
         );
         for status in ["idle", "working", "needs-you"] {
             for (width, height) in [(900., 600.), (360., 600.), (360., 140.)] {
@@ -452,9 +451,5 @@ fn native_bot_header_three_state_capture() {
             }
         }
     }
-    vorkspace_ui::theme::configure(
-        &vorkspace_ui::preferences::Preferences::default(),
-        false,
-        true,
-    );
+    vorkspace_ui::theme::configure(&vorkspace_ui::preferences::Preferences::default(), false);
 }

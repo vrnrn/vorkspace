@@ -1453,11 +1453,7 @@ fn compact_rail_follows_the_full_rail_and_sessions_opens_it(cx: &mut TestAppCont
 }
 #[gpui::test]
 fn original_layout_keeps_project_rail_sidebar_and_workspace_independent(cx: &mut TestAppContext) {
-    vorkspace_ui::theme::configure(
-        &vorkspace_ui::preferences::Preferences::default(),
-        false,
-        true,
-    );
+    vorkspace_ui::theme::configure(&vorkspace_ui::preferences::Preferences::default(), false);
     vorkspace_ui::clock::use_test_clock(cx);
     let (window, a, b) = window(cx);
     let visual = &mut gpui::VisualTestContext::from_window(window.into(), cx);

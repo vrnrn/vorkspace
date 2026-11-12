@@ -88,7 +88,7 @@ fn native_recovery_banner_capture() {
             theme: if light { "light" } else { "dark" }.into(),
             ..Default::default()
         };
-        vorkspace_ui::theme::configure(&prefs, false, true);
+        vorkspace_ui::theme::configure(&prefs, false);
         cx.update(|cx| {
             input::bind(cx);
             cx.set_global(prefs);
@@ -112,5 +112,5 @@ fn native_recovery_banner_capture() {
                 .unwrap();
         }
     }
-    vorkspace_ui::theme::configure(&Default::default(), false, true);
+    vorkspace_ui::theme::configure(&Default::default(), false);
 }

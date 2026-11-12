@@ -69,7 +69,6 @@ fn native_todos_capture() {
                 ..Default::default()
             },
             false,
-            true,
         );
     });
     for (layout, width) in [("wide", 1200.), ("tile420", 420.)] {

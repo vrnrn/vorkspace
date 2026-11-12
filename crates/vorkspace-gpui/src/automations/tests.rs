@@ -100,7 +100,6 @@ fn narrow_navigation_retains_filter_and_editor(cx: &mut TestAppContext) {
                     ..Default::default()
                 },
                 light,
-                true,
             );
         });
         for (width, narrow) in [(1100., false), (480., true), (1100., false)] {
@@ -211,7 +210,7 @@ fn narrow_navigation_retains_filter_and_editor(cx: &mut TestAppContext) {
             assert_eq!(view.settings_scroll.offset(), settings_offset);
         })
         .unwrap();
-    visual.update(|_, _| configure(&Default::default(), false, true));
+    visual.update(|_, _| configure(&Default::default(), false));
 }
 
 #[gpui::test]

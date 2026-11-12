@@ -2557,10 +2557,10 @@ impl Render for Shell {
             cx.window_appearance(),
             gpui::WindowAppearance::Light | gpui::WindowAppearance::VibrantLight
         );
-        if configure(p, system_light, true) {
+        if configure(p, system_light) {
             cx.refresh_windows();
         }
-        let glass = window_glass(p, system_light, true);
+        let glass = window_glass(p, system_light);
         let blur = if glass { p.sidebar_blur.min(100) } else { 0 };
         if self.window.glass != Some(glass) || self.window.blur != Some(blur) {
             self.window.glass = Some(glass);

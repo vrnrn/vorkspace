@@ -234,7 +234,7 @@ mod tests {
                     theme: appearance.into(),
                     ..Default::default()
                 };
-                vorkspace_ui::theme::configure(&prefs, light, false);
+                vorkspace_ui::theme::configure(&prefs, light);
                 let mut cx = gpui::HeadlessAppContext::with_platform(
                     Arc::new(gpui_apple::AppleTextSystem::new()),
                     Arc::new(crate::assets::Assets),

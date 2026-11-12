@@ -57,7 +57,7 @@ fn begin(
 }
 #[gpui::test]
 fn composer_toolbar_selects_one_row_during_resize_and_preserves_draft(cx: &mut TestAppContext) {
-    vorkspace_ui::theme::configure(&Default::default(), false, true);
+    vorkspace_ui::theme::configure(&Default::default(), false);
     cx.update(|cx| {
         cx.set_global(vorkspace_ui::preferences::Preferences::default());
         vorkspace_ui::clock::use_test_clock(cx);
@@ -416,7 +416,7 @@ fn native_narrow_composer_capture() {
             theme: if light { "light" } else { "dark" }.into(),
             ..Default::default()
         };
-        vorkspace_ui::theme::configure(&prefs, false, true);
+        vorkspace_ui::theme::configure(&prefs, false);
         cx.update(|cx| cx.set_global(prefs));
         for width in [260., 360., 480., 760.] {
             let store = Store::test(Path::new(":memory:")).unwrap();
@@ -526,12 +526,12 @@ fn native_narrow_composer_capture() {
                 .unwrap();
         }
     }
-    vorkspace_ui::theme::configure(&Default::default(), false, true);
+    vorkspace_ui::theme::configure(&Default::default(), false);
 }
 #[gpui::test]
 fn composer_uses_react_surface_and_equal_text_padding_with_attachments(cx: &mut TestAppContext) {
     let preferences = vorkspace_ui::preferences::Preferences::default();
-    vorkspace_ui::theme::configure(&preferences, false, true);
+    vorkspace_ui::theme::configure(&preferences, false);
     cx.update(|cx| {
         cx.set_global(preferences);
         vorkspace_ui::clock::use_test_clock(cx);
@@ -717,7 +717,7 @@ fn narrow_layout_and_opening_history_do_not_slide(cx: &mut TestAppContext) {
 
 #[gpui::test]
 fn an_empty_session_offers_starters_that_fill_the_composer(cx: &mut TestAppContext) {
-    vorkspace_ui::theme::configure(&Default::default(), false, true);
+    vorkspace_ui::theme::configure(&Default::default(), false);
     cx.update(|cx| {
         cx.set_global(vorkspace_ui::preferences::Preferences::default());
         vorkspace_ui::clock::use_test_clock(cx);
@@ -753,7 +753,7 @@ fn an_empty_session_offers_starters_that_fill_the_composer(cx: &mut TestAppConte
 fn a_session_without_a_project_asks_plainly_and_offers_no_project_starters(
     cx: &mut TestAppContext,
 ) {
-    vorkspace_ui::theme::configure(&Default::default(), false, true);
+    vorkspace_ui::theme::configure(&Default::default(), false);
     cx.update(|cx| {
         cx.set_global(vorkspace_ui::preferences::Preferences::default());
         vorkspace_ui::clock::use_test_clock(cx);
@@ -791,7 +791,7 @@ fn a_session_without_a_project_asks_plainly_and_offers_no_project_starters(
 
 #[gpui::test]
 fn a_short_empty_session_keeps_only_its_question_and_composer(cx: &mut TestAppContext) {
-    vorkspace_ui::theme::configure(&Default::default(), false, true);
+    vorkspace_ui::theme::configure(&Default::default(), false);
     cx.update(|cx| {
         cx.set_global(vorkspace_ui::preferences::Preferences::default());
         vorkspace_ui::clock::use_test_clock(cx);

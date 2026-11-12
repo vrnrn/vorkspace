@@ -523,7 +523,7 @@ mod shimmer_frames {
             },
         );
         vorkspace_ui::clock::use_test_clock(&cx);
-        vorkspace_ui::theme::configure(&Default::default(), true, true);
+        vorkspace_ui::theme::configure(&Default::default(), true);
         let window = cx
             .open_window(gpui::size(px(420.), px(440.)), |_, cx| cx.new(|_| Frames))
             .unwrap();

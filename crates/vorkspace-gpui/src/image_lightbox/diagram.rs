@@ -336,7 +336,7 @@ mod tests {
             y: -30.,
         };
         for (kind, source) in DIAGRAMS {
-            configure(&preferences, false, true);
+            configure(&preferences, false);
             let window = open_diagram(kind, source, cx);
             let visual = &mut VisualTestContext::from_window(window.into(), cx);
             visual.run_until_parked();
@@ -358,7 +358,7 @@ mod tests {
                 window.refresh();
                 window.draw(cx).clear(cx);
             };
-            configure(&preferences, true, true);
+            configure(&preferences, true);
             visual.update(draw);
             window
                 .update(visual, |view, _, _| {
@@ -384,14 +384,14 @@ mod tests {
 
             // Start a dark render, then restore the light palette before the
             // executor runs. The stale raster must never replace these pixels.
-            configure(&preferences, false, true);
+            configure(&preferences, false);
             visual.update(draw);
             window
                 .update(visual, |view, _, _| {
                     assert!(view.diagram.as_ref().unwrap().rendering);
                 })
                 .unwrap();
-            configure(&preferences, true, true);
+            configure(&preferences, true);
             visual.run_until_parked();
             window
                 .update(visual, |view, window, _| {

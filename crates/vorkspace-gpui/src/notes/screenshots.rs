@@ -101,7 +101,6 @@ fn native_notes_capture() {
                     ..Default::default()
                 },
                 theme == "light",
-                true,
             );
         });
         for (layout, width) in [("wide", 1200.), ("narrow", 540.)] {

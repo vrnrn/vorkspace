@@ -126,7 +126,6 @@ fn native_codebase_capture() {
                     ..Default::default()
                 },
                 false,
-                true,
             )
         });
         for width in [1200., 420.] {

@@ -65,10 +65,10 @@ struct Tokens {
     diff_strong: bool,
 }
 thread_local! { static TOKENS: std::cell::RefCell<Option<Tokens>> = const { std::cell::RefCell::new(None) }; }
-pub fn configure(p: &crate::preferences::Preferences, system_light: bool, classic: bool) -> bool {
+pub fn configure(p: &crate::preferences::Preferences, system_light: bool) -> bool {
     let light = p.theme == "light" || (p.theme == "system" && system_light);
     let palette = crate::palettes::palette(&p.workspace_theme, light);
-    let glass = window_glass(p, system_light, classic);
+    let glass = window_glass(p, system_light);
     // Both layouts derive their surface roles from the same saved settings.
     let shell = gpui::hsla(
         p.theme_hue.min(360) as f32 / 360.,
@@ -109,12 +109,8 @@ pub fn configure(p: &crate::preferences::Preferences, system_light: bool, classi
     })
 }
 
-pub fn window_glass(
-    p: &crate::preferences::Preferences,
-    system_light: bool,
-    classic: bool,
-) -> bool {
-    (classic || p.inset_glass) && p.theme != "light" && !(p.theme == "system" && system_light)
+pub fn window_glass(p: &crate::preferences::Preferences, system_light: bool) -> bool {
+    p.theme != "light" && !(p.theme == "system" && system_light)
 }
 pub fn accent_color() -> Hsla {
     TOKENS.with(|t| {
@@ -528,7 +524,6 @@ pub fn diff_background(add: bool, gutter: bool) -> Hsla {
 pub fn test_appearance(
     preferences: &crate::preferences::Preferences,
     system_light: bool,
-    classic: bool,
 ) -> impl Drop {
     struct Restore(Option<Tokens>);
     impl Drop for Restore {
@@ -537,7 +532,7 @@ pub fn test_appearance(
         }
     }
     let restore = Restore(TOKENS.with(|tokens| *tokens.borrow()));
-    configure(preferences, system_light, classic);
+    configure(preferences, system_light);
     restore
 }
 
