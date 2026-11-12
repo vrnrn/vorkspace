@@ -17,7 +17,8 @@ use crate::shell_env::path_to_js;
 #[cfg(test)]
 mod tests;
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
 pub struct CheckpointFile {
     pub path: String,
     pub relative: String,
@@ -26,22 +27,6 @@ pub struct CheckpointFile {
     pub deletions: i64,
     /// False when restoring could overwrite a change made outside this session.
     pub undoable: bool,
-}
-
-impl Serialize for CheckpointFile {
-    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
-        use serde::ser::SerializeStruct;
-        let mut file = serializer.serialize_struct("CheckpointFile", 7)?;
-        file.serialize_field("path", &self.path)?;
-        file.serialize_field("relative", &self.relative)?;
-        file.serialize_field("status", &self.status)?;
-        file.serialize_field("additions", &self.additions)?;
-        file.serialize_field("deletions", &self.deletions)?;
-        // Preserve the published response shape without storing a choice that never varies.
-        file.serialize_field("exact", &true)?;
-        file.serialize_field("undoable", &self.undoable)?;
-        file.end()
-    }
 }
 
 #[derive(Debug, Clone, Default, Serialize, PartialEq, Eq)]
