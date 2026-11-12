@@ -35,15 +35,10 @@ struct TabStripGeometry<'a> {
 
 impl TabWidthSelection<'_> {
     fn weight(&self, tab: &TitleTab) -> f32 {
-        let selected = self.selected;
-        let leaving = self.leaving;
-        let switching = self.switching;
-        let switch = self.switch;
-
-        if Some(tab) == selected.as_ref() {
-            if switching { switch } else { 1. }
-        } else if leaving.as_ref() == Some(tab) {
-            1. - switch
+        if Some(tab) == self.selected.as_ref() {
+            if self.switching { self.switch } else { 1. }
+        } else if self.leaving.as_ref() == Some(tab) {
+            1. - self.switch
         } else {
             0.
         }
@@ -51,13 +46,10 @@ impl TabWidthSelection<'_> {
 }
 impl TabSizing<'_> {
     fn snap(&self, x: f32) -> f32 {
-        let scale = self.scale;
-        (x * scale).floor() / scale
+        (x * self.scale).floor() / self.scale
     }
     fn base_width(&self, tab: &TitleTab) -> f32 {
-        let width = self.width;
-        let floor = self.floor;
-        self.snap(width + (floor - width) * self.selection.weight(tab))
+        self.snap(self.width + (self.floor - self.width) * self.selection.weight(tab))
     }
     fn slot_size(&self, tab: &TitleTab, open: f32) -> (f32, f32) {
         (
@@ -935,8 +927,6 @@ impl Shell {
         ix: usize,
         geometry: &TabStripGeometry<'_>,
     ) -> gpui::Stateful<gpui::Div> {
-        let insert = geometry.insert;
-        let count = geometry.count;
         tab.map(|d| {
             let bar = || {
                 div()
@@ -947,10 +937,13 @@ impl Shell {
                     .rounded_full()
                     .bg(accent_color())
             };
-            d.when(insert == Some(ix), |d| d.child(bar().left(px(-2.))))
-                .when(insert == Some(count) && ix + 1 == count, |d| {
-                    d.child(bar().right(px(-2.)))
-                })
+            d.when(geometry.insert == Some(ix), |d| {
+                d.child(bar().left(px(-2.)))
+            })
+            .when(
+                geometry.insert == Some(geometry.count) && ix + 1 == geometry.count,
+                |d| d.child(bar().right(px(-2.))),
+            )
         })
     }
 
@@ -1007,9 +1000,6 @@ impl Shell {
         geometry: &TabStripGeometry<'_>,
         cx: &Context<Self>,
     ) -> HashMap<i64, AnyElement> {
-        let thumb_ready = geometry.thumb_ready;
-        let shifts = &geometry.shifts;
-        let glide = &geometry.glide;
         tabs.iter()
             .enumerate()
             .filter_map(|(ix, tab)| tab.session().map(|id| (ix, id)))
@@ -1056,13 +1046,15 @@ impl Shell {
                         .flex_shrink_0()
                         .h(px(TITLE_BAR_HEIGHT))
                         .relative()
-                        .left(shifts[ix])
+                        .left(geometry.shifts[ix])
                         .flex()
                         .items_center()
                         .child(
                             title_tab_plate(active, hovered)
-                                .when(active && thumb_ready, |d| d.bg(gpui::transparent_black()))
-                                .child(glide.probe(ix))
+                                .when(active && geometry.thumb_ready, |d| {
+                                    d.bg(gpui::transparent_black())
+                                })
+                                .child(geometry.glide.probe(ix))
                                 .id(("tab-plate", id as usize))
                                 .debug_selector(move || format!("title-tab-plate-{id}"))
                                 .relative()
@@ -1112,9 +1104,6 @@ impl Shell {
         geometry: &TabStripGeometry<'_>,
         cx: &mut Context<Self>,
     ) -> HashMap<TitleTab, AnyElement> {
-        let glide = &geometry.glide;
-        let shifts = &geometry.shifts;
-        let dragged = &geometry.dragged;
         tabs.iter()
             .enumerate()
             .filter_map(|(ix, tab)| {
@@ -1122,9 +1111,14 @@ impl Shell {
                     TitleTab::Workspace(id) => workspace_elements.remove(id)?,
                     TitleTab::Terminal { .. } | TitleTab::Bot { .. } => {
                         let element = self
-                            .simple_title_tab(tab, geometry.tab_width(tab), (glide, ix), cx)?
-                            .left(shifts[ix]);
-                        if dragged.as_ref() == Some(tab) {
+                            .simple_title_tab(
+                                tab,
+                                geometry.tab_width(tab),
+                                (&geometry.glide, ix),
+                                cx,
+                            )?
+                            .left(geometry.shifts[ix]);
+                        if geometry.dragged.as_ref() == Some(tab) {
                             gpui::deferred(element).with_priority(1).into_any_element()
                         } else {
                             element.into_any_element()
@@ -1144,7 +1138,6 @@ impl Shell {
         geometry: &TabStripGeometry<'_>,
         cx: &Context<Self>,
     ) -> Vec<AnyElement> {
-        let crowded = geometry.crowded;
         slots
             .into_iter()
             .filter_map(|s| match s {
@@ -1158,7 +1151,7 @@ impl Shell {
                             // In a full strip the tab opens out of the new-tab
                             // button: its right edge shows first, so it grows
                             // leftward instead of sliding under the button.
-                            .when(crowded, |d| d.flex().justify_end())
+                            .when(geometry.crowded, |d| d.flex().justify_end())
                             .child(element)
                             .into_any_element()
                     })
@@ -1202,16 +1195,10 @@ impl Shell {
         geometry: TabStripGeometry<'_>,
         cx: &Context<Self>,
     ) -> AnyElement {
-        let viewport = geometry.viewport;
-        let glide = &geometry.glide;
-        let show_new = geometry.show_new;
-        let show_switcher = geometry.show_switcher;
-        let new_tab_lead = geometry.new_tab_lead;
-        let all_tabs = geometry.all_tabs;
         div()
             .id("title-tab-strip")
             .debug_selector(|| "title-tab-strip".into())
-            .w(px(viewport))
+            .w(px(geometry.viewport))
             .min_w_0()
             .h(px(TITLE_BAR_HEIGHT))
             .relative()
@@ -1222,8 +1209,8 @@ impl Shell {
             .border_color(crate::panel_kit::stroke())
             // Outside the scrolled list, so the tabs keep their child indices
             // in `tab_scroll`; the thumb paints in window coordinates.
-            .child(glide.container())
-            .child(glide.thumb(
+            .child(geometry.glide.container())
+            .child(geometry.glide.thumb(
                 vorkspace_ui::theme::title_tab_fill(true, false),
                 radius::CONTROL,
             ))
@@ -1241,7 +1228,7 @@ impl Shell {
                     .pl(px(STRIP_LEAD))
                     .pr(px(STRIP_TRAIL - 2.))
                     .children(elements)
-                    .when(show_new, |d| {
+                    .when(geometry.show_new, |d| {
                         d.child(
                             div()
                                 .id("new-tab")
@@ -1253,7 +1240,7 @@ impl Shell {
                                 .cursor(CursorStyle::Arrow)
                                 .size(px(TAB_PLATE_HEIGHT))
                                 .flex_shrink_0()
-                                .ml(px(new_tab_lead))
+                                .ml(px(geometry.new_tab_lead))
                                 .rounded(px(radius::CONTROL))
                                 .relative()
                                 .opacity(0.65)
@@ -1278,7 +1265,7 @@ impl Shell {
                     })
                     .child(titlebar_drag_area().flex_1().min_w_0()),
             )
-            .when(show_switcher, |d| {
+            .when(geometry.show_switcher, |d| {
                 d.child(
                     icon_button("open-title-tabs", "Open tabs", "chevron-down")
                         .debug_selector(|| "open-title-tabs".into())
@@ -1289,7 +1276,7 @@ impl Shell {
                         .child(self.tabs.switcher_anchor.probe())
                         .on_click(cx.listener(move |this, _, window, cx| {
                             this.open_menu(
-                                MenuTarget::Tabs(all_tabs.clone()),
+                                MenuTarget::Tabs(geometry.all_tabs.clone()),
                                 Anchor::Slot(this.tabs.switcher_anchor.clone()),
                                 window,
                                 cx,
