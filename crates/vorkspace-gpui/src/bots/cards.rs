@@ -16,8 +16,7 @@ fn launched_state(session: &Conversation) -> &'static str {
     } else {
         match session.turn_state() {
             TurnState::Settled(TurnOutcome::Cancelled) => "stopped",
-            TurnState::Settled(TurnOutcome::Failed | TurnOutcome::Superseded)
-            | TurnState::Unconfirmed => "failed",
+            TurnState::Settled(TurnOutcome::Failed) | TurnState::Unconfirmed => "failed",
             _ => "done",
         }
     }
