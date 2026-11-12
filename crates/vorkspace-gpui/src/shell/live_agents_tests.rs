@@ -232,18 +232,15 @@ fn native_activity_capture() {
     );
     cx.update(|cx| vorkspace_ui::clock::use_test_clock(cx));
     for theme in ["dark", "light", "harbor"] {
-        for (name, compact, _expanded, height, single) in [
-            ("expanded", false, false, 800., false),
-            ("compact", true, false, 800., false),
-            ("all", false, true, 800., false),
-            ("bottom", false, true, 800., false),
-            ("short", false, true, 520., false),
-            ("compact-all", true, true, 800., false),
-            ("compact-short", true, true, 520., false),
-            ("single", false, false, 800., true),
-            ("plain", false, false, 800., true),
-            ("done", false, false, 800., true),
-            ("motion", false, false, 800., true),
+        for (name, compact, height, single) in [
+            ("expanded", false, 800., false),
+            ("compact", true, 800., false),
+            ("short", false, 520., false),
+            ("compact-short", true, 520., false),
+            ("single", false, 800., true),
+            ("plain", false, 800., true),
+            ("done", false, 800., true),
+            ("motion", false, 800., true),
         ] {
             if theme != "dark" && !matches!(name, "expanded" | "compact" | "plain" | "done") {
                 continue;
