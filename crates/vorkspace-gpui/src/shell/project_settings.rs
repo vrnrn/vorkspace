@@ -310,7 +310,7 @@ impl Shell {
             .and_then(|v| v.background.clone())
             .or_else(|| self.workspace.preferences.chat_background_settings())
             .filter(|background| background.opacity(empty) > 0.);
-        chat.update(cx, |session, cx| session.set_classic_layout(true, cx));
+        chat.update(cx, |session, cx| session.set_classic_layout(cx));
         if settings.is_none() {
             self.backgrounds.remove(&id);
         }

@@ -346,9 +346,9 @@ impl Conversation {
             })
             .collect()
     }
-    pub(crate) fn set_classic_layout(&mut self, classic: bool, cx: &mut Context<Self>) {
-        if self.classic_layout != classic {
-            self.classic_layout = classic;
+    pub(crate) fn set_classic_layout(&mut self, cx: &mut Context<Self>) {
+        if !self.classic_layout {
+            self.classic_layout = true;
             cx.notify();
         }
     }
