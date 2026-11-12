@@ -32,7 +32,7 @@ pub enum TaskStatus {
     Cancelled,
 }
 impl TaskStatus {
-    pub fn parse(value: &str) -> Self {
+    pub(crate) fn parse(value: &str) -> Self {
         match value.to_lowercase().replace([' ', '-', '_'], "").as_str() {
             "completed" | "complete" | "done" => Self::Completed,
             "inprogress" | "active" | "running" => Self::InProgress,
@@ -70,7 +70,7 @@ impl TaskList {
             )
         }
     }
-    pub fn from_value(value: &Value) -> Option<Self> {
+    pub(crate) fn from_value(value: &Value) -> Option<Self> {
         let rows = value
             .get("todos")
             .or_else(|| value.get("plan"))
@@ -135,7 +135,7 @@ pub struct AgentStep {
 }
 impl AgentStep {
     /// Mirror a child call without reducing its file/command metadata to prose.
-    pub fn from_tool_call(call: &ToolCall) -> Self {
+    pub(crate) fn from_tool_call(call: &ToolCall) -> Self {
         let (action, target) = call.summary();
         let mut display = call
             .display
@@ -245,7 +245,7 @@ impl AgentStep {
     }
 }
 impl AgentRun {
-    pub fn from_input(input: &Value) -> Self {
+    pub(crate) fn from_input(input: &Value) -> Self {
         Self {
             name: string(&input["name"])
                 .or_else(|| string(&input["agentName"]))
@@ -258,7 +258,7 @@ impl AgentRun {
             ..Self::default()
         }
     }
-    pub fn title(&self) -> &str {
+    pub(crate) fn title(&self) -> &str {
         self.name
             .as_deref()
             .or_else(|| self.brief.lines().next().filter(|s| !s.is_empty()))
@@ -345,7 +345,7 @@ impl AgentRun {
             .or_else(|| desktop_model_name(id).map(str::to_owned))
             .or_else(|| Some(id.into()))
     }
-    pub fn upsert(&mut self, mut step: AgentStep) {
+    pub(crate) fn upsert(&mut self, mut step: AgentStep) {
         // Bound child detail without claiming the retained window is the whole run.
         bound(&mut step.text, 16 * 1024);
         bound(&mut step.detail, 16 * 1024);
@@ -436,7 +436,7 @@ fn desktop_model_name(id: &str) -> Option<&'static str> {
         _ => return None,
     })
 }
-pub fn bound(text: &mut String, limit: usize) {
+pub(crate) fn bound(text: &mut String, limit: usize) {
     if text.len() > limit {
         let mut at = text.len() - limit;
         while !text.is_char_boundary(at) {
@@ -587,7 +587,7 @@ impl ToolCall {
         }
         None
     }
-    pub fn refresh_agent_input(&mut self) {
+    pub(crate) fn refresh_agent_input(&mut self) {
         if let Ok(value) = serde_json::from_str::<Value>(&self.input) {
             let input = AgentRun::from_input(&value);
             if let Some(run) = self.agent_mut() {
@@ -606,7 +606,7 @@ impl ToolCall {
             }
         }
     }
-    pub fn agent_mut(&mut self) -> Option<&mut AgentRun> {
+    pub(crate) fn agent_mut(&mut self) -> Option<&mut AgentRun> {
         if self.panel.is_none() {
             self.panel = self.infer_panel();
         }
@@ -618,7 +618,7 @@ impl ToolCall {
 }
 
 /// Adapt desktop metadata and recognize legacy delegated-tool captions.
-pub fn from_desktop(block: &Value) -> Option<Panel> {
+pub(crate) fn from_desktop(block: &Value) -> Option<Panel> {
     if block["role"] == "tasks" {
         return TaskList::from_value(&block["taskList"]).map(Panel::Tasks);
     }
@@ -725,7 +725,7 @@ pub fn from_desktop(block: &Value) -> Option<Panel> {
     Some(Panel::Agent(run))
 }
 
-pub fn desktop_agent(run: &AgentRun) -> Value {
+pub(crate) fn desktop_agent(run: &AgentRun) -> Value {
     serde_json::json!({
         "name":run.name.as_deref().filter(|name| !name.trim().is_empty()).unwrap_or_else(|| if run.brief.is_empty() { "Subagent" } else { &run.brief }),
         "model":run.model, "agentType":run.agent_type, "nativeIds":run.ids, "nativeBrief":run.brief,

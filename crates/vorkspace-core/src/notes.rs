@@ -103,14 +103,6 @@ impl Note {
             .map(crate::files::leaf_name)
     }
 
-    pub fn in_project(&self, scope: Option<&str>) -> bool {
-        let Some(scope) = scope else { return true };
-        self.source_cwd
-            .as_deref()
-            .filter(|cwd| is_project(cwd))
-            .is_none_or(|cwd| crate::files::path_key(cwd) == crate::files::path_key(scope))
-    }
-
     pub fn preview(&self) -> String {
         let mut parts = Vec::new();
         let mut fence = false;
@@ -253,7 +245,7 @@ fn unwrap_markdown(text: &str) -> String {
 }
 
 /// The same prompt boundary as `injectNotePrompt` in the desktop composer.
-pub fn inject_prompt(text: &str, notes: &[Note]) -> String {
+pub(crate) fn inject_prompt(text: &str, notes: &[Note]) -> String {
     if notes.is_empty() {
         return text.into();
     }
@@ -274,18 +266,7 @@ pub fn inject_prompt(text: &str, notes: &[Note]) -> String {
     format!("{}\n\n---\n{}", text.trim_end(), blocks.join("\n"))
 }
 
-pub fn compose_message(note: &Note, text: &str) -> String {
-    inject_prompt(
-        if text.trim().is_empty() {
-            "Use this note."
-        } else {
-            text.trim()
-        },
-        std::slice::from_ref(note),
-    )
-}
-
-pub fn slugs_in_text(text: &str) -> Vec<String> {
+pub(crate) fn slugs_in_text(text: &str) -> Vec<String> {
     static SLUG: std::sync::LazyLock<regex::Regex> =
         std::sync::LazyLock::new(|| regex::Regex::new(r"(?:^|\s)@note/([A-Za-z0-9_-]+)").unwrap());
     let mut result = Vec::new();

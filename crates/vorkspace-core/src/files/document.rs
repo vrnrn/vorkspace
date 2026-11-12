@@ -203,7 +203,7 @@ fn document_from_bytes(
     }))
 }
 
-pub fn is_video_path(path: &Path) -> bool {
+pub(crate) fn is_video_path(path: &Path) -> bool {
     path.extension()
         .and_then(|s| s.to_str())
         .is_some_and(|ext| {
@@ -225,7 +225,7 @@ pub fn is_video_path(path: &Path) -> bool {
 }
 
 impl TextDocument {
-    pub fn encode(&self, text: &str) -> Vec<u8> {
+    pub(crate) fn encode(&self, text: &str) -> Vec<u8> {
         let mut out = if self.bom {
             vec![0xef, 0xbb, 0xbf]
         } else {

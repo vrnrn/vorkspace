@@ -10,7 +10,7 @@ mod media;
 pub use avatar::png as avatar_png;
 pub use media::png as media_png;
 mod github;
-pub mod gitlab;
+pub(crate) mod gitlab;
 pub mod jira;
 
 use crate::session_groups::WorkItem;
@@ -186,22 +186,6 @@ pub fn timestamp_ms(value: &str) -> i64 {
         .map(|at| at.timestamp_millis())
         .unwrap_or(0)
 }
-pub fn relative_time(value: &str) -> String {
-    let at = timestamp_ms(value);
-    if at == 0 {
-        return String::new();
-    }
-    let seconds = ((crate::time::now_ms() as i64 - at).max(0)) / 1000;
-    match seconds {
-        0..60 => "now".into(),
-        60..3600 => format!("{}m", seconds / 60),
-        3600..86400 => format!("{}h", seconds / 3600),
-        86400..604800 => format!("{}d", seconds / 86400),
-        _ => chrono::DateTime::from_timestamp_millis(at)
-            .map(|d| d.format("%b %-d").to_string())
-            .unwrap_or_default(),
-    }
-}
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
 pub struct Details {
@@ -331,7 +315,7 @@ impl Default for Filters {
     }
 }
 impl Filters {
-    pub fn fetch_state(&self) -> &str {
+    pub(crate) fn fetch_state(&self) -> &str {
         if self.status.closed || self.status.merged || !(self.status.open || self.status.draft) {
             "all"
         } else {
@@ -601,7 +585,7 @@ fn convert<T: Serialize, U: DeserializeOwned>(value: T) -> Result<U, String> {
         .map_err(|e| e.to_string())
 }
 impl Service {
-    pub fn status(&self, provider: &str) -> Result<Status, String> {
+    pub(crate) fn status(&self, provider: &str) -> Result<Status, String> {
         match provider {
             "jira" => convert(jira::jira_status(self.data_dir.clone())?),
             "gitlab" => convert(gitlab::gitlab_status(self.data_dir.clone())?),

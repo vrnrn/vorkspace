@@ -140,7 +140,7 @@ fn open_marker(marker: &Path) -> io::Result<File> {
 }
 
 /// Keeps the command chosen when the worktree was made, whatever changes later.
-pub fn mark_due(projects: &[&Path], worktree: &Path) {
+pub(crate) fn mark_due(projects: &[&Path], worktree: &Path) {
     let pending = {
         let policy = POLICY.lock().unwrap_or_else(|e| e.into_inner());
         policy.as_ref().and_then(|policy| {

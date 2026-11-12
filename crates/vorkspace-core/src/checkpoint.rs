@@ -117,7 +117,7 @@ pub fn store() -> Option<&'static Store> {
 }
 
 impl Store {
-    pub fn new(root: PathBuf) -> Self {
+    pub(crate) fn new(root: PathBuf) -> Self {
         Self {
             root,
             gate: Arc::new(Mutex::new(())),
@@ -161,41 +161,6 @@ impl Store {
     pub fn status(&self, session_id: &str, cwd: &str) -> Result<CheckpointStatus, String> {
         validate_id(session_id, "session")?;
         Ok(self.turn_status(session_id, cwd)?.unwrap_or_default())
-    }
-
-    /// A presentation-only read, without persisting newly resolved paths.
-    pub fn status_readonly(&self, session_id: &str, cwd: &str) -> Result<CheckpointStatus, String> {
-        validate_id(session_id, "session")?;
-        Ok(self
-            .turn_status_inner(session_id, cwd, false)?
-            .unwrap_or_default())
-    }
-
-    /// Native UI handles and desktop UUIDs can name the same conversation.
-    /// Read its newest recording in place, without migrating either directory.
-    pub fn status_readonly_aliases(
-        &self,
-        session_ids: &[String],
-        cwd: &str,
-    ) -> Result<CheckpointStatus, String> {
-        for id in session_ids {
-            validate_id(id, "session")?;
-        }
-        let latest = session_ids
-            .iter()
-            .enumerate()
-            .filter_map(|(index, id)| {
-                let modified = std::fs::metadata(self.session_dir(id).join("turn-review.json"))
-                    .ok()?
-                    .modified()
-                    .ok()?;
-                Some((modified, std::cmp::Reverse(index), id))
-            })
-            .max_by_key(|(modified, index, _)| (*modified, *index));
-        latest.map_or_else(
-            || Ok(CheckpointStatus::default()),
-            |(_, _, id)| self.status_readonly(id, cwd),
-        )
     }
 
     /// Reads the complete saved tree pair. Review surfaces use the attributed
@@ -441,100 +406,6 @@ impl Store {
         }
         if dirty {
             write_review(&self.session_dir(session_id), &review)?;
-        }
-        Ok(())
-    }
-
-    /// Repair the interrupted-turn state left by versions that replaced its
-    /// baseline on Continue. Only transcript-confirmed edits can be recovered.
-    pub fn recover_orphaned_turn(
-        &self,
-        session_id: &str,
-        cwd: &str,
-        paths: &[String],
-    ) -> Result<(), String> {
-        if paths.is_empty() {
-            return Ok(());
-        }
-        let Some(mut review) = self.matching_turn_review(session_id, cwd)? else {
-            return Ok(());
-        };
-        if review.active.is_some() {
-            return Ok(());
-        }
-        let turn = completed_turn(&review)?;
-        let root = Path::new(&review.cwd);
-        if !turn.edited.is_empty() || !changes(root, turn, ".")?.is_empty() {
-            return Ok(());
-        }
-        let workspace = project_root(cwd)?;
-        let edited: BTreeSet<_> = paths
-            .iter()
-            .filter_map(|path| resolve_edit_path(&workspace, root, path).ok())
-            .collect();
-        if edited.is_empty() {
-            return Ok(());
-        }
-        let prefix = format!("refs/vorkspace/checkpoints/{session_id}/");
-        let refs = run_git(
-            root,
-            &[
-                "for-each-ref",
-                "--sort=-committerdate",
-                "--format=%(refname) %(objectname)",
-                &prefix,
-            ],
-        )?;
-        let refs: Vec<_> = String::from_utf8_lossy(&refs)
-            .lines()
-            .filter_map(|line| {
-                line.split_once(' ')
-                    .map(|(name, oid)| (name.to_string(), oid.to_string()))
-            })
-            .collect();
-        let names: HashSet<_> = refs.iter().map(|(name, _)| name.as_str()).collect();
-        let dir = self.session_dir(session_id);
-        for (reference, before) in &refs {
-            let Some(id) = reference
-                .strip_prefix(&prefix)
-                .and_then(|name| name.strip_suffix("/before"))
-            else {
-                continue;
-            };
-            if id == turn.id
-                || names.contains(turn_ref(session_id, id, "after").as_str())
-                || dir.join("turns").join(format!("{id}.json")).exists()
-            {
-                continue;
-            }
-            validate_id(id, "turn")?;
-            let mut recovered = turn.clone();
-            recovered.before = Some(before.clone());
-            recovered.edited = edited.clone();
-            // The orphan lost its original HEAD and overlap metadata. Review
-            // remains available, but recovery must never make Undo available.
-            recovered.head = None;
-            recovered.shared = true;
-            if !changes(root, &recovered, ".")?
-                .iter()
-                .any(|change| edited.contains(&change.relative))
-            {
-                continue;
-            }
-            let mut archived = recovered.clone();
-            archived.id = id.into();
-            for saved in [archived, recovered.clone()] {
-                write_json(
-                    &dir.join("turns").join(format!("{}.json", saved.id)),
-                    &SavedTurn {
-                        cwd: review.cwd.clone(),
-                        repo: review.repo.clone(),
-                        turn: saved,
-                    },
-                )?;
-            }
-            review.latest = Some(recovered);
-            return write_review(&dir, &review);
         }
         Ok(())
     }

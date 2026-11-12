@@ -1409,7 +1409,7 @@ impl Store {
         })
     }
     /// Sessions whose latest message is saved as a draft and not yet sent.
-    pub fn draft_sessions(&self) -> Result<HashSet<i64>, String> {
+    pub(crate) fn draft_sessions(&self) -> Result<HashSet<i64>, String> {
         let mut query = sql(self.conn.prepare(&format!(
             "SELECT id FROM sessions WHERE {}!=0",
             self.shared_field("is_draft", "0")

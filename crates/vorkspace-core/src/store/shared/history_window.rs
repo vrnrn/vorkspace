@@ -22,17 +22,13 @@ pub struct IndexedHistoryPage {
     /// Position of the first row in the complete projected transcript.
     pub global_start: usize,
     pub before: Option<IndexedHistoryCursor>,
-    guard: IndexedHistoryCursor,
-    saved_global_start: usize,
-    saved_len: usize,
-    tail: bool,
 }
 
 impl Store {
     /// Read a snapshot-bound page of indexed Bot history. Blob and ordinary
     /// histories return None and retain their existing loading path.
-    /// Use `write_indexed_history_page` for page-relative writes; `write_rows`
-    /// requires a complete transcript and a separate revision guard.
+    /// Writes go through `write_rows`, which requires a complete transcript
+    /// and a separate revision guard.
     pub fn indexed_history_page(
         &self,
         id: i64,
@@ -162,62 +158,13 @@ impl Store {
         } else {
             None
         };
-        let saved_len = rows.len();
         Ok(Some(IndexedHistoryPage {
             rows,
             revision: self.history_revision(original)?,
             turns,
             global_start,
             before,
-            guard,
-            saved_global_start: global_start,
-            saved_len,
-            tail: cursor.is_none(),
         }))
-    }
-
-    /// Merge a page-relative edit or tail append against the exact snapshot
-    /// that produced the page. Older pages cannot append into newer history.
-    pub fn write_indexed_history_page(
-        &self,
-        id: i64,
-        page: &IndexedHistoryPage,
-        start: usize,
-        rows: &[Row],
-    ) -> Result<(), String> {
-        if start > page.saved_len || (!page.tail && rows.len() > page.saved_len - start) {
-            return Err("Write exceeds the loaded history page; reload before editing".into());
-        }
-        self.shared_writable()?;
-        self.shared_history_schema()?;
-        self.shared_card_rows_current(id, rows)?;
-        let original = self.persisted_session_id(id)?;
-        let tx = sql(self.conn.unchecked_transaction())?;
-        // Revalidate the owner, all block positions and content, and turns
-        // under the same transaction as the merge and publication.
-        self.shared_indexed_history_page_in_snapshot(&original, Some(&page.guard), 1)?
-            .ok_or("Indexed history owner changed; reload the conversation")?;
-        let current = self.shared_blocks(id)?;
-        let global_start = page
-            .saved_global_start
-            .checked_add(start)
-            .ok_or("History row offset overflow")?;
-        let next = blocks::merge(&current, global_start, rows)?;
-        self.shared_store_blocks(id, &next)?;
-        if !rows.is_empty() {
-            self.shared_patch(id, &[("updated_at", json!(crate::time::now_ms()))])?;
-        }
-        sql(tx.commit())?;
-        // Existing complete-history readers must reload after this independent
-        // write rather than inheriting a revision they never observed.
-        let shared = &self.shared;
-        shared
-            .snapshots
-            .borrow_mut()
-            .insert(id, HistoryRevision::Invalidated);
-        shared.incremental.borrow_mut().remove(&id);
-        shared.card_revisions.borrow_mut().remove(&id);
-        Ok(())
     }
 }
 

@@ -133,7 +133,7 @@ impl Bot {
             .retain(|p| !p.trim().is_empty() && seen.insert(crate::files::path_key(p)));
     }
 }
-pub type Work = (Vec<Document>, Vec<Launch>);
+pub(crate) type Work = (Vec<Document>, Vec<Launch>);
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Roster {
@@ -464,7 +464,7 @@ static MINIONS: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::n
 pub fn set_minions_enabled(enabled: bool) {
     MINIONS.store(enabled, std::sync::atomic::Ordering::Relaxed);
 }
-pub fn minions_enabled() -> bool {
+pub(crate) fn minions_enabled() -> bool {
     MINIONS.load(std::sync::atomic::Ordering::Relaxed)
 }
 

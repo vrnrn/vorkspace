@@ -9,7 +9,7 @@ impl Bot {
     pub fn is_retired(&self) -> bool {
         self.minion.as_ref().is_some_and(|m| m.retired)
     }
-    pub fn storage_id(&self) -> &str {
+    pub(crate) fn storage_id(&self) -> &str {
         self.minion.as_ref().map_or(&self.id, |m| &m.parent_id)
     }
 }
@@ -42,7 +42,7 @@ impl Roster {
         let owner = self.get(actor.storage_id())?;
         (!owner.is_minion()).then_some(owner)
     }
-    pub fn can_read_peer(&self, from: &str, to: &str) -> bool {
+    pub(crate) fn can_read_peer(&self, from: &str, to: &str) -> bool {
         let (Some(a), Some(b)) = (self.get(from), self.get(to)) else {
             return false;
         };

@@ -196,7 +196,7 @@ impl Launch {
             workspace,
         })
     }
-    pub fn validate_workspace(&mut self, project: &str) -> Result<(), String> {
+    pub(crate) fn validate_workspace(&mut self, project: &str) -> Result<(), String> {
         match &self.workspace {
             Workspace::Current => {
                 if let Some(cwd) = self.settings.worktree_cwd.clone() {

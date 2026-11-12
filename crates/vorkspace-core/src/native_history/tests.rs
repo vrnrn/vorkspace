@@ -2,6 +2,7 @@ use super::*;
 use crate::{
     agent::{Settings, TurnInfo},
     store::Store,
+    transcript::Transcript,
 };
 use serde_json::json;
 use std::io::Write;

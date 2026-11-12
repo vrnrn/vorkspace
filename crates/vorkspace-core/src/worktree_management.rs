@@ -262,7 +262,7 @@ pub fn remove_if_safe(cwd: &Path, path: &Path) -> Result<(), String> {
     Ok(())
 }
 /// The rows that describe a project's worktrees; `sessions` answers who uses one.
-pub fn describe(
+pub(crate) fn describe(
     project: &Path,
     sessions_using: impl Fn(&str) -> Result<Vec<i64>, String>,
 ) -> Result<serde_json::Value, String> {

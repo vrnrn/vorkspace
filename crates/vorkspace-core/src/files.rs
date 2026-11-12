@@ -81,7 +81,7 @@ pub fn list_dir(path: &Path) -> Result<Vec<DirEntry>, String> {
 }
 
 /// Case-insensitive order where digit runs compare by numeric value.
-pub fn compare_natural_names(a: &str, b: &str) -> std::cmp::Ordering {
+pub(crate) fn compare_natural_names(a: &str, b: &str) -> std::cmp::Ordering {
     use std::cmp::Ordering;
 
     let (a, b) = (a.as_bytes(), b.as_bytes());

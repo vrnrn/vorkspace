@@ -77,7 +77,7 @@ impl Groups {
             .iter()
             .find(|f| f.session_ids.contains(&session))
     }
-    pub fn folder(&self, id: &str) -> Option<&Folder> {
+    pub(crate) fn folder(&self, id: &str) -> Option<&Folder> {
         self.folders.iter().find(|f| f.id == id)
     }
     fn folder_mut(&mut self, id: &str) -> Option<&mut Folder> {
@@ -141,7 +141,7 @@ impl Groups {
         }
     }
     /// Takes the sessions out of their folders; emptied folders go too.
-    pub fn remove_sessions(&mut self, sessions: &[i64]) {
+    pub(crate) fn remove_sessions(&mut self, sessions: &[i64]) {
         for f in &mut self.folders {
             f.session_ids.retain(|id| !sessions.contains(id));
         }
@@ -163,7 +163,7 @@ impl Groups {
     }
 }
 
-pub const REMINDER_PRESETS: [&str; 5] = [
+pub(crate) const REMINDER_PRESETS: [&str; 5] = [
     "reminder:1h",
     "reminder:3h",
     "reminder:evening",

@@ -31,7 +31,7 @@ const HABITS_FILE: &str = "habits.json";
 /// Larger than anything that would load: the soul and memory both have far
 /// smaller prompt budgets, this only stops a runaway write.
 const FILE_MAX: usize = 256 * 1024;
-pub const CONFLICT: &str = "conflict";
+pub(crate) const CONFLICT: &str = "conflict";
 
 static FILES_LOCK: Mutex<()> = Mutex::new(());
 

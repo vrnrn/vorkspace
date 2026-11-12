@@ -28,10 +28,7 @@ pub const BOT_FACES: [&str; 6] = ["pills", "dots", "visor", "square", "slits", "
 /// legacy value reads as "dither".
 pub const BOT_PATTERNS: [&str; 5] = ["dither", "halftone", "grain", "stripes", "solid"];
 
-/// Where a Bot's pattern sits on its body.
-pub const BOT_PRINTS: [&str; 3] = ["ground", "cap", "full"];
-
-pub fn normalize_bot_print(print: &str) -> &'static str {
+pub(crate) fn normalize_bot_print(print: &str) -> &'static str {
     match print {
         "cap" => "cap",
         "full" => "full",
@@ -39,7 +36,7 @@ pub fn normalize_bot_print(print: &str) -> &'static str {
     }
 }
 
-pub fn normalize_bot_pattern(pattern: &str) -> &'static str {
+pub(crate) fn normalize_bot_pattern(pattern: &str) -> &'static str {
     match pattern {
         "halftone" => "halftone",
         "grain" => "grain",
@@ -325,86 +322,6 @@ pub fn background_texture(source: &RgbaImage, effect: Effect) -> RgbaImage {
     }
 }
 
-/// Backends without the Metal layer compositor bake Haze into the source;
-/// their cover crop and opacity mask still follow the current view immediately.
-pub fn software_background_texture(
-    source: &RgbaImage,
-    effect: Effect,
-    empty: bool,
-    preview: bool,
-) -> RgbaImage {
-    if effect == Effect::GradientBlur {
-        effect_pixels(source, effect, empty, preview, 1.)
-    } else {
-        background_texture(source, effect)
-    }
-}
-
-/// React processes texture effects at the artwork's resolution, then the view
-/// cover-crops the result and applies its own fade. CSS blur uses view pixels.
-pub fn render_background(
-    source: &RgbaImage,
-    effect: Effect,
-    width: u32,
-    height: u32,
-    empty: bool,
-) -> RgbaImage {
-    render_background_scaled(source, effect, width, height, empty, 1.)
-}
-pub fn render_background_scaled(
-    source: &RgbaImage,
-    effect: Effect,
-    width: u32,
-    height: u32,
-    empty: bool,
-    scale: f32,
-) -> RgbaImage {
-    let textured = if matches!(
-        effect,
-        Effect::Dither | Effect::Ascii | Effect::Halftone | Effect::Scanlines
-    ) {
-        effect_pixels(source, effect, empty, false, scale)
-    } else {
-        source.clone()
-    };
-    let covered = cover_image(&textured, width, height);
-    let mut output = if effect == Effect::GradientBlur {
-        effect_pixels(&covered, effect, empty, false, scale)
-    } else {
-        covered
-    };
-    let height = output.height();
-    for (_, y, pixel) in output.enumerate_pixels_mut() {
-        pixel[3] = (pixel[3] as f32
-            * background_fade(
-                y as f32 / height as f32,
-                empty,
-                effect == Effect::GradientBlur,
-            ))
-        .round() as u8;
-    }
-    output
-}
-fn cover_image(source: &RgbaImage, width: u32, height: u32) -> RgbaImage {
-    let width = width.clamp(1, 2048);
-    let height = height.clamp(1, 2048);
-    let aspect = width as f64 / height as f64;
-    let crop_width = source
-        .width()
-        .min((source.height() as f64 * aspect).round().max(1.) as u32);
-    let crop_height = source
-        .height()
-        .min((source.width() as f64 / aspect).round().max(1.) as u32);
-    let cropped = imageops::crop_imm(
-        source,
-        (source.width() - crop_width) / 2,
-        (source.height() - crop_height) / 2,
-        crop_width,
-        crop_height,
-    )
-    .to_image();
-    imageops::resize(&cropped, width, height, imageops::FilterType::Triangle)
-}
 fn effect_pixels(
     source: &RgbaImage,
     effect: Effect,
@@ -533,7 +450,7 @@ fn effect_pixels(
     output
 }
 
-pub fn png_bytes(image: RgbaImage) -> Result<Vec<u8>, String> {
+pub(crate) fn png_bytes(image: RgbaImage) -> Result<Vec<u8>, String> {
     let mut bytes = Cursor::new(Vec::new());
     image
         .write_to(&mut bytes, image::ImageFormat::Png)

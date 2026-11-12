@@ -8,7 +8,7 @@ impl DesktopPreferences {
     /// A native groups sidecar, when present, is the deliberate native override.
     /// The callback must resolve existing database IDs, never invent sessions for
     /// stale folder members or reinterpret numeric-looking canonical strings.
-    pub fn groups(
+    pub(crate) fn groups(
         &self,
         cwd: &str,
         mut resolve: impl FnMut(&str) -> Option<i64>,

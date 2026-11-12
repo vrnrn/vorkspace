@@ -23,7 +23,7 @@ use std::{
 
 const SETTING: &str = "codebase-enabled-projects";
 type Database = Arc<Mutex<Store>>;
-pub type Reply = async_channel::Receiver<Result<Value, String>>;
+pub(crate) type Reply = async_channel::Receiver<Result<Value, String>>;
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]

@@ -8,7 +8,7 @@ const MAX_BYTES: u64 = 1024 * 1024;
 
 #[derive(Clone, Copy, Deserialize)]
 #[serde(rename_all = "kebab-case")]
-pub enum PiUsageProvider {
+pub(crate) enum PiUsageProvider {
     Anthropic,
     OpenaiCodex,
 }
@@ -21,13 +21,13 @@ pub(super) struct UsageWindow {
     pub resets_at: Option<u64>,
 }
 #[derive(Debug, Default, Serialize)]
-pub struct UsageWindows {
+pub(crate) struct UsageWindows {
     pub session: Option<UsageWindow>,
     pub weekly: Option<UsageWindow>,
 }
 #[derive(Debug, Serialize)]
 #[serde(tag = "status", rename_all = "lowercase")]
-pub enum PiUsageResult {
+pub(crate) enum PiUsageResult {
     Ok { windows: UsageWindows },
     Unavailable { message: String },
     Error { message: String },

@@ -19,7 +19,7 @@ impl Limit {
         pattern.is_match(message).then(Self::default)
     }
     /// Extra-usage refusals fall back to the subscription and do not stop a turn.
-    pub fn from_claude_info(info: &Value) -> Option<Self> {
+    pub(crate) fn from_claude_info(info: &Value) -> Option<Self> {
         (info["status"] == "rejected"
             && info["isUsingOverage"] != true
             && info["rateLimitType"] != "overage")

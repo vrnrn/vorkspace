@@ -16,7 +16,7 @@ struct MediaUrl {
     url: String,
 }
 
-pub fn fetch(url: &str) -> Result<Vec<u8>, String> {
+pub(crate) fn fetch(url: &str) -> Result<Vec<u8>, String> {
     let mut current = parse_allowed_media_url(url)?;
     let token = if github_auth_host(&current.host) {
         github_auth_token()

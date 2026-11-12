@@ -44,11 +44,11 @@ impl ToolCall {
     pub fn is_compaction(&self) -> bool {
         self.name == "contextCompaction"
     }
-    pub fn append_output(&mut self, delta: &str) {
+    pub(crate) fn append_output(&mut self, delta: &str) {
         self.output.push_str(delta);
         self.bound_output();
     }
-    pub fn bound_output(&mut self) {
+    pub(crate) fn bound_output(&mut self) {
         if let Some(tail) = self.output_tail() {
             self.output = format!("{OUTPUT_OMISSION}{tail}");
         }
@@ -107,9 +107,4 @@ impl ToolCall {
             serde_json::to_string_pretty(raw).unwrap_or_else(|_| self.input.clone())
         })
     }
-}
-
-/// Strip a recognized shell launcher for display without executing its script.
-pub fn shell_command(command: &str) -> String {
-    presentation::shell_command(command)
 }

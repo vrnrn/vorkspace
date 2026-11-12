@@ -12,10 +12,10 @@ pub(super) struct Display {
     pub mood: String,
 }
 impl Display {
-    pub fn snapshot(&self) -> Value {
+    pub(crate) fn snapshot(&self) -> Value {
         json!({"hearing":self.hearing.is_some(),"activity":if self.speaking.is_some(){"replying"}else if self.thinking{"thinking"}else{"listening"},"mood":self.mood,"lines":if self.text.is_empty(){vec![]}else{vec![json!({"id":format!("reply-{}",self.serial),"text":self.text,"truncated":self.truncated})]}})
     }
-    pub fn realtime(&mut self, event: &Value) -> bool {
+    pub(crate) fn realtime(&mut self, event: &Value) -> bool {
         let before = self.snapshot();
         match event["type"].as_str() {
             Some("output_transcript.added") => {
@@ -65,7 +65,7 @@ impl Display {
         }
         before != self.snapshot()
     }
-    pub fn notification(&mut self, method: &str, value: &Value) -> bool {
+    pub(crate) fn notification(&mut self, method: &str, value: &Value) -> bool {
         let before = self.snapshot();
         match method {
             "turn/started" => self.thinking = true,

@@ -530,7 +530,7 @@ impl Service {
         Ok(DueAutomationRun { automation, run })
     }
 
-    pub fn claim_occurrence(
+    pub(crate) fn claim_occurrence(
         &mut self,
         automation_id: &str,
         expected_next_run_at: i64,
@@ -587,7 +587,7 @@ impl Service {
         Ok(Some(DueAutomationRun { automation, run }))
     }
 
-    pub fn claim_event(
+    pub(crate) fn claim_event(
         &mut self,
         automation_id: &str,
         claim: AutomationEventClaim,

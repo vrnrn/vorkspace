@@ -40,7 +40,7 @@ pub fn configure_idle_agents(limit: usize) {
 pub fn keep_idle_agents(ids: Vec<i64>) {
     parked::keep(ids);
 }
-pub fn discard_worktree(path: &Path) {
+pub(crate) fn discard_worktree(path: &Path) {
     parked::discard_worktree(path);
 }
 pub fn forget_session(kind: Kind, provider_id: &str, account_id: &str, cwd: &Path) {

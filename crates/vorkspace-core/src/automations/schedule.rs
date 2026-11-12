@@ -130,7 +130,7 @@ pub fn next_run_at(triggers: &[AutomationTrigger], after: i64) -> i64 {
 }
 
 impl Automation {
-    pub fn triggers(&self) -> Vec<AutomationTrigger> {
+    pub(crate) fn triggers(&self) -> Vec<AutomationTrigger> {
         self.triggers
             .clone()
             .unwrap_or_else(|| vec![legacy_trigger(self)])

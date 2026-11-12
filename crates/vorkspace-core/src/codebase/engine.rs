@@ -10,7 +10,7 @@ use std::{
     time::Duration,
 };
 
-pub const VERSION: &str = "0.12.1";
+pub(crate) const VERSION: &str = "0.12.1";
 const BINARY: &str = "codebase-memory-mcp";
 
 fn asset() -> Result<(&'static str, u64, &'static str), String> {

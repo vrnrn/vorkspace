@@ -31,7 +31,7 @@ impl DesktopPreferences {
     /// Isolated development databases and copies never inherit personal settings.
     /// Read committed SQLite/WAL data once when opening a store. The store owns
     /// the verified snapshot so session reads never rescan WebKit directories.
-    pub fn load(data_dir: &Path) -> Self {
+    pub(crate) fn load(data_dir: &Path) -> Self {
         let Some(desktop) = crate::compatibility::vorkspace_database() else {
             return Self::default();
         };
@@ -59,13 +59,13 @@ impl DesktopPreferences {
         Self::default()
     }
 
-    pub fn is_available(&self) -> bool {
+    pub(crate) fn is_available(&self) -> bool {
         self.available
     }
     pub fn get(&self, key: &str) -> Option<&str> {
         self.values.get(key).map(String::as_str)
     }
-    pub fn json(&self, key: &str) -> Option<Value> {
+    pub(crate) fn json(&self, key: &str) -> Option<Value> {
         serde_json::from_str(self.get(key)?).ok()
     }
 
@@ -135,7 +135,7 @@ impl DesktopPreferences {
 
     /// Reconcile current desktop project settings on every workspace read.
     /// Baselines distinguish deliberate native changes from stale sidecar data.
-    pub fn apply_workspace(&self, workspace: &mut Value) {
+    pub(crate) fn apply_workspace(&self, workspace: &mut Value) {
         if !self.available {
             return;
         }

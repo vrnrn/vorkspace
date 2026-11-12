@@ -23,7 +23,7 @@ impl Usage {
     }
 }
 
-pub fn claude_used(usage: &Value) -> Option<u64> {
+pub(crate) fn claude_used(usage: &Value) -> Option<u64> {
     let used = [
         "input_tokens",
         "cache_creation_input_tokens",

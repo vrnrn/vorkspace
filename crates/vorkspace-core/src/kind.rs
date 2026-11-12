@@ -58,7 +58,7 @@ impl Kind {
     pub fn is_supported(self) -> bool {
         self != Self::Unsupported
     }
-    pub fn binary_name(self) -> &'static str {
+    pub(crate) fn binary_name(self) -> &'static str {
         match self {
             Self::Antigravity => "agy_acp_server.par",
             _ => self.id(),
@@ -70,13 +70,13 @@ impl Kind {
             _ => &[],
         }
     }
-    pub fn is_acp(self) -> bool {
+    pub(crate) fn is_acp(self) -> bool {
         self == Self::Antigravity
     }
-    pub fn is_pi(self) -> bool {
+    pub(crate) fn is_pi(self) -> bool {
         matches!(self, Self::Pi | Self::Omp)
     }
-    pub fn subscription_usage(self) -> bool {
+    pub(crate) fn subscription_usage(self) -> bool {
         matches!(self, Self::Codex | Self::Claude)
     }
     pub fn login_hint(self) -> &'static str {

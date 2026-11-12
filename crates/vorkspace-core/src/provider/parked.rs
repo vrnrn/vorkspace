@@ -49,7 +49,7 @@ pub(super) struct Wire {
     _copilot_gateway: Option<super::copilot::Gateway>,
 }
 impl Wire {
-    pub fn spawn(command: &mut Command, request: &Request) -> Result<Self, String> {
+    pub(crate) fn spawn(command: &mut Command, request: &Request) -> Result<Self, String> {
         Self::spawn_with_budget(command, request, frames::Budget::new())
     }
     fn spawn_with_budget(
@@ -177,7 +177,7 @@ fn selected_sessions() -> &'static Mutex<std::collections::HashSet<i64>> {
     SELECTED.get_or_init(Default::default)
 }
 /// Snapshot the conversations currently shown, including split panes.
-pub fn keep(ids: Vec<i64>) {
+pub(crate) fn keep(ids: Vec<i64>) {
     let next = ids.into_iter().collect();
     let mut selected = selected_sessions()
         .lock()
@@ -231,7 +231,7 @@ fn epochs() -> &'static Mutex<HashMap<Binding, u64>> {
     static EPOCHS: OnceLock<Mutex<HashMap<Binding, u64>>> = OnceLock::new();
     EPOCHS.get_or_init(Default::default)
 }
-pub fn configure(limit: usize) {
+pub(crate) fn configure(limit: usize) {
     let limit = limit.min(5);
     if LIMIT.swap(limit, Ordering::Relaxed) != limit {
         thread::spawn(enforce_idle_limit);
@@ -516,7 +516,7 @@ fn park_cancelled(wire: Wire, protocol: Protocol, binding: &Binding, epoch: u64)
     put_if_current(wire, protocol, Some((binding, epoch)));
 }
 
-pub fn discard_worktree(path: &Path) {
+pub(crate) fn discard_worktree(path: &Path) {
     let root = path.to_string_lossy();
     let retired = {
         let mut epochs = epochs().lock().unwrap();

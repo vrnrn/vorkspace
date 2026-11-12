@@ -4,9 +4,9 @@ use serde::{Deserialize, Serialize};
 pub mod github;
 
 pub const MAX_TITLE: usize = 500;
-pub const MAX_DESCRIPTION: usize = 256 * 1024;
-pub const MAX_ATTACHMENTS: usize = 50;
-pub const MAX_DEPENDENCIES: usize = 100;
+pub(crate) const MAX_DESCRIPTION: usize = 256 * 1024;
+pub(crate) const MAX_ATTACHMENTS: usize = 50;
+pub(crate) const MAX_DEPENDENCIES: usize = 100;
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -28,7 +28,7 @@ impl TodoStatus {
             Self::Done => "done",
         }
     }
-    pub fn from_id(id: &str) -> Option<Self> {
+    pub(crate) fn from_id(id: &str) -> Option<Self> {
         Self::ALL.into_iter().find(|status| status.id() == id)
     }
     pub fn label(self) -> &'static str {
@@ -68,17 +68,6 @@ impl TodoBoard {
             Self::Project(path) => format!("project:{path}"),
             Self::Bot(id) => format!("bot:{id}"),
         }
-    }
-    pub fn from_key(key: &str) -> Option<Self> {
-        if key == "personal" {
-            return Some(Self::Personal);
-        }
-        if let Some(path) = key.strip_prefix("project:").filter(|p| !p.is_empty()) {
-            return Some(Self::Project(path.into()));
-        }
-        key.strip_prefix("bot:")
-            .filter(|id| !id.is_empty())
-            .map(|id| Self::Bot(id.into()))
     }
 }
 
@@ -159,7 +148,7 @@ pub fn clean_title(title: &str) -> Result<String, String> {
     Ok(title)
 }
 
-pub fn clean_description(description: &str) -> Result<String, String> {
+pub(crate) fn clean_description(description: &str) -> Result<String, String> {
     if description.len() > MAX_DESCRIPTION {
         return Err(format!(
             "Descriptions are limited to {MAX_DESCRIPTION} bytes"
@@ -168,7 +157,11 @@ pub fn clean_description(description: &str) -> Result<String, String> {
     Ok(description.trim().to_string())
 }
 
-pub fn clean_references(values: &[String], max: usize, kind: &str) -> Result<Vec<String>, String> {
+pub(crate) fn clean_references(
+    values: &[String],
+    max: usize,
+    kind: &str,
+) -> Result<Vec<String>, String> {
     if values.len() > max {
         return Err(format!("Too many {kind} (limit {max})"));
     }
@@ -191,19 +184,6 @@ pub fn clean_references(values: &[String], max: usize, kind: &str) -> Result<Vec
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn board_keys_round_trip() {
-        for board in [
-            TodoBoard::Personal,
-            TodoBoard::Project("/work/a:b".into()),
-            TodoBoard::Bot("abc".into()),
-        ] {
-            assert_eq!(TodoBoard::from_key(&board.key()), Some(board));
-        }
-        assert_eq!(TodoBoard::from_key("project:"), None);
-        assert_eq!(TodoBoard::from_key("other"), None);
-    }
 
     #[test]
     fn statuses_cycle_and_titles_are_cleaned() {

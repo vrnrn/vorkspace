@@ -199,19 +199,7 @@ impl Launch {
     }
 }
 
-impl Bot {
-    /// Refresh references without discarding native-created documents or launch
-    /// monitoring state. Removed desktop references disappear on the next read.
-    pub fn refresh_work(&mut self, store: &crate::store::Store) -> Result<bool, String> {
-        let Some(session) = self.session_id else {
-            return Ok(false);
-        };
-        let Some((documents, launches)) = store.bot_work(session)? else {
-            return Ok(false);
-        };
-        Ok(self.apply_work(documents, launches))
-    }
-}
+impl Bot {}
 
 pub fn root(store: &Store) -> PathBuf {
     store
@@ -223,7 +211,7 @@ pub fn root(store: &Store) -> PathBuf {
 
 impl Store {
     /// Unarchived sessions working in `path`.
-    pub fn sessions_using(&self, path: &str) -> Result<Vec<i64>, String> {
+    pub(crate) fn sessions_using(&self, path: &str) -> Result<Vec<i64>, String> {
         self.sessions_using_path(path, crate::files::is_equal_or_inside)
     }
 

@@ -41,7 +41,7 @@ impl AccessMode {
         }
     }
     /// codexProtocol.ts::runtimeModeToCodexConfig.
-    pub fn codex(self) -> (Value, &'static str, Value, &'static str) {
+    pub(crate) fn codex(self) -> (Value, &'static str, Value, &'static str) {
         match self {
             Self::ReadOnly => (
                 json!("never"),
@@ -75,7 +75,7 @@ impl AccessMode {
             ),
         }
     }
-    pub fn claude(self) -> &'static str {
+    pub(crate) fn claude(self) -> &'static str {
         match self {
             Self::ReadOnly => "plan",
             Self::Supervised => "default",

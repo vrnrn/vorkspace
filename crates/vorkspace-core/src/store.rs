@@ -8,7 +8,7 @@ mod bot_desktop;
 pub(crate) mod bot_state;
 pub use bot_state::describe_worktrees;
 mod bots;
-pub mod inbox_preferences;
+pub(crate) mod inbox_preferences;
 pub use bot_state::root as bot_root;
 mod composer_draft;
 mod follow_up;
@@ -185,7 +185,7 @@ impl Store {
     }
 
     /// Each session another one started through the app CLI, and its caller.
-    pub fn started_links(&self) -> Result<std::collections::HashMap<i64, i64>, String> {
+    pub(crate) fn started_links(&self) -> Result<std::collections::HashMap<i64, i64>, String> {
         let mut links = self.shared_started_links()?;
         let saved: std::collections::HashMap<_, _> = self
             .settings_with_prefix("started-by:")?
@@ -199,7 +199,7 @@ impl Store {
         self.save_setting(&format!("started-by:{child}"), &caller.to_string())
     }
     /// Every lead's last orchestration summary.
-    pub fn orchestration_summaries(
+    pub(crate) fn orchestration_summaries(
         &self,
     ) -> Result<std::collections::HashMap<i64, crate::orchestration::Summary>, String> {
         Ok(self

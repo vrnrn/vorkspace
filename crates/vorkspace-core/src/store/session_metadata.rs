@@ -28,7 +28,7 @@ pub struct SessionMetadata {
 impl Store {
     /// One bounded metadata query per publication. Never decode transcript
     /// bodies or model controls, or load a Conversation just to list it.
-    pub fn session_metadata(&self) -> Result<HashMap<i64, SessionMetadata>, String> {
+    pub(crate) fn session_metadata(&self) -> Result<HashMap<i64, SessionMetadata>, String> {
         let query = {
             format!(
                 "SELECT id,harness,substr(model,1,512),substr({},1,512),{},coalesce({},0),coalesce({},'supervised') FROM sessions",

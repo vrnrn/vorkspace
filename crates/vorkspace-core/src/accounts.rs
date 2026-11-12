@@ -114,7 +114,7 @@ impl Profile {
             root: Some(root.into()),
         }
     }
-    pub fn directory(&self, kind: Kind) -> Result<Option<PathBuf>, String> {
+    pub(crate) fn directory(&self, kind: Kind) -> Result<Option<PathBuf>, String> {
         if self.id == DEFAULT {
             return Ok(None);
         }
@@ -149,7 +149,7 @@ impl Profile {
             .or_else(|| home().map(|p| p.join(dir)))
             .ok_or_else(|| format!("Could not find the {} home directory", kind.label()))
     }
-    pub fn apply(&self, kind: Kind, command: &mut Command) -> Result<(), String> {
+    pub(crate) fn apply(&self, kind: Kind, command: &mut Command) -> Result<(), String> {
         let Some(dir) = self.directory(kind)? else {
             return Ok(());
         };
@@ -209,7 +209,7 @@ pub fn supports_profiles(kind: Kind) -> bool {
 pub fn supports_accounts(kind: Kind) -> bool {
     PROVIDERS.contains(&kind)
 }
-pub fn validate_id(id: &str) -> Result<(), String> {
+pub(crate) fn validate_id(id: &str) -> Result<(), String> {
     if id.is_empty()
         || id.len() > 80
         || !id

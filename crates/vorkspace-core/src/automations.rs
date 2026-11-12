@@ -173,7 +173,7 @@ pub struct DueAutomationRun {
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct AutomationEventClaim {
+pub(crate) struct AutomationEventClaim {
     pub event_key: String,
     pub event_kind: String,
     pub event: String,

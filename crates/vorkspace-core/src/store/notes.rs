@@ -19,7 +19,7 @@ pub struct NoteRecording {
 fn now_millis() -> i64 {
     crate::time::now_ms().min(i64::MAX as u64) as i64
 }
-pub fn ensure_notes_table(conn: &Connection) -> rusqlite::Result<()> {
+pub(crate) fn ensure_notes_table(conn: &Connection) -> rusqlite::Result<()> {
     conn.execute_batch(
         "CREATE TABLE IF NOT EXISTS notes (
            id TEXT PRIMARY KEY,
@@ -555,18 +555,6 @@ impl Store {
         Ok(Some(note))
     }
 
-    pub fn create_note(&self, cwd: Option<String>) -> Result<Note, String> {
-        self.upsert_note(&NoteUpsert {
-            id: format!(
-                "note-{}-{:016x}",
-                crate::time::now_ms(),
-                rand::random::<u64>()
-            ),
-            source_cwd: cwd.filter(|cwd| crate::notes::is_project(cwd)),
-            ..Default::default()
-        })
-    }
-
     pub fn upsert_note(&self, note: &NoteUpsert) -> Result<Note, String> {
         self.prepare_note_upsert(note)?;
         upsert_note(&self.conn, note).map_err(|e| e.to_string())
@@ -795,7 +783,7 @@ impl Store {
         Ok(true)
     }
 
-    pub fn note_source_session(&self, note: &Note) -> Option<i64> {
+    pub(crate) fn note_source_session(&self, note: &Note) -> Option<i64> {
         note.source_session_id
             .as_deref()
             .and_then(|id| self.resolve_existing_session_id(id))

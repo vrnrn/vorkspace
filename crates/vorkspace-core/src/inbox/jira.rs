@@ -16,7 +16,7 @@ const ISSUE_FIELDS: [&str; 6] = [
 
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
-pub struct JiraStatus {
+pub(crate) struct JiraStatus {
     pub connected: bool,
     pub site: String,
     pub email: String,
@@ -31,7 +31,7 @@ struct JiraConfig {
 
 #[derive(Serialize, Clone, Debug, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
-pub struct JiraProject {
+pub(crate) struct JiraProject {
     pub id: String,
     pub key: String,
     pub name: String,
@@ -75,7 +75,7 @@ pub struct JiraIssue {
 
 #[derive(Serialize, Clone, Debug, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
-pub struct JiraIssueDetails {
+pub(crate) struct JiraIssueDetails {
     pub body: String,
     pub author: String,
     pub author_avatar_url: String,
@@ -83,7 +83,7 @@ pub struct JiraIssueDetails {
 
 #[derive(Serialize, Clone, Debug, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
-pub struct JiraIssueComment {
+pub(crate) struct JiraIssueComment {
     pub id: String,
     pub kind: String,
     pub author: String,
@@ -101,7 +101,7 @@ pub struct JiraIssueComment {
 
 #[derive(Serialize, Clone, Debug, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
-pub struct JiraIssueThread {
+pub(crate) struct JiraIssueThread {
     pub comments: Vec<JiraIssueComment>,
     pub truncated: bool,
     pub review_decision: String,
@@ -109,12 +109,12 @@ pub struct JiraIssueThread {
     pub head_ref_name: String,
 }
 
-pub fn jira_status(app: PathBuf) -> Result<JiraStatus, String> {
+pub(crate) fn jira_status(app: PathBuf) -> Result<JiraStatus, String> {
     let config = read_config(&app)?;
     Ok(status_for(config.as_ref()))
 }
 
-pub fn jira_set_config(
+pub(crate) fn jira_set_config(
     app: PathBuf,
     site: String,
     email: String,
@@ -145,7 +145,7 @@ pub fn jira_set_config(
     Ok(status_for(Some(&config)))
 }
 
-pub fn jira_list_projects(app: PathBuf) -> Result<Vec<JiraProject>, String> {
+pub(crate) fn jira_list_projects(app: PathBuf) -> Result<Vec<JiraProject>, String> {
     let config = require_config(&app)?;
     fetch_jira_projects(|start| {
         jira_get(

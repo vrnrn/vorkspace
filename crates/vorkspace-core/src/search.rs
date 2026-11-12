@@ -106,7 +106,7 @@ pub fn grouped(lists: impl IntoIterator<Item = Hit>, scope: Scope) -> Vec<Hit> {
         })
         .collect()
 }
-pub fn recency(updated: u64) -> i64 {
+pub(crate) fn recency(updated: u64) -> i64 {
     if updated == 0 {
         return 0;
     }
@@ -398,7 +398,7 @@ pub fn literal_ranges(text: &str, query: &str) -> Vec<Range<usize>> {
         .map(|r| r.find_iter(text).map(|m| m.range()).collect())
         .unwrap_or_default()
 }
-pub fn snippet(text: &str, query: &str) -> String {
+pub(crate) fn snippet(text: &str, query: &str) -> String {
     let compact = text.split_whitespace().collect::<Vec<_>>().join(" ");
     let chars: Vec<_> = compact
         .char_indices()

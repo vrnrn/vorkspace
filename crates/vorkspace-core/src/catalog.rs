@@ -396,7 +396,7 @@ fn send(out: &mut impl Write, v: Value) -> Result<(), String> {
         .map_err(|e| e.to_string())
 }
 /// Read-only account probes use the same bounded, supervised app-server transport.
-pub fn codex_request(
+pub(crate) fn codex_request(
     account: &crate::accounts::Profile,
     method: &str,
     params: Value,

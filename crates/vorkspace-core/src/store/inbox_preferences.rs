@@ -35,7 +35,7 @@ impl JiraFilter {
                 .into(),
         }
     }
-    pub fn custom_jql(&self) -> Option<&str> {
+    pub(crate) fn custom_jql(&self) -> Option<&str> {
         (self.mode == "jql").then_some(self.jql.trim())
     }
     pub fn save(&self, store: &Store) -> Result<(), String> {

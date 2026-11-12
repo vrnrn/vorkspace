@@ -3,7 +3,7 @@ use super::files;
 use chrono::{DateTime, Datelike, Duration, Local, Timelike};
 use serde::{Deserialize, Serialize};
 use std::path::Path;
-pub const MAX: usize = 20;
+pub(crate) const MAX: usize = 20;
 pub const GRACE_MS: u64 = 2 * 60 * 60 * 1000;
 pub const TIMEOUT_MS: u64 = 60 * 60 * 1000;
 pub const APPROVAL_WAIT_MS: u64 = 12 * 60 * 60 * 1000;

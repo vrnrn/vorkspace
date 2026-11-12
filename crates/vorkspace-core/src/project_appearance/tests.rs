@@ -17,42 +17,6 @@ fn dither_matches_the_react_workers_palette_and_two_pixel_bayer_cells() {
     assert_eq!(background_texture(&source, Effect::GradientBlur), source);
 }
 #[test]
-fn dither_texture_scales_with_the_artwork_in_the_preview() {
-    let source = RgbaImage::from_pixel(128, 64, image::Rgba([130, 180, 210, 255]));
-    let full = render_background(&source, Effect::Dither, 128, 64, true);
-    let preview = render_background(&source, Effect::Dither, 64, 32, true);
-    let reduced = imageops::resize(&full, 64, 32, imageops::FilterType::Triangle);
-    for x in 0..64 {
-        assert_eq!(
-            preview.get_pixel(x, 0).0[..3],
-            reduced.get_pixel(x, 0).0[..3]
-        );
-    }
-}
-#[test]
-fn effects_keep_cover_dimensions_fade_and_change_pixels() {
-    let source = RgbaImage::from_fn(64, 48, |x, y| {
-        image::Rgba([(x * 4) as u8, (y * 5) as u8, 90, 255])
-    });
-    let plain = render_background(&source, Effect::None, 41, 33, true);
-    for effect in Effect::ALL {
-        let result = render_background(&source, effect, 41, 33, true);
-        assert_eq!(result.dimensions(), (41, 33));
-        assert_eq!(result.get_pixel(0, 0)[3], 255);
-        assert_eq!(result.get_pixel(20, 32)[3], 0);
-        if effect != Effect::None {
-            assert_ne!(result, plain, "{effect:?}");
-        }
-    }
-    let dark = RgbaImage::from_pixel(4, 4, image::Rgba([0, 0, 0, 100]));
-    assert_eq!(
-        render_background(&dark, Effect::Dither, 4, 4, true)
-            .get_pixel(0, 0)
-            .0,
-        [0, 0, 0, 100]
-    );
-}
-#[test]
 fn background_settings_normalize_and_round_trip() {
     let mut background = Background {
         path: "a.png".into(),

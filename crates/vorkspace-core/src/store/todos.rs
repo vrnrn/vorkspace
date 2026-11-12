@@ -8,7 +8,7 @@ use crate::todos::{
 use rusqlite::{params, Connection, OptionalExtension, Transaction, TransactionBehavior};
 use serde_json::Value;
 
-pub fn ensure_schema(conn: &Connection) -> rusqlite::Result<()> {
+pub(crate) fn ensure_schema(conn: &Connection) -> rusqlite::Result<()> {
     conn.execute_batch(
         "CREATE TABLE IF NOT EXISTS todo_items (
            id TEXT PRIMARY KEY,

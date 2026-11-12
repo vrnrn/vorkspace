@@ -14,7 +14,7 @@ pub(super) struct Audio {
     pub commands: mpsc::SyncSender<Value>,
 }
 impl Audio {
-    pub fn start(config: Value, events: mpsc::SyncSender<Event>) -> Result<Self, String> {
+    pub(crate) fn start(config: Value, events: mpsc::SyncSender<Event>) -> Result<Self, String> {
         let token = rand::random::<[u8; 32]>()
             .iter()
             .map(|b| format!("{b:02x}"))
@@ -61,7 +61,7 @@ impl Audio {
             commands,
         })
     }
-    pub fn send(&self, event: Value) -> Result<(), String> {
+    pub(crate) fn send(&self, event: Value) -> Result<(), String> {
         self.commands
             .try_send(event)
             .map_err(|_| "Audio control queue is full".into())

@@ -74,7 +74,7 @@ it does not capture a screenshot. Fix errors before publishing. Set a concise
 title for the published visual. Never expose capability environment variables.
 "#;
 /// Diagram guidance, shared with Bot context.
-pub const DIAGRAMS: &str = include_str!("diagrams.md");
+pub(crate) const DIAGRAMS: &str = include_str!("diagrams.md");
 
 #[derive(Serialize, Deserialize)]
 struct Wire {
@@ -427,7 +427,7 @@ fn serve(mut stream: TcpStream, hub: &Hub) -> Result<(), String> {
 }
 
 /// Local validation never requires an active session capability.
-pub fn check(source: &str) -> Result<Value, String> {
+pub(crate) fn check(source: &str) -> Result<Value, String> {
     if source.len() > MAX_SOURCE_BYTES {
         return Err("Visual source exceeds 64 KiB".into());
     }
@@ -621,14 +621,14 @@ fn documentation() -> Value {
     })
 }
 
-pub fn configured(environment: &HashMap<String, String>) -> bool {
+pub(crate) fn configured(environment: &HashMap<String, String>) -> bool {
     [ENV_ENDPOINT, ENV_TOKEN, ENV_SESSION, ENV_EXECUTABLE]
         .iter()
         .all(|key| environment.contains_key(*key))
 }
 
 /// Provider-specific adapters use this ephemeral stdio server definition.
-pub fn mcp_server(environment: &HashMap<String, String>) -> Option<Value> {
+pub(crate) fn mcp_server(environment: &HashMap<String, String>) -> Option<Value> {
     configured(environment).then(|| {
         json!({
             "type":"stdio", "command":environment[ENV_EXECUTABLE], "args":["visual-mcp"]
@@ -636,7 +636,7 @@ pub fn mcp_server(environment: &HashMap<String, String>) -> Option<Value> {
     })
 }
 
-pub fn acp_servers(environment: &HashMap<String, String>) -> Value {
+pub(crate) fn acp_servers(environment: &HashMap<String, String>) -> Value {
     let Some(mut server) = mcp_server(environment) else {
         return json!([]);
     };
@@ -651,7 +651,10 @@ pub fn acp_servers(environment: &HashMap<String, String>) -> Value {
     json!([server])
 }
 
-pub fn configure_codex(command: &mut std::process::Command, environment: &HashMap<String, String>) {
+pub(crate) fn configure_codex(
+    command: &mut std::process::Command,
+    environment: &HashMap<String, String>,
+) {
     if !configured(environment) {
         return;
     }
@@ -668,7 +671,7 @@ pub fn configure_codex(command: &mut std::process::Command, environment: &HashMa
     }
 }
 
-pub fn tool_definitions() -> Vec<Value> {
+pub(crate) fn tool_definitions() -> Vec<Value> {
     let properties = json!({"source":{"type":"string","description":"JavaScript function body using the native visual SDK"}});
     let mut show_properties = properties.clone();
     show_properties["title"] = json!({"type":"string","maxLength":160});

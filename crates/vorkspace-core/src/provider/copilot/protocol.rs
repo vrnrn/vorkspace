@@ -202,10 +202,10 @@ pub(super) struct Events {
     pub done: bool,
 }
 impl Events {
-    pub fn start(model: &str) -> Value {
+    pub(crate) fn start(model: &str) -> Value {
         json!({"type":"message_start","message":{"id":format!("msg_{}",uuid::Uuid::new_v4()),"type":"message","role":"assistant","model":model,"content":[],"stop_reason":null,"stop_sequence":null,"usage":{"input_tokens":0,"output_tokens":0}}})
     }
-    pub fn push(&mut self, event: &Value) -> Result<Vec<Value>, String> {
+    pub(crate) fn push(&mut self, event: &Value) -> Result<Vec<Value>, String> {
         if self.done {
             return Err("Copilot sent data after completion".into());
         }

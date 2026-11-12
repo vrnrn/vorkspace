@@ -16,7 +16,7 @@ const USER_AGENT: &str = "vorkspace";
 
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
-pub struct GitlabStatus {
+pub(crate) struct GitlabStatus {
     pub connected: bool,
     pub url: String,
 }
@@ -29,21 +29,21 @@ struct GitlabConfig {
 
 #[derive(Serialize, Clone, Debug, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
-pub struct GitlabLabel {
+pub(crate) struct GitlabLabel {
     pub name: String,
     pub color: String,
 }
 
 #[derive(Serialize, Clone, Debug, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
-pub struct GitlabAssignee {
+pub(crate) struct GitlabAssignee {
     pub login: String,
     pub avatar_url: String,
 }
 
 #[derive(Serialize, Clone, Debug, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
-pub struct GitlabWorkItem {
+pub(crate) struct GitlabWorkItem {
     pub kind: String,
     pub number: i64,
     pub title: String,
@@ -59,7 +59,7 @@ pub struct GitlabWorkItem {
 
 #[derive(Serialize, Clone, Debug, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
-pub struct GitlabWorkItemDetails {
+pub(crate) struct GitlabWorkItemDetails {
     pub body: String,
     pub author: String,
     pub author_avatar_url: String,
@@ -70,7 +70,7 @@ pub struct GitlabWorkItemDetails {
 
 #[derive(Serialize, Clone, Debug, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
-pub struct GitlabWorkItemComment {
+pub(crate) struct GitlabWorkItemComment {
     pub id: String,
     pub kind: String,
     pub author: String,
@@ -88,7 +88,7 @@ pub struct GitlabWorkItemComment {
 
 #[derive(Serialize, Clone, Debug, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
-pub struct GitlabWorkItemThread {
+pub(crate) struct GitlabWorkItemThread {
     pub comments: Vec<GitlabWorkItemComment>,
     pub truncated: bool,
     pub review_decision: String,
@@ -98,7 +98,7 @@ pub struct GitlabWorkItemThread {
 
 #[derive(Serialize, Clone, Debug, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
-pub struct GitlabMrFile {
+pub(crate) struct GitlabMrFile {
     pub path: String,
     pub additions: i64,
     pub deletions: i64,
@@ -106,7 +106,7 @@ pub struct GitlabMrFile {
 
 #[derive(Serialize, Clone, Debug, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
-pub struct GitlabMrDiff {
+pub(crate) struct GitlabMrDiff {
     pub additions: i64,
     pub deletions: i64,
     pub files: Vec<GitlabMrFile>,
@@ -114,7 +114,7 @@ pub struct GitlabMrDiff {
     pub truncated: bool,
 }
 
-pub fn gitlab_status(app: PathBuf) -> Result<GitlabStatus, String> {
+pub(crate) fn gitlab_status(app: PathBuf) -> Result<GitlabStatus, String> {
     let config = read_config(&app)?;
     Ok(GitlabStatus {
         connected: config.is_some(),
@@ -124,7 +124,11 @@ pub fn gitlab_status(app: PathBuf) -> Result<GitlabStatus, String> {
     })
 }
 
-pub fn gitlab_set_config(app: PathBuf, url: String, token: String) -> Result<GitlabStatus, String> {
+pub(crate) fn gitlab_set_config(
+    app: PathBuf,
+    url: String,
+    token: String,
+) -> Result<GitlabStatus, String> {
     let url = normalize_gitlab_url(&url)?;
     let token = token.trim().to_string();
     if token.is_empty() {
@@ -146,12 +150,12 @@ pub fn gitlab_set_config(app: PathBuf, url: String, token: String) -> Result<Git
     })
 }
 
-pub fn gitlab_repo(app: PathBuf, cwd: String) -> Result<String, String> {
+pub(crate) fn gitlab_repo(app: PathBuf, cwd: String) -> Result<String, String> {
     let config = require_config(&app)?;
     gitlab_repo_for(&expand_home(&cwd), &config.url)
 }
 
-pub fn gitlab_list_work_items(
+pub(crate) fn gitlab_list_work_items(
     app: PathBuf,
     cwd: String,
     kind: String,
@@ -169,7 +173,7 @@ pub fn gitlab_list_work_items(
     )
 }
 
-pub fn gitlab_list_todos(
+pub(crate) fn gitlab_list_todos(
     app: PathBuf,
     kind: String,
     limit: Option<u32>,

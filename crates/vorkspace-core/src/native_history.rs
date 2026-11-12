@@ -1,6 +1,6 @@
 //! Read-only projection of native CLI conversations. Provider files own context;
 //! the Store owns presentation, import receipts and the incremental read cursor.
-use crate::{accounts::Profile, kind::Kind, transcript::Transcript};
+use crate::{accounts::Profile, kind::Kind};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use sha2::{Digest, Sha256};
@@ -37,7 +37,7 @@ pub struct Binding {
     pub home: PathBuf,
 }
 impl Binding {
-    pub fn for_bot(
+    pub(crate) fn for_bot(
         provider: &str,
         thread: &str,
         account: &Profile,
@@ -61,7 +61,7 @@ impl Binding {
             home,
         }))
     }
-    pub fn key(&self) -> String {
+    pub(crate) fn key(&self) -> String {
         format!(
             "{:x}",
             Sha256::digest(serde_json::to_vec(self).expect("serializable binding"))
@@ -257,15 +257,6 @@ impl Turn {
         budget.events = next;
         self.event_messages.push(message);
         Ok(())
-    }
-    pub fn transcript(&self) -> Transcript {
-        let mut transcript = Transcript::default();
-        for message in &self.messages {
-            let at = transcript.begin(&message.role);
-            transcript.rows[at].sent_at = message.at;
-            transcript.append(&message.text);
-        }
-        transcript
     }
 }
 

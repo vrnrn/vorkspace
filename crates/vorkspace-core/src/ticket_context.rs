@@ -12,7 +12,7 @@ use url::Url;
 const MAX_LINKS: usize = 8;
 const MAX_CONTEXT_BYTES: usize = 4 * 1024 * 1024;
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
-pub struct Reference {
+pub(crate) struct Reference {
     pub provider: String,
     pub kind: String,
     pub url: String,
@@ -89,7 +89,7 @@ fn positive(value: &str) -> Option<i64> {
         .flatten()
         .filter(|n| *n > 0)
 }
-pub fn parse(value: &str) -> Result<Reference, String> {
+pub(crate) fn parse(value: &str) -> Result<Reference, String> {
     fn invalid() -> String {
         "Invalid ticket context link. Copy it again from the ticket.".into()
     }

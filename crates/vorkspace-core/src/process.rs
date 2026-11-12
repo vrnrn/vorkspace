@@ -33,7 +33,7 @@ unsafe extern "C" {
 }
 
 /// New native provider processes use a separate group for cancellation.
-pub fn isolate(command: &mut Command) {
+pub(crate) fn isolate(command: &mut Command) {
     configure_child(command);
     command.env("VORKSPACE_HARNESS_PARENT", std::process::id().to_string());
     use std::os::unix::process::CommandExt;
@@ -41,7 +41,7 @@ pub fn isolate(command: &mut Command) {
 }
 
 /// Terminate an isolated process group and reap the immediate child.
-pub fn terminate(child: &mut std::process::Child) {
+pub(crate) fn terminate(child: &mut std::process::Child) {
     unsafe {
         libc::kill(-(child.id() as i32), libc::SIGKILL);
     }
@@ -78,7 +78,7 @@ impl From<&Arc<AtomicBool>> for TurnToken {
 
 /// A provider child that belongs to a session, for the running-work list.
 #[derive(Clone, Debug)]
-pub struct Agent {
+pub(crate) struct Agent {
     pub session: i64,
     pub turn: Option<TurnToken>,
     pub pid: u32,
@@ -131,7 +131,7 @@ fn with_owner<T>(owner: Attribution, run: impl FnOnce() -> T) -> T {
     run()
 }
 /// Live provider children that belong to a session.
-pub fn agents() -> Vec<Agent> {
+pub(crate) fn agents() -> Vec<Agent> {
     active()
         .lock()
         .unwrap_or_else(|e| e.into_inner())
@@ -162,8 +162,8 @@ pub(crate) fn mark_idle(pid: u32, idle: bool) {
         *slot = agent;
     }
 }
-pub struct Registration(u32);
-pub fn register(pid: u32) -> Registration {
+pub(crate) struct Registration(u32);
+pub(crate) fn register(pid: u32) -> Registration {
     let agent = attributed_agent(pid);
     active()
         .lock()

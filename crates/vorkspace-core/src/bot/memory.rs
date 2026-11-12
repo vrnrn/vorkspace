@@ -23,7 +23,7 @@ static SECRETS: LazyLock<Vec<Regex>> = LazyLock::new(|| {
     .map(|p| Regex::new(p).unwrap())
     .collect()
 });
-pub fn redact(text: &str) -> String {
+pub(crate) fn redact(text: &str) -> String {
     let mut output = Cow::Borrowed(text);
     for pattern in SECRETS.iter() {
         if let Cow::Owned(redacted) =
@@ -174,7 +174,7 @@ pub fn replace(text: &str, find: &str, entry: Option<&str>, day: &str) -> Result
     }
     Ok(join(&rows))
 }
-pub fn fit(text: &str, keep: Option<&str>, day: &str) -> (String, Vec<String>) {
+pub(crate) fn fit(text: &str, keep: Option<&str>, day: &str) -> (String, Vec<String>) {
     let mut rows = lines(text);
     let mut moved = Vec::new();
     let mut bytes = rows.iter().map(|row| row.len() + 1).sum::<usize>();
