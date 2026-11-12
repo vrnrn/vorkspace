@@ -291,224 +291,29 @@ impl VisualView {
         match node {
             Node::Column { children, gap }
             | Node::Row { children, gap }
-            | Node::Grid { children, gap, .. } => {
-                let mut layout = div().w_full().min_w_0().gap(px(*gap));
-                if let Node::Grid { columns, .. } = node {
-                    let responsive =
-                        ((*columns).min((self.width.get() / 180.).floor().max(1.) as usize)).max(1);
-                    layout = layout.grid().grid_cols(responsive as u16);
-                } else if matches!(node, Node::Row { .. }) {
-                    layout = layout.flex().flex_wrap().items_start();
-                } else {
-                    layout = layout.flex().flex_col();
-                }
-                for (i, child) in children.iter().enumerate() {
-                    let element = self.node(child, format!("{key}/{i}"), cx);
-                    layout = layout.child(
-                        div()
-                            .min_w_0()
-                            .when(matches!(node, Node::Row { .. }), |d| {
-                                d.flex_1().min_w(px(120.))
-                            })
-                            .child(element),
-                    );
-                }
-                layout.into_any_element()
-            }
+            | Node::Grid { children, gap, .. } => self.node_layout(node, children, gap, key, cx),
             Node::Text {
                 text,
                 size,
                 color: token,
-            } => {
-                let font_size = match size {
-                    TextSize::Caption => 11.,
-                    TextSize::Small => 12.,
-                    TextSize::Body => 14.,
-                    TextSize::Subtitle => 17.,
-                    TextSize::Title => 22.,
-                    TextSize::Hero => 34.,
-                };
-                div()
-                    .min_w_0()
-                    .text_size(px(font_size))
-                    .line_height(px(font_size * 1.45))
-                    .text_color(color(token))
-                    .when(
-                        matches!(size, TextSize::Subtitle | TextSize::Title | TextSize::Hero),
-                        |d| d.font_weight(FontWeight::SEMIBOLD),
-                    )
-                    .child(text.clone())
-                    .into_any_element()
-            }
+            } => Self::node_text(text, size, token),
             Node::Stat {
                 label,
                 value,
                 detail,
                 color: token,
-            } => div()
-                .flex()
-                .flex_col()
-                .gap_1()
-                .min_w_0()
-                .child(
-                    div()
-                        .text_size(px(12.))
-                        .text_color(content(0.6))
-                        .child(label.clone()),
-                )
-                .child(
-                    div()
-                        .text_size(px(28.))
-                        .line_height(px(34.))
-                        .font_weight(FontWeight::SEMIBOLD)
-                        .text_color(color(token))
-                        .child(value.clone()),
-                )
-                .children(detail.iter().map(|d| {
-                    div()
-                        .text_size(px(12.))
-                        .text_color(content(0.6))
-                        .child(d.clone())
-                }))
-                .into_any_element(),
-            Node::Table { columns, rows } => {
-                let mut table = div()
-                    .id(SharedString::from(format!("visual-table-{key}")))
-                    .w_full()
-                    .overflow_x_scroll()
-                    .flex()
-                    .flex_col()
-                    .text_size(px(12.));
-                let count = columns.len().max(1);
-                let width = (self.width.get() / count as f32).max(100.);
-                // A column of numbers sits right-aligned in Obel Mono, as
-                // fluidither's tables set theirs.
-                let numeric: Vec<bool> = (0..columns.len())
-                    .map(|col| {
-                        !rows.is_empty()
-                            && rows.iter().all(|cells| {
-                                cells
-                                    .get(col)
-                                    .is_some_and(|cell| vorkspace_ui::fluid::is_numeric(cell))
-                            })
-                    })
-                    .collect();
-                let row = |cells: &[String], header: bool| {
-                    div()
-                        .flex()
-                        .min_w(px(width * count as f32))
-                        .border_b_1()
-                        .border_color(content(0.08))
-                        .when(header, |d| {
-                            d.font_weight(FontWeight::SEMIBOLD)
-                                .text_color(content(0.65))
-                        })
-                        .children(cells.iter().enumerate().map(|(col, cell)| {
-                            let number = numeric.get(col).copied().unwrap_or(false);
-                            div()
-                                .w(px(width))
-                                .flex_shrink_0()
-                                .px_2()
-                                .py_2()
-                                .when(number, |d| d.text_right())
-                                .when(number && !header, |d| {
-                                    d.font_family(vorkspace_ui::fonts::MONO)
-                                        .font_features(crate::panel_kit::tabular())
-                                })
-                                .child(cell.clone())
-                        }))
-                };
-                table = table.child(row(columns, true));
-                for cells in rows {
-                    table = table.child(row(cells, false));
-                }
-                table.into_any_element()
-            }
+            } => Self::node_stat(label, value, detail, token),
+            Node::Table { columns, rows } => self.node_table(columns, rows, key),
             Node::Button {
                 label,
                 handler,
                 disabled,
-            } => {
-                let handler = handler.clone();
-                let keyboard = handler.clone();
-                button(SharedString::from(format!("visual-button-{key}")))
-                    .debug_selector(move || format!("visual-button-{key}"))
-                    .aria_label(label.clone())
-                    .child(label.clone())
-                    .when(*disabled, |d| d.opacity(0.4).cursor_default())
-                    .when(!disabled, |d| {
-                        d.on_click(cx.listener(move |this, _, _, cx| {
-                            this.dispatch(&handler, Value::Null, cx)
-                        }))
-                        .on_key_down(cx.listener(
-                            move |this, event, _, cx| {
-                                if activated(event) {
-                                    this.dispatch(&keyboard, Value::Null, cx);
-                                    cx.stop_propagation();
-                                }
-                            },
-                        ))
-                    })
-                    .into_any_element()
-            }
+            } => Self::node_button(label, handler, disabled, key, cx),
             Node::Toggle {
                 label,
                 value,
                 handler,
-            } => {
-                let next = !*value;
-                let handler = handler.clone();
-                let keyboard = handler.clone();
-                div()
-                    .id(SharedString::from(format!("visual-toggle-{key}")))
-                    .debug_selector(move || format!("visual-toggle-{key}"))
-                    .role(Role::Switch)
-                    .aria_label(label.clone())
-                    .aria_toggled(if *value {
-                        gpui::Toggled::True
-                    } else {
-                        gpui::Toggled::False
-                    })
-                    .focusable()
-                    .tab_stop(true)
-                    .flex()
-                    .items_center()
-                    .gap_2()
-                    .py_1()
-                    .cursor_pointer()
-                    .child(
-                        div()
-                            .w(px(30.))
-                            .h(px(18.))
-                            .rounded(px(vorkspace_ui::fluid::SWITCH_RADIUS))
-                            .bg(if *value {
-                                accent_color()
-                            } else {
-                                vorkspace_ui::fluid::switch_off()
-                            })
-                            .relative()
-                            .child(
-                                div()
-                                    .absolute()
-                                    .top(px(3.))
-                                    .left(px(if *value { 15. } else { 3. }))
-                                    .size(px(12.))
-                                    .rounded(px(3.))
-                                    .bg(vorkspace_ui::fluid::knob(*value)),
-                            ),
-                    )
-                    .child(label.clone())
-                    .on_click(
-                        cx.listener(move |this, _, _, cx| this.dispatch(&handler, json!(next), cx)),
-                    )
-                    .on_key_down(cx.listener(move |this, event, _, cx| {
-                        if activated(event) {
-                            this.dispatch(&keyboard, json!(next), cx);
-                            cx.stop_propagation();
-                        }
-                    }))
-                    .into_any_element()
-            }
+            } => Self::node_toggle(label, value, handler, key, cx),
             Node::Slider {
                 label,
                 value,
@@ -623,43 +428,7 @@ impl VisualView {
                 labels,
                 selected,
                 handler,
-            } => {
-                let mut tabs = div().flex().flex_wrap().gap_1();
-                for (i, label) in labels.iter().enumerate() {
-                    let handler = handler.clone();
-                    let keyboard = handler.clone();
-                    tabs =
-                        tabs.child(
-                            tab_button(
-                                SharedString::from(format!("visual-tab-{key}-{i}")),
-                                i == *selected,
-                            )
-                            .debug_selector({
-                                let key = key.clone();
-                                move || format!("visual-tab-{key}-{i}")
-                            })
-                            .aria_label(label.clone())
-                            .aria_toggled(if i == *selected {
-                                gpui::Toggled::True
-                            } else {
-                                gpui::Toggled::False
-                            })
-                            .child(label.clone())
-                            .on_click(cx.listener(move |this, _, _, cx| {
-                                this.dispatch(&handler, json!(i), cx)
-                            }))
-                            .on_key_down(cx.listener(
-                                move |this, event, _, cx| {
-                                    if activated(event) {
-                                        this.dispatch(&keyboard, json!(i), cx);
-                                        cx.stop_propagation();
-                                    }
-                                },
-                            )),
-                        );
-                }
-                tabs.into_any_element()
-            }
+            } => Self::node_tabs(labels, selected, handler, key, cx),
             Node::Input {
                 label,
                 value,
@@ -741,48 +510,7 @@ impl VisualView {
                 options,
                 selected,
                 handler,
-            } => {
-                let mut choices = div().flex().flex_wrap().gap_1();
-                for (i, option) in options.iter().enumerate() {
-                    let handler = handler.clone();
-                    let keyboard = handler.clone();
-                    choices = choices.child(
-                        button(SharedString::from(format!("visual-option-{key}-{i}")))
-                            .debug_selector({
-                                let key = key.clone();
-                                move || format!("visual-option-{key}-{i}")
-                            })
-                            .aria_label(option.clone())
-                            .child(option.clone())
-                            .when(i == *selected, |d| {
-                                d.bg(content(0.09))
-                                    .border_color(accent_color())
-                                    .text_color(content(1.))
-                            })
-                            .on_click(cx.listener(move |this, _, _, cx| {
-                                this.dispatch(&handler, json!(i), cx)
-                            }))
-                            .on_key_down(cx.listener(move |this, event, _, cx| {
-                                if activated(event) {
-                                    this.dispatch(&keyboard, json!(i), cx);
-                                    cx.stop_propagation();
-                                }
-                            })),
-                    );
-                }
-                div()
-                    .flex()
-                    .flex_col()
-                    .gap_2()
-                    .child(
-                        div()
-                            .text_size(px(12.))
-                            .text_color(content(0.6))
-                            .child(label.clone()),
-                    )
-                    .child(choices)
-                    .into_any_element()
-            }
+            } => Self::node_select(label, options, selected, handler, key, cx),
             Node::Chart {
                 chart_type,
                 series,
@@ -798,25 +526,7 @@ impl VisualView {
             | Node::Mermaid {
                 source: markup,
                 title,
-            } => {
-                let kind = if matches!(node, Node::Svg { .. }) {
-                    crate::diagrams::DiagramKind::Svg
-                } else {
-                    crate::diagrams::DiagramKind::Mermaid
-                };
-                crate::diagrams::diagram(
-                    kind,
-                    markup.clone().into(),
-                    title.clone().map(Into::into),
-                    || {
-                        div()
-                            .text_size(px(12.))
-                            .text_color(content(0.5))
-                            .child("This diagram could not be drawn")
-                            .into_any_element()
-                    },
-                )
-            }
+            } => Self::node_diagram(node, markup, title),
             Node::Scene {
                 width: _,
                 height,
@@ -825,6 +535,345 @@ impl VisualView {
             } => self.scene(key, *height, objects.clone(), camera.clone(), cx),
         }
     }
+
+    fn node_layout(
+        &mut self,
+        node: &Node,
+        children: &[Node],
+        gap: &f32,
+        key: String,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        let mut layout = div().w_full().min_w_0().gap(px(*gap));
+        if let Node::Grid { columns, .. } = node {
+            let responsive =
+                ((*columns).min((self.width.get() / 180.).floor().max(1.) as usize)).max(1);
+            layout = layout.grid().grid_cols(responsive as u16);
+        } else if matches!(node, Node::Row { .. }) {
+            layout = layout.flex().flex_wrap().items_start();
+        } else {
+            layout = layout.flex().flex_col();
+        }
+        for (i, child) in children.iter().enumerate() {
+            let element = self.node(child, format!("{key}/{i}"), cx);
+            layout = layout.child(
+                div()
+                    .min_w_0()
+                    .when(matches!(node, Node::Row { .. }), |d| {
+                        d.flex_1().min_w(px(120.))
+                    })
+                    .child(element),
+            );
+        }
+        layout.into_any_element()
+    }
+
+    fn node_text(text: &str, size: &TextSize, token: &ThemeColor) -> AnyElement {
+        let font_size = match size {
+            TextSize::Caption => 11.,
+            TextSize::Small => 12.,
+            TextSize::Body => 14.,
+            TextSize::Subtitle => 17.,
+            TextSize::Title => 22.,
+            TextSize::Hero => 34.,
+        };
+        div()
+            .min_w_0()
+            .text_size(px(font_size))
+            .line_height(px(font_size * 1.45))
+            .text_color(color(token))
+            .when(
+                matches!(size, TextSize::Subtitle | TextSize::Title | TextSize::Hero),
+                |d| d.font_weight(FontWeight::SEMIBOLD),
+            )
+            .child(text.to_owned())
+            .into_any_element()
+    }
+
+    fn node_stat(
+        label: &str,
+        value: &str,
+        detail: &Option<String>,
+        token: &ThemeColor,
+    ) -> AnyElement {
+        div()
+            .flex()
+            .flex_col()
+            .gap_1()
+            .min_w_0()
+            .child(
+                div()
+                    .text_size(px(12.))
+                    .text_color(content(0.6))
+                    .child(label.to_owned()),
+            )
+            .child(
+                div()
+                    .text_size(px(28.))
+                    .line_height(px(34.))
+                    .font_weight(FontWeight::SEMIBOLD)
+                    .text_color(color(token))
+                    .child(value.to_owned()),
+            )
+            .children(detail.iter().map(|d| {
+                div()
+                    .text_size(px(12.))
+                    .text_color(content(0.6))
+                    .child(d.clone())
+            }))
+            .into_any_element()
+    }
+
+    fn node_table(&self, columns: &[String], rows: &[Vec<String>], key: String) -> AnyElement {
+        let mut table = div()
+            .id(SharedString::from(format!("visual-table-{key}")))
+            .w_full()
+            .overflow_x_scroll()
+            .flex()
+            .flex_col()
+            .text_size(px(12.));
+        let count = columns.len().max(1);
+        let width = (self.width.get() / count as f32).max(100.);
+        // A column of numbers sits right-aligned in Obel Mono, as
+        // fluidither's tables set theirs.
+        let numeric: Vec<bool> = (0..columns.len())
+            .map(|col| {
+                !rows.is_empty()
+                    && rows.iter().all(|cells| {
+                        cells
+                            .get(col)
+                            .is_some_and(|cell| vorkspace_ui::fluid::is_numeric(cell))
+                    })
+            })
+            .collect();
+        let row = |cells: &[String], header: bool| {
+            div()
+                .flex()
+                .min_w(px(width * count as f32))
+                .border_b_1()
+                .border_color(content(0.08))
+                .when(header, |d| {
+                    d.font_weight(FontWeight::SEMIBOLD)
+                        .text_color(content(0.65))
+                })
+                .children(cells.iter().enumerate().map(|(col, cell)| {
+                    let number = numeric.get(col).copied().unwrap_or(false);
+                    div()
+                        .w(px(width))
+                        .flex_shrink_0()
+                        .px_2()
+                        .py_2()
+                        .when(number, |d| d.text_right())
+                        .when(number && !header, |d| {
+                            d.font_family(vorkspace_ui::fonts::MONO)
+                                .font_features(crate::panel_kit::tabular())
+                        })
+                        .child(cell.clone())
+                }))
+        };
+        table = table.child(row(columns, true));
+        for cells in rows {
+            table = table.child(row(cells, false));
+        }
+        table.into_any_element()
+    }
+
+    fn node_button(
+        label: &str,
+        handler: &str,
+        disabled: &bool,
+        key: String,
+        cx: &Context<Self>,
+    ) -> AnyElement {
+        let handler = handler.to_owned();
+        let keyboard = handler.to_owned();
+        button(SharedString::from(format!("visual-button-{key}")))
+            .debug_selector(move || format!("visual-button-{key}"))
+            .aria_label(label.to_owned())
+            .child(label.to_owned())
+            .when(*disabled, |d| d.opacity(0.4).cursor_default())
+            .when(!disabled, |d| {
+                d.on_click(
+                    cx.listener(move |this, _, _, cx| this.dispatch(&handler, Value::Null, cx)),
+                )
+                .on_key_down(cx.listener(move |this, event, _, cx| {
+                    if activated(event) {
+                        this.dispatch(&keyboard, Value::Null, cx);
+                        cx.stop_propagation();
+                    }
+                }))
+            })
+            .into_any_element()
+    }
+
+    fn node_toggle(
+        label: &str,
+        value: &bool,
+        handler: &str,
+        key: String,
+        cx: &Context<Self>,
+    ) -> AnyElement {
+        let next = !*value;
+        let handler = handler.to_owned();
+        let keyboard = handler.to_owned();
+        div()
+            .id(SharedString::from(format!("visual-toggle-{key}")))
+            .debug_selector(move || format!("visual-toggle-{key}"))
+            .role(Role::Switch)
+            .aria_label(label.to_owned())
+            .aria_toggled(if *value {
+                gpui::Toggled::True
+            } else {
+                gpui::Toggled::False
+            })
+            .focusable()
+            .tab_stop(true)
+            .flex()
+            .items_center()
+            .gap_2()
+            .py_1()
+            .cursor_pointer()
+            .child(
+                div()
+                    .w(px(30.))
+                    .h(px(18.))
+                    .rounded(px(vorkspace_ui::fluid::SWITCH_RADIUS))
+                    .bg(if *value {
+                        accent_color()
+                    } else {
+                        vorkspace_ui::fluid::switch_off()
+                    })
+                    .relative()
+                    .child(
+                        div()
+                            .absolute()
+                            .top(px(3.))
+                            .left(px(if *value { 15. } else { 3. }))
+                            .size(px(12.))
+                            .rounded(px(3.))
+                            .bg(vorkspace_ui::fluid::knob(*value)),
+                    ),
+            )
+            .child(label.to_owned())
+            .on_click(cx.listener(move |this, _, _, cx| this.dispatch(&handler, json!(next), cx)))
+            .on_key_down(cx.listener(move |this, event, _, cx| {
+                if activated(event) {
+                    this.dispatch(&keyboard, json!(next), cx);
+                    cx.stop_propagation();
+                }
+            }))
+            .into_any_element()
+    }
+
+    fn node_tabs(
+        labels: &[String],
+        selected: &usize,
+        handler: &str,
+        key: String,
+        cx: &Context<Self>,
+    ) -> AnyElement {
+        let mut tabs = div().flex().flex_wrap().gap_1();
+        for (i, label) in labels.iter().enumerate() {
+            let handler = handler.to_owned();
+            let keyboard = handler.to_owned();
+            tabs = tabs.child(
+                tab_button(
+                    SharedString::from(format!("visual-tab-{key}-{i}")),
+                    i == *selected,
+                )
+                .debug_selector({
+                    let key = key.clone();
+                    move || format!("visual-tab-{key}-{i}")
+                })
+                .aria_label(label.clone())
+                .aria_toggled(if i == *selected {
+                    gpui::Toggled::True
+                } else {
+                    gpui::Toggled::False
+                })
+                .child(label.clone())
+                .on_click(cx.listener(move |this, _, _, cx| this.dispatch(&handler, json!(i), cx)))
+                .on_key_down(cx.listener(move |this, event, _, cx| {
+                    if activated(event) {
+                        this.dispatch(&keyboard, json!(i), cx);
+                        cx.stop_propagation();
+                    }
+                })),
+            );
+        }
+        tabs.into_any_element()
+    }
+
+    fn node_select(
+        label: &str,
+        options: &[String],
+        selected: &usize,
+        handler: &str,
+        key: String,
+        cx: &Context<Self>,
+    ) -> AnyElement {
+        let mut choices = div().flex().flex_wrap().gap_1();
+        for (i, option) in options.iter().enumerate() {
+            let handler = handler.to_owned();
+            let keyboard = handler.to_owned();
+            choices = choices.child(
+                button(SharedString::from(format!("visual-option-{key}-{i}")))
+                    .debug_selector({
+                        let key = key.clone();
+                        move || format!("visual-option-{key}-{i}")
+                    })
+                    .aria_label(option.clone())
+                    .child(option.clone())
+                    .when(i == *selected, |d| {
+                        d.bg(content(0.09))
+                            .border_color(accent_color())
+                            .text_color(content(1.))
+                    })
+                    .on_click(
+                        cx.listener(move |this, _, _, cx| this.dispatch(&handler, json!(i), cx)),
+                    )
+                    .on_key_down(cx.listener(move |this, event, _, cx| {
+                        if activated(event) {
+                            this.dispatch(&keyboard, json!(i), cx);
+                            cx.stop_propagation();
+                        }
+                    })),
+            );
+        }
+        div()
+            .flex()
+            .flex_col()
+            .gap_2()
+            .child(
+                div()
+                    .text_size(px(12.))
+                    .text_color(content(0.6))
+                    .child(label.to_owned()),
+            )
+            .child(choices)
+            .into_any_element()
+    }
+
+    fn node_diagram(node: &Node, markup: &str, title: &Option<String>) -> AnyElement {
+        let kind = if matches!(node, Node::Svg { .. }) {
+            crate::diagrams::DiagramKind::Svg
+        } else {
+            crate::diagrams::DiagramKind::Mermaid
+        };
+        crate::diagrams::diagram(
+            kind,
+            markup.to_owned().into(),
+            title.clone().map(Into::into),
+            || {
+                div()
+                    .text_size(px(12.))
+                    .text_color(content(0.5))
+                    .child("This diagram could not be drawn")
+                    .into_any_element()
+            },
+        )
+    }
+
     fn scene(
         &mut self,
         key: String,
