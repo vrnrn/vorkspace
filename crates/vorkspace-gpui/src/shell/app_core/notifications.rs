@@ -96,19 +96,13 @@ impl AppCore {
         .detach();
     }
 
-    pub(in crate::shell) fn start_linked_activity(
-        &mut self,
-        metadata: Option<serde_json::Value>,
-        cx: &mut Context<Self>,
-    ) {
+    pub(in crate::shell) fn start_linked_activity(&mut self, cx: &mut Context<Self>) {
         if self.linked_activity_clock.is_some() {
             return;
         }
         let store = self.store.clone();
         let work = cx.background_executor().spawn(async move {
-            locked(&store).and_then(|store| {
-                github_activity::load_seen_with_metadata(&store, metadata.as_ref())
-            })
+            locked(&store).and_then(|store| github_activity::load_seen(&store))
         });
         self.linked_activity_clock = Some(cx.spawn(async move |core, cx| {
             let seen = work.await.unwrap_or_default();

@@ -128,29 +128,6 @@ pub(crate) fn load_seen(store: &Store) -> Result<HashMap<i64, i64>, String> {
 }
 /// Merge the desktop's acknowledged UUID snapshots with the native cache.
 /// Resolve source IDs through Store rather than treating UUIDs as native IDs.
-pub(crate) fn load_seen_with_metadata(
-    store: &Store,
-    metadata: Option<&Value>,
-) -> Result<HashMap<i64, i64>, String> {
-    let mut seen = load_seen(store)?;
-    let raw = metadata.and_then(|m| m.get("vorkspace.linkedSessionSeen"));
-    let decoded = raw
-        .and_then(Value::as_str)
-        .and_then(|s| serde_json::from_str::<Value>(s).ok());
-    let values = decoded.as_ref().or(raw).and_then(Value::as_object);
-    if let Some(values) = values {
-        for (source_id, timestamp) in values {
-            if let (Some(id), Some(at)) = (
-                store.resolve_existing_session_id(source_id),
-                timestamp.as_i64(),
-            ) {
-                let current = seen.entry(id).or_default();
-                *current = (*current).max(at);
-            }
-        }
-    }
-    Ok(seen)
-}
 #[derive(Clone)]
 pub(crate) struct LinkedSession {
     pub(crate) id: i64,

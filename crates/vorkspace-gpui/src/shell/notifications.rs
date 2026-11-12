@@ -919,9 +919,8 @@ impl Shell {
                 }
             },
         ));
-        let metadata = self.workspace.desktop_preferences_metadata.clone();
         if let Some(core) = &self.app_core {
-            core.update(cx, |core, cx| core.start_linked_activity(metadata, cx));
+            core.update(cx, |core, cx| core.start_linked_activity(cx));
         }
     }
 

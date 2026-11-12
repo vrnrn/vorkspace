@@ -73,25 +73,6 @@ impl WindowLayouts {
                 .collect();
         }
         self.shared = Some(Arc::new(WindowShared::from_workspace(&legacy)));
-        for entry in &mut self.entries {
-            // Keep each layout's selected project, panes and zoom. Carry the
-            // desktop merge baseline forward so the next launch can detect edits.
-            let Ok(mut layout) = serde_json::from_str::<Workspace>(&entry.workspace) else {
-                continue;
-            };
-            layout
-                .desktop_project_preferences
-                .clone_from(&legacy.desktop_project_preferences);
-            layout
-                .desktop_preferences_metadata
-                .clone_from(&legacy.desktop_preferences_metadata);
-            layout
-                .desktop_workspace_snapshot
-                .clone_from(&legacy.desktop_workspace_snapshot);
-            entry.workspace = serde_json::to_string(&layout)
-                .expect("serialize reconciled window")
-                .into();
-        }
     }
 
     pub(super) fn record(&mut self, id: u64, workspace: String, focused: bool) -> bool {
@@ -643,8 +624,6 @@ mod compatibility_tests {
             .projects
             .push("/workspace/new-desktop-project".into());
         updated.preferences.default_provider = Some("claude".into());
-        updated.desktop_project_preferences =
-            Some(serde_json::json!({"default_provider":"claude"}));
         updated.preferences.ui_scale = 100;
         store
             .save_settings(&[
@@ -661,10 +640,6 @@ mod compatibility_tests {
         );
         assert_eq!(restored.preferences.ui_scale, 135);
         assert_eq!(restored.project, local.project);
-        assert_eq!(
-            restored.desktop_project_preferences,
-            updated.desktop_project_preferences
-        );
         assert_eq!(loaded.imported_projects, ["/workspace/new-desktop-project"]);
     }
 }

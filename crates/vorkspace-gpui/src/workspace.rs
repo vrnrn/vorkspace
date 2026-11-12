@@ -291,14 +291,6 @@ pub(crate) struct Workspace {
     pub docks: HashMap<String, TerminalDock>,
     pub preferences: vorkspace_ui::preferences::Preferences,
     pub session_filters: vorkspace_core::session_filters::Filters,
-    /// Last desktop source values, used to reconcile subsequent desktop changes
-    /// while retaining deliberate native project and preference edits.
-    pub desktop_project_preferences: Option<serde_json::Value>,
-    /// Unmodified desktop viewport metadata, including pane types and explicit
-    /// tab-group assignments that do not yet have a native representation.
-    pub desktop_workspace_snapshot: Option<serde_json::Value>,
-    /// Exact source strings retained for preferences with no native equivalent.
-    pub desktop_preferences_metadata: Option<serde_json::Value>,
     /// Named sets of projects and Bots. Folders and Bots keep their own data;
     /// a vorkspace only decides what this window lists.
     pub vorkspaces: Arc<Vec<VorkspaceDef>>,
@@ -469,9 +461,6 @@ impl Default for Workspace {
             docks: Default::default(),
             preferences: vorkspace_ui::preferences::Preferences::default(),
             session_filters: Default::default(),
-            desktop_project_preferences: None,
-            desktop_workspace_snapshot: None,
-            desktop_preferences_metadata: None,
             vorkspaces: Arc::default(),
             active_vorkspace: String::new(),
             vorkspace_project: HashMap::new(),
@@ -593,22 +582,6 @@ impl Workspace {
         }
         state.restore_open_app_tabs();
         state.normalize_title_order();
-        if state
-            .desktop_project_preferences
-            .as_ref()
-            .and_then(|source| source.get("projects"))
-            .is_some()
-            && state.active.is_some_and(|id| {
-                state
-                    .session_for_pane(id)
-                    .and_then(|owner| sessions.get(&owner))
-                    .is_some_and(|path| !state.projects.iter().any(|project| project == path))
-            })
-        {
-            // An old native sidecar could focus an internal session folder.
-            // It must not restore that folder as a remembered user project.
-            state.active = None;
-        }
         if state.active.is_none_or(|id| state.tab_of(id).is_none()) {
             state.active = state
                 .project_focus

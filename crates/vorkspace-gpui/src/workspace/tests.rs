@@ -517,31 +517,6 @@ fn restore_keeps_project_selection_and_prunes_stale_project_focus() {
     assert_eq!(fresh.project, "/a");
 }
 #[test]
-fn restoring_history_keeps_only_remembered_or_selected_projects() {
-    let saved = serde_json::json!({
-        "project": "/code/app",
-        "projects": ["/code/app", "/code/other"],
-        "tabs": [2],
-        "active": 2,
-        "desktop_project_preferences": {"projects": ["/code/app", "/code/other"]}
-    })
-    .to_string();
-    let sessions = vec![
-        (1, "/code/app".into()),
-        (2, "/tmp/internal-bot-chat".into()),
-        (3, "/private/var/folders/temporary".into()),
-    ];
-    let restored = Workspace::restore(Some(&saved), &sessions, "/code/app");
-    assert_eq!(restored.projects, ["/code/app", "/code/other"]);
-    assert_eq!(restored.project, "/code/app");
-    assert_eq!(restored.active, None);
-    let serialized = serde_json::to_value(restored).unwrap();
-    assert_eq!(
-        serialized["desktop_project_preferences"]["projects"],
-        serde_json::json!(["/code/app", "/code/other"])
-    );
-}
-#[test]
 fn restore_prunes_stale_tabs_and_preserves_an_intentionally_empty_workspace() {
     let mut s = Workspace::default();
     s.open(1);
