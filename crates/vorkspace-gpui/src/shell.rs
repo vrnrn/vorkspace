@@ -90,10 +90,10 @@ use crate::{
     },
 };
 use gpui::{
-    AnyElement, App, Bounds, BoxShadow, ClipboardItem, Context, CursorStyle, Entity, FocusHandle,
-    Focusable, FontWeight, KeyBinding, MouseButton, MouseDownEvent, MouseMoveEvent,
-    PathPromptOptions, Pixels, Point, Role, ScrollHandle, SharedString, StyleRefinement,
-    Subscription, Window, actions, div, prelude::*, px, rgb, rgba,
+    AnyElement, App, Bounds, ClipboardItem, Context, CursorStyle, Entity, FocusHandle, Focusable,
+    FontWeight, KeyBinding, MouseButton, MouseDownEvent, MouseMoveEvent, PathPromptOptions, Pixels,
+    Point, Role, ScrollHandle, SharedString, StyleRefinement, Subscription, Window, actions, div,
+    prelude::*, px, rgb, rgba,
 };
 use session_groups::local_reminder_label;
 use std::{
@@ -695,7 +695,7 @@ impl Shell {
         let github_activity = app_core.read(cx).github_activity.clone();
         let notification_state = notifications::State::new(&workspace, github_activity, cx);
         let owner = cx.weak_entity();
-        let live_agents = cx.new(|cx| live_agents::LiveAgents::new(owner, cx));
+        let live_agents = cx.new(|_| live_agents::LiveAgents::new(owner));
 
         // Keep context mutations and the clock sample in their original order.
         let init_usage_footer = cx.new(|cx| UsageFooter::new(active_kind, cx));

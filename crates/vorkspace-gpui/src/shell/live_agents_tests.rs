@@ -232,7 +232,7 @@ fn native_activity_capture() {
     );
     cx.update(|cx| vorkspace_ui::clock::use_test_clock(cx));
     for theme in ["dark", "light", "harbor"] {
-        for (name, compact, expanded, height, single) in [
+        for (name, compact, _expanded, height, single) in [
             ("expanded", false, false, 800., false),
             ("compact", true, false, 800., false),
             ("all", false, true, 800., false),
@@ -319,27 +319,11 @@ fn native_activity_capture() {
                     }
                     .into();
                     shell.workspace.project_rail_open = !compact;
-                    shell.sidebar.live_agents.update(cx, |activity, cx| {
-                        if activity.expanded != expanded {
-                            activity.toggle_expanded(cx);
-                        }
-                    });
                     shell.invalidate_chrome(cx);
                     cx.notify();
                 })
                 .unwrap();
             cx.run_until_parked();
-            if name == "bottom" {
-                window
-                    .update(&mut cx, |shell, _, cx| {
-                        shell.sidebar.live_agents.update(cx, |activity, cx| {
-                            activity.scroll.scroll_to_end();
-                            cx.notify();
-                        })
-                    })
-                    .unwrap();
-                cx.run_until_parked();
-            }
             if name == "motion" {
                 window
                     .update(&mut cx, |shell, _, cx| {
@@ -369,22 +353,6 @@ fn native_activity_capture() {
             }
             window.update(&mut cx, |_, w, _| w.remove_window()).unwrap();
         }
-    }
-}
-
-#[test]
-fn historical_elapsed_format_handles_rounding_and_whole_units() {
-    for (ms, label) in [
-        (0, "1s"),
-        (499, "1s"),
-        (1499, "1s"),
-        (1500, "2s"),
-        (60_000, "1m"),
-        (61_000, "1m 1s"),
-        (3_600_000, "1h"),
-        (3_660_000, "1h 1m"),
-    ] {
-        assert_eq!(live_elapsed(Duration::from_millis(ms)), label);
     }
 }
 
