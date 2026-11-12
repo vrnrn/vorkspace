@@ -351,6 +351,15 @@ impl DesktopPreferences {
             })
             .collect();
         reconcile_preference(target, baseline, next, "keybindings", json!(keys));
+        self.apply_model_preferences(target, baseline, next);
+    }
+
+    fn apply_model_preferences(
+        &self,
+        target: &mut Map<String, Value>,
+        baseline: &Value,
+        next: &mut Map<String, Value>,
+    ) {
         let favorites = self.json("vorkspace.favoriteModels");
         let mut choices = Vec::new();
         for id in favorites
