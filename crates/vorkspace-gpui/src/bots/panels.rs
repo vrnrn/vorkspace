@@ -81,14 +81,13 @@ fn setting(label: &str, description: Option<&str>, control: AnyElement) -> Div {
                 .child(control),
         )
 }
-fn switch_setting(label: &str, description: &str, disabled: bool, control: AnyElement) -> Div {
+fn switch_setting(label: &str, description: &str, control: AnyElement) -> Div {
     div()
         .flex()
         .items_center()
         .gap_3()
         .px_3()
         .py_2()
-        .when(disabled, |d| d.opacity(0.4))
         .child(
             div()
                 .flex_1()

@@ -832,7 +832,6 @@ impl Bots {
             .child(card().child(switch_setting(
                 "Show sessions in sidebar",
                 "Sessions it starts appear in the Sessions list for its projects.",
-                false,
                 self.switch(
                     "bot-show-started",
                     "Show sessions in sidebar",
