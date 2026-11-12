@@ -50,9 +50,7 @@ use crate::{
     SharedString, SubscriberSet, Subscription, SvgRenderer, SystemNotification,
     SystemNotificationResponse, Task, TextRenderingMode, TextSystem, ThermalState, Window,
     WindowAppearance, WindowButtonLayout, WindowHandle, WindowId, WindowInvalidator,
-    WindowingRequest,
-    colors::{Colors, GlobalColors},
-    hash, init_app_menus,
+    WindowingRequest, hash, init_app_menus,
 };
 
 mod async_context;
@@ -3114,13 +3112,6 @@ impl App {
         F: 'static + FnMut(crate::InspectorElementId, &T, &mut Window, &mut App) -> R,
     {
         self.inspector_element_registry.register(factory);
-    }
-
-    /// Initializes gpui's default colors for the application.
-    ///
-    /// These colors can be accessed through `cx.default_colors()`.
-    pub fn init_colors(&mut self) {
-        self.set_global(GlobalColors(Arc::new(Colors::default())));
     }
 
     #[inline(never)]
