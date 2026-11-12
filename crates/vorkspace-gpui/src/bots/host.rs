@@ -325,11 +325,7 @@ impl Bots {
                 },cx);return;
             }
             "worktrees.remove"=>{
-                let path=match text(&input,"path",4096){Ok(path)=>path,Err(error)=>{self.finish_call(call,Err(error),cx);return;}};
-                let bots=cx.weak_entity();
-                self.owner.remove_worktree(project,path,Box::new(move|result,cx|{
-                    let _=bots.update(cx,|bots,cx|bots.finish_call(call,result.map(|()|json!({"removed":true})),cx));
-                }),cx);return;
+                self.app_remove_worktree(call,&input,project,cx);return;
             }
             "minions.list"=>{
                 Ok(json!(self.roster.team(&bot.id).filter(|b|b.is_minion()).map(|b|self.minion_value(b,cx)).collect::<Vec<_>>()))
@@ -367,10 +363,7 @@ impl Bots {
                 Ok(value)
             }
             "minions.fire"=>{
-                let query=match text(&input,"minion",160){Ok(v)=>v,Err(e)=>{self.finish_call(call,Err(e),cx);return;}};
-                let member=match self.roster.resolve_peer(&actor.id,&query,true){Ok(b)=>b.id.clone(),Err(e)=>{self.finish_call(call,Err(e),cx);return;}};
-                self.fire_minion(call, actor.id, member, cx);
-                return;
+                self.app_fire_minion(call,&input,actor.id,cx);return;
             }
             "minions.retry"|"minions.discard"=>{
                 let query=match text(&input,"minion",160){Ok(v)=>v,Err(e)=>{self.finish_call(call,Err(e),cx);return;}};
@@ -452,16 +445,7 @@ impl Bots {
             }
             "folders.list"=>Ok(json!(self.owner.groups(&project,cx).folders)),
             "folders.move"=>{
-                let session=match id(&input,"sessionId"){Ok(id)=>id,Err(e)=>{self.finish_call(call,Err(e),cx);return;}};
-                let allowed=self.owner.ensure_session(session,cx).is_some_and(|v|v.read(cx).summary.cwd==project);
-                if !allowed{self.finish_call(call,Err("Session is outside this project".into()),cx);return;}
-                self.call_work(call,&actor.id,target,move|store|{
-                    let destination = vorkspace_core::session_groups::FolderDestination::from_parts(
-                        input["folderId"].as_str(), input["newFolderName"].as_str(),
-                    );
-                    locked(&store)?.move_sessions_to_folder(&project, &[session], destination)?;
-                    Ok((json!({"moved":true}),Effect::Groups(project)))
-                },cx);return;
+                self.app_move_to_folder(call,input,project,&actor.id,target,cx);return;
             }
             "artifacts.list"=>Ok(json!(bot.documents.iter().filter(|d|input.get("kind").and_then(Value::as_str).is_none_or(|k|k==d.kind)).skip(input.get("offset").and_then(Value::as_u64).unwrap_or(0) as usize).take(input.get("limit").and_then(Value::as_u64).unwrap_or(50).min(200) as usize).collect::<Vec<_>>())),
             "artifacts.read"=>input.get("id").and_then(Value::as_str).and_then(|id|bot.documents.iter().find(|d|d.id==id)).map(|d|json!(d)).ok_or("Document not found".into()),
@@ -514,6 +498,97 @@ impl Bots {
             _=>Err("Unknown action. Run app help to see supported actions".into()),
         };
         self.finish_call(call, result, cx);
+    }
+
+    fn app_remove_worktree(
+        &mut self,
+        call: Call,
+        input: &Value,
+        project: String,
+        cx: &mut Context<Self>,
+    ) {
+        let path = match text(input, "path", 4096) {
+            Ok(path) => path,
+            Err(error) => {
+                self.finish_call(call, Err(error), cx);
+                return;
+            }
+        };
+        let bots = cx.weak_entity();
+        self.owner.remove_worktree(
+            project,
+            path,
+            Box::new(move |result, cx| {
+                let _ = bots.update(cx, |bots, cx| {
+                    bots.finish_call(call, result.map(|()| json!({"removed":true})), cx)
+                });
+            }),
+            cx,
+        );
+    }
+
+    fn app_fire_minion(
+        &mut self,
+        call: Call,
+        input: &Value,
+        actor_id: String,
+        cx: &mut Context<Self>,
+    ) {
+        let query = match text(input, "minion", 160) {
+            Ok(v) => v,
+            Err(e) => {
+                self.finish_call(call, Err(e), cx);
+                return;
+            }
+        };
+        let member = match self.roster.resolve_peer(&actor_id, &query, true) {
+            Ok(b) => b.id.clone(),
+            Err(e) => {
+                self.finish_call(call, Err(e), cx);
+                return;
+            }
+        };
+        self.fire_minion(call, actor_id, member, cx);
+    }
+
+    fn app_move_to_folder(
+        &mut self,
+        call: Call,
+        input: Value,
+        project: String,
+        actor_id: &str,
+        target: String,
+        cx: &mut Context<Self>,
+    ) {
+        let session = match id(&input, "sessionId") {
+            Ok(id) => id,
+            Err(e) => {
+                self.finish_call(call, Err(e), cx);
+                return;
+            }
+        };
+        let allowed = self
+            .owner
+            .ensure_session(session, cx)
+            .is_some_and(|v| v.read(cx).summary.cwd == project);
+        if !allowed {
+            self.finish_call(call, Err("Session is outside this project".into()), cx);
+            return;
+        }
+        self.call_work(
+            call,
+            actor_id,
+            target,
+            move |store| {
+                let destination = vorkspace_core::session_groups::FolderDestination::from_parts(
+                    input["folderId"].as_str(),
+                    input["newFolderName"].as_str(),
+                );
+                locked(&store)?.move_sessions_to_folder(&project, &[session], destination)?;
+                Ok((json!({"moved":true}), Effect::Groups(project)))
+            },
+            cx,
+        );
     }
 
     fn app_codebase_root(
