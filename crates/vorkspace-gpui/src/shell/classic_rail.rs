@@ -176,7 +176,6 @@ impl Shell {
             .live_agents
             .update(cx, |activity, _| activity.hide());
 
-        let _ = self.workspace.migrate_project_rail();
         // The rail lists the vorkspace's sessions rather than its projects;
         // projects are picked from the sidebar header within the vorkspace.
         let bots = self.bots.clone().map(|bots| {

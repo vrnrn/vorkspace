@@ -217,16 +217,6 @@ pub(crate) struct ProjectRailState {
     pub groups: Vec<ProjectRailGroup>,
     pub assignments: HashMap<String, String>,
     pub pinned: HashSet<String>,
-    #[serde(default)]
-    pub awaiting_legacy_groups: bool,
-    #[serde(default)]
-    pub awaiting_legacy_assignments: bool,
-    #[serde(default)]
-    pub awaiting_legacy_pins: bool,
-    #[serde(default)]
-    pub assignment_overrides: HashMap<String, Option<String>>,
-    #[serde(default)]
-    pub pin_overrides: HashMap<String, bool>,
 }
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(default)]
@@ -235,61 +225,6 @@ pub(crate) struct ProjectRailGroup {
     pub name: String,
     pub collapsed: bool,
 }
-impl ProjectRailState {
-    fn from_metadata(metadata: &serde_json::Value) -> Result<Self, String> {
-        fn read<T: serde::de::DeserializeOwned + Default>(
-            metadata: &serde_json::Value,
-            key: &str,
-        ) -> Result<T, String> {
-            match metadata.get(key) {
-                None => Ok(T::default()),
-                Some(value) => serde_json::from_str(
-                    value
-                        .as_str()
-                        .ok_or_else(|| format!("Invalid legacy {key}"))?,
-                )
-                .map_err(|_| format!("Invalid legacy {key}")),
-            }
-        }
-        let groups: Vec<ProjectRailGroup> = read(metadata, "vorkspace.projectGroups")?;
-        let mut seen = HashSet::new();
-        if groups
-            .iter()
-            .any(|g| g.id.is_empty() || g.name.is_empty() || !seen.insert(g.id.clone()))
-        {
-            return Err("Invalid legacy project groups".into());
-        }
-        let assignments: HashMap<String, String> =
-            read(metadata, "vorkspace.projectGroupAssignments")?;
-        let mut normalized = HashMap::new();
-        for (path, group) in assignments {
-            let key = vorkspace_core::files::path_key(&path);
-            if normalized
-                .insert(key, group.clone())
-                .is_some_and(|previous| previous != group)
-            {
-                return Err("Conflicting legacy project assignments".into());
-            }
-        }
-        let pinned: Vec<String> = read(metadata, "vorkspace.projectRailPinned")?;
-        Ok(Self {
-            groups,
-            assignments: normalized,
-            pinned: pinned
-                .into_iter()
-                .map(|p| vorkspace_core::files::path_key(&p))
-                .collect(),
-            awaiting_legacy_groups: metadata.get("vorkspace.projectGroups").is_none(),
-            awaiting_legacy_assignments: metadata
-                .get("vorkspace.projectGroupAssignments")
-                .is_none(),
-            awaiting_legacy_pins: metadata.get("vorkspace.projectRailPinned").is_none(),
-            assignment_overrides: HashMap::new(),
-            pin_overrides: HashMap::new(),
-        })
-    }
-}
-
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
 pub(crate) struct Workspace {
@@ -584,28 +519,6 @@ impl Workspace {
                 serde_json::from_value::<Self>(value).ok()
             })
             .unwrap_or_default();
-        // Recover markers retained by an earlier bridge even when the desktop
-        // source is unavailable. Native decisions, including restore, win.
-        if let Some(raw) = state
-            .desktop_preferences_metadata
-            .as_ref()
-            .and_then(|m| m.get("vorkspace.archivedProjects"))
-            .and_then(|v| v.as_str())
-            .and_then(|s| serde_json::from_str::<serde_json::Value>(s).ok())
-            .and_then(|v| v.as_array().cloned())
-        {
-            for path in raw
-                .iter()
-                .filter_map(|v| v.get("path").and_then(|v| v.as_str()))
-                .filter(|p| !p.is_empty())
-            {
-                state
-                    .project_archive
-                    .entry(vorkspace_core::files::path_key(path))
-                    .or_insert(true);
-            }
-        }
-        let _ = state.migrate_project_rail();
         state.projects.retain(|p| {
             state
                 .project_archive
@@ -903,88 +816,8 @@ impl Workspace {
                     .unwrap_or(SidebarTab::Files)
             })
     }
-    pub fn migrate_project_rail(&mut self) -> Result<(), String> {
-        let Some(metadata) = &self.desktop_preferences_metadata else {
-            return Ok(());
-        };
-        let keys = [
-            "vorkspace.projectGroups",
-            "vorkspace.projectGroupAssignments",
-            "vorkspace.projectRailPinned",
-        ];
-        if self.project_rail_state.is_none() {
-            if keys.iter().any(|key| metadata.get(*key).is_some()) {
-                self.project_rail_state = Some(ProjectRailState::from_metadata(metadata)?);
-            }
-            return Ok(());
-        }
-        let rail = self.project_rail_state.as_mut().unwrap();
-        let pending = [
-            rail.awaiting_legacy_groups,
-            rail.awaiting_legacy_assignments,
-            rail.awaiting_legacy_pins,
-        ];
-        let selected: serde_json::Map<String, serde_json::Value> = keys
-            .iter()
-            .zip(pending)
-            .filter_map(|(key, pending)| {
-                pending
-                    .then(|| metadata.get(*key).map(|v| ((*key).to_owned(), v.clone())))
-                    .flatten()
-            })
-            .collect();
-        if selected.is_empty() {
-            return Ok(());
-        }
-        let legacy = ProjectRailState::from_metadata(&serde_json::Value::Object(selected))?;
-        if rail.awaiting_legacy_groups && metadata.get(keys[0]).is_some() {
-            let mut groups = legacy.groups;
-            for group in std::mem::take(&mut rail.groups) {
-                if let Some(existing) = groups.iter_mut().find(|g| g.id == group.id) {
-                    *existing = group;
-                } else {
-                    groups.push(group);
-                }
-            }
-            rail.groups = groups;
-            rail.awaiting_legacy_groups = false;
-        }
-        if rail.awaiting_legacy_assignments && metadata.get(keys[1]).is_some() {
-            let mut assignments = legacy.assignments;
-            for (path, value) in std::mem::take(&mut rail.assignment_overrides) {
-                if let Some(group) = value {
-                    assignments.insert(path, group);
-                } else {
-                    assignments.remove(&path);
-                }
-            }
-            rail.assignments = assignments;
-            rail.awaiting_legacy_assignments = false;
-        }
-        if rail.awaiting_legacy_pins && metadata.get(keys[2]).is_some() {
-            let mut pinned = legacy.pinned;
-            for (path, value) in std::mem::take(&mut rail.pin_overrides) {
-                if value {
-                    pinned.insert(path);
-                } else {
-                    pinned.remove(&path);
-                }
-            }
-            rail.pinned = pinned;
-            rail.awaiting_legacy_pins = false;
-        }
-        Ok(())
-    }
     pub fn project_rail_mut(&mut self) -> &mut ProjectRailState {
-        self.migrate_project_rail()
-            .expect("rail mutations require validated migration");
-        self.project_rail_state
-            .get_or_insert_with(|| ProjectRailState {
-                awaiting_legacy_groups: true,
-                awaiting_legacy_assignments: true,
-                awaiting_legacy_pins: true,
-                ..Default::default()
-            })
+        self.project_rail_state.get_or_insert_with(Default::default)
     }
     pub fn restore_project(&mut self, path: &str) {
         self.deleted_projects

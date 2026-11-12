@@ -522,11 +522,6 @@ impl Shell {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if let Err(error) = self.workspace.migrate_project_rail() {
-            self.error = Some(format!("Cannot remove project rail metadata: {error}"));
-            cx.notify();
-            return;
-        }
         let ids = match self.project_session_scope(&path, cx).and_then(|ids| {
             self.project_delete_guard(&path, &ids, true, cx)?;
             self.other_project(&path)?;
@@ -660,8 +655,6 @@ impl Shell {
                     let rail = this.workspace.project_rail_mut();
                     rail.pinned.remove(&key);
                     rail.assignments.remove(&key);
-                    if rail.awaiting_legacy_pins { rail.pin_overrides.insert(key.clone(), false); }
-                    if rail.awaiting_legacy_assignments { rail.assignment_overrides.insert(key.clone(), None); }
                     this.workspace.project_focus.remove(&path);
                     this.persist(cx);
                 }

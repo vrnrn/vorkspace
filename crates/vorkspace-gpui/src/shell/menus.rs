@@ -431,28 +431,13 @@ impl Shell {
                 }
             }
             MenuTarget::Project { path, .. } => {
-                if action == "pin"
-                    && let Err(error) = self.workspace.migrate_project_rail()
-                {
-                    self.error = Some(format!(
-                        "Cannot change project rail state: {error}. Existing preferences were kept."
-                    ));
-                    cx.notify();
-                    return;
-                }
                 if action == "codebase-enabled" {
                     self.configure_codebase(path, window, cx);
                 } else if action == "pin" {
                     let key = vorkspace_core::files::path_key(&path);
                     let rail = self.workspace.project_rail_mut();
-                    let value = if rail.pinned.remove(&key) {
-                        false
-                    } else {
-                        rail.pinned.insert(key.clone());
-                        true
-                    };
-                    if rail.awaiting_legacy_pins {
-                        rail.pin_overrides.insert(key, value);
+                    if !rail.pinned.remove(&key) {
+                        rail.pinned.insert(key);
                     }
                     self.persist(cx);
                     self.invalidate_chrome(cx);
