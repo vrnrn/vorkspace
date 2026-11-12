@@ -621,40 +621,6 @@ fn desktop_sidebar_recovers_only_hidden_launches_of_listed_callers_without_histo
 }
 
 #[test]
-fn desktop_workspace_snapshot_restores_existing_ids_and_keeps_native_override() {
-    let store = Store::test(Path::new(":memory:")).unwrap();
-    let session = store.create("codex", "/project").unwrap();
-    let original = store.persisted_session_id(session.id).unwrap();
-    let source = json!({"projectCwd":"/project","activeTabId":"saved-tab","tabs":[
-        {"id":"saved-tab","focusedId":original,"layout":{"type":"leaf","id":original}},
-        {"id":"stale-tab","layout":{"type":"leaf","id":"999999"}}
-    ]});
-    store
-        .conn
-        .execute(
-            "INSERT INTO workspace_snapshot VALUES(1,?1,1)",
-            [source.to_string()],
-        )
-        .unwrap();
-    assert_eq!(
-        store.resolve_existing_session_id(&original),
-        Some(session.id)
-    );
-    assert_eq!(store.resolve_existing_session_id("999999"), None);
-    let workspace: Value = parse(&store.ui_state().unwrap().unwrap()).unwrap();
-    assert_eq!(workspace["tabs"], json!([session.id]));
-    assert_eq!(workspace["active"], session.id);
-    assert_eq!(workspace["desktop_workspace_snapshot"], source);
-    store
-        .save_ui_state(r#"{"project":"/native","tabs":[]}"#)
-        .unwrap();
-    let workspace: Value = parse(&store.ui_state().unwrap().unwrap()).unwrap();
-    assert_eq!(workspace["project"], "/native");
-    assert_eq!(workspace["tabs"], json!([]));
-    assert_eq!(workspace["desktop_workspace_snapshot"], source);
-}
-
-#[test]
 fn search_connections_share_the_same_read_only_preference_snapshot() {
     let directory = tempfile::tempdir().unwrap();
     let store = Store::open_vorkspace(&directory.path().join("vorkspace.db")).unwrap();

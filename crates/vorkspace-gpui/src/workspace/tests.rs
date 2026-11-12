@@ -674,35 +674,6 @@ fn restore_prunes_stale_tabs_and_preserves_an_intentionally_empty_workspace() {
     );
 }
 #[test]
-fn desktop_snapshot_translation_deserializes_and_retains_unported_metadata() {
-    let source = serde_json::json!({
-        "projectCwd":"/work", "activeTabId":"tab",
-        "tabs":[{"id":"tab", "focusedId":"b", "groupId":"assigned", "editorPanes":[], "layout":{"type":"split", "dir":"down", "children":[{"type":"leaf","id":"a"},{"type":"leaf","id":"b"}], "sizes":[0.4,0.6]}}],
-        "projectTerminals":[{"projectPath":"/work", "side":"bottom", "size":240, "open":false, "pane":{"activeFileId":"term", "files":[{"id":"term", "terminal":true, "cwd":"/work/sub"}]}}]
-    });
-    let mapped = vorkspace_core::desktop_preferences::DesktopPreferences::workspace_snapshot(
-        &source,
-        |id| match id {
-            "a" => Some(1),
-            "b" => Some(2),
-            _ => None,
-        },
-    );
-    let saved = mapped.to_string();
-    let restored = Workspace::restore(
-        Some(&saved),
-        &[(1, "/work".into()), (2, "/work".into())],
-        "/work",
-    );
-    assert_eq!(restored.tabs, [1]);
-    assert_eq!(restored.active, Some(2));
-    assert!(restored.layouts[&1].is_split());
-    assert_eq!(restored.focused[&1], 2);
-    assert_eq!(restored.docks["/work"].terminals, ["/work/sub"]);
-    assert!(!restored.docks["/work"].open);
-    assert_eq!(restored.desktop_workspace_snapshot.as_ref(), Some(&source));
-}
-#[test]
 fn restore_drops_retired_channels_app_pane_without_losing_workspace_state() {
     let saved = serde_json::json!({
         "project": "/work/a",

@@ -1,6 +1,5 @@
 //! Read desktop webview preferences without modifying WebKit storage or its schema.
 mod workspace_preferences;
-mod workspace_snapshot;
 
 use rusqlite::{types::ValueRef, Connection, OpenFlags};
 use serde_json::{json, Map, Value};

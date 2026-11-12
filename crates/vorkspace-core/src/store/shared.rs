@@ -1420,34 +1420,7 @@ impl Store {
     }
     pub fn ui_state(&self) -> Result<Option<String>, String> {
         let saved = self.setting("workspace")?;
-        let mut workspace = saved.as_deref().map(parse::<Value>).transpose()?;
-        if has_table(&self.conn, "workspace_snapshot")? {
-            let raw: Option<String> = sql(self
-                .conn
-                .query_row(
-                    "SELECT snapshot_json FROM workspace_snapshot WHERE id=1",
-                    [],
-                    |r| r.get(0),
-                )
-                .optional())?;
-            if let Some(raw) = raw {
-                let snapshot: Value = parse(&raw)?;
-                if workspace.is_none() {
-                    workspace = Some(
-                        crate::desktop_preferences::DesktopPreferences::workspace_snapshot(
-                            &snapshot,
-                            |id| self.resolve_existing_session_id(id),
-                        ),
-                    );
-                } else if let Some(saved) = workspace.as_mut().and_then(Value::as_object_mut) {
-                    // Preserve the source snapshot alongside native layouts;
-                    // unsupported panes can be recovered without rewriting it.
-                    saved
-                        .entry("desktop_workspace_snapshot")
-                        .or_insert(snapshot);
-                }
-            }
-        }
+        let workspace = saved.as_deref().map(parse::<Value>).transpose()?;
         let mut merged = workspace.clone().unwrap_or_else(|| json!({}));
         self.desktop_preferences().apply_workspace(&mut merged);
         if merged.as_object().is_some_and(|object| !object.is_empty()) {
