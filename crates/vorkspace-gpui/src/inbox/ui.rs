@@ -340,7 +340,6 @@ impl Inbox {
                         })
                         .on_click(cx.listener(|this, _, _, cx| {
                             this.filters_open = !this.filters_open;
-                            this.connections_open = false;
                             cx.notify();
                         })),
                 )
@@ -652,13 +651,8 @@ impl gpui::Render for Inbox {
                         if !this.acting {
                             this.confirm_action = None;
                         }
-                    } else if this.filters_open
-                        || this.connections_open
-                        || this.project_picker
-                        || this.action_menu
-                    {
+                    } else if this.filters_open || this.project_picker || this.action_menu {
                         this.filters_open = false;
-                        this.connections_open = false;
                         this.project_picker = false;
                         this.action_menu = false;
                     } else if this.pinned_item.is_none()
@@ -746,7 +740,6 @@ impl gpui::Render for Inbox {
             )
             .when_some(self.error.clone(), |d, text| d.child(error(text)))
             .when(self.filters_open, |d| d.child(self.filters_menu(cx)))
-            .when(self.connections_open, |d| d.child(self.connection_menu(cx)))
             .when(self.project_picker, |d| d.child(self.project_menu(cx)))
             .when(self.action_menu, |d| d.child(self.action_menu_view(cx)))
             .when(self.connect_provider.is_some(), |d| {

@@ -109,9 +109,7 @@ pub(crate) struct Inbox {
     detail_generation: u64,
     extra_request: u64,
     filters_open: bool,
-    connections_open: bool,
     filter_anchor: AnchorSlot,
-    connection_anchor: AnchorSlot,
     connect_provider: Option<String>,
     connect_url: Entity<Input>,
     connect_email: Entity<Input>,
@@ -305,9 +303,7 @@ impl Inbox {
             detail_generation: 0,
             extra_request: 0,
             filters_open: false,
-            connections_open: false,
             filter_anchor: AnchorSlot::default(),
-            connection_anchor: AnchorSlot::default(),
             connect_provider: None,
             connect_url,
             connect_email,
@@ -1427,7 +1423,6 @@ impl Inbox {
         if self.connecting || !self.state.connectors.enabled(&provider) {
             return;
         }
-        self.connections_open = false;
         self.connect_error = None;
         let status = self
             .snapshot

@@ -189,46 +189,6 @@ impl Inbox {
         )
         .into_any_element()
     }
-    pub(super) fn connection_menu(&self, cx: &mut Context<Self>) -> AnyElement {
-        let weak = cx.entity().downgrade();
-        popover(
-            "inbox-connections-menu",
-            Anchor::Slot(self.connection_anchor.clone()),
-        )
-        .width(272.)
-        .padding(4.)
-        .on_dismiss(move |_, cx| {
-            let _ = weak.update(cx, |this, cx| {
-                this.connections_open = false;
-                cx.notify();
-            });
-        })
-        .child(caption("Connections"))
-        .children(self.state.connectors.enabled_providers().map(|provider| {
-            let connected = self
-                .snapshot
-                .connections
-                .get(provider)
-                .is_some_and(|s| s.connected);
-            let label = format!(
-                "{} {}",
-                if connected { "Manage" } else { "Connect" },
-                model::provider_label(provider)
-            );
-            page::action(format!("inbox-connect-{provider}"), label.clone(), true)
-                .debug_selector(move || format!("inbox-connect-{provider}"))
-                .w_full()
-                .justify_start()
-                .gap(px(8.))
-                .child(provider_mark(provider))
-                .child(label)
-                .on_click(
-                    cx.listener(move |this, _, _, cx| this.open_connection(provider.into(), cx)),
-                )
-        }))
-        .into_any_element()
-    }
-
     pub(super) fn connection_dialog(&self, cx: &mut Context<Self>) -> AnyElement {
         let mut background = pane_fill();
         background.a = 0.9;
