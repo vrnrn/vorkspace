@@ -41,7 +41,6 @@ mod scene;
 #[cfg(any(test, feature = "test-support"))]
 mod seeds;
 mod shared_uri;
-mod spring;
 mod style;
 mod styled;
 mod subscription;
@@ -111,7 +110,6 @@ pub use global::*;
 pub use gpui_macros::{
     AppContext, IntoElement, Render, VisualContext, property_test, register_action, test,
 };
-pub use spring::*;
 
 pub use gpui_shared_string::*;
 pub use gpui_util::arc_cow::ArcCow;
