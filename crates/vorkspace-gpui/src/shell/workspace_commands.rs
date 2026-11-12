@@ -465,107 +465,7 @@ impl Shell {
             None
         };
 
-        let content = match kind {
-            "session" | "file" => None,
-            "codebase" => {
-                if !crate::codebase::enabled(project, cx) {
-                    return Err("Codebase Memory is disabled for this project".into());
-                }
-                Some(AppPane::Codebase)
-            }
-            "notes" => {
-                if !self.workspace.preferences.notes {
-                    return Err("Notes are disabled".into());
-                }
-                Some(AppPane::App(AppView::Notes))
-            }
-            "note" => {
-                if !self.workspace.preferences.notes {
-                    return Err("Notes are disabled".into());
-                }
-                let id = workspace_text(input, "noteId", 256)?;
-                let note = locked(&self.store)?
-                    .get_note(&id)?
-                    .ok_or("Note not found")?;
-                if note
-                    .source_cwd
-                    .as_deref()
-                    .is_none_or(|cwd| path_key(cwd) != path_key(project))
-                {
-                    return Err("Note is outside the selected project".into());
-                }
-                Some(AppPane::Note(id))
-            }
-            "connector" => {
-                let provider = Connector::from_id(&workspace_text(input, "provider", 32)?)
-                    .ok_or("Unknown connector provider")?;
-                if !self.enabled_connectors(cx).contains(&provider) {
-                    return Err("Connector is disabled".into());
-                }
-                Some(AppPane::App(AppView::Connector(provider)))
-            }
-            "item" => {
-                let key = workspace_text(input, "itemKey", 1024)?;
-                self.ensure_background_inbox(window, cx);
-                let item = self.pages.inbox.as_ref().and_then(|owner| owner.read(cx).item_by_key_for_project(&key, project))
-                    .or_else(|| self.workspace.app_panes.values().find_map(|pane| {
-                        match &pane.content {
-                            AppPane::ConnectorItem(item) if item.key() == key
-                                && ((item.provider == "jira" && item.project_path.is_empty())
-                                    || (!item.project_path.is_empty() && path_key(&item.project_path) == path_key(project))) => Some((**item).clone()),
-                            _ => None,
-                        }
-                    })).ok_or("Connector item is not in the current inbox snapshot; refresh its connector page first")?;
-                let provider =
-                    Connector::from_id(&item.provider).ok_or("Unknown connector provider")?;
-                if !self.enabled_connectors(cx).contains(&provider) {
-                    return Err("Connector is disabled".into());
-                }
-                Some(AppPane::ConnectorItem(Box::new(item)))
-            }
-            "bot" | "botDocument" => {
-                let bot = workspace_text(input, "bot", 256)?;
-                let manager = self.bots.as_ref().ok_or("Bots are unavailable")?;
-                if !self.workspace.preferences.bots
-                    || !manager
-                        .read(cx)
-                        .roster
-                        .get(&bot)
-                        .is_some_and(|entry| entry.works_on(project))
-                {
-                    return Err("Bot is unavailable in the selected project".into());
-                }
-                if kind == "bot" {
-                    Some(AppPane::Bot(bot))
-                } else {
-                    let document = workspace_text(input, "document", 256)?;
-                    if manager
-                        .read(cx)
-                        .document_for_pane(&bot, &document)
-                        .is_none()
-                    {
-                        return Err("Bot document is unavailable".into());
-                    }
-                    Some(AppPane::BotDocument { bot, document })
-                }
-            }
-            "terminal" => {
-                let cwd = self.working_copy().to_owned();
-                if !cfg!(test) && !std::path::Path::new(&cwd).is_dir() {
-                    return Err("Terminal directory is unavailable".into());
-                }
-                None
-            }
-            "search" => Some(AppPane::Search),
-            "todos" => {
-                if !self.workspace.preferences.todos {
-                    return Err("To-dos are disabled".into());
-                }
-                Some(AppPane::App(AppView::Todos))
-            }
-            "automations" => Some(AppPane::App(AppView::Automations)),
-            _ => return Err("Unknown workspace pane kind".into()),
-        };
+        let content = self.app_workspace_content(kind, project, input, window, cx)?;
 
         let existing = session.or_else(|| {
             content.as_ref().and_then(|content| {
@@ -731,6 +631,117 @@ impl Shell {
             self.finish_workspace_layout(target_before.unwrap(), id, window, cx);
         }
         Ok(json!({"paneId":id,"tabId":self.workspace.tab_of(id),"kind":kind,"opened":true}))
+    }
+
+    fn app_workspace_content(
+        &mut self,
+        kind: &str,
+        project: &str,
+        input: &Value,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Result<Option<AppPane>, String> {
+        Ok(match kind {
+            "session" | "file" => None,
+            "codebase" => {
+                if !crate::codebase::enabled(project, cx) {
+                    return Err("Codebase Memory is disabled for this project".into());
+                }
+                Some(AppPane::Codebase)
+            }
+            "notes" => {
+                if !self.workspace.preferences.notes {
+                    return Err("Notes are disabled".into());
+                }
+                Some(AppPane::App(AppView::Notes))
+            }
+            "note" => {
+                if !self.workspace.preferences.notes {
+                    return Err("Notes are disabled".into());
+                }
+                let id = workspace_text(input, "noteId", 256)?;
+                let note = locked(&self.store)?
+                    .get_note(&id)?
+                    .ok_or("Note not found")?;
+                if note
+                    .source_cwd
+                    .as_deref()
+                    .is_none_or(|cwd| path_key(cwd) != path_key(project))
+                {
+                    return Err("Note is outside the selected project".into());
+                }
+                Some(AppPane::Note(id))
+            }
+            "connector" => {
+                let provider = Connector::from_id(&workspace_text(input, "provider", 32)?)
+                    .ok_or("Unknown connector provider")?;
+                if !self.enabled_connectors(cx).contains(&provider) {
+                    return Err("Connector is disabled".into());
+                }
+                Some(AppPane::App(AppView::Connector(provider)))
+            }
+            "item" => {
+                let key = workspace_text(input, "itemKey", 1024)?;
+                self.ensure_background_inbox(window, cx);
+                let item = self.pages.inbox.as_ref().and_then(|owner| owner.read(cx).item_by_key_for_project(&key, project))
+                    .or_else(|| self.workspace.app_panes.values().find_map(|pane| {
+                        match &pane.content {
+                            AppPane::ConnectorItem(item) if item.key() == key
+                                && ((item.provider == "jira" && item.project_path.is_empty())
+                                    || (!item.project_path.is_empty() && path_key(&item.project_path) == path_key(project))) => Some((**item).clone()),
+                            _ => None,
+                        }
+                    })).ok_or("Connector item is not in the current inbox snapshot; refresh its connector page first")?;
+                let provider =
+                    Connector::from_id(&item.provider).ok_or("Unknown connector provider")?;
+                if !self.enabled_connectors(cx).contains(&provider) {
+                    return Err("Connector is disabled".into());
+                }
+                Some(AppPane::ConnectorItem(Box::new(item)))
+            }
+            "bot" | "botDocument" => {
+                let bot = workspace_text(input, "bot", 256)?;
+                let manager = self.bots.as_ref().ok_or("Bots are unavailable")?;
+                if !self.workspace.preferences.bots
+                    || !manager
+                        .read(cx)
+                        .roster
+                        .get(&bot)
+                        .is_some_and(|entry| entry.works_on(project))
+                {
+                    return Err("Bot is unavailable in the selected project".into());
+                }
+                if kind == "bot" {
+                    Some(AppPane::Bot(bot))
+                } else {
+                    let document = workspace_text(input, "document", 256)?;
+                    if manager
+                        .read(cx)
+                        .document_for_pane(&bot, &document)
+                        .is_none()
+                    {
+                        return Err("Bot document is unavailable".into());
+                    }
+                    Some(AppPane::BotDocument { bot, document })
+                }
+            }
+            "terminal" => {
+                let cwd = self.working_copy().to_owned();
+                if !cfg!(test) && !std::path::Path::new(&cwd).is_dir() {
+                    return Err("Terminal directory is unavailable".into());
+                }
+                None
+            }
+            "search" => Some(AppPane::Search),
+            "todos" => {
+                if !self.workspace.preferences.todos {
+                    return Err("To-dos are disabled".into());
+                }
+                Some(AppPane::App(AppView::Todos))
+            }
+            "automations" => Some(AppPane::App(AppView::Automations)),
+            _ => return Err("Unknown workspace pane kind".into()),
+        })
     }
 }
 
