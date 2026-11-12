@@ -1502,62 +1502,7 @@ impl Changes {
                     .items_center()
                     .gap_1()
                     .px(px(6.))
-                    .child(
-                        div()
-                            .id(("section", ix))
-                            .role(Role::Button)
-                            .map(vorkspace_ui::theme::tab_reachable)
-                            .aria_label(title)
-                            .aria_expanded(open)
-                            .min_w_0()
-                            .flex_1()
-                            .flex()
-                            .items_center()
-                            .gap_1()
-                            .child(
-                                icon(
-                                    if open {
-                                        "chevron-down"
-                                    } else {
-                                        "chevron-right"
-                                    },
-                                    14.,
-                                )
-                                .text_color(content(0.5)),
-                            )
-                            .child(
-                                div()
-                                    .min_w_0()
-                                    .truncate()
-                                    .text_size(px(11.))
-                                    .font_weight(FontWeight::SEMIBOLD)
-                                    .text_color(content(0.55))
-                                    .child(title),
-                            )
-                            .child(
-                                div()
-                                    .ml_1()
-                                    .h_4()
-                                    .min_w_4()
-                                    .flex_shrink_0()
-                                    .flex()
-                                    .items_center()
-                                    .justify_center()
-                                    .rounded_full()
-                                    .bg(accent_color().opacity(0.8))
-                                    .px_1()
-                                    .text_size(px(8.))
-                                    .text_color(white(1.))
-                                    .child(count.to_string()),
-                            )
-                            .on_click(cx.listener(move |this, _, _, cx| {
-                                match kind {
-                                    Kind2::Staged => this.staged_open = !this.staged_open,
-                                    Kind2::Unstaged => this.changes_open = !this.changes_open,
-                                }
-                                this.rebuild(cx);
-                            })),
-                    )
+                    .child(Self::change_section_title(kind, title, open, count, ix, cx))
                     .child(
                         icon_action(
                             ("view", ix),
@@ -1615,53 +1560,9 @@ impl Changes {
                     .pr_2()
                     .text_color(content(1.))
                     .hover(|s| s.bg(vorkspace_ui::fluid::hover(0.05)))
-                    .child(
-                        div()
-                            .id(("change-dir-toggle", ix))
-                            .role(Role::TreeItem)
-                            .aria_label(SharedString::from(path.clone()))
-                            .aria_expanded(open)
-                            .min_w_0()
-                            .flex_1()
-                            .flex()
-                            .items_center()
-                            .gap(px(6.))
-                            .child(
-                                div()
-                                    .size_4()
-                                    .flex_shrink_0()
-                                    .flex()
-                                    .items_center()
-                                    .justify_center()
-                                    .child(
-                                        icon(
-                                            if open {
-                                                "chevron-down"
-                                            } else {
-                                                "chevron-right"
-                                            },
-                                            14.,
-                                        )
-                                        .text_color(content(0.5)),
-                                    ),
-                            )
-                            .child(file_type_icon(&name, true, open, 16.))
-                            .child(
-                                div()
-                                    .min_w_0()
-                                    .flex_1()
-                                    .truncate()
-                                    .text_size(px(13.))
-                                    .font_weight(FontWeight::MEDIUM)
-                                    .child(name.clone()),
-                            )
-                            .on_click(cx.listener(move |this, _, _, cx| {
-                                if !this.collapsed.remove(&key) {
-                                    this.collapsed.insert(key.clone());
-                                }
-                                this.rebuild(cx);
-                            })),
-                    )
+                    .child(Self::change_directory_toggle(
+                        ix, key, &path, name, open, cx,
+                    ))
                     .child(
                         div()
                             .flex_shrink_0()
@@ -1714,15 +1615,7 @@ impl Changes {
                     .selected
                     .as_ref()
                     .is_some_and(|(rel, k)| rel == &file.relative && *k == kind);
-                let name = basename(&file.relative).to_owned();
-                let dir = if depth.is_some() {
-                    ""
-                } else {
-                    dirname(&file.relative)
-                };
-                let relative = file.relative.clone();
-                let open_path = file.path.clone();
-                let row_cwd = self.cwd.clone();
+
                 let row_file = file.clone();
                 let stage_file = file.clone();
                 div()
@@ -1745,60 +1638,7 @@ impl Changes {
                     .when(!active, |d| {
                         d.hover(|s| s.bg(vorkspace_ui::fluid::hover(0.05)))
                     })
-                    .child(
-                        div()
-                            .id(("change-open", ix))
-                            .role(Role::Button)
-                            .map(vorkspace_ui::theme::tab_reachable)
-                            .aria_label(SharedString::from(file.relative.clone()))
-                            .h_full()
-                            .min_w_0()
-                            .flex_1()
-                            .flex()
-                            .items_center()
-                            .gap(px(6.))
-                            .when(depth.is_some(), |d| d.child(div().size_4().flex_shrink_0()))
-                            .child(file_type_icon(&name, false, false, 16.))
-                            .child(
-                                div()
-                                    .min_w_0()
-                                    .flex_1()
-                                    .flex()
-                                    .items_baseline()
-                                    .overflow_hidden()
-                                    .whitespace_nowrap()
-                                    .child(
-                                        div()
-                                            .flex_shrink_0()
-                                            .text_size(px(13.))
-                                            .font_weight(FontWeight::MEDIUM)
-                                            .child(name),
-                                    )
-                                    .when(!dir.is_empty(), |d| {
-                                        d.child(
-                                            div()
-                                                .ml(px(6.))
-                                                .min_w_0()
-                                                .truncate()
-                                                .text_size(px(11.))
-                                                .text_color(content(0.4))
-                                                .child(dir.to_owned()),
-                                        )
-                                    }),
-                            )
-                            .on_click(cx.listener(move |this, _, _, cx| {
-                                if this.cwd != row_cwd {
-                                    return;
-                                }
-                                this.selected = Some((relative.clone(), kind));
-                                cx.emit(ChangesEvent::OpenDiff {
-                                    cwd: row_cwd.clone(),
-                                    path: Some(open_path.clone()),
-                                    staged: kind == Kind2::Staged,
-                                });
-                                cx.notify();
-                            })),
-                    )
+                    .child(self.change_file_open(&file, depth, ix, kind, cx))
                     .child(
                         div()
                             .flex_shrink_0()
@@ -1867,6 +1707,196 @@ impl Changes {
                     .into_any_element()
             }
         }
+    }
+
+    fn change_section_title(
+        kind: Kind2,
+        title: &'static str,
+        open: bool,
+        count: usize,
+        ix: usize,
+        cx: &Context<Self>,
+    ) -> gpui::Stateful<gpui::Div> {
+        div()
+            .id(("section", ix))
+            .role(Role::Button)
+            .map(vorkspace_ui::theme::tab_reachable)
+            .aria_label(title)
+            .aria_expanded(open)
+            .min_w_0()
+            .flex_1()
+            .flex()
+            .items_center()
+            .gap_1()
+            .child(
+                icon(
+                    if open {
+                        "chevron-down"
+                    } else {
+                        "chevron-right"
+                    },
+                    14.,
+                )
+                .text_color(content(0.5)),
+            )
+            .child(
+                div()
+                    .min_w_0()
+                    .truncate()
+                    .text_size(px(11.))
+                    .font_weight(FontWeight::SEMIBOLD)
+                    .text_color(content(0.55))
+                    .child(title),
+            )
+            .child(
+                div()
+                    .ml_1()
+                    .h_4()
+                    .min_w_4()
+                    .flex_shrink_0()
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .rounded_full()
+                    .bg(accent_color().opacity(0.8))
+                    .px_1()
+                    .text_size(px(8.))
+                    .text_color(white(1.))
+                    .child(count.to_string()),
+            )
+            .on_click(cx.listener(move |this, _, _, cx| {
+                match kind {
+                    Kind2::Staged => this.staged_open = !this.staged_open,
+                    Kind2::Unstaged => this.changes_open = !this.changes_open,
+                }
+                this.rebuild(cx);
+            }))
+    }
+
+    fn change_directory_toggle(
+        ix: usize,
+        key: String,
+        path: &str,
+        name: String,
+        open: bool,
+        cx: &Context<Self>,
+    ) -> gpui::Stateful<gpui::Div> {
+        div()
+            .id(("change-dir-toggle", ix))
+            .role(Role::TreeItem)
+            .aria_label(SharedString::from(path.to_owned()))
+            .aria_expanded(open)
+            .min_w_0()
+            .flex_1()
+            .flex()
+            .items_center()
+            .gap(px(6.))
+            .child(
+                div()
+                    .size_4()
+                    .flex_shrink_0()
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .child(
+                        icon(
+                            if open {
+                                "chevron-down"
+                            } else {
+                                "chevron-right"
+                            },
+                            14.,
+                        )
+                        .text_color(content(0.5)),
+                    ),
+            )
+            .child(file_type_icon(&name, true, open, 16.))
+            .child(
+                div()
+                    .min_w_0()
+                    .flex_1()
+                    .truncate()
+                    .text_size(px(13.))
+                    .font_weight(FontWeight::MEDIUM)
+                    .child(name.clone()),
+            )
+            .on_click(cx.listener(move |this, _, _, cx| {
+                if !this.collapsed.remove(&key) {
+                    this.collapsed.insert(key.clone());
+                }
+                this.rebuild(cx);
+            }))
+    }
+
+    fn change_file_open(
+        &self,
+        file: &ChangedFile,
+        depth: Option<usize>,
+        ix: usize,
+        kind: Kind2,
+        cx: &Context<Self>,
+    ) -> gpui::Stateful<gpui::Div> {
+        let name = basename(&file.relative).to_owned();
+        let dir = if depth.is_some() {
+            ""
+        } else {
+            dirname(&file.relative)
+        };
+        let relative = file.relative.clone();
+        let open_path = file.path.clone();
+        let row_cwd = self.cwd.clone();
+        div()
+            .id(("change-open", ix))
+            .role(Role::Button)
+            .map(vorkspace_ui::theme::tab_reachable)
+            .aria_label(SharedString::from(file.relative.clone()))
+            .h_full()
+            .min_w_0()
+            .flex_1()
+            .flex()
+            .items_center()
+            .gap(px(6.))
+            .when(depth.is_some(), |d| d.child(div().size_4().flex_shrink_0()))
+            .child(file_type_icon(&name, false, false, 16.))
+            .child(
+                div()
+                    .min_w_0()
+                    .flex_1()
+                    .flex()
+                    .items_baseline()
+                    .overflow_hidden()
+                    .whitespace_nowrap()
+                    .child(
+                        div()
+                            .flex_shrink_0()
+                            .text_size(px(13.))
+                            .font_weight(FontWeight::MEDIUM)
+                            .child(name),
+                    )
+                    .when(!dir.is_empty(), |d| {
+                        d.child(
+                            div()
+                                .ml(px(6.))
+                                .min_w_0()
+                                .truncate()
+                                .text_size(px(11.))
+                                .text_color(content(0.4))
+                                .child(dir.to_owned()),
+                        )
+                    }),
+            )
+            .on_click(cx.listener(move |this, _, _, cx| {
+                if this.cwd != row_cwd {
+                    return;
+                }
+                this.selected = Some((relative.clone(), kind));
+                cx.emit(ChangesEvent::OpenDiff {
+                    cwd: row_cwd.clone(),
+                    path: Some(open_path.clone()),
+                    staged: kind == Kind2::Staged,
+                });
+                cx.notify();
+            }))
     }
 }
 
