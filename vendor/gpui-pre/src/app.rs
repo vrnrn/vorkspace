@@ -20,11 +20,6 @@ use parking_lot::RwLock;
 use slotmap::SlotMap;
 
 pub use async_context::*;
-#[cfg(feature = "bench-support")]
-pub use bench_context::{
-    BenchAppContext, BenchMeasurement, BenchReport, BenchWindowContext, CountingAllocator,
-    MetricReport, bench_platform,
-};
 use collections::{FxHashMap, FxHashSet, HashMap, TypeIdHashMap, TypeIdHashSet, VecDeque};
 pub use context::*;
 pub use entity_map::*;
@@ -61,8 +56,6 @@ use crate::{
 };
 
 mod async_context;
-#[cfg(feature = "bench-support")]
-mod bench_context;
 mod context;
 mod entity_map;
 #[cfg(any(test, feature = "test-support"))]

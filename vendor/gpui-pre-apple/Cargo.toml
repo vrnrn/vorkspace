@@ -32,7 +32,6 @@ zed-version = "0.1.0"
 zed-rev = "93d745668805029476e6d7fbb19652116fed51de"
 
 [features]
-bench-support = ["gpui/bench-support"]
 default = []
 font-kit = [
     "dep:font-kit",

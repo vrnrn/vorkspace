@@ -32,10 +32,6 @@ zed-version = "0.1.0"
 zed-rev = "93d745668805029476e6d7fbb19652116fed51de"
 
 [features]
-bench-support = [
-    "gpui/bench-support",
-    "gpui_apple/bench-support",
-]
 default = ["gpui/default"]
 font-kit = ["gpui_apple/font-kit"]
 screen-capture = [

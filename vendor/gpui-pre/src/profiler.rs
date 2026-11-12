@@ -759,10 +759,10 @@ pub fn set_trace_enabled(enabled: bool) -> bool {
     }
 }
 
-#[cfg(any(feature = "bench-support", all(test, feature = "profiler")))]
+#[cfg(all(test, feature = "profiler"))]
 pub(crate) struct TraceGuard;
 
-#[cfg(any(feature = "bench-support", all(test, feature = "profiler")))]
+#[cfg(all(test, feature = "profiler"))]
 pub(crate) fn trace_scope() -> TraceGuard {
     let incremented = TRACE_STATE.fetch_update(Ordering::AcqRel, Ordering::Acquire, |state| {
         (state & TRACE_SCOPE_COUNT_MASK < TRACE_SCOPE_COUNT_MASK).then_some(state + 1)
@@ -771,7 +771,7 @@ pub(crate) fn trace_scope() -> TraceGuard {
     TraceGuard
 }
 
-#[cfg(any(feature = "bench-support", all(test, feature = "profiler")))]
+#[cfg(all(test, feature = "profiler"))]
 impl Drop for TraceGuard {
     fn drop(&mut self) {
         let previous_state =
