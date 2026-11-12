@@ -128,9 +128,14 @@ struct TeamAvatars(&'static str);
 impl gpui::Render for TeamAvatars {
     fn render(&mut self, _: &mut Window, _: &mut gpui::Context<Self>) -> impl IntoElement {
         let parent = Bot::default();
-        gpui::div().size_full().flex().children(
-            (0..12).map(|i| minion_avatar(&parent, &format!("member-{i}"), self.0, 24., true)),
-        )
+        gpui::div().size_full().flex().children((0..12).map(|i| {
+            avatar_with_look(
+                minion_look(&parent, &format!("member-{i}")),
+                self.0,
+                24.,
+                true,
+            )
+        }))
     }
 }
 

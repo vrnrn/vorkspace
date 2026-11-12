@@ -949,14 +949,8 @@ pub(crate) fn bot_avatar(bot: &Bot, status: &str, side: f32, still: bool) -> Any
 
 /// The same cached renderer and bounded clocks as ordinary Bot avatars.
 /// Callers supply the member's persistent ID, never its mutable name or role.
-pub(crate) fn minion_avatar(
-    parent: &Bot,
-    identity: &str,
-    status: &str,
-    side: f32,
-    still: bool,
-) -> AnyElement {
-    avatar_with_look(minion_look(parent, identity), status, side, still)
+pub(crate) fn minion_avatar(parent: &Bot, identity: &str, status: &str, side: f32) -> AnyElement {
+    avatar_with_look(minion_look(parent, identity), status, side, false)
 }
 
 /// Chat identity has explicitly no pointer gaze. Unlike `avatar_with_look` and

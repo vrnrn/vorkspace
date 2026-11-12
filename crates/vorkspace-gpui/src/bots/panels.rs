@@ -991,7 +991,7 @@ impl Bots {
         .rounded(px(radius::CONTROL))
         .when(active, |d| d.bg(content(0.1)))
         .hover(|s| s.bg(vorkspace_ui::fluid::hover(0.08)))
-        .child(avatar::minion_avatar(parent, &id, status, 16., false))
+        .child(avatar::minion_avatar(parent, &id, status, 16.))
         .child(
             div()
                 .flex_1()
