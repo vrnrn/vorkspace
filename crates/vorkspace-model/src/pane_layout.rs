@@ -19,7 +19,7 @@ pub enum Edge {
     Bottom,
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Place {
+pub(crate) enum Place {
     Before,
     After,
 }
@@ -675,7 +675,7 @@ impl PaneNode {
 
     /// Drag a leaf onto another pane's edge. Same-axis siblings swap order
     /// and keep their sizes; otherwise the leaf moves beside the target.
-    pub fn move_pane(&self, from: i64, to: i64, edge: Edge) -> PaneNode {
+    pub(crate) fn move_pane(&self, from: i64, to: i64, edge: Edge) -> PaneNode {
         if from == to {
             return self.clone();
         }
@@ -780,7 +780,12 @@ impl PaneNode {
     }
 }
 
-pub fn sizes_at_boundary(current: &[f32], index: usize, boundary: f32, min_size: f32) -> Vec<f32> {
+pub(crate) fn sizes_at_boundary(
+    current: &[f32],
+    index: usize,
+    boundary: f32,
+    min_size: f32,
+) -> Vec<f32> {
     if index + 1 >= current.len() {
         return current.to_vec();
     }

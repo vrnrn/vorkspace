@@ -3,18 +3,18 @@
 //! Corporation). Previous row `output` lanes become the next row's `input`.
 use std::collections::HashMap;
 
-pub const SWIMLANE_HEIGHT: f32 = 22.;
+pub(crate) const SWIMLANE_HEIGHT: f32 = 22.;
 pub const SWIMLANE_WIDTH: f32 = 11.;
 const SWIMLANE_CURVE_RADIUS: f32 = 5.;
 const CIRCLE_RADIUS: f32 = 4.;
 const CIRCLE_STROKE_WIDTH: f32 = 2.;
 
 /// Lane colors, cycled as new branches appear.
-pub const COLOR_REGISTRY: [u32; 5] = [0xFFB000, 0xDC267F, 0x994F00, 0x40B0A6, 0xB66DFF];
+pub(crate) const COLOR_REGISTRY: [u32; 5] = [0xFFB000, 0xDC267F, 0x994F00, 0x40B0A6, 0xB66DFF];
 /// Current branch.
-pub const HISTORY_ITEM_REF_COLOR: u32 = 0x75BEFF;
+pub(crate) const HISTORY_ITEM_REF_COLOR: u32 = 0x75BEFF;
 /// Upstream of the current branch.
-pub const HISTORY_ITEM_REMOTE_REF_COLOR: u32 = 0xB180D7;
+pub(crate) const HISTORY_ITEM_REMOTE_REF_COLOR: u32 = 0xB180D7;
 const FALLBACK: u32 = HISTORY_ITEM_REF_COLOR;
 
 #[derive(Clone, Debug, PartialEq)]
