@@ -401,131 +401,7 @@ impl Inbox {
             (format!("No {provider} items"), String::new())
         };
         let rows = items
-            .map(|item| {
-                let key = item.detail_key();
-                let active = self.selected.as_ref() == Some(&key);
-                let unread = self.state.seen.unseen(item);
-                let sessions = self.sessions.matching(item).count();
-                let project = self.scoped_project(item).unwrap_or(&item.project_path);
-                let tracker = model::is_tracker(&item.provider);
-                let kind = if item.kind == "pr" {
-                    if item.provider == "gitlab" {
-                        "Merge request"
-                    } else {
-                        "Pull request"
-                    }
-                } else {
-                    "Issue"
-                };
-                let source = if tracker && !item.team_name.is_empty() {
-                    item.team_name.clone()
-                } else if !item.repo.is_empty() {
-                    item.repo.clone()
-                } else {
-                    project_name(std::path::Path::new(project))
-                };
-                let attention = attention_label(&item.attention_reason);
-                let row_id = format!("inbox-item-{key}");
-                let middle_key = key.clone();
-                page::row(row_id.clone(), item.title.clone(), active)
-                    .debug_selector(move || row_id.clone())
-                    .role(Role::ListBoxOption)
-                    .aria_selected(active)
-                    .child(
-                        page::meta()
-                            .flex()
-                            .items_center()
-                            .gap(px(4.))
-                            .child(provider_mark(&item.provider))
-                            .child(icon(status_icon(item), 12.).text_color(status_color(item)))
-                            .child(div().min_w_0().flex_1().truncate().child(format!(
-                                "{kind} · {}{}",
-                                item.reference(),
-                                if attention.is_empty() {
-                                    String::new()
-                                } else {
-                                    format!(" · {attention}")
-                                }
-                            )))
-                            .when(sessions > 0, |d| {
-                                d.child(
-                                    div()
-                                        .flex()
-                                        .items_center()
-                                        .gap(px(2.))
-                                        .text_color(accent_color())
-                                        .child(
-                                            icon("message-multiple", 12.)
-                                                .text_color(accent_color()),
-                                        )
-                                        .child(sessions.to_string()),
-                                )
-                            })
-                            .child(relative_time(&item.updated_at))
-                            .when(unread, |d| {
-                                d.child(div().size(px(6.)).rounded_full().bg(accent_color()))
-                            }),
-                    )
-                    .child(
-                        page::label()
-                            .mt(px(4.))
-                            .truncate()
-                            .font_weight(FontWeight::SEMIBOLD)
-                            .child(item.title.clone()),
-                    )
-                    .child(
-                        div()
-                            .mt(px(4.))
-                            .flex()
-                            .items_center()
-                            .gap(px(8.))
-                            .child(
-                                page::meta()
-                                    .min_w_0()
-                                    .flex_1()
-                                    .flex()
-                                    .items_center()
-                                    .gap(px(4.))
-                                    .when(!tracker && !project.is_empty(), |d| {
-                                        d.child(crate::project_mark::project_icon(project, 12.))
-                                    })
-                                    .child(div().min_w_0().truncate().child(source)),
-                            )
-                            .children(
-                                item.labels
-                                    .iter()
-                                    .take(2)
-                                    .map(|label| label_badge(label, true)),
-                            ),
-                    )
-                    .on_mouse_up(
-                        MouseButton::Middle,
-                        cx.listener(move |this, _, _, cx| {
-                            cx.stop_propagation();
-                            if let Some(item) = this.item_in_list(&middle_key) {
-                                cx.emit(Event::OpenTab(Box::new(item)));
-                            }
-                        }),
-                    )
-                    .on_click(
-                        cx.listener(move |this, event: &gpui::ClickEvent, window, cx| {
-                            let modifiers = event.modifiers();
-                            if modifiers.platform || modifiers.control {
-                                if let Some(item) = this.item_in_list(&key) {
-                                    cx.emit(Event::OpenTab(Box::new(item)));
-                                }
-                                cx.stop_propagation();
-                                return;
-                            }
-                            this.narrow_detail = true;
-                            this.select(key.clone(), cx);
-                            if this.is_narrow(window) {
-                                window.focus(&this.focus, cx);
-                                cx.notify();
-                            }
-                        }),
-                    )
-            })
+            .map(|item| self.list_row(item, cx))
             .collect::<Vec<_>>();
         div()
             .relative()
@@ -613,6 +489,129 @@ impl Inbox {
                 )
             })
             .into_any_element()
+    }
+
+    fn list_row(&self, item: &Item, cx: &mut Context<Self>) -> Stateful<Div> {
+        let key = item.detail_key();
+        let active = self.selected.as_ref() == Some(&key);
+        let unread = self.state.seen.unseen(item);
+        let sessions = self.sessions.matching(item).count();
+        let project = self.scoped_project(item).unwrap_or(&item.project_path);
+        let tracker = model::is_tracker(&item.provider);
+        let kind = if item.kind == "pr" {
+            if item.provider == "gitlab" {
+                "Merge request"
+            } else {
+                "Pull request"
+            }
+        } else {
+            "Issue"
+        };
+        let source = if tracker && !item.team_name.is_empty() {
+            item.team_name.clone()
+        } else if !item.repo.is_empty() {
+            item.repo.clone()
+        } else {
+            project_name(std::path::Path::new(project))
+        };
+        let attention = attention_label(&item.attention_reason);
+        let row_id = format!("inbox-item-{key}");
+        let middle_key = key.clone();
+        page::row(row_id.clone(), item.title.clone(), active)
+            .debug_selector(move || row_id.clone())
+            .role(Role::ListBoxOption)
+            .aria_selected(active)
+            .child(
+                page::meta()
+                    .flex()
+                    .items_center()
+                    .gap(px(4.))
+                    .child(provider_mark(&item.provider))
+                    .child(icon(status_icon(item), 12.).text_color(status_color(item)))
+                    .child(div().min_w_0().flex_1().truncate().child(format!(
+                        "{kind} · {}{}",
+                        item.reference(),
+                        if attention.is_empty() {
+                            String::new()
+                        } else {
+                            format!(" · {attention}")
+                        }
+                    )))
+                    .when(sessions > 0, |d| {
+                        d.child(
+                            div()
+                                .flex()
+                                .items_center()
+                                .gap(px(2.))
+                                .text_color(accent_color())
+                                .child(icon("message-multiple", 12.).text_color(accent_color()))
+                                .child(sessions.to_string()),
+                        )
+                    })
+                    .child(relative_time(&item.updated_at))
+                    .when(unread, |d| {
+                        d.child(div().size(px(6.)).rounded_full().bg(accent_color()))
+                    }),
+            )
+            .child(
+                page::label()
+                    .mt(px(4.))
+                    .truncate()
+                    .font_weight(FontWeight::SEMIBOLD)
+                    .child(item.title.clone()),
+            )
+            .child(
+                div()
+                    .mt(px(4.))
+                    .flex()
+                    .items_center()
+                    .gap(px(8.))
+                    .child(
+                        page::meta()
+                            .min_w_0()
+                            .flex_1()
+                            .flex()
+                            .items_center()
+                            .gap(px(4.))
+                            .when(!tracker && !project.is_empty(), |d| {
+                                d.child(crate::project_mark::project_icon(project, 12.))
+                            })
+                            .child(div().min_w_0().truncate().child(source)),
+                    )
+                    .children(
+                        item.labels
+                            .iter()
+                            .take(2)
+                            .map(|label| label_badge(label, true)),
+                    ),
+            )
+            .on_mouse_up(
+                MouseButton::Middle,
+                cx.listener(move |this, _, _, cx| {
+                    cx.stop_propagation();
+                    if let Some(item) = this.item_in_list(&middle_key) {
+                        cx.emit(Event::OpenTab(Box::new(item)));
+                    }
+                }),
+            )
+            .on_click(
+                cx.listener(move |this, event: &gpui::ClickEvent, window, cx| {
+                    let modifiers = event.modifiers();
+                    if modifiers.platform || modifiers.control {
+                        if let Some(item) = this.item_in_list(&key) {
+                            cx.emit(Event::OpenTab(Box::new(item)));
+                        }
+                        cx.stop_propagation();
+                        return;
+                    }
+                    this.narrow_detail = true;
+                    this.select(key.clone(), cx);
+                    if this.is_narrow(window) {
+                        window.focus(&this.focus, cx);
+                        cx.notify();
+                    }
+                }),
+            )
     }
 
     fn back_to_list(&mut self, window: &mut Window, cx: &mut Context<Self>) {
