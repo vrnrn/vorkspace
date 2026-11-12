@@ -1072,8 +1072,8 @@ pub(crate) fn avatar_with_look(
     .into_any_element()
 }
 
-pub(crate) fn avatar(name: &str, color: u32, status: &str, side: f32, still: bool) -> AnyElement {
-    avatar_with_look(BotLookConfig::from_legacy(name, color), status, side, still)
+pub(crate) fn avatar(name: &str, color: u32, status: &str, side: f32) -> AnyElement {
+    avatar_with_look(BotLookConfig::from_legacy(name, color), status, side, true)
 }
 
 #[derive(Clone, PartialEq, Eq, Hash)]
