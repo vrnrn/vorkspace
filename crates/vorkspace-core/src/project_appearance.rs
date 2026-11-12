@@ -349,7 +349,7 @@ pub fn render_background(
     height: u32,
     empty: bool,
 ) -> RgbaImage {
-    render_background_scaled(source, effect, width, height, empty, false, 1.)
+    render_background_scaled(source, effect, width, height, empty, 1.)
 }
 pub fn render_background_scaled(
     source: &RgbaImage,
@@ -357,20 +357,19 @@ pub fn render_background_scaled(
     width: u32,
     height: u32,
     empty: bool,
-    preview: bool,
     scale: f32,
 ) -> RgbaImage {
     let textured = if matches!(
         effect,
         Effect::Dither | Effect::Ascii | Effect::Halftone | Effect::Scanlines
     ) {
-        effect_pixels(source, effect, empty, preview, scale)
+        effect_pixels(source, effect, empty, false, scale)
     } else {
         source.clone()
     };
     let covered = cover_image(&textured, width, height);
     let mut output = if effect == Effect::GradientBlur {
-        effect_pixels(&covered, effect, empty, preview, scale)
+        effect_pixels(&covered, effect, empty, false, scale)
     } else {
         covered
     };
