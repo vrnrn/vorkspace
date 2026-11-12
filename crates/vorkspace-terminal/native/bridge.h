@@ -27,7 +27,6 @@ void vorkspace_vt_scroll(Vt *, int32_t, uint32_t);
 int vorkspace_vt_select(Vt *, uint16_t, uint16_t, uint32_t, uint32_t, uint32_t);
 int vorkspace_vt_select_all(Vt *);
 void vorkspace_vt_clear_selection(Vt *);
-int vorkspace_vt_has_selection(Vt *);
 int vorkspace_vt_selection_text(Vt *, uint8_t *, size_t, size_t *);
 int vorkspace_vt_expire_hold(Vt *);
 uint32_t vorkspace_vt_hold_remaining(Vt *);
