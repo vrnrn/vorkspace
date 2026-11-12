@@ -324,12 +324,7 @@ impl Store {
                 has_user INTEGER NOT NULL, is_draft INTEGER NOT NULL,
                 PRIMARY KEY(session_id,block_id));
              CREATE INDEX IF NOT EXISTS ordinary_blocks_order ON ordinary_blocks(session_id,position);
-             CREATE INDEX IF NOT EXISTS ordinary_blocks_flags ON ordinary_blocks(session_id,has_user,is_draft);
-             CREATE TRIGGER IF NOT EXISTS history_sessions_update AFTER UPDATE OF blocks_json ON sessions BEGIN
-                INSERT INTO session_history_revisions VALUES(NEW.id,1)
-                ON CONFLICT(session_id) DO UPDATE SET revision=revision+1;
-                UPDATE ordinary_transcripts SET normalized=0 WHERE session_id=NEW.id;
-             END;"
+             CREATE INDEX IF NOT EXISTS ordinary_blocks_flags ON ordinary_blocks(session_id,has_user,is_draft);"
         ))?;
         let mut guarded = vec![
             (

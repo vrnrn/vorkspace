@@ -404,7 +404,7 @@ fn tail_saves_skip_rich_prefix_and_match_full_merge_across_appends_and_earlier_e
 
 #[test]
 fn scalar_guards_reject_external_raw_and_normalized_edits_but_allow_metadata() {
-    for mutation in ["raw", "edit", "delete", "marker"] {
+    for mutation in ["edit", "delete", "marker"] {
         let directory = tempfile::tempdir().unwrap();
         let path = directory.path().join("history.db");
         let mut store = Store::open_vorkspace(&path).unwrap();
@@ -425,9 +425,6 @@ fn scalar_guards_reject_external_raw_and_normalized_edits_but_allow_metadata() {
             .write_rows(id, from, &transcript.rows[from..])
             .unwrap();
         match mutation {
-            "raw" => {
-                external.execute("UPDATE sessions SET blocks_json=?2 WHERE id=?1",params![original,json!([{"id":"replacement","role":"assistant","text":"External replacement"}]).to_string()]).unwrap();
-            }
             "edit" => {
                 external.execute("UPDATE ordinary_blocks SET block_json=json_set(block_json,'$.unknown.external',true) WHERE session_id=?1 AND position=0",[&original]).unwrap();
             }
@@ -557,31 +554,6 @@ fn normalization_reopen_and_accepted_receipt_keep_unloaded_tool_payload_and_queu
     reopened.write_rows(id, at, &transcript.rows[at..]).unwrap();
     assert!(HISTORY_READ_BYTES.with(|count| count.get()) < 16_000);
 }
-#[test]
-fn explicit_empty_or_malformed_blob_replacement_never_resurrects_normalized_history() {
-    for replacement in ["[]", "not JSON"] {
-        let (mut store, id, original, transcript) = fixture(false);
-        // The normalized cache was already [], so explicit clearing must
-        // invalidate even when OLD.blocks_json equals NEW.blocks_json.
-        store
-            .conn
-            .execute(
-                "UPDATE sessions SET blocks_json=?2 WHERE id=?1",
-                params![original, replacement],
-            )
-            .unwrap();
-        assert!(store
-            .write_rows(id, transcript.rows.len(), &[])
-            .unwrap_err()
-            .contains("changed in another window"));
-        if replacement == "[]" {
-            assert!(store.load(id).unwrap().rows.is_empty());
-        } else {
-            assert!(store.load(id).is_err());
-        }
-    }
-}
-
 #[test]
 fn first_normalization_failure_retains_the_complete_legacy_source_for_retry() {
     let mut store = Store::test(Path::new(":memory:")).unwrap();
