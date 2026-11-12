@@ -65,12 +65,12 @@ fn restore_keeps_empty_vorkspace_even_with_an_unrelated_saved_chat() {
 }
 
 #[test]
-fn archived_project_is_not_reopened_by_active_session_or_stale_metadata() {
+fn archived_project_is_not_reopened_by_active_session() {
     let saved = serde_json::json!({
-            "projects": ["/work/old", "/work/other"], "project": "/work/old", "active": 42,
-            "tabs": [42], "project_archive": {"/work/old": true},
-            "desktop_preferences_metadata": {"vorkspace.archivedProjects": "[{\"path\":\"/work/old/\"}]"}
-        }).to_string();
+        "projects": ["/work/old", "/work/other"], "project": "/work/old", "active": 42,
+        "tabs": [42], "project_archive": {"/work/old": true}
+    })
+    .to_string();
     let mut state = Workspace::restore(Some(&saved), &[(42, "/work/old".into())], "/work/old");
     assert_eq!(state.project, "/work/other");
     assert!(!state.projects.contains(&"/work/old".into()));

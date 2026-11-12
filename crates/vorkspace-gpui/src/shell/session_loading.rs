@@ -190,7 +190,5 @@ impl Shell {
     }
 }
 
-/// Preserve remembered source controls when they refer to the selected model.
-/// A deliberate native model override starts with fresh model-specific controls.
 #[cfg(test)]
 mod tests;

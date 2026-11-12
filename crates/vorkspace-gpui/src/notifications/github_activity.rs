@@ -126,8 +126,6 @@ pub(crate) fn load_seen(store: &Store) -> Result<HashMap<i64, i64>, String> {
         .and_then(|s| serde_json::from_str(&s).ok())
         .unwrap_or_default())
 }
-/// Merge the desktop's acknowledged UUID snapshots with the native cache.
-/// Resolve source IDs through Store rather than treating UUIDs as native IDs.
 #[derive(Clone)]
 pub(crate) struct LinkedSession {
     pub(crate) id: i64,
