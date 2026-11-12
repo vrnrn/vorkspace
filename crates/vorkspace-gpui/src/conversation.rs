@@ -176,8 +176,6 @@ impl SessionChanged {
         )
     }
 }
-/// A tool label changed; token/output changes do not wake session discovery.
-pub(crate) struct SessionActivityChanged;
 /// The review card asked to open the session's recorded changes.
 pub(crate) struct OpenSessionChanges(pub(crate) crate::git_tools::review::ReviewTab);
 /// UI admission follows durable identity, including retired members and
@@ -628,7 +626,6 @@ impl Conversation {
 }
 
 impl EventEmitter<SessionChanged> for Conversation {}
-impl EventEmitter<SessionActivityChanged> for Conversation {}
 impl EventEmitter<OpenSessionChanges> for Conversation {}
 impl EventEmitter<Transfer> for Conversation {}
 impl EventEmitter<composer_features::StartOrchestration> for Conversation {}

@@ -91,7 +91,6 @@ impl TurnProjection {
         let history_recovery = settlement
             .as_ref()
             .and_then(|settlement| settlement.history_recovery);
-        let activity_changed = this.activity != update.activity;
         this.activity = update.activity.take();
         let inputs_changed = (!stopping
             && (!update.approvals.is_empty() || !update.questions.is_empty()))
@@ -110,9 +109,6 @@ impl TurnProjection {
             if inputs_changed {
                 cx.emit(SessionChanged::Attention);
             }
-        }
-        if activity_changed {
-            cx.emit(SessionActivityChanged);
         }
         this.pump_follow_ups(cx);
         cx.notify();
