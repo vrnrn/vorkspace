@@ -274,135 +274,8 @@ impl Notes {
         } else {
             actions.into_any_element()
         };
-        let tabs = div()
-            .id("note-sections")
-            .role(Role::TabList)
-            .aria_label("Note sections")
-            .h(px(page::TOOLBAR_HEIGHT))
-            .flex()
-            .items_center()
-            .gap_1()
-            .border_b_1()
-            .border_color(page::divider())
-            .children(
-                [(false, "Preview"), (true, "Source")].map(|(source, label)| {
-                    page::tab(
-                        if source {
-                            "note-source"
-                        } else {
-                            "note-preview"
-                        },
-                        label,
-                        !self.show_recording && self.source == source,
-                    )
-                    .child(label)
-                    .on_click(cx.listener(move |this, _, window, cx| {
-                        this.source = source;
-                        this.show_recording = false;
-                        this.recording
-                            .update(cx, |page, cx| page.hide_note_content(cx));
-                        if let Some(id) = &this.selected {
-                            this.modes.insert(id.clone(), source);
-                        }
-                        if source {
-                            window.focus(&this.body.focus_handle(cx), cx);
-                        } else {
-                            this.flush(cx);
-                            this.update_preview(cx);
-                        }
-                        cx.notify();
-                    }))
-                }),
-            )
-            .when(attached, |d| {
-                d.children(
-                    [(false, "Summary"), (true, "Transcript")].map(|(transcript, label)| {
-                        page::tab(
-                            if transcript {
-                                "note-transcript"
-                            } else {
-                                "note-summary"
-                            },
-                            label,
-                            self.show_recording
-                                && self.recording.read(cx).transcript_selected() == transcript,
-                        )
-                        .child(label)
-                        .on_click(cx.listener(move |this, _, _, cx| {
-                            this.flush(cx);
-                            if this.dirty {
-                                return;
-                            }
-                            this.show_recording = true;
-                            this.recording
-                                .update(cx, |page, cx| page.note_section(transcript, cx));
-                            cx.notify();
-                        }))
-                    }),
-                )
-            });
-        let editor = div()
-            .id("note-image-drop-zone")
-            .relative()
-            .min_h(px(448.))
-            .rounded(px(radius::CONTAINER))
-            .border_1()
-            .border_color(if self.image_drag {
-                accent_color()
-            } else {
-                content(0.)
-            })
-            .on_drag_move::<ExternalPaths>(cx.listener(
-                |this, event: &gpui::DragMoveEvent<ExternalPaths>, _, cx| {
-                    this.image_drag = event.bounds.contains(&event.event.position);
-                    cx.notify();
-                },
-            ))
-            .on_drag_move::<DraggedFile>(cx.listener(
-                |this, event: &gpui::DragMoveEvent<DraggedFile>, _, cx| {
-                    this.image_drag = event.bounds.contains(&event.event.position);
-                    cx.notify();
-                },
-            ))
-            .on_file_drop_exit(cx.listener(|this, _, _, cx| {
-                this.image_drag = false;
-                cx.notify();
-            }))
-            .on_drop(cx.listener(|this, paths: &ExternalPaths, _, cx| {
-                this.add_images(paths.paths().to_vec(), cx)
-            }))
-            .on_drop(cx.listener(|this, file: &DraggedFile, _, cx| {
-                this.add_images(vec![file.0.clone()], cx)
-            }))
-            .when(self.source, |d| {
-                d.h(px((self.body.read(cx).editor_line_count() as f32
-                    * page::BODY_LINE
-                    + 16.)
-                    .clamp(448., 2000.)))
-                    .child(self.body.clone())
-            })
-            .when(!self.source, |d| {
-                d.when_some(self.document.clone(), |d, preview| d.child(preview))
-            })
-            .when(self.image_drag || self.image_note.is_some(), |d| {
-                d.child(
-                    div()
-                        .absolute()
-                        .inset_0()
-                        .rounded(px(radius::CONTAINER))
-                        .bg(pane_fill().opacity(0.9))
-                        .flex()
-                        .items_center()
-                        .justify_center()
-                        .text_size(px(12.))
-                        .text_color(content(0.7))
-                        .child(if self.image_note.is_some() {
-                            "Adding images…"
-                        } else {
-                            "Drop images here"
-                        }),
-                )
-            });
+        let tabs = self.detail_tabs(attached, cx);
+        let editor = self.detail_editor(cx);
         div()
             .id("note-detail")
             .debug_selector(|| "note-detail".into())
@@ -469,6 +342,141 @@ impl Notes {
                     }),
             )
             .into_any_element()
+    }
+
+    fn detail_tabs(&self, attached: bool, cx: &mut Context<Self>) -> gpui::Stateful<gpui::Div> {
+        div()
+            .id("note-sections")
+            .role(Role::TabList)
+            .aria_label("Note sections")
+            .h(px(page::TOOLBAR_HEIGHT))
+            .flex()
+            .items_center()
+            .gap_1()
+            .border_b_1()
+            .border_color(page::divider())
+            .children(
+                [(false, "Preview"), (true, "Source")].map(|(source, label)| {
+                    page::tab(
+                        if source {
+                            "note-source"
+                        } else {
+                            "note-preview"
+                        },
+                        label,
+                        !self.show_recording && self.source == source,
+                    )
+                    .child(label)
+                    .on_click(cx.listener(move |this, _, window, cx| {
+                        this.source = source;
+                        this.show_recording = false;
+                        this.recording
+                            .update(cx, |page, cx| page.hide_note_content(cx));
+                        if let Some(id) = &this.selected {
+                            this.modes.insert(id.clone(), source);
+                        }
+                        if source {
+                            window.focus(&this.body.focus_handle(cx), cx);
+                        } else {
+                            this.flush(cx);
+                            this.update_preview(cx);
+                        }
+                        cx.notify();
+                    }))
+                }),
+            )
+            .when(attached, |d| {
+                d.children(
+                    [(false, "Summary"), (true, "Transcript")].map(|(transcript, label)| {
+                        page::tab(
+                            if transcript {
+                                "note-transcript"
+                            } else {
+                                "note-summary"
+                            },
+                            label,
+                            self.show_recording
+                                && self.recording.read(cx).transcript_selected() == transcript,
+                        )
+                        .child(label)
+                        .on_click(cx.listener(move |this, _, _, cx| {
+                            this.flush(cx);
+                            if this.dirty {
+                                return;
+                            }
+                            this.show_recording = true;
+                            this.recording
+                                .update(cx, |page, cx| page.note_section(transcript, cx));
+                            cx.notify();
+                        }))
+                    }),
+                )
+            })
+    }
+
+    fn detail_editor(&self, cx: &mut Context<Self>) -> gpui::Stateful<gpui::Div> {
+        div()
+            .id("note-image-drop-zone")
+            .relative()
+            .min_h(px(448.))
+            .rounded(px(radius::CONTAINER))
+            .border_1()
+            .border_color(if self.image_drag {
+                accent_color()
+            } else {
+                content(0.)
+            })
+            .on_drag_move::<ExternalPaths>(cx.listener(
+                |this, event: &gpui::DragMoveEvent<ExternalPaths>, _, cx| {
+                    this.image_drag = event.bounds.contains(&event.event.position);
+                    cx.notify();
+                },
+            ))
+            .on_drag_move::<DraggedFile>(cx.listener(
+                |this, event: &gpui::DragMoveEvent<DraggedFile>, _, cx| {
+                    this.image_drag = event.bounds.contains(&event.event.position);
+                    cx.notify();
+                },
+            ))
+            .on_file_drop_exit(cx.listener(|this, _, _, cx| {
+                this.image_drag = false;
+                cx.notify();
+            }))
+            .on_drop(cx.listener(|this, paths: &ExternalPaths, _, cx| {
+                this.add_images(paths.paths().to_vec(), cx)
+            }))
+            .on_drop(cx.listener(|this, file: &DraggedFile, _, cx| {
+                this.add_images(vec![file.0.clone()], cx)
+            }))
+            .when(self.source, |d| {
+                d.h(px((self.body.read(cx).editor_line_count() as f32
+                    * page::BODY_LINE
+                    + 16.)
+                    .clamp(448., 2000.)))
+                    .child(self.body.clone())
+            })
+            .when(!self.source, |d| {
+                d.when_some(self.document.clone(), |d, preview| d.child(preview))
+            })
+            .when(self.image_drag || self.image_note.is_some(), |d| {
+                d.child(
+                    div()
+                        .absolute()
+                        .inset_0()
+                        .rounded(px(radius::CONTAINER))
+                        .bg(pane_fill().opacity(0.9))
+                        .flex()
+                        .items_center()
+                        .justify_center()
+                        .text_size(px(12.))
+                        .text_color(content(0.7))
+                        .child(if self.image_note.is_some() {
+                            "Adding images…"
+                        } else {
+                            "Drop images here"
+                        }),
+                )
+            })
     }
 
     fn library(&self, narrow: bool, cx: &mut Context<Self>) -> AnyElement {
