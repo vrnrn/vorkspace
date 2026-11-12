@@ -21,7 +21,7 @@ impl Shell {
         cx: &mut Context<Self>,
     ) {
         if !cfg!(test)
-            && !self.terminal_tabs.contains_key(&id)
+            && !self.pages.terminal_tabs.contains_key(&id)
             && !std::path::Path::new(&cwd).is_dir()
         {
             self.error = Some(format!(
@@ -40,6 +40,7 @@ impl Shell {
         );
         self.leave_app_views(cx);
         let terminal = self
+            .pages
             .terminal_tabs
             .entry(id)
             .or_insert_with(|| {
@@ -49,7 +50,7 @@ impl Shell {
             })
             .clone();
         terminal.update(cx, |terminal, cx| terminal.set_visible(true, cx));
-        self.active_terminal_tab = Some(id);
+        self.pages.active_terminal_tab = Some(id);
         self.admit_app_pane(crate::workspace::AppPane::Terminal { id, cwd });
         self.reveal_active_tab(cx);
         self.update_chat_visibility(cx);
@@ -88,7 +89,7 @@ impl Shell {
             return false;
         };
         let id = *id;
-        let Some(terminal) = self.terminal_tabs.get(&id) else {
+        let Some(terminal) = self.pages.terminal_tabs.get(&id) else {
             return false;
         };
         let Some(process) = terminal.read(cx).foreground_process() else {
@@ -106,8 +107,8 @@ impl Shell {
             if matches!(answer.await, Ok(0)) {
                 let _ = this.update_in(cx, |this, window, cx| {
                     if this.workspace.tab_of(pane).is_some()
-                        && owner.upgrade().as_ref() == this.terminal_tabs.get(&id)
-                        && this.terminal_tabs.contains_key(&id)
+                        && owner.upgrade().as_ref() == this.pages.terminal_tabs.get(&id)
+                        && this.pages.terminal_tabs.contains_key(&id)
                     {
                         this.close_pane_confirmed(pane, window, cx);
                     }
@@ -143,7 +144,7 @@ impl Shell {
             .iter()
             .flat_map(|(_, ids)| ids.iter())
             .map(|(id, cwd)| {
-                let terminal = self.terminal_tabs.get(id);
+                let terminal = self.pages.terminal_tabs.get(id);
                 (
                     *id,
                     cwd.clone(),
@@ -199,10 +200,10 @@ impl Shell {
                                             .is_some_and(|(_, _, expected, _)| match expected {
                                                 Some(expected) => {
                                                     expected.upgrade().as_ref()
-                                                        == this.terminal_tabs.get(id)
-                                                        && this.terminal_tabs.contains_key(id)
+                                                        == this.pages.terminal_tabs.get(id)
+                                                        && this.pages.terminal_tabs.contains_key(id)
                                                 }
-                                                None => !this.terminal_tabs.contains_key(id),
+                                                None => !this.pages.terminal_tabs.contains_key(id),
                                             })
                                     })
                                 })
@@ -264,7 +265,7 @@ fn native_terminal_tab_capture() {
     cx.run_until_parked();
     cx.update_window(window.into(), |view, _, cx| {
         view.downcast::<Shell>().unwrap().update(cx, |shell, cx| {
-            let terminal = &shell.terminal_tabs[&id];
+            let terminal = &shell.pages.terminal_tabs[&id];
             terminal.update(cx, |terminal, cx| {
                 terminal.fixture_output(
                     "demo % printf 'Terminal tab ready\\n'\r\nTerminal tab ready\r\n\r\ndemo % ",

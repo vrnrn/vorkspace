@@ -7,7 +7,7 @@ impl Shell {
     /// open sidebar, with history at its far edge; with the sidebar closed,
     /// just the traffic lights' gap and its three buttons.
     pub(super) fn traffic_lights(&self, window: &Window) -> f32 {
-        traffic_light_inset(window.ui_scale(), self.fullscreen)
+        traffic_light_inset(window.ui_scale(), self.window.fullscreen)
     }
     pub(super) fn navigation_padding(&self) -> f32 {
         if self.workspace.project_rail_open {
@@ -87,7 +87,7 @@ impl Shell {
             .child(titlebar_drag_area().flex_1())
     }
     pub(super) fn titlebar(&mut self, window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
-        if let Some(settings) = self.settings.clone() {
+        if let Some(settings) = self.pages.settings.clone() {
             let lead = self.strip_lead(window);
             let header = settings.update(cx, |view, cx| view.header(false, cx));
             return div()
@@ -102,7 +102,7 @@ impl Shell {
                 .child(header)
                 .into_any_element();
         }
-        let curve = if self.rail_meets_title_rule() && self.sidebar_fraction <= 0. {
+        let curve = if self.rail_meets_title_rule() && self.sidebar.fraction <= 0. {
             radius::SURFACE
         } else {
             0.

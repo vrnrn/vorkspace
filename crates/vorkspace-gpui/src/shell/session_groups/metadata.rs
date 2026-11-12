@@ -87,8 +87,8 @@ impl Shell {
     ) {
         let store = self.store.clone();
         self.begin_session_metadata(&changed, cx);
-        let previous = self.group_writes.take();
-        self.group_writes = Some(cx.spawn(async move |this, cx| {
+        let previous = self.sidebar.group_writes.take();
+        self.sidebar.group_writes = Some(cx.spawn(async move |this, cx| {
             if let Some(previous) = previous {
                 previous.await;
             }

@@ -181,11 +181,13 @@ impl Shell {
         self.observations
             .push(cx.subscribe(core, |this, _, event: &GroupsChanged, cx| {
                 if this
+                    .sidebar
                     .groups
                     .get(&event.project)
                     .is_none_or(|folders| folders.saved() != event.folders.saved())
                 {
-                    this.groups
+                    this.sidebar
+                        .groups
                         .insert(event.project.clone(), event.folders.clone());
                     this.invalidate_chrome(cx);
                     cx.notify();
@@ -254,7 +256,7 @@ impl Shell {
         match locked(&self.store).and_then(|store| store.groups(&project)) {
             Ok(groups) => {
                 let folders = Arc::new(super::super::session_groups::FolderIndex::new(groups));
-                self.groups.insert(project.clone(), folders.clone());
+                self.sidebar.groups.insert(project.clone(), folders.clone());
                 if let Some(core) = &self.app_core {
                     core.update(cx, |core, cx| {
                         core.catalog_revision = core.catalog_revision.wrapping_add(1);
@@ -315,13 +317,13 @@ impl Shell {
         else {
             return false;
         };
-        let source = self.native_window;
+        let source = self.window.native_window;
         cx.defer(move |cx| {
             // A peer can reference a view while rendering its rail. Address
             // the owning window independently of GPUI's render context.
             let target = owner
                 .upgrade()
-                .and_then(|shell| shell.read(cx).native_window);
+                .and_then(|shell| shell.read(cx).window.native_window);
             let shown = target.is_some_and(|target| {
                 target
                     .update(cx, |shell, window, cx| {

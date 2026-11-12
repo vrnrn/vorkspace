@@ -120,10 +120,11 @@ fn delete_requires_confirmation_and_cancel_keeps_project(cx: &mut gpui::TestAppC
     window
         .update(cx, |shell, w, cx| {
             shell.workspace.add_project("/tmp/delete-empty-fixture");
-            shell.automation_state.service = Some(std::sync::Arc::new(std::sync::Mutex::new(
-                vorkspace_core::automations::Service::open(std::path::Path::new(":memory:"))
-                    .unwrap(),
-            )));
+            shell.pages.automation_state.service =
+                Some(std::sync::Arc::new(std::sync::Mutex::new(
+                    vorkspace_core::automations::Service::open(std::path::Path::new(":memory:"))
+                        .unwrap(),
+                )));
             shell.confirm_delete_project("/tmp/delete-empty-fixture".into(), w, cx);
         })
         .unwrap();
@@ -150,10 +151,11 @@ fn confirmed_empty_project_removal_survives_workspace_restore(cx: &mut gpui::Tes
     window
         .update(cx, |shell, w, cx| {
             shell.workspace.add_project(&project);
-            shell.automation_state.service = Some(std::sync::Arc::new(std::sync::Mutex::new(
-                vorkspace_core::automations::Service::open(std::path::Path::new(":memory:"))
-                    .unwrap(),
-            )));
+            shell.pages.automation_state.service =
+                Some(std::sync::Arc::new(std::sync::Mutex::new(
+                    vorkspace_core::automations::Service::open(std::path::Path::new(":memory:"))
+                        .unwrap(),
+                )));
             shell.confirm_delete_project(project.clone(), w, cx);
         })
         .unwrap();

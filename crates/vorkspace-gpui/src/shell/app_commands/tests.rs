@@ -393,7 +393,7 @@ fn failed_install(
             assert!(!shell.has_session(id, cx));
             assert!(!shell.session_marks.contains_key(&id));
             assert!(!shell.tab_marks.contains_key(&id));
-            assert!(!shell.started_by.contains_key(&id));
+            assert!(!shell.sidebar.started_by.contains_key(&id));
             assert!(shell.session_record(id, cx).is_none());
             assert!(!shell.order.contains(&id));
             assert!(shell.workspace.tab_of(id).is_none());
@@ -526,7 +526,7 @@ fn operator_preparation_link_failure_rolls_back_before_settling_the_request(
                         .collect::<Vec<_>>(),
                     vec![caller]
                 );
-                assert!(shell.started_by.is_empty());
+                assert!(shell.sidebar.started_by.is_empty());
                 assert!(shell.directory.read(cx).rows == directory_before);
                 assert_eq!(
                     shell.sessions[&caller].read(cx).input.read(cx).content,

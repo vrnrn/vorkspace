@@ -150,7 +150,7 @@ fn header_settings_and_worktree_actions_open_focused_native_surfaces(cx: &mut Te
         .update(cx, |shell, w, cx| {
             shell.open_menu(
                 MenuTarget::Header,
-                Anchor::Slot(shell.project_anchor.clone()),
+                Anchor::Slot(shell.sidebar.project_anchor.clone()),
                 w,
                 cx,
             );
@@ -269,7 +269,7 @@ fn copies_keep_running_sessions_and_route_new_tabs_and_splits(cx: &mut TestAppCo
             shell.open(main_session, w, cx);
             let mut folders = vorkspace_core::session_groups::Groups::default();
             folders.create_folder(&[main_session], "saved-folder".into());
-            shell.groups.insert(
+            shell.sidebar.groups.insert(
                 project.into(),
                 Arc::new(super::super::session_groups::FolderIndex::new(folders)),
             );

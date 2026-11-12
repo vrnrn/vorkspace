@@ -88,14 +88,14 @@ impl Shell {
                 .insert(from, self.workspace.project.clone());
         }
         self.workspace.active_vorkspace = id.to_owned();
-        self.rail_sessions_expanded = false;
-        self.rail_search_open = false;
-        self.query.clear();
+        self.rail.sessions_expanded = false;
+        self.rail.search_open = false;
+        self.sidebar.query.clear();
         self.sidebar_search
             .update(cx, |input, cx| input.set_text(String::new(), cx));
-        self.selected_sessions.clear();
-        self.selection_anchor = None;
-        self.sidebar_target = None;
+        self.sidebar.selected_sessions.clear();
+        self.sidebar.selection_anchor = None;
+        self.sidebar.target = None;
         self.configure_vorkspace_bots(cx);
         true
     }
@@ -228,11 +228,11 @@ impl Shell {
                             .child(name),
                     )
                     .child(icon("chevron-down", 12.).text_color(content(0.45)))
-                    .child(self.vorkspace_anchor.probe())
+                    .child(self.rail.vorkspace_anchor.probe())
                     .on_click(cx.listener(|this, _, window, cx| {
                         this.open_menu(
                             MenuTarget::Vorkspace,
-                            Anchor::Slot(this.vorkspace_anchor.clone()),
+                            Anchor::Slot(this.rail.vorkspace_anchor.clone()),
                             window,
                             cx,
                         );
@@ -284,7 +284,7 @@ impl Shell {
         if let Some(next) = next {
             self.workspace.open(next);
         }
-        self.review_focused = false;
+        self.review.focused = false;
         self.update_chat_visibility(cx);
         true
     }
@@ -395,7 +395,13 @@ mod tests {
         window
             .update(visual, |shell, _, _| {
                 assert_eq!(
-                    shell.vorkspace_dialog.as_ref().unwrap().project.as_deref(),
+                    shell
+                        .project_settings
+                        .vorkspace_dialog
+                        .as_ref()
+                        .unwrap()
+                        .project
+                        .as_deref(),
                     Some("/work/folder-39")
                 );
             })

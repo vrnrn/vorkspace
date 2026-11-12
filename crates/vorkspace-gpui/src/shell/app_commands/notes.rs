@@ -147,10 +147,12 @@ impl Shell {
             .map(|note| note.id.clone())
             .unwrap_or_else(|| format!("gpui-note-{numeric}"));
         let blocked = self
+            .page_tabs
             .notes
             .as_ref()
             .is_some_and(|view| view.read(cx).blocks_external_write(&note_id, cx))
             || self
+                .page_tabs
                 .note_tabs
                 .values()
                 .any(|view| view.read(cx).blocks_external_write(&note_id, cx));
@@ -197,10 +199,10 @@ impl Shell {
                 view.update(cx, |view, cx| view.refresh(cx));
             }
         };
-        if let Some(view) = &self.notes {
+        if let Some(view) = &self.page_tabs.notes {
             refresh_if_clean(view, cx);
         }
-        for view in self.note_tabs.values() {
+        for view in self.page_tabs.note_tabs.values() {
             refresh_if_clean(view, cx);
         }
         cx.notify();

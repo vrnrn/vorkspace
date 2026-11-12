@@ -47,6 +47,7 @@ impl Shell {
                     .clone()
             }),
             inbox_connectors: self
+                .pages
                 .inbox
                 .as_ref()
                 .map(|inbox| inbox.read(cx).connector_preferences())
@@ -56,6 +57,7 @@ impl Shell {
                         .unwrap_or_default()
                 }),
             inbox_connections: self
+                .pages
                 .inbox
                 .as_ref()
                 .map(|inbox| inbox.read(cx).connection_statuses())
@@ -64,11 +66,13 @@ impl Shell {
                 .ok()
                 .and_then(|store| store.data_dir().map(std::path::PathBuf::from)),
             inbox_connection_revision: self
+                .pages
                 .inbox
                 .as_ref()
                 .map(|inbox| inbox.read(cx).connection_revision())
                 .unwrap_or_default(),
             jira_filter: self
+                .pages
                 .inbox
                 .as_ref()
                 .map(|inbox| inbox.read(cx).jira_filter())
@@ -78,6 +82,7 @@ impl Shell {
                         .unwrap_or_default()
                 }),
             inbox_bots: self
+                .pages
                 .inbox
                 .as_ref()
                 .map(|inbox| inbox.read(cx).default_bots())
@@ -87,11 +92,13 @@ impl Shell {
                         .unwrap_or_default()
                 }),
             jira_projects: self
+                .pages
                 .inbox
                 .as_ref()
                 .map(|inbox| inbox.read(cx).jira_projects())
                 .unwrap_or_default(),
             hidden_jira_projects: self
+                .pages
                 .inbox
                 .as_ref()
                 .map(|inbox| inbox.read(cx).hidden_jira_projects())
@@ -159,21 +166,21 @@ impl Shell {
         self.leave_app_search(cx);
         self.close_preview(cx);
         self.menu = None;
-        if self.settings.is_some() {
+        if self.pages.settings.is_some() {
             self.select_settings(section, cx);
             return;
         }
         self.navigation_revision += 1;
-        if let Some(notes) = &self.notes {
+        if let Some(notes) = &self.page_tabs.notes {
             notes.update(cx, |notes, cx| notes.set_active(false, cx));
         }
-        for notes in self.note_tabs.values() {
+        for notes in self.page_tabs.note_tabs.values() {
             notes.update(cx, |notes, cx| notes.set_active(false, cx));
         }
         let context = self.settings_context(section, cx);
         let prefs = self.workspace.preferences.clone();
         let view = cx.new(|cx| SettingsView::new(section, prefs, context, cx));
-        self.settings_events = Some(cx.subscribe_in(
+        self.pages.settings_events = Some(cx.subscribe_in(
             &view,
             window,
             |this, _, event: &SettingsEvent, window, cx| match event {
@@ -222,7 +229,7 @@ impl Shell {
                 SettingsEvent::Section(section) => this.select_settings(*section, cx),
                 SettingsEvent::InboxConnectorEnabled(provider, enabled) => {
                     this.ensure_background_inbox(window, cx);
-                    let result = this.inbox.as_ref().unwrap().update(cx, |inbox, cx| {
+                    let result = this.pages.inbox.as_ref().unwrap().update(cx, |inbox, cx| {
                         inbox.set_connector_enabled(provider, *enabled, cx)
                     });
                     match result {
@@ -232,7 +239,7 @@ impl Shell {
                                 let tab = TitleTab::App(app_views::AppView::Connector(provider));
                                 this.workspace.title_order.retain(|entry| *entry != tab);
                                 this.workspace.scope_focus.retain(|_, entry| *entry != tab);
-                                if this.active_app_view
+                                if this.pages.active_app_view
                                     == Some(app_views::AppView::Connector(provider))
                                 {
                                     this.leave_app_views(cx);
@@ -249,7 +256,7 @@ impl Shell {
                 SettingsEvent::ManageInboxProvider(provider) => {
                     if let Some(provider) = Connector::from_id(provider) {
                         this.open_connector(provider, window, cx);
-                        if let Some(page) = this.connector_pages.get(&provider) {
+                        if let Some(page) = this.pages.connector_pages.get(&provider) {
                             page.update(cx, |page, cx| {
                                 page.open_connection(provider.id().into(), cx)
                             });
@@ -258,7 +265,7 @@ impl Shell {
                 }
                 SettingsEvent::JiraFilter(filter) => {
                     this.ensure_background_inbox(window, cx);
-                    if let Some(inbox) = &this.inbox
+                    if let Some(inbox) = &this.pages.inbox
                         && let Err(error) =
                             inbox.update(cx, |inbox, cx| inbox.set_jira_filter(filter.clone(), cx))
                     {
@@ -268,20 +275,20 @@ impl Shell {
                 }
                 SettingsEvent::RefreshInbox => {
                     this.ensure_background_inbox(window, cx);
-                    if let Some(inbox) = &this.inbox {
+                    if let Some(inbox) = &this.pages.inbox {
                         inbox.update(cx, |inbox, cx| inbox.refresh(cx));
                     }
                 }
                 SettingsEvent::JiraProject(id, visible) => {
                     this.ensure_background_inbox(window, cx);
-                    if let Some(inbox) = &this.inbox {
+                    if let Some(inbox) = &this.pages.inbox {
                         inbox.update(cx, |inbox, cx| inbox.set_jira_project(id, *visible, cx));
                     }
                     this.sync_settings(cx);
                 }
                 SettingsEvent::InboxBot(source, bot) => {
                     this.ensure_background_inbox(window, cx);
-                    if let Some(inbox) = &this.inbox
+                    if let Some(inbox) = &this.pages.inbox
                         && let Err(error) =
                             inbox.update(cx, |inbox, cx| inbox.set_default_bot(source, bot, cx))
                     {
@@ -314,7 +321,7 @@ impl Shell {
                             let tab = TitleTab::App(view);
                             this.workspace.title_order.retain(|entry| *entry != tab);
                             this.workspace.scope_focus.retain(|_, entry| *entry != tab);
-                            if this.active_app_view == Some(view) {
+                            if this.pages.active_app_view == Some(view) {
                                 this.leave_app_views(cx);
                             }
                         }
@@ -363,7 +370,7 @@ impl Shell {
                         cx.spawn(async move |this, cx| {
                             let result = reset.await;
                             let _ = this.update(cx, |this, cx| {
-                                if let Some(settings) = &this.settings {
+                                if let Some(settings) = &this.pages.settings {
                                     settings.update(cx, |s, cx| s.management_finished(result, cx));
                                 }
                                 this.sync_settings(cx);
@@ -380,22 +387,22 @@ impl Shell {
                 }
             },
         ));
-        self.settings = Some(view.clone());
+        self.pages.settings = Some(view.clone());
         // Settings has its own complete rail, even when the project rail was hidden.
-        self.sidebar_slide = None;
-        self.sidebar_fraction = 1.;
+        self.sidebar.slide = None;
+        self.sidebar.fraction = 1.;
         window.focus(&view.focus_handle(cx), cx);
         this_update(self, cx);
     }
     pub(super) fn select_settings(&mut self, section: Section, cx: &mut Context<Self>) {
-        if let Some(view) = &self.settings {
+        if let Some(view) = &self.pages.settings {
             view.update(cx, |v, cx| v.select_section(section, cx));
             self.sync_settings(cx);
         }
         this_update(self, cx);
     }
     pub(super) fn sync_settings(&mut self, cx: &mut Context<Self>) {
-        if let Some(view) = self.settings.clone() {
+        if let Some(view) = self.pages.settings.clone() {
             let context = self.settings_context(view.read(cx).section(), cx);
             let prefs = self.workspace.preferences.clone();
             view.update(cx, |v, cx| {
@@ -405,9 +412,9 @@ impl Shell {
         }
     }
     pub(super) fn close_settings(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        self.settings = None;
-        self.settings_events = None;
-        self.sidebar_fraction = if self.workspace.sidebar_visible {
+        self.pages.settings = None;
+        self.pages.settings_events = None;
+        self.sidebar.fraction = if self.workspace.sidebar_visible {
             1.
         } else {
             0.
@@ -427,7 +434,7 @@ impl Shell {
             vorkspace_ui::preferences::Preferences::MIN_UI_SCALE_PERCENT,
             vorkspace_ui::preferences::Preferences::MAX_UI_SCALE_PERCENT,
         );
-        if let Some(owner) = self.native_window {
+        if let Some(owner) = self.window.native_window {
             cx.defer(move |cx| {
                 let _ = owner.update(cx, |shell, window, cx| shell.initialize_scale(window, cx));
             });
@@ -442,13 +449,13 @@ impl Shell {
         }
         let notes_enabled = self.workspace.preferences.notes;
         let hidden_providers = self.workspace.preferences.hidden_providers.clone();
-        if let Some(notes) = &self.notes {
+        if let Some(notes) = &self.page_tabs.notes {
             notes.update(cx, |notes, cx| {
                 notes.set_enabled(notes_enabled, cx);
                 notes.configure_recording(&hidden_providers, cx);
             });
         }
-        for notes in self.note_tabs.values() {
+        for notes in self.page_tabs.note_tabs.values() {
             notes.update(cx, |notes, cx| {
                 notes.set_enabled(notes_enabled, cx);
                 notes.configure_recording(&hidden_providers, cx);
@@ -526,7 +533,7 @@ impl Shell {
         .detach();
     }
     fn finish_worktree_action(&mut self, result: Result<(), String>, cx: &mut Context<Self>) {
-        if let Some(view) = &self.settings {
+        if let Some(view) = &self.pages.settings {
             view.update(cx, |v, cx| v.management_finished(result, cx));
         }
         self.sync_git(cx);
@@ -536,10 +543,11 @@ impl Shell {
     }
     /// Dock and title-tab shells have separate owners, and either can sit inside it.
     pub(crate) fn terminals_using(&self, path: &str, cx: &App) -> bool {
-        self.terminals
+        self.dock
+            .terminals
             .values()
             .flatten()
-            .chain(self.terminal_tabs.values())
+            .chain(self.pages.terminal_tabs.values())
             .any(|t| vorkspace_core::files::is_resolved_inside(&t.read(cx).cwd, path))
     }
     /// The one way a worktree is removed. Everything after the first step uses the
@@ -640,7 +648,12 @@ impl Shell {
                     .filter(|(_, focus)| is_resolved_inside(&focus.path, &path))
                     .map(|(project, focus)| (project.clone(), focus.path.clone()))
                     .collect::<Vec<_>>();
-                Ok((guard, this.group_writes.take(), this.store.clone(), focuses))
+                Ok((
+                    guard,
+                    this.sidebar.group_writes.take(),
+                    this.store.clone(),
+                    focuses,
+                ))
             });
             let (mut guard, writes, store, focuses) = match admitted {
                 Ok(Ok(admitted)) => admitted,

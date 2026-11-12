@@ -25,13 +25,13 @@ impl AppCore {
                             .windows
                             .iter()
                             .filter_map(WeakEntity::upgrade)
-                            .filter(|window| !window.read(cx).window_closing)
+                            .filter(|window| !window.read(cx).window.closing)
                             .collect();
                         let scheduler = core
                             .scheduler
                             .as_ref()
                             .and_then(WeakEntity::upgrade)
-                            .filter(|window| !window.read(cx).window_closing)
+                            .filter(|window| !window.read(cx).window.closing)
                             .or_else(|| windows.first().cloned());
                         let sidebars = windows
                             .into_iter()

@@ -155,7 +155,7 @@ impl Shell {
             .cloned()
             .expect("accepted session view");
         self.publish_prepared(&view, install.as_mut(), cx);
-        self.started_by.insert(id, caller);
+        self.sidebar.started_by.insert(id, caller);
         if let Some((target, edge)) = placement {
             let before = self.active_leaves();
             self.workspace.place(id, target, edge);
@@ -181,7 +181,7 @@ impl Shell {
             view.update(cx, |view, _| view.discard_unaccepted_app_start());
         }
         self.forget_session(id, cx);
-        self.started_by.remove(&id);
+        self.sidebar.started_by.remove(&id);
         let removed = locked(&self.store).and_then(|mut store| match install {
             Some(install) => install.discard(&mut store, id),
             None => store.delete(id),
@@ -248,6 +248,7 @@ impl Shell {
                 *owner == id
                     && (self.workspace.tab_of(*pane).is_some()
                         || self
+                            .review
                             .reviews
                             .get(pane)
                             .is_some_and(|review| review.read(cx).unsaved_files(cx)))
@@ -464,7 +465,7 @@ impl Shell {
             }
             "sessions.list" => Ok(json!(self.order.iter().map(|&id| self.session_metadata(id, cx).summary).filter(|s| s.cwd == project).map(|s| json!({"sessionId":s.id,"title":s.title,"harness":s.provider,"project":s.cwd,"archived":s.archived})).collect::<Vec<_>>())),
             "models.list" => Ok(json!(Kind::ALL.into_iter().map(|kind| json!({"harness":kind.id(),"name":kind.label(),"models":self.sessions.values().find(|v| { let v=v.read(cx); let profile=if kind.id()==provider { inherited.account.clone() } else { crate::accounts::get(cx).map(|center|center.read(cx).selected(kind,&project)).unwrap_or_default() }; v.summary.provider == kind.id() && v.settings.account.id==profile.id }).map(|v| v.read(cx).settings_models()).unwrap_or_default()})).collect::<Vec<_>>())),
-            "folders.list" => Ok(json!(self.groups.get(&project).map_or(&[][..], |folders| folders.saved().folders.as_slice()))),
+            "folders.list" => Ok(json!(self.sidebar.groups.get(&project).map_or(&[][..], |folders| folders.saved().folders.as_slice()))),
             "sessions.stop" | "sessions.archive" | "sessions.delete" => {
                 session_id(&input,&self.store).and_then(|id|self.app_session_action(call.session,id,&project,&action,window,cx))
             }

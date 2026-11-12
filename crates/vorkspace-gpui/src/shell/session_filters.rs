@@ -185,8 +185,13 @@ impl Shell {
         }
         self.close_preview(cx);
         let visible = self.sidebar_session_ids(cx);
-        self.selected_sessions.retain(|id| visible.contains(id));
-        self.selection_anchor = self.selection_anchor.filter(|id| visible.contains(id));
+        self.sidebar
+            .selected_sessions
+            .retain(|id| visible.contains(id));
+        self.sidebar.selection_anchor = self
+            .sidebar
+            .selection_anchor
+            .filter(|id| visible.contains(id));
         self.invalidate_chrome(cx);
         self.persist(cx);
         cx.notify();
@@ -220,7 +225,7 @@ mod tests {
                     s.set_running_for_test(true);
                 });
                 shell.sessions[&b].update(cx, |s, _| s.summary.provider = "claude".into());
-                shell.selected_sessions.insert(b);
+                shell.sidebar.selected_sessions.insert(b);
                 shell.open_menu(
                     MenuTarget::SessionFilter,
                     Anchor::Point(gpui::point(px(220.), px(180.))),
@@ -240,7 +245,7 @@ mod tests {
                 assert_eq!(shell.sidebar_session_ids(cx), [a]);
                 assert_eq!(shell.workspace.active, Some(b));
                 assert!(shell.sessions[&a].read(cx).responding());
-                assert!(!shell.selected_sessions.contains(&b));
+                assert!(!shell.sidebar.selected_sessions.contains(&b));
                 let state: Workspace =
                     serde_json::from_str(&shell.latest_window_layout(cx)).unwrap();
                 assert!(state.session_filters.status.working);

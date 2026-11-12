@@ -90,8 +90,8 @@ fn sidebar_visibility_switches_stay_open_preserve_notes_and_survive_restart(
     }
     window
         .update(visual, |shell, _, cx| {
-            assert_eq!(shell.active_app_view, Some(app_views::AppView::Notes));
-            assert!(shell.notes.is_some());
+            assert_eq!(shell.pages.active_app_view, Some(app_views::AppView::Notes));
+            assert!(shell.page_tabs.notes.is_some());
             assert!(
                 shell.workspace.preferences.notes,
                 "hiding the shortcut leaves Notes enabled"
@@ -168,12 +168,13 @@ fn sidebar_grip_drag_reorders_without_toggling_and_preserves_connector_tabs(
         .update(cx, |shell, w, cx| {
             shell.ensure_background_inbox(w, cx);
             shell
+                .pages
                 .inbox
                 .as_ref()
                 .unwrap()
                 .update(cx, |owner, _| owner.suspend_refresh_for_test());
             shell.open_connector(Connector::Github, w, cx);
-            shell.connector_pages[&Connector::Github].clone()
+            shell.pages.connector_pages[&Connector::Github].clone()
         })
         .unwrap();
     let visual = &mut gpui::VisualTestContext::from_window(window.into(), cx);
@@ -292,7 +293,7 @@ fn sidebar_grip_drag_reorders_without_toggling_and_preserves_connector_tabs(
     window
         .update(visual, |shell, _, cx| {
             assert!(shell.enabled_connectors(cx).contains(&Connector::Github));
-            assert_eq!(shell.connector_pages[&Connector::Github], page);
+            assert_eq!(shell.pages.connector_pages[&Connector::Github], page);
             let saved = shell.latest_window_layout(cx);
             let restored = Workspace::restore(Some(&saved), &[], "/work/vorkspace");
             assert_eq!(
@@ -344,7 +345,7 @@ fn sidebar_grip_drag_reorders_without_toggling_and_preserves_connector_tabs(
     for enabled in [false, true] {
         window
             .update(visual, |shell, _, cx| {
-                shell.inbox.as_ref().unwrap().update(cx, |owner, cx| {
+                shell.pages.inbox.as_ref().unwrap().update(cx, |owner, cx| {
                     owner.set_connector_enabled("gitlab", enabled, cx).unwrap()
                 });
                 shell.invalidate_chrome(cx);
@@ -417,7 +418,7 @@ fn sidebar_settings_native_capture() {
         .update(&mut cx, |shell, w, cx| {
             shell.open_menu(
                 MenuTarget::SidebarOptions,
-                Anchor::Slot(shell.sidebar_options_anchor.clone()),
+                Anchor::Slot(shell.sidebar.options_anchor.clone()),
                 w,
                 cx,
             );

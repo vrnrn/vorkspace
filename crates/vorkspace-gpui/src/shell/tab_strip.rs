@@ -252,12 +252,12 @@ impl Shell {
         animate: bool,
     ) -> (Option<usize>, f32, f32) {
         let Some(shown) = copy.panes.get(copy.focus).map(|p| p.key) else {
-            self.pane_ticks.remove(&tab);
+            self.tabs.pane_ticks.remove(&tab);
             return (None, 0., 1.);
         };
         let now = vorkspace_ui::clock::Instant::now();
         let position = |key: (i64, bool)| copy.panes.iter().position(|p| p.key == key);
-        let tick = self.pane_ticks.entry(tab).or_insert(PaneTick {
+        let tick = self.tabs.pane_ticks.entry(tab).or_insert(PaneTick {
             shown,
             from: None,
             dir: 0.,
@@ -287,7 +287,7 @@ impl Shell {
     }
     /// The dragged pane's title, following the pointer.
     pub(super) fn drag_ghost(&self, cx: &App) -> Option<AnyElement> {
-        let drag = self.pane_drag.as_ref().filter(|d| d.active)?;
+        let drag = self.panes.drag.as_ref().filter(|d| d.active)?;
         let id = drag.source.session();
         let review = (matches!(drag.source, DragSource::Review(_))
             || self.workspace.review_owners.contains_key(&id))
@@ -377,7 +377,7 @@ impl Shell {
         event: &MouseDownEvent,
         cx: &mut Context<Self>,
     ) {
-        self.skip_tab_click = false;
+        self.tabs.skip_tab_click = false;
         self.close_menu(cx);
         let tabs = self.visible_tabs(cx);
         let Some(from) = tabs.iter().position(|tab| *tab == id) else {
@@ -387,12 +387,12 @@ impl Shell {
             return;
         }
         let bounds: Vec<_> = (0..tabs.len())
-            .filter_map(|ix| self.tab_scroll.bounds_for_item(ix))
+            .filter_map(|ix| self.tabs.scroll.bounds_for_item(ix))
             .collect();
         if bounds.len() != tabs.len() {
             return;
         }
-        self.tab_drag = Some(TabDrag {
+        self.tabs.drag = Some(TabDrag {
             id,
             from,
             to: from,
@@ -405,13 +405,13 @@ impl Shell {
         self.tabs_frame.update(cx, |_, cx| cx.notify());
     }
     pub(super) fn move_tab_drag(&mut self, event: &MouseMoveEvent, cx: &mut Context<Self>) {
-        let Some(drag) = self.tab_drag.as_mut() else {
+        let Some(drag) = self.tabs.drag.as_mut() else {
             return;
         };
         // A press whose release never reached the shell (the title bar can
         // swallow it) must not wake up on the next drag elsewhere.
         if event.pressed_button != Some(MouseButton::Left) {
-            self.tab_drag = None;
+            self.tabs.drag = None;
             self.cancel_pane_drag(cx);
             self.tabs_frame.update(cx, |_, cx| cx.notify());
             return;
@@ -422,7 +422,7 @@ impl Shell {
             return;
         }
         drag.active = true;
-        self.skip_tab_click = true;
+        self.tabs.skip_tab_click = true;
         // Once armed it stays armed until the pointer is back over the tabs.
         if pulled <= 0. {
             drag.armed = false;
@@ -457,8 +457,8 @@ impl Shell {
         // The active tab has no other pane to land on, but its title still
         // follows the pointer.
         let own = self.workspace.active_tab() == id.session();
-        let was = self.pane_drag.is_some();
-        self.pane_drag = id.session().filter(|_| armed).map(|id| PaneDrag {
+        let was = self.panes.drag.is_some();
+        self.panes.drag = id.session().filter(|_| armed).map(|id| PaneDrag {
             source: DragSource::Tab(id),
             start: event.position,
             position: event.position,
@@ -476,14 +476,14 @@ impl Shell {
         self.tabs_frame.update(cx, |_, cx| cx.notify());
     }
     pub(super) fn finish_tab_drag(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if let Some(drag) = self.tab_drag.take() {
-            let onto_pane = self.pane_drag.as_ref().is_some_and(|d| {
+        if let Some(drag) = self.tabs.drag.take() {
+            let onto_pane = self.panes.drag.as_ref().is_some_and(|d| {
                 Some(d.source.session()) == drag.id.session()
                     && matches!(d.source, DragSource::Tab(_))
                     && d.over.is_some()
             });
             if onto_pane {
-                self.skip_tab_click = true;
+                self.tabs.skip_tab_click = true;
                 self.finish_pane_drag(window, cx);
             } else if drag.active {
                 self.cancel_pane_drag(cx);
@@ -494,7 +494,7 @@ impl Shell {
                     .iter()
                     .enumerate()
                     .map(|(ix, id)| {
-                        let shift = self.tab_shifts.get(id).map_or(0., |s| s.at(now).0);
+                        let shift = self.tabs.shifts.get(id).map_or(0., |s| s.at(now).0);
                         (
                             id.clone(),
                             drag.bounds.get(ix).map_or(0., |b| b.left().as_f32()) + shift,
@@ -502,7 +502,7 @@ impl Shell {
                     })
                     .collect();
                 self.reorder_title_tab(&drag.id, drag.to, cx);
-                self.tab_shifts.clear();
+                self.tabs.shifts.clear();
                 for (ix, id) in self.visible_tabs(cx).iter().enumerate() {
                     let (Some((_, left)), Some(slot)) =
                         (drawn.iter().find(|(t, _)| t == id), drag.bounds.get(ix))
@@ -511,7 +511,7 @@ impl Shell {
                     };
                     let from = left - slot.left().as_f32();
                     if from.abs() > 0.5 {
-                        self.tab_shifts.insert(
+                        self.tabs.shifts.insert(
                             id.clone(),
                             TabShift {
                                 from,
@@ -521,7 +521,7 @@ impl Shell {
                         );
                     }
                 }
-                self.skip_tab_click = true;
+                self.tabs.skip_tab_click = true;
                 self.persist(cx);
             }
             self.tabs_frame.update(cx, |_, cx| cx.notify());
@@ -532,7 +532,7 @@ impl Shell {
         let now = vorkspace_ui::clock::Instant::now();
         // The dragged tab rides the pointer; it eases only into a slot.
         if follow {
-            self.tab_shifts.insert(
+            self.tabs.shifts.insert(
                 id,
                 TabShift {
                     from: target,
@@ -542,14 +542,14 @@ impl Shell {
             );
             return (target, false);
         }
-        let current = self.tab_shifts.get(&id).map(|s| s.at(now));
-        if current.is_none_or(|_| self.tab_shifts[&id].to != target) {
+        let current = self.tabs.shifts.get(&id).map(|s| s.at(now));
+        if current.is_none_or(|_| self.tabs.shifts[&id].to != target) {
             let from = current.map_or(0., |(value, _)| value);
             if from == target {
-                self.tab_shifts.remove(&id);
+                self.tabs.shifts.remove(&id);
                 return (target, false);
             }
-            self.tab_shifts.insert(
+            self.tabs.shifts.insert(
                 id.clone(),
                 TabShift {
                     from,
@@ -558,14 +558,14 @@ impl Shell {
                 },
             );
         }
-        let (value, done) = self.tab_shifts[&id].at(now);
+        let (value, done) = self.tabs.shifts[&id].at(now);
         if done && target == 0. {
-            self.tab_shifts.remove(&id);
+            self.tabs.shifts.remove(&id);
         }
         (value, !done)
     }
     pub(super) fn tab_shift(&self, ix: usize) -> Pixels {
-        let Some(d) = self.tab_drag.as_ref().filter(|d| d.active) else {
+        let Some(d) = self.tabs.drag.as_ref().filter(|d| d.active) else {
             return px(0.);
         };
         if ix == d.from {
@@ -611,11 +611,11 @@ impl Shell {
             all_tabs.clone()
         };
         let count = tabs.len();
-        let insert = self.pane_drag.as_ref().and_then(|d| d.insert);
+        let insert = self.panes.drag.as_ref().and_then(|d| d.insert);
         let animate = !compact
             && self.workspace.preferences.tab_animations
-            && !self.tab_drag.as_ref().is_some_and(|d| d.active);
-        let (slots, opening) = self.title_tab_motion.sync(
+            && !self.tabs.drag.as_ref().is_some_and(|d| d.active);
+        let (slots, opening) = self.tabs.motion.sync(
             tabs.iter().map(|tab| (tab.clone(), ())).collect(),
             animate,
             vorkspace_ui::clock::Instant::now(),
@@ -638,16 +638,16 @@ impl Shell {
         };
         // The selected tab keeps a wider share; the others split the rest.
         let now = vorkspace_ui::clock::Instant::now();
-        let selection_changed = self.title_tab_selection.1 != selected;
+        let selection_changed = self.tabs.selection.1 != selected;
         if selection_changed {
-            let previous = self.title_tab_selection.1.take();
-            self.title_tab_selection = (previous.filter(|_| animate), selected.clone(), now);
+            let previous = self.tabs.selection.1.take();
+            self.tabs.selection = (previous.filter(|_| animate), selected.clone(), now);
         }
-        let switch = vorkspace_ui::tab_motion::progress(self.title_tab_selection.2, now);
+        let switch = vorkspace_ui::tab_motion::progress(self.tabs.selection.2, now);
         if switch >= 1. {
-            self.title_tab_selection.0 = None;
+            self.tabs.selection.0 = None;
         }
-        let leaving = self.title_tab_selection.0.clone();
+        let leaving = self.tabs.selection.0.clone();
         let switching = leaving.is_some();
         // How much of the selected tab's wider share each tab holds: the new
         // one eases in while the previous one eases out.
@@ -728,7 +728,8 @@ impl Shell {
         }
         let tab_width = |tab: &TitleTab| base_width(tab) + extra.get(tab).copied().unwrap_or(0.);
         let dragged = self
-            .tab_drag
+            .tabs
+            .drag
             .as_ref()
             .filter(|d| d.active && !d.armed)
             .map(|d| d.id.clone());
@@ -747,7 +748,8 @@ impl Shell {
             .collect();
         // Keep inactive headlines on their last pane. Only an in-tab focus
         // change rolls the title; selecting a tab settles it in the same frame.
-        self.pane_ticks
+        self.tabs
+            .pane_ticks
             .retain(|id, _| self.workspace.tabs.contains(id));
         let mut copies = HashMap::new();
         for id in tabs.iter().filter_map(|tab| tab.session()) {
@@ -784,17 +786,18 @@ impl Shell {
                     // The press itself redraws the strip to arm tab dragging.
                     // Keep its ink stable until that press is released, even if
                     // hover hitboxes are being replaced during that redraw.
-                    let hovered = self.tab_hover == Some(id)
-                        || self
-                            .tab_drag
-                            .as_ref()
-                            .is_some_and(|drag| drag.id == TitleTab::Workspace(id) && !drag.active);
+                    let hovered =
+                        self.tabs.hover == Some(id)
+                            || self.tabs.drag.as_ref().is_some_and(|drag| {
+                                drag.id == TitleTab::Workspace(id) && !drag.active
+                            });
                     // A collapsed tab drops its close button, so a click anywhere
                     // on it selects it; selected, it is wide enough to show it again.
                     let close = self.tab_can_close(id, cx)
                         && (active || tab_width(&TitleTab::Workspace(id)) >= TAB_CLOSE_MIN_WIDTH);
                     let dragging = self
-                        .tab_drag
+                        .tabs
+                        .drag
                         .as_ref()
                         .is_some_and(|d| d.id == TitleTab::Workspace(id) && d.active);
                     let tab = vorkspace_ui::theme::keyboard_reachable(
@@ -925,9 +928,9 @@ impl Shell {
                     )
                     .on_hover(cx.listener(move |this, hovered, _, cx| {
                         if *hovered {
-                            this.tab_hover = Some(id);
-                        } else if this.tab_hover == Some(id) {
-                            this.tab_hover = None;
+                            this.tabs.hover = Some(id);
+                        } else if this.tabs.hover == Some(id) {
+                            this.tabs.hover = None;
                         }
                         this.tabs_frame.update(cx, |_, cx| cx.notify());
                     }))
@@ -950,7 +953,7 @@ impl Shell {
                         }),
                     )
                     .on_click(cx.listener(move |this, _, window, cx| {
-                        if std::mem::take(&mut this.skip_tab_click) {
+                        if std::mem::take(&mut this.tabs.skip_tab_click) {
                             return;
                         }
                         this.open_title_tab(&TitleTab::Workspace(id), window, cx);
@@ -1070,7 +1073,7 @@ impl Shell {
                     .min_w_0()
                     .h_full()
                     .overflow_hidden()
-                    .track_scroll(&self.tab_scroll)
+                    .track_scroll(&self.tabs.scroll)
                     .flex()
                     .items_center()
                     .gap(px(2.))
@@ -1122,11 +1125,11 @@ impl Shell {
                         .flex_shrink_0()
                         .mr(px(2.))
                         .size(px(TAB_PLATE_HEIGHT))
-                        .child(self.tab_switcher_anchor.probe())
+                        .child(self.tabs.switcher_anchor.probe())
                         .on_click(cx.listener(move |this, _, window, cx| {
                             this.open_menu(
                                 MenuTarget::Tabs(all_tabs.clone()),
-                                Anchor::Slot(this.tab_switcher_anchor.clone()),
+                                Anchor::Slot(this.tabs.switcher_anchor.clone()),
                                 window,
                                 cx,
                             );

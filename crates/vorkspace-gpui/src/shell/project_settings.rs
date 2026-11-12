@@ -46,8 +46,8 @@ impl Shell {
             }
         });
         let focus = view.focus_handle(cx);
-        self.vorkspace_dialog = None;
-        self.background_dialog = Some(OpenBackground {
+        self.project_settings.vorkspace_dialog = None;
+        self.project_settings.background_dialog = Some(OpenBackground {
             view,
             vorkspace,
             _events: events,
@@ -88,7 +88,7 @@ impl Shell {
             })
             .map(|v| v.id.clone());
         self.open_vorkspace_dialog(vorkspace, window, cx);
-        if let Some(dialog) = self.vorkspace_dialog.as_mut() {
+        if let Some(dialog) = self.project_settings.vorkspace_dialog.as_mut() {
             dialog.project = Some(path);
         }
         cx.notify();
@@ -228,7 +228,11 @@ impl Shell {
     }
 
     pub(super) fn close_background_dialog(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let vorkspace = self.background_dialog.take().map(|open| open.vorkspace);
+        let vorkspace = self
+            .project_settings
+            .background_dialog
+            .take()
+            .map(|open| open.vorkspace);
         if let Some(bots) = &self.bots {
             bots.update(cx, |bots, cx| bots.close_background(cx));
         }
@@ -244,6 +248,7 @@ impl Shell {
         cx: &mut Context<Self>,
     ) -> Option<AnyElement> {
         let view = self
+            .project_settings
             .background_dialog
             .as_ref()
             .map(|open| open.view.clone())
@@ -320,7 +325,7 @@ impl Shell {
             });
             background
         });
-        let linked = if self.workspace.active == Some(id) && !self.review_focused {
+        let linked = if self.workspace.active == Some(id) && !self.review.focused {
             self.linked_notice(id, cx)
         } else {
             None

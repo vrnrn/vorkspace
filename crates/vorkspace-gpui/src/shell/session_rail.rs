@@ -27,10 +27,14 @@ impl Shell {
     ) -> (Vec<i64>, usize) {
         let mut sessions = self.filtered_rail_sessions(launches, cx);
         let total = sessions.len();
-        let narrowed = !self.query.is_empty() || self.session_filters_active(cx);
+        let narrowed = !self.sidebar.query.is_empty() || self.session_filters_active(cx);
         // Expanded, searching or filtering, every match is listed.
-        if !(self.rail_sessions_expanded || narrowed) && sessions.len() > RAIL_SESSIONS {
-            let renaming = self.renaming.as_ref().map(|edit| edit.target.anchor());
+        if !(self.rail.sessions_expanded || narrowed) && sessions.len() > RAIL_SESSIONS {
+            let renaming = self
+                .sidebar
+                .renaming
+                .as_ref()
+                .map(|edit| edit.target.anchor());
             let extra = renaming.and_then(|id| {
                 sessions[RAIL_SESSIONS..]
                     .iter()
@@ -46,8 +50,8 @@ impl Shell {
     }
 
     pub(super) fn close_rail_search(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        self.rail_search_open = false;
-        self.query.clear();
+        self.rail.search_open = false;
+        self.sidebar.query.clear();
         self.sidebar_search
             .update(cx, |input, cx| input.set_text(String::new(), cx));
         self.focus_active(window, cx);
@@ -61,7 +65,7 @@ impl Shell {
     }
 
     pub(super) fn rail_sessions_min_height(&self) -> f32 {
-        if self.rail_search_open || !self.query.is_empty() {
+        if self.rail.search_open || !self.sidebar.query.is_empty() {
             126.
         } else {
             94.
@@ -76,33 +80,36 @@ impl Shell {
             .into_iter()
             .map(|(id, bot)| (id, bot.id.clone()))
             .collect::<HashMap<_, _>>();
-        let hovered = self.session_hover;
-        self.session_row_bounds.retain(|id, _| Some(*id) == hovered);
-        if self.rail_list_ids.as_slice() != sessions.as_slice() {
-            let mut offset = self.rail_list.logical_scroll_top();
-            let anchor = self.rail_list_ids.get(offset.item_ix);
-            self.rail_list
+        let hovered = self.preview.session_hover;
+        self.sidebar
+            .session_row_bounds
+            .retain(|id, _| Some(*id) == hovered);
+        if self.rail.list_ids.as_slice() != sessions.as_slice() {
+            let mut offset = self.rail.list.logical_scroll_top();
+            let anchor = self.rail.list_ids.get(offset.item_ix);
+            self.rail
+                .list
                 .reset_with_uniform_height(sessions.len(), px(RAIL_ROW_HEIGHT));
             if (offset.item_ix != 0 || offset.offset_in_item > px(0.))
                 && let Some(ix) = anchor.and_then(|id| sessions.iter().position(|row| row == id))
             {
                 offset.item_ix = ix;
-                self.rail_list.scroll_to(offset);
+                self.rail.list.scroll_to(offset);
             }
-            self.rail_list_ids = std::rc::Rc::new(sessions);
+            self.rail.list_ids = std::rc::Rc::new(sessions);
         }
-        let sessions = self.rail_list_ids.clone();
+        let sessions = self.rail.list_ids.clone();
         let owner = cx.weak_entity();
-        self.rail_list.set_scroll_handler(move |_, _, cx| {
+        self.rail.list.set_scroll_handler(move |_, _, cx| {
             let _ = owner.update(cx, |this, cx| {
-                this.sidebar_last_scroll = Some(vorkspace_ui::clock::Instant::now());
+                this.preview.last_scroll = Some(vorkspace_ui::clock::Instant::now());
                 this.close_preview(cx);
             });
         });
-        let expanded = self.rail_sessions_expanded;
+        let expanded = self.rail.sessions_expanded;
         let more = total > sessions.len() || expanded;
         let filtering = self.session_filters_active(cx);
-        let searching = self.rail_search_open || !self.query.is_empty();
+        let searching = self.rail.search_open || !self.sidebar.query.is_empty();
         let search = searching.then(|| {
             div()
                 .mx_2()
@@ -141,10 +148,10 @@ impl Shell {
                         .size(px(20.))
                         .when(searching, |d| d.bg(content(0.1)))
                         .on_click(cx.listener(|this, _, window, cx| {
-                            if this.rail_search_open {
+                            if this.rail.search_open {
                                 this.close_rail_search(window, cx);
                             } else {
-                                this.rail_search_open = true;
+                                this.rail.search_open = true;
                                 window.focus(&this.sidebar_search.focus_handle(cx), cx);
                                 this.invalidate_chrome(cx);
                                 cx.notify();
@@ -160,14 +167,14 @@ impl Shell {
                             filtering || self.menu_open(&MenuTarget::SessionFilter),
                             |d| d.bg(content(0.1)),
                         )
-                        .child(self.filter_anchor.probe())
+                        .child(self.sidebar.filter_anchor.probe())
                         .on_click(cx.listener(|this, _, window, cx| {
                             if this.menu_open(&MenuTarget::SessionFilter) {
                                 this.close_menu(cx);
                             } else {
                                 this.open_menu(
                                     MenuTarget::SessionFilter,
-                                    Anchor::Slot(this.filter_anchor.clone()),
+                                    Anchor::Slot(this.sidebar.filter_anchor.clone()),
                                     window,
                                     cx,
                                 );
@@ -191,7 +198,7 @@ impl Shell {
         );
         // Below the list, the disclosure reaches further back.
         // A full-width disclosure under the list: all sessions, or back to five.
-        let disclosure = (more && !filtering && self.query.is_empty()).then(|| {
+        let disclosure = (more && !filtering && self.sidebar.query.is_empty()).then(|| {
             div().flex_shrink_0().px_2().pt_1().child(
                 div()
                     .id("rail-sessions-more")
@@ -224,7 +231,7 @@ impl Shell {
                         .text_color(content(0.5)),
                     )
                     .on_click(cx.listener(|this, _, _, cx| {
-                        this.rail_sessions_expanded = !this.rail_sessions_expanded;
+                        this.rail.sessions_expanded = !this.rail.sessions_expanded;
                         this.invalidate_chrome(cx);
                         cx.notify();
                     })),
@@ -262,7 +269,7 @@ impl Shell {
                     .text_color(content(0.55))
                     .child(if self.workspace.project.is_empty() {
                         "Open a project to start a session"
-                    } else if filtering || !self.query.is_empty() {
+                    } else if filtering || !self.sidebar.query.is_empty() {
                         "No sessions match"
                     } else {
                         "No sessions yet · ⌘N starts one"
@@ -279,7 +286,7 @@ impl Shell {
                     .min_h(px(RAIL_CARD_HEIGHT))
                     .px_2()
                     .child(
-                        gpui::list(self.rail_list.clone(), move |ix, _, cx| {
+                        gpui::list(self.rail.list.clone(), move |ix, _, cx| {
                             let id = sessions[ix];
                             owner
                                 .update(cx, |this, cx| {
@@ -312,6 +319,7 @@ impl Shell {
     ) -> AnyElement {
         let meta = self.session_metadata(id, cx);
         let folder = self
+            .sidebar
             .groups
             .get(&meta.summary.cwd)
             .and_then(|folders| folders.folder_of(id));
@@ -337,9 +345,14 @@ impl Shell {
             |folder| format!("{} · Folder {}", s.project, folder.name),
         );
         let filed = folder.is_some();
-        let active = self.selected_sessions.contains(&id)
+        let active = self.sidebar.selected_sessions.contains(&id)
             || (self.workspace.active == Some(id) && !self.bot_active(cx) && !self.app_view_open());
-        let anchor = self.session_row_bounds.entry(id).or_default().clone();
+        let anchor = self
+            .sidebar
+            .session_row_bounds
+            .entry(id)
+            .or_default()
+            .clone();
         let menu_anchor = anchor.clone();
         // Status only: card actions live in the right-click menu,
         // so hovering never changes a card's size.
@@ -466,7 +479,7 @@ impl Shell {
             }))
             .on_click(
                 cx.listener(move |this, event: &gpui::ClickEvent, window, cx| {
-                    if std::mem::take(&mut this.skip_session_click) {
+                    if std::mem::take(&mut this.sidebar.skip_session_click) {
                         return;
                     }
                     this.select_sidebar_session(id, event.modifiers(), window, cx)
@@ -476,9 +489,9 @@ impl Shell {
             .on_mouse_down(
                 MouseButton::Left,
                 cx.listener(move |this, event: &MouseDownEvent, _, _| {
-                    this.skip_session_click = false;
-                    this.tab_drag = None;
-                    this.pane_drag = Some(PaneDrag {
+                    this.sidebar.skip_session_click = false;
+                    this.tabs.drag = None;
+                    this.panes.drag = Some(PaneDrag {
                         source: DragSource::Session(id),
                         start: event.position,
                         position: event.position,
@@ -523,10 +536,10 @@ impl Shell {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        self.context_selection = !self.selected_sessions.contains(&id);
-        if self.context_selection {
-            self.selected_sessions.clear();
-            self.selected_sessions.insert(id);
+        self.sidebar.context_selection = !self.sidebar.selected_sessions.contains(&id);
+        if self.sidebar.context_selection {
+            self.sidebar.selected_sessions.clear();
+            self.sidebar.selected_sessions.insert(id);
         }
         self.open_menu(MenuTarget::Session(id), anchor, window, cx);
         window.prevent_default();

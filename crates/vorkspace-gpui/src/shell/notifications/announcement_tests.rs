@@ -32,13 +32,13 @@ fn a_request_in_a_visible_conversation_never_doubles_as_a_toast(cx: &mut TestApp
             });
             // The conversation is on screen in an active window, but the
             // keyboard is elsewhere: its inline card already asks.
-            shell.window_active = true;
+            shell.window.active = true;
             window.blur(cx);
             shell.notification_session_changed(session, cx);
             shell.sync_notices(cx);
             assert!(shell.notification_state.approvals.read(cx).is_empty());
             // Away from the window, the toast is how the request reaches you.
-            shell.window_active = false;
+            shell.window.active = false;
             shell.sync_notices(cx);
             assert!(!shell.notification_state.approvals.read(cx).is_empty());
         })
@@ -68,7 +68,7 @@ fn scrolling_a_split_pane_onscreen_replaces_its_approval_toast(cx: &mut TestAppC
             shell.sessions[&hidden].update(cx, |chat, _| {
                 chat.request_approval_for_test("request", "Run tests?");
             });
-            shell.window_active = true;
+            shell.window.active = true;
             shell.notification_session_changed(hidden, cx);
             shell.sync_notices(cx);
             assert!(!shell.notification_state.approvals.read(cx).is_empty());
@@ -85,12 +85,12 @@ fn scrolling_a_split_pane_onscreen_replaces_its_approval_toast(cx: &mut TestAppC
             assert!(
                 shell.notice_session_visible(hidden, cx),
                 "viewport {:?}, canvas {:?}, offset {:?}, panes {:?}",
-                shell.pane_viewport.get(),
-                shell.pane_bounds.get(),
-                shell.pane_scroll.offset(),
+                shell.panes.viewport.get(),
+                shell.panes.bounds.get(),
+                shell.panes.scroll.offset(),
                 shell.workspace.layout(focused).leaves(),
             );
-            shell.window_active = true;
+            shell.window.active = true;
             shell.sync_notices(cx);
             assert!(shell.notification_state.approvals.read(cx).is_empty());
         })

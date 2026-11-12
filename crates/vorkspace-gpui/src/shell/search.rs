@@ -16,9 +16,9 @@ impl Open {
 
 impl Shell {
     pub(super) fn leave_app_search(&mut self, cx: &mut Context<Self>) {
-        if let Some(search) = self.app_search.take() {
-            self.saved_search = Some(search.view.read(cx).draft(cx));
-            self.parked_search = Some(search);
+        if let Some(search) = self.pages.search.take() {
+            self.pages.saved_search = Some(search.view.read(cx).draft(cx));
+            self.pages.parked_search = Some(search);
         }
     }
     pub(super) fn close_app_search(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -33,11 +33,12 @@ impl Shell {
         self.leave_app_views(cx);
         let cwd = self.working_copy().to_owned();
         if let Some(search) = self
+            .pages
             .parked_search
             .take()
             .filter(|search| search.matches_working_copy(&cwd))
         {
-            self.app_search = Some(search);
+            self.pages.search = Some(search);
             self.admit_app_pane(crate::workspace::AppPane::Search);
             self.finish_app_pane_open(window, cx);
             return;
@@ -50,7 +51,7 @@ impl Shell {
         let sources = self.search_sources(&cwd, cx);
         let store = self.store.clone();
         let view = cx.new(|cx| SearchView::new(cwd.clone(), store, sources, cx));
-        if let Some(draft) = self.saved_search.clone() {
+        if let Some(draft) = self.pages.saved_search.clone() {
             view.update(cx, |v, cx| v.restore_draft(draft, cx));
         }
         let source_cwd = cwd.clone();
@@ -98,7 +99,7 @@ impl Shell {
                 },
             );
         window.focus(&view.focus_handle(cx), cx);
-        self.app_search = Some(Open {
+        self.pages.search = Some(Open {
             cwd,
             view,
             _events: events,
@@ -155,7 +156,12 @@ impl Shell {
     }
 
     pub(super) fn sync_search_visibility(&self, visible: bool, cx: &mut Context<Self>) {
-        let Some(search) = self.app_search.as_ref().or(self.parked_search.as_ref()) else {
+        let Some(search) = self
+            .pages
+            .search
+            .as_ref()
+            .or(self.pages.parked_search.as_ref())
+        else {
             return;
         };
         if search.view.read(cx).is_visible() == visible {
@@ -168,7 +174,12 @@ impl Shell {
     }
 
     pub(super) fn forget_search_session(&self, id: i64, cx: &mut Context<Self>) {
-        if let Some(search) = self.app_search.as_ref().or(self.parked_search.as_ref()) {
+        if let Some(search) = self
+            .pages
+            .search
+            .as_ref()
+            .or(self.pages.parked_search.as_ref())
+        {
             search
                 .view
                 .update(cx, |view, cx| view.forget_session(id, cx));
@@ -273,7 +284,12 @@ impl Shell {
         )
     }
     pub(super) fn sync_bot_search(&mut self, cx: &mut Context<Self>) {
-        let Some(search) = self.app_search.as_ref().or(self.parked_search.as_ref()) else {
+        let Some(search) = self
+            .pages
+            .search
+            .as_ref()
+            .or(self.pages.parked_search.as_ref())
+        else {
             return;
         };
         if !search.view.read(cx).is_visible() {
@@ -294,7 +310,12 @@ impl Shell {
         }
     }
     pub(super) fn sync_search_session(&mut self, id: i64, cx: &mut Context<Self>) {
-        let Some(search) = self.app_search.as_ref().or(self.parked_search.as_ref()) else {
+        let Some(search) = self
+            .pages
+            .search
+            .as_ref()
+            .or(self.pages.parked_search.as_ref())
+        else {
             return;
         };
         if !search.view.read(cx).is_visible() || !self.order.contains(&id) {
@@ -362,7 +383,7 @@ mod tests {
                 assert!(shell.sessions[&victim].read(cx).history_loaded());
                 shell.open_app_search(w, cx);
                 let pane = shell.workspace.active.unwrap();
-                let view = shell.app_search.as_ref().unwrap().view.clone();
+                let view = shell.pages.search.as_ref().unwrap().view.clone();
                 view.update(cx, |view, cx| {
                     view.restore_draft(("needle".into(), Scope::Conversations), cx)
                 });
@@ -390,7 +411,7 @@ mod tests {
         let created = window
             .update(cx, |shell, w, cx| {
                 shell.open(session, w, cx);
-                assert!(shell.app_search.is_none());
+                assert!(shell.pages.search.is_none());
                 let summary = {
                     let store = locked(&shell.store).unwrap();
                     let mut summary = store.create("codex", &cwd).unwrap();
@@ -423,7 +444,7 @@ mod tests {
                         .all(|hit| hit.target != Target::Conversation(victim))
                 );
                 shell.open(pane, w, cx);
-                assert_eq!(shell.app_search.as_ref().unwrap().view, view);
+                assert_eq!(shell.pages.search.as_ref().unwrap().view, view);
                 assert_eq!(
                     view.read(cx).draft(cx),
                     ("needle".into(), Scope::Conversations)
@@ -460,8 +481,8 @@ mod tests {
             .update(cx, |shell, w, cx| {
                 shell.workspace.place(pane, session, Edge::Right);
                 shell.open(session, w, cx);
-                assert!(shell.app_search.is_none());
-                assert_eq!(shell.parked_search.as_ref().unwrap().view, view);
+                assert!(shell.pages.search.is_none());
+                assert_eq!(shell.pages.parked_search.as_ref().unwrap().view, view);
                 assert_eq!(
                     view.read(cx).draft(cx),
                     ("needle".into(), Scope::Conversations)
@@ -519,7 +540,7 @@ mod tests {
                 let session = shell.workspace.active.unwrap();
                 shell.open_app_search(w, cx);
                 let pane = shell.workspace.active.unwrap();
-                let view = shell.app_search.as_ref().unwrap().view.clone();
+                let view = shell.pages.search.as_ref().unwrap().view.clone();
                 view.update(cx, |view, cx| {
                     view.restore_draft(("needle".into(), Scope::Files), cx)
                 });
@@ -563,8 +584,8 @@ mod tests {
         window
             .update(cx, |shell, w, cx| {
                 shell.open(session, w, cx);
-                assert!(shell.app_search.is_none());
-                assert_eq!(shell.parked_search.as_ref().unwrap().view, view);
+                assert!(shell.pages.search.is_none());
+                assert_eq!(shell.pages.parked_search.as_ref().unwrap().view, view);
             })
             .unwrap();
         std::fs::rename(
@@ -587,8 +608,8 @@ mod tests {
                 shell.workspace.place(pane, session, Edge::Right);
                 shell.open(session, w, cx);
                 assert_eq!(shell.workspace.layout(session).leaf_ids(), [session, pane]);
-                assert!(shell.app_search.is_none());
-                assert_eq!(shell.parked_search.as_ref().unwrap().view, view);
+                assert!(shell.pages.search.is_none());
+                assert_eq!(shell.pages.parked_search.as_ref().unwrap().view, view);
                 assert_eq!(view.read(cx).draft(cx), ("needle".into(), Scope::Files));
             })
             .unwrap();
@@ -621,7 +642,7 @@ mod tests {
             .update(cx, |shell, w, cx| {
                 shell.select_project(a.path().to_string_lossy().into_owned(), w, cx);
                 shell.open_app_search(w, cx);
-                let first = shell.app_search.as_ref().unwrap().view.clone();
+                let first = shell.pages.search.as_ref().unwrap().view.clone();
                 first.update(cx, |view, cx| {
                     view.restore_draft(("same".into(), vorkspace_core::search::Scope::Files), cx)
                 });
@@ -634,7 +655,7 @@ mod tests {
                     },
                 );
                 shell.open_app_search(w, cx);
-                let search = shell.app_search.as_ref().unwrap();
+                let search = shell.pages.search.as_ref().unwrap();
                 assert_ne!(search.view, first);
                 assert_eq!(search.cwd, b_cwd);
                 assert_eq!(search.view.read(cx).draft(cx).0, "same");
@@ -721,7 +742,7 @@ mod tests {
                 shell.open(session, w, cx);
                 shell.open_app_search(w, cx);
                 let search = shell.workspace.active.unwrap();
-                let previous = shell.app_search.as_ref().unwrap().view.clone();
+                let previous = shell.pages.search.as_ref().unwrap().view.clone();
                 previous.update(cx, |view, cx| {
                     view.restore_draft(
                         ("keep this".into(), vorkspace_core::search::Scope::Files),
@@ -737,7 +758,7 @@ mod tests {
                     shell.workspace.layout(session).leaf_ids(),
                     [session, search]
                 );
-                let rebuilt = shell.parked_search.as_ref().unwrap();
+                let rebuilt = shell.pages.parked_search.as_ref().unwrap();
                 assert_ne!(rebuilt.view, previous);
                 assert_eq!(rebuilt.cwd, cwd);
                 assert_eq!(rebuilt.view.read(cx).draft(cx).0, "keep this");
@@ -768,7 +789,7 @@ mod tests {
         cx.refresh().unwrap();
         window
             .update(cx, |shell, w, cx| {
-                let view = &shell.app_search.as_ref().unwrap().view;
+                let view = &shell.pages.search.as_ref().unwrap().view;
                 assert!(view.focus_handle(cx).is_focused(w));
             })
             .unwrap();
@@ -776,7 +797,7 @@ mod tests {
         cx.run_until_parked();
         window
             .update(cx, |shell, w, cx| {
-                assert!(shell.app_search.is_none());
+                assert!(shell.pages.search.is_none());
                 let input = &shell.sessions[&b].read(cx).input;
                 assert_eq!(input.read(cx).content, "preserve this draft");
                 assert!(input.focus_handle(cx).is_focused(w));
@@ -790,7 +811,7 @@ mod tests {
         cx.run_until_parked();
         window
             .update(cx, |shell, _, cx| {
-                assert!(shell.app_search.is_none());
+                assert!(shell.pages.search.is_none());
                 assert_eq!(shell.workspace.active, Some(a));
                 assert_eq!(shell.workspace.project, "/work/another-project");
                 assert_eq!(

@@ -422,8 +422,8 @@ impl LiveAgents {
             })
             .on_click(move |_, window, cx| {
                 let _ = owner.update(cx, |shell, cx| {
-                    shell.selected_sessions.clear();
-                    shell.selection_anchor = Some(id);
+                    shell.sidebar.selected_sessions.clear();
+                    shell.sidebar.selection_anchor = Some(id);
                     shell.open(id, window, cx);
                     shell.invalidate_chrome(cx);
                     cx.notify();
@@ -855,16 +855,16 @@ impl Shell {
                     selected: self.workspace.active == Some(id)
                         && !self.bot_active(cx)
                         && !self.app_view_open()
-                        && self.app_search.is_none(),
+                        && self.pages.search.is_none(),
                     updated_at: metadata.summary.updated_at,
                 })
             })
             .collect();
         let hidden = self.classic_rail_width() <= 0.
-            || self.settings.is_some()
+            || self.pages.settings.is_some()
             || !self.workspace.sidebar_activity_visible
             || !self.workspace.preferences.working_agents;
-        self.live_agents.update(cx, |activity, cx| {
+        self.sidebar.live_agents.update(cx, |activity, cx| {
             activity.publish(agents, cx);
             // A fully hidden rail is unmounted, so its render callback cannot
             // be responsible for releasing the presentation timer.
@@ -880,13 +880,16 @@ impl Shell {
         cx: &mut Context<Self>,
     ) -> Option<AnyElement> {
         if !self.workspace.sidebar_activity_visible || !self.workspace.preferences.working_agents {
-            self.live_agents.update(cx, |activity, _| activity.hide());
+            self.sidebar
+                .live_agents
+                .update(cx, |activity, _| activity.hide());
             return None;
         }
         let visible = self
+            .sidebar
             .live_agents
             .update(cx, |activity, cx| activity.present(compact, cx));
-        visible.then(|| self.live_agents.clone().into_any_element())
+        visible.then(|| self.sidebar.live_agents.clone().into_any_element())
     }
 }
 
@@ -953,6 +956,7 @@ mod minion_history_tests {
                 shell.sync_live_agents(cx);
                 assert!(
                     !shell
+                        .sidebar
                         .live_agents
                         .read(cx)
                         .agents

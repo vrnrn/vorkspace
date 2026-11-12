@@ -15,7 +15,7 @@ use vorkspace_ui::theme::*;
 
 impl Shell {
     pub(super) fn docked_sidebar_width(&self) -> f32 {
-        self.sidebar_content_width * self.sidebar_fraction
+        self.sidebar.content_width * self.sidebar.fraction
     }
 
     pub(super) fn layout_body(
@@ -33,7 +33,9 @@ impl Shell {
         let navigation = self.navigation(window, cx);
         let rail_width = self.classic_rail_width();
         if rail_width <= 0. {
-            self.live_agents.update(cx, |activity, _| activity.hide());
+            self.sidebar
+                .live_agents
+                .update(cx, |activity, _| activity.hide());
         }
         let header = self.classic_workspace_header(cx);
         // Sessions, Explorer and Changes sit beside the rail on the left.
@@ -62,11 +64,11 @@ impl Shell {
                         .absolute()
                         .left_0()
                         .top_0()
-                        .w(px(self.sidebar_content_width))
+                        .w(px(self.sidebar.content_width))
                         .h_full()
                         .flex()
                         .flex_col()
-                        .opacity(self.sidebar_fraction)
+                        .opacity(self.sidebar.fraction)
                         // A collapsed rail leaves navigation over the left sidebar.
                         // Give it a row above the project switcher and its actions.
                         .when(sidebar_navigation_row, |d| {
@@ -134,7 +136,7 @@ impl Shell {
             .into_any_element()
     }
     pub(super) fn sidebar_uncached(&self) -> bool {
-        self.sidebar_slide.is_some()
+        self.sidebar.slide.is_some()
     }
 
     fn sidebar_contents(&self) -> AnyElement {
@@ -148,7 +150,7 @@ impl Shell {
                 .clone()
                 .cached(
                     StyleRefinement::default()
-                        .w(px(self.sidebar_content_width))
+                        .w(px(self.sidebar.content_width))
                         .h_full(),
                 )
                 .into_any_element()
@@ -156,9 +158,9 @@ impl Shell {
     }
     fn sidebar_resize(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
         (self.workspace.sidebar_visible
-            && self.sidebar_fraction > 0.
-            && self.sidebar_content_width == self.workspace.right_panel_width
-            && self.sidebar_slide.is_none())
+            && self.sidebar.fraction > 0.
+            && self.sidebar.content_width == self.workspace.right_panel_width
+            && self.sidebar.slide.is_none())
         .then(|| {
             // Drag the sidebar's separator on the pane's side.
             let border = self.workspace.right_panel_width - 0.5;
@@ -173,7 +175,8 @@ impl Shell {
                 .on_mouse_down(
                     MouseButton::Left,
                     cx.listener(|this, event: &MouseDownEvent, _, cx| {
-                        this.resize = Some((event.position.x, this.workspace.right_panel_width));
+                        this.sidebar.resize =
+                            Some((event.position.x, this.workspace.right_panel_width));
                         cx.stop_propagation();
                     }),
                 )
@@ -181,7 +184,7 @@ impl Shell {
         })
     }
     fn workspace_content(&mut self, window: &mut Window, cx: &mut Context<Self>) -> gpui::Div {
-        if let Some(settings) = &self.settings {
+        if let Some(settings) = &self.pages.settings {
             return div()
                 .flex_1()
                 .min_h_0()

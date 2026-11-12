@@ -82,9 +82,10 @@ impl Shell {
             return;
         }
         let target = if self.sidebar_focus.is_focused(window) {
-            self.sidebar_target.clone()
+            self.sidebar.target.clone()
         } else {
-            self.session_hover
+            self.preview
+                .session_hover
                 .or(self.workspace.active)
                 .map(RenameTarget::Session)
         };
@@ -95,7 +96,7 @@ impl Shell {
         }
     }
     pub(super) fn delete_sidebar_selection(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let ids: Vec<_> = self.selected_sessions.iter().copied().collect();
+        let ids: Vec<_> = self.sidebar.selected_sessions.iter().copied().collect();
         self.request_delete_sessions(ids, window, cx);
     }
 
@@ -151,17 +152,17 @@ impl Shell {
     }
 
     fn session_menu_ids(&self, id: i64, cx: &App) -> Vec<i64> {
-        if !self.selected_sessions.contains(&id) {
+        if !self.sidebar.selected_sessions.contains(&id) {
             return vec![id];
         }
         self.sidebar_session_ids(cx)
             .into_iter()
-            .filter(|id| self.selected_sessions.contains(id))
+            .filter(|id| self.sidebar.selected_sessions.contains(id))
             .collect()
     }
     pub(super) fn clear_context_selection(&mut self) {
-        if std::mem::take(&mut self.context_selection) {
-            self.selected_sessions.clear();
+        if std::mem::take(&mut self.sidebar.context_selection) {
+            self.sidebar.selected_sessions.clear();
         }
     }
     pub(super) fn select_sidebar_session(
@@ -171,13 +172,14 @@ impl Shell {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        self.context_selection = false;
+        self.sidebar.context_selection = false;
         self.close_menu(cx);
-        self.sidebar_target = Some(RenameTarget::Session(id));
+        self.sidebar.target = Some(RenameTarget::Session(id));
         let additive = modifiers.control || modifiers.platform;
         if modifiers.shift {
             let visible = self.sidebar_navigation_ids(cx);
             let anchor = self
+                .sidebar
                 .selection_anchor
                 .filter(|id| visible.contains(id))
                 .or(self.workspace.active)
@@ -187,23 +189,25 @@ impl Shell {
                 .position(|s| *s == anchor)
                 .zip(visible.iter().position(|s| *s == id));
             if !additive {
-                self.selected_sessions.clear();
+                self.sidebar.selected_sessions.clear();
             }
             if let Some((a, b)) = range {
-                self.selected_sessions.extend(&visible[a.min(b)..=a.max(b)]);
-                self.selection_anchor = Some(anchor);
+                self.sidebar
+                    .selected_sessions
+                    .extend(&visible[a.min(b)..=a.max(b)]);
+                self.sidebar.selection_anchor = Some(anchor);
             } else {
-                self.selected_sessions.insert(id);
-                self.selection_anchor = Some(id);
+                self.sidebar.selected_sessions.insert(id);
+                self.sidebar.selection_anchor = Some(id);
             }
         } else if additive {
-            self.selection_anchor = Some(id);
-            if !self.selected_sessions.insert(id) {
-                self.selected_sessions.remove(&id);
+            self.sidebar.selection_anchor = Some(id);
+            if !self.sidebar.selected_sessions.insert(id) {
+                self.sidebar.selected_sessions.remove(&id);
             }
         } else {
-            self.selected_sessions.clear();
-            self.selection_anchor = Some(id);
+            self.sidebar.selected_sessions.clear();
+            self.sidebar.selection_anchor = Some(id);
             self.open(id, window, cx);
         }
         if modifiers.shift || additive {
@@ -427,6 +431,7 @@ impl Shell {
             *owner == id
                 && (self.workspace.tab_of(*pane).is_some()
                     || self
+                        .review
                         .reviews
                         .get(pane)
                         .is_some_and(|r| r.read(cx).unsaved_files(cx)))
@@ -460,8 +465,8 @@ impl Shell {
         }
         self.invalidate_chrome(cx);
         let store = self.store.clone();
-        let previous = self.group_writes.take();
-        self.group_writes = Some(cx.spawn(async move |this, cx| {
+        let previous = self.sidebar.group_writes.take();
+        self.sidebar.group_writes = Some(cx.spawn(async move |this, cx| {
             if let Some(previous) = previous {
                 previous.await;
             }
@@ -508,12 +513,13 @@ impl Shell {
             self.workspace.close(id);
         }
         if self
+            .preview
             .session_preview
             .as_ref()
             .is_some_and(|preview| preview.id == id)
         {
-            self.session_preview = None;
-            self.preview_close = None;
+            self.preview.session_preview = None;
+            self.preview.close = None;
         }
         self.release_live_session(id, cx);
         self.session_removal_epoch = self.session_removal_epoch.wrapping_add(1);
@@ -524,20 +530,21 @@ impl Shell {
         self.forget_search_session(id, cx);
         self.busy_sessions.remove(&id);
         self.unseen_finished.remove(&id);
-        self.selected_sessions.remove(&id);
+        self.sidebar.selected_sessions.remove(&id);
         self.poll_reminders(cx);
         self.workspace.project_focus.retain(|_, s| *s != id);
         self.history
             .prune(&self.workspace.open_sessions(), self.workspace.active);
-        if self.session_hover == Some(id) {
-            self.session_hover = None;
+        if self.preview.session_hover == Some(id) {
+            self.preview.session_hover = None;
         }
         if self
+            .sidebar
             .renaming
             .as_ref()
             .is_some_and(|r| r.target.anchor() == id)
         {
-            self.renaming = None;
+            self.sidebar.renaming = None;
         }
         self.persist(cx);
     }
@@ -585,7 +592,7 @@ impl Shell {
             }),
         ];
         window.focus(&focus, cx);
-        self.renaming = Some(Renaming {
+        self.sidebar.renaming = Some(Renaming {
             target,
             input,
             _events: events,
@@ -594,7 +601,7 @@ impl Shell {
         cx.notify();
     }
     fn finish_rename(&mut self, commit: bool, window: &mut Window, cx: &mut Context<Self>) {
-        let Some(renaming) = self.renaming.take() else {
+        let Some(renaming) = self.sidebar.renaming.take() else {
             return;
         };
         let name = renaming.input.read(cx).content.trim().to_string();
@@ -629,7 +636,11 @@ impl Shell {
     }
     /// SessionRenameRow: the name in a focused field.
     pub(super) fn rename_row(&self, id: i64, cx: &mut Context<Self>) -> Option<AnyElement> {
-        let renaming = self.renaming.as_ref().filter(|r| r.target.anchor() == id)?;
+        let renaming = self
+            .sidebar
+            .renaming
+            .as_ref()
+            .filter(|r| r.target.anchor() == id)?;
         Some(
             div()
                 .key_context("SessionRename")
@@ -727,7 +738,7 @@ impl Shell {
                 |this, _, _: &input::Submitted, window, cx| this.save_link(true, window, cx),
             ),
             cx.subscribe(&input, |this, _, _: &input::Changed, cx| {
-                if let Some(dialog) = &mut this.link_dialog
+                if let Some(dialog) = &mut this.sidebar.link_dialog
                     && dialog.error.take().is_some()
                 {
                     cx.notify();
@@ -735,7 +746,7 @@ impl Shell {
             }),
         ];
         window.focus(&input.read(cx).focus_handle(cx), cx);
-        self.link_dialog = Some(LinkDialog {
+        self.sidebar.link_dialog = Some(LinkDialog {
             id,
             input,
             error: None,
@@ -745,7 +756,7 @@ impl Shell {
         cx.notify();
     }
     pub(super) fn close_link_dialog(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if self.link_dialog.take().is_some() {
+        if self.sidebar.link_dialog.take().is_some() {
             self.focus_active(window, cx);
             cx.notify();
         }
@@ -753,6 +764,7 @@ impl Shell {
     /// Saves the parsed link, or with `keep` false, removes it.
     fn save_link(&mut self, keep: bool, window: &mut Window, cx: &mut Context<Self>) {
         if self
+            .sidebar
             .link_dialog
             .as_ref()
             .is_some_and(|dialog| !self.session_available_here(dialog.id, cx))
@@ -762,7 +774,7 @@ impl Shell {
             self.close_link_dialog(window, cx);
             return;
         }
-        let Some(dialog) = &mut self.link_dialog else {
+        let Some(dialog) = &mut self.sidebar.link_dialog else {
             return;
         };
         let id = dialog.id;
@@ -784,7 +796,7 @@ impl Shell {
     }
     /// LinkSessionWorkItemDialog, centred over the window.
     pub(super) fn link_modal(&self, window: &Window, cx: &mut Context<Self>) -> Option<AnyElement> {
-        let dialog = self.link_dialog.as_ref()?;
+        let dialog = self.sidebar.link_dialog.as_ref()?;
         let title = self.session_metadata(dialog.id, cx).display_title();
         let viewport = window.viewport_size();
         let width = 384f32.min(viewport.width.as_f32() - 24.);

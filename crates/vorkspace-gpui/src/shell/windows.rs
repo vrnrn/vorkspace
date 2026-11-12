@@ -316,8 +316,8 @@ impl Shell {
             return false;
         }
         if self.unsaved_files(cx) {
-            if !self.quit_prompted {
-                self.quit_prompted = true;
+            if !self.window.quit_prompted {
+                self.window.quit_prompted = true;
                 let answer = window.prompt(
                     gpui::PromptLevel::Warning,
                     "Close window with unsaved file edits?",
@@ -328,7 +328,7 @@ impl Shell {
                 cx.spawn_in(window, async move |shell, cx| {
                     let answer = answer.await;
                     let _ = shell.update_in(cx, |shell, window, cx| {
-                        shell.quit_prompted = false;
+                        shell.window.quit_prompted = false;
                         if matches!(answer, Ok(0)) && shell.finish_window_close(cx) {
                             window.remove_window();
                         }
@@ -351,9 +351,10 @@ impl Shell {
             .as_ref()
             .is_some_and(|bots| bots.read(cx).has_active_work(cx));
         let terminal_active = self
+            .pages
             .terminal_tabs
             .values()
-            .chain(self.terminals.values().flatten())
+            .chain(self.dock.terminals.values().flatten())
             .any(|terminal| terminal.read(cx).foreground_process().is_some());
         let voice_active = self
             .vox
@@ -365,6 +366,7 @@ impl Shell {
             || voice_active
             || self.automation_work_in_progress()
             || self
+                .sidebar
                 .group_writes
                 .as_ref()
                 .is_some_and(|task| !task.is_ready())
@@ -393,7 +395,7 @@ impl Shell {
         for view in self.sessions.values() {
             view.update(cx, |view, cx| view.save_side_question_draft(cx));
         }
-        self.window_closing = true;
+        self.window.closing = true;
         self.forget_closed_window(cx);
         true
     }
@@ -535,9 +537,9 @@ mod tests {
             .update(cx, |shell, window, cx| {
                 assert_eq!(shell.workspace.active_vorkspace, side);
                 shell.scale_interface(-15, window, cx);
-                shell.window_active = true;
+                shell.window.active = true;
                 shell.persist(cx);
-                shell.window_layout
+                shell.window.layout
             })
             .unwrap();
 

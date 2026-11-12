@@ -471,7 +471,7 @@ mod tests {
         cx.run_until_parked();
         window
             .update(cx, |shell, _, cx| {
-                assert!(shell.settings.is_some());
+                assert!(shell.pages.settings.is_some());
                 assert!(!shell.vox.as_ref().unwrap().read(cx).running());
                 assert_eq!(
                     cx.windows().len(),

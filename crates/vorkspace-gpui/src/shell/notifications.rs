@@ -396,7 +396,7 @@ impl Shell {
     }
 
     fn notice_session_visible(&self, id: i64, cx: &App) -> bool {
-        if self.settings.is_some() {
+        if self.pages.settings.is_some() {
             return false;
         }
         self.workspace.active_tab().is_some_and(|tab| {
@@ -407,13 +407,13 @@ impl Shell {
                 // toast when the whole pane can show the inline request.
                 if split {
                     let Some((canvas, viewport)) =
-                        self.pane_bounds.get().zip(self.pane_viewport.get())
+                        self.panes.bounds.get().zip(self.panes.viewport.get())
                     else {
                         return false;
                     };
                     let rect = leaf.rect;
                     let top_left = viewport.origin
-                        + self.pane_scroll.offset()
+                        + self.panes.scroll.offset()
                         + gpui::point(canvas.size.width * rect.x, canvas.size.height * rect.y);
                     let bottom_right = top_left
                         + gpui::point(canvas.size.width * rect.w, canvas.size.height * rect.h);
@@ -467,7 +467,7 @@ impl Shell {
             .filter_map(|&id| self.notification_chat(id, cx))
         {
             let chat = view.read(cx);
-            if let Some(snapshot) = self.input_snapshot(chat, self.window_active, cx) {
+            if let Some(snapshot) = self.input_snapshot(chat, self.window.active, cx) {
                 directories.insert(snapshot.session_id.clone(), chat.summary.cwd.clone());
                 snapshots.push(snapshot);
             }
@@ -602,7 +602,7 @@ impl Shell {
                 .map_or(Permission::Unsupported, |core| {
                     core.read(cx).notification_permission
                 }),
-            self.window_active,
+            self.window.active,
             category != "reminders" && self.notice_session_visible(summary.id, cx),
         );
         if !notify {
@@ -806,7 +806,7 @@ impl Shell {
             .top(px(12.))
             .right(px(12.))
             .w(px(360.))
-            .max_w(px((self.viewport_width - 24.).max(0.)))
+            .max_w(px((self.window.viewport_width - 24.).max(0.)))
             .flex()
             .flex_col()
             .items_end()

@@ -18,7 +18,7 @@ fn terminal_id(shell: &Shell, tab: &TitleTab) -> u64 {
 
 fn active_terminal(shell: &Shell, cx: &App) -> (TitleTab, Entity<Terminal>) {
     let tab = shell.active_title_tab(cx).unwrap();
-    let terminal = shell.terminal_tabs[&terminal_id(shell, &tab)].clone();
+    let terminal = shell.pages.terminal_tabs[&terminal_id(shell, &tab)].clone();
     (tab, terminal)
 }
 
@@ -108,8 +108,8 @@ fn terminal_is_not_a_sidebar_item_and_a_plain_new_tab_click_opens_a_session(
     window
         .update(visual, |shell, _, _| {
             assert_eq!(shell.workspace.tabs.len(), tabs + 1);
-            assert!(shell.terminal_tabs.is_empty());
-            assert_eq!(shell.active_terminal_tab, None);
+            assert!(shell.pages.terminal_tabs.is_empty());
+            assert_eq!(shell.pages.active_terminal_tab, None);
         })
         .unwrap();
 }
@@ -153,7 +153,7 @@ fn command_new_tab_every_click_opens_and_focuses_an_independent_top_tab(cx: &mut
                     assert_eq!(terminal.read(cx).cwd, "/work/vorkspace");
                     assert!(terminal.read(cx).is_visible());
                     assert!(terminal.focus_handle(cx).is_focused(w));
-                    assert_eq!(shell.terminal_tabs.len(), opened.len() + 1);
+                    assert_eq!(shell.pages.terminal_tabs.len(), opened.len() + 1);
                     assert_eq!(
                         shell
                             .visible_tabs(cx)
@@ -162,7 +162,7 @@ fn command_new_tab_every_click_opens_and_focuses_an_independent_top_tab(cx: &mut
                             .count(),
                         opened.len() + 1
                     );
-                    assert!(shell.terminals.is_empty());
+                    assert!(shell.dock.terminals.is_empty());
                     terminal.update(cx, |terminal, cx| {
                         terminal.fixture_output(&format!("shell-{}-only", opened.len()), cx)
                     });
@@ -181,8 +181,11 @@ fn command_new_tab_every_click_opens_and_focuses_an_independent_top_tab(cx: &mut
         window
             .update(visual, |shell, w, cx| {
                 assert_eq!(shell.active_title_tab(cx).as_ref(), Some(tab));
-                assert_eq!(shell.terminal_tabs.len(), opened.len());
-                assert_eq!(shell.terminal_tabs[&terminal_id(shell, tab)], *terminal);
+                assert_eq!(shell.pages.terminal_tabs.len(), opened.len());
+                assert_eq!(
+                    shell.pages.terminal_tabs[&terminal_id(shell, tab)],
+                    *terminal
+                );
                 assert!(terminal.focus_handle(cx).is_focused(w));
                 let screen = terminal.read(cx).fixture_screen();
                 assert!(screen.contains(&format!("shell-{index}-only")));
@@ -206,16 +209,20 @@ fn command_new_tab_every_click_opens_and_focuses_an_independent_top_tab(cx: &mut
             assert!(!shell.workspace.title_order.contains(&closed));
             assert!(
                 !shell
+                    .pages
                     .terminal_tabs
                     .contains_key(&terminal_id(shell, &closed))
             );
-            assert_eq!(shell.terminal_tabs.len(), opened.len());
+            assert_eq!(shell.pages.terminal_tabs.len(), opened.len());
             assert_eq!(
                 shell.active_title_tab(cx).as_ref(),
                 opened.last().map(|(tab, _)| tab)
             );
             for (tab, terminal) in &opened {
-                assert_eq!(shell.terminal_tabs[&terminal_id(shell, tab)], *terminal);
+                assert_eq!(
+                    shell.pages.terminal_tabs[&terminal_id(shell, tab)],
+                    *terminal
+                );
             }
         })
         .unwrap();
@@ -227,10 +234,11 @@ fn command_new_tab_every_click_opens_and_focuses_an_independent_top_tab(cx: &mut
             assert!(!shell.workspace.title_order.contains(&closed));
             assert!(
                 !shell
+                    .pages
                     .terminal_tabs
                     .contains_key(&terminal_id(shell, &closed))
             );
-            assert_eq!(shell.terminal_tabs.len(), opened.len());
+            assert_eq!(shell.pages.terminal_tabs.len(), opened.len());
             assert_eq!(
                 shell.active_title_tab(cx).as_ref(),
                 opened.last().map(|(tab, _)| tab)
@@ -244,14 +252,14 @@ fn command_new_tab_every_click_opens_and_focuses_an_independent_top_tab(cx: &mut
     window
         .update(visual, |shell, w, cx| {
             assert_eq!(
-                shell.active_terminal_tab,
+                shell.pages.active_terminal_tab,
                 opened.last().map(|(tab, _)| terminal_id(shell, tab))
             );
             assert_eq!(shell.dock_focused(w, cx), Some(0));
             for (_, terminal) in &opened {
-                assert_ne!(shell.terminals["/work/vorkspace"][0], *terminal);
+                assert_ne!(shell.dock.terminals["/work/vorkspace"][0], *terminal);
             }
-            assert_eq!(shell.terminal_tabs.len(), opened.len());
+            assert_eq!(shell.pages.terminal_tabs.len(), opened.len());
         })
         .unwrap();
     window
@@ -260,10 +268,13 @@ fn command_new_tab_every_click_opens_and_focuses_an_independent_top_tab(cx: &mut
     visual.run_until_parked();
     window
         .update(visual, |shell, _, _| {
-            assert_eq!(shell.terminal_tabs.len(), opened.len());
-            assert_eq!(shell.terminals["/work/vorkspace"].len(), 2);
+            assert_eq!(shell.pages.terminal_tabs.len(), opened.len());
+            assert_eq!(shell.dock.terminals["/work/vorkspace"].len(), 2);
             for (tab, terminal) in &opened {
-                assert_eq!(shell.terminal_tabs[&terminal_id(shell, tab)], *terminal);
+                assert_eq!(
+                    shell.pages.terminal_tabs[&terminal_id(shell, tab)],
+                    *terminal
+                );
             }
         })
         .unwrap();
@@ -289,7 +300,7 @@ fn terminal_tabs_retain_output_and_working_copy_across_navigation_and_drag(
     let visual = &mut VisualTestContext::from_window(window.into(), cx);
     visual.run_until_parked();
     let before = window
-        .update(visual, |shell, _, _| shell.render_passes)
+        .update(visual, |shell, _, _| shell.window.render_passes)
         .unwrap();
     terminal.update(visual, |terminal, cx| {
         assert!(!terminal.is_visible());
@@ -299,7 +310,7 @@ fn terminal_tabs_retain_output_and_working_copy_across_navigation_and_drag(
     let feature_tab = window
         .update(visual, |shell, w, cx| {
             assert_eq!(
-                shell.render_passes, before,
+                shell.window.render_passes, before,
                 "hidden output must not repaint Shell/chat"
             );
             shell.worktree_focus.insert(
@@ -317,7 +328,7 @@ fn terminal_tabs_retain_output_and_working_copy_across_navigation_and_drag(
             assert_ne!(feature, sibling);
             assert_ne!(feature_terminal, sibling_terminal);
             assert_eq!(sibling_terminal.read(cx).cwd, "/work/feature");
-            assert_eq!(shell.terminal_tabs.len(), 3);
+            assert_eq!(shell.pages.terminal_tabs.len(), 3);
             shell.open_title_tab(&original_tab, w, cx);
             assert_eq!(shell.active_title_tab(cx), Some(original_tab.clone()));
             assert_eq!(shell.working_copy(), "/work/feature");
@@ -379,7 +390,7 @@ fn terminal_tab_close_preserves_siblings_and_revalidates_prompt_ownership(cx: &m
         .update(cx, |shell, w, cx| {
             assert_eq!(
                 old.upgrade().as_ref(),
-                shell.terminal_tabs.get(&terminal_id(shell, &tab))
+                shell.pages.terminal_tabs.get(&terminal_id(shell, &tab))
             );
             assert_eq!(shell.active_title_tab(cx), Some(sibling.clone()));
             shell.close_title_tabs(std::slice::from_ref(&tab), None, w, cx);
@@ -401,13 +412,13 @@ fn terminal_tab_close_preserves_siblings_and_revalidates_prompt_ownership(cx: &m
     let replaced = window
         .update(cx, |shell, w, cx| {
             assert_eq!(
-                shell.terminal_tabs.len(),
+                shell.pages.terminal_tabs.len(),
                 2,
                 "old confirmation must preserve same-cwd shells"
             );
             assert_eq!(shell.active_title_tab(cx), Some(successor.clone()));
             assert_eq!(
-                shell.terminal_tabs[&terminal_id(shell, &sibling)],
+                shell.pages.terminal_tabs[&terminal_id(shell, &sibling)],
                 sibling_entity
             );
             assert!(
@@ -416,7 +427,7 @@ fn terminal_tab_close_preserves_siblings_and_revalidates_prompt_ownership(cx: &m
                     .fixture_screen()
                     .contains("sibling output")
             );
-            let terminal = &shell.terminal_tabs[&terminal_id(shell, &successor)];
+            let terminal = &shell.pages.terminal_tabs[&terminal_id(shell, &successor)];
             terminal.update(cx, |terminal, _| {
                 terminal.foreground = Some("replacement-job".into())
             });
@@ -434,8 +445,8 @@ fn terminal_tab_close_preserves_siblings_and_revalidates_prompt_ownership(cx: &m
     cx.run_until_parked();
     let final_entity = window
         .update(cx, |shell, w, cx| {
-            assert_eq!(shell.terminal_tabs.len(), 2);
-            let terminal = &shell.terminal_tabs[&terminal_id(shell, &successor)];
+            assert_eq!(shell.pages.terminal_tabs.len(), 2);
+            let terminal = &shell.pages.terminal_tabs[&terminal_id(shell, &successor)];
             let final_entity = terminal.downgrade();
             terminal.update(cx, |terminal, _| {
                 terminal.foreground = Some("final-job".into())
@@ -454,10 +465,10 @@ fn terminal_tab_close_preserves_siblings_and_revalidates_prompt_ownership(cx: &m
     );
     window
         .update(cx, |shell, _, cx| {
-            assert_eq!(shell.terminal_tabs.len(), 1);
+            assert_eq!(shell.pages.terminal_tabs.len(), 1);
             assert_eq!(shell.active_title_tab(cx), Some(sibling.clone()));
             assert_eq!(
-                shell.terminal_tabs[&terminal_id(shell, &sibling)],
+                shell.pages.terminal_tabs[&terminal_id(shell, &sibling)],
                 sibling_entity
             );
             assert!(
@@ -488,9 +499,9 @@ fn terminal_tabs_restore_duplicate_cwd_identity_order_and_fresh_lazy_shells(
     let (saved, store, first, second, old) = window
         .update(cx, |shell, w, cx| {
             shell.open_connector(Connector::Github, w, cx);
-            let connector = shell.connector_pages[&Connector::Github].clone();
+            let connector = shell.pages.connector_pages[&Connector::Github].clone();
             shell.open_connector(Connector::Github, w, cx);
-            assert_eq!(shell.connector_pages[&Connector::Github], connector);
+            assert_eq!(shell.pages.connector_pages[&Connector::Github], connector);
             let connector_pane = shell.workspace.active.unwrap();
             assert_eq!(
                 shell
@@ -542,11 +553,11 @@ fn terminal_tabs_restore_duplicate_cwd_identity_order_and_fresh_lazy_shells(
             assert_eq!(shell.active_title_tab(cx), Some(second.clone()));
             assert_eq!(shell.workspace.title_order[0], second);
             assert_eq!(
-                shell.terminal_tabs.len(),
+                shell.pages.terminal_tabs.len(),
                 1,
                 "inactive saved shells restore lazily"
             );
-            let fresh = shell.terminal_tabs[&terminal_id(shell, &second)].clone();
+            let fresh = shell.pages.terminal_tabs[&terminal_id(shell, &second)].clone();
             assert_ne!(fresh.entity_id(), old);
             assert_eq!(fresh.read(cx).cwd, "/work/vorkspace");
             assert!(
@@ -560,7 +571,7 @@ fn terminal_tabs_restore_duplicate_cwd_identity_order_and_fresh_lazy_shells(
             });
             shell.open_title_tab(&first, w, cx);
             let (_, other) = active_terminal(shell, cx);
-            assert_eq!(shell.terminal_tabs.len(), 2);
+            assert_eq!(shell.pages.terminal_tabs.len(), 2);
             assert_ne!(fresh, other);
             assert_eq!(other.read(cx).cwd, "/work/vorkspace");
             assert!(
@@ -570,10 +581,10 @@ fn terminal_tabs_restore_duplicate_cwd_identity_order_and_fresh_lazy_shells(
                     .contains("restored second only")
             );
             shell.open_title_tab(&second, w, cx);
-            assert_eq!(shell.terminal_tabs[&terminal_id(shell, &second)], fresh);
+            assert_eq!(shell.pages.terminal_tabs[&terminal_id(shell, &second)], fresh);
             assert!(fresh.focus_handle(cx).is_focused(w));
             shell.open_terminal_tab(w, cx);
-            assert_eq!(shell.terminal_tabs.len(), 3);
+            assert_eq!(shell.pages.terminal_tabs.len(), 3);
             let newest = shell.active_title_tab(cx).unwrap();
             assert_ne!(newest, first);
             assert_ne!(newest, second);

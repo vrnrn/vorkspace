@@ -52,7 +52,7 @@ fn compact_settings_button() -> gpui::Stateful<gpui::Div> {
 
 impl Shell {
     pub(super) fn classic_rail_width(&self) -> f32 {
-        if self.workspace.project_rail_open || self.settings.is_some() {
+        if self.workspace.project_rail_open || self.pages.settings.is_some() {
             self.workspace
                 .project_rail_width
                 .max(self.open_rail_floor())
@@ -69,7 +69,7 @@ impl Shell {
     pub(super) fn open_rail_floor(&self) -> f32 {
         let lights = traffic_light_inset(
             self.workspace.preferences.interface_scale(),
-            self.fullscreen,
+            self.window.fullscreen,
         );
         // Each button rounds to whole device pixels: at most half a pixel more
         // at 1x (`navigation_button_size`).
@@ -81,13 +81,13 @@ impl Shell {
     /// meeting it at a right angle.
     pub(super) fn rail_meets_title_rule(&self) -> bool {
         !self.workspace.project_rail_open
-            && self.settings.is_none()
+            && self.pages.settings.is_none()
             && self.classic_rail_width() > 0.
     }
 
     pub(super) fn toggle_project_rail(&mut self, cx: &mut Context<Self>) {
         self.workspace.project_rail_open = !self.workspace.project_rail_open;
-        self.project_rail_drag = None;
+        self.rail.drag = None;
         self.close_menu(cx);
         self.invalidate_chrome(cx);
         self.persist(cx);
@@ -101,8 +101,10 @@ impl Shell {
     ) -> AnyElement {
         let width = self.classic_rail_width();
         // Early-return layouts must stop the card's presentation clock too.
-        if width <= 0. || self.settings.is_some() {
-            self.live_agents.update(cx, |activity, _| activity.hide());
+        if width <= 0. || self.pages.settings.is_some() {
+            self.sidebar
+                .live_agents
+                .update(cx, |activity, _| activity.hide());
         }
         if width <= 0. {
             return div()
@@ -126,7 +128,7 @@ impl Shell {
                 // Around its neighbour's rounded corners (the pane, or a left
                 // sidebar). Beside the icon rail, navigation overhangs the
                 // pane, so it turns into the title bar's rule instead.
-                let cap_top = if self.workspace.project_rail_open || self.settings.is_some() {
+                let cap_top = if self.workspace.project_rail_open || self.pages.settings.is_some() {
                     Some(0.)
                 } else {
                     self.rail_meets_title_rule().then_some(TITLE_BAR_HEIGHT)
@@ -138,12 +140,12 @@ impl Shell {
 
         self.resources.update(cx, |resources, cx| {
             resources.set_compact(
-                !self.workspace.project_rail_open && self.settings.is_none(),
+                !self.workspace.project_rail_open && self.pages.settings.is_none(),
                 cx,
             )
         });
 
-        if let Some(settings) = &self.settings {
+        if let Some(settings) = &self.pages.settings {
             let section = settings.read(cx).section;
             let select = cx.weak_entity();
             let back = select.clone();
@@ -170,7 +172,9 @@ impl Shell {
             return self.compact_project_rail(rail, cx);
         }
         // Expanded, sessions hang under their projects instead of the Working card.
-        self.live_agents.update(cx, |activity, _| activity.hide());
+        self.sidebar
+            .live_agents
+            .update(cx, |activity, _| activity.hide());
 
         let _ = self.workspace.migrate_project_rail();
         // The rail lists the vorkspace's sessions rather than its projects;
@@ -247,8 +251,7 @@ impl Shell {
                     .on_mouse_down(
                         MouseButton::Left,
                         cx.listener(|this, event: &MouseDownEvent, _, cx| {
-                            this.project_rail_drag =
-                                Some((event.position.x, this.classic_rail_width()));
+                            this.rail.drag = Some((event.position.x, this.classic_rail_width()));
                             cx.stop_propagation();
                         }),
                     ),
@@ -310,14 +313,14 @@ impl Shell {
                                 s.bg(vorkspace_ui::fluid::hover(0.08))
                                     .text_color(content(1.))
                             })
-                            .child(self.sidebar_options_anchor.probe())
+                            .child(self.sidebar.options_anchor.probe())
                             .child(icon("more-horizontal", 14.))
                             .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
                             .on_click(cx.listener(|this, _, window, cx| {
                                 cx.stop_propagation();
                                 this.open_menu(
                                     MenuTarget::SidebarOptions,
-                                    Anchor::Slot(this.sidebar_options_anchor.clone()),
+                                    Anchor::Slot(this.sidebar.options_anchor.clone()),
                                     window,
                                     cx,
                                 );
@@ -446,7 +449,7 @@ impl Shell {
                                     selected_item == Some(item),
                                     self.sidebar_destination_unread(item, cx),
                                 ),
-                                None => ("Search", "search", self.app_search.is_some(), false),
+                                None => ("Search", "search", self.pages.search.is_some(), false),
                             };
                             icon_button(label, label, glyph)
                                 .debug_selector(move || format!("sidebar-navigation-{label}"))

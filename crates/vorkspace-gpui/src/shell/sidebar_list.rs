@@ -12,10 +12,10 @@ impl Shell {
         {
             return Some(SidebarNavigation::Codebase);
         }
-        if self.active_terminal_tab.is_some() {
+        if self.pages.active_terminal_tab.is_some() {
             return None;
         }
-        match self.active_app_view? {
+        match self.pages.active_app_view? {
             app_views::AppView::Connector(provider) => Some(SidebarNavigation::Connector(provider)),
             app_views::AppView::Notes => Some(SidebarNavigation::Notes),
             app_views::AppView::Automations => Some(SidebarNavigation::Automations),
@@ -221,8 +221,8 @@ impl Shell {
                     .px_2()
                     .rounded(px(radius::CONTROL))
                     .relative()
-                    .when(self.app_search.is_some(), |d| d.bg(content(0.1)))
-                    .text_color(content(if self.app_search.is_some() { 1. } else { 0.5 }))
+                    .when(self.pages.search.is_some(), |d| d.bg(content(0.1)))
+                    .text_color(content(if self.pages.search.is_some() { 1. } else { 0.5 }))
                     .font_weight(FontWeight::MEDIUM)
                     .hover(|s| {
                         s.bg(vorkspace_ui::fluid::hover(0.08))
@@ -252,7 +252,7 @@ impl Shell {
                             item,
                             selected == Some(item),
                             self.sidebar_destination_unread(item, cx),
-                            self.sidebar_hover == Some(item),
+                            self.sidebar.hover == Some(item),
                         )
                     })
                     .collect();
@@ -323,9 +323,9 @@ impl Shell {
                                     .on_hover(move |hovered, _, cx| {
                                         let _ = hovering.update(cx, |this: &mut Shell, cx| {
                                             if *hovered {
-                                                this.sidebar_hover = Some(item);
-                                            } else if this.sidebar_hover == Some(item) {
-                                                this.sidebar_hover = None;
+                                                this.sidebar.hover = Some(item);
+                                            } else if this.sidebar.hover == Some(item) {
+                                                this.sidebar.hover = None;
                                             }
                                             this.sidebar_frame.update(cx, |_, cx| cx.notify());
                                             this.project_rail_frame.update(cx, |_, cx| cx.notify());

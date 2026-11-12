@@ -41,6 +41,7 @@ impl Shell {
         });
         let name_sub = cx.subscribe(&name, |this, field, _: &input::Changed, cx| {
             let Some(editing) = this
+                .project_settings
                 .vorkspace_dialog
                 .as_ref()
                 .filter(|d| d.name == field)
@@ -72,6 +73,7 @@ impl Shell {
                 return;
             }
             let Some(editing) = this
+                .project_settings
                 .vorkspace_dialog
                 .as_ref()
                 .filter(|d| d.icon_letters == field)
@@ -96,7 +98,7 @@ impl Shell {
         let focus = cx.focus_handle();
         self.navigation_revision += 1;
         window.focus(&name.focus_handle(cx), cx);
-        self.vorkspace_dialog = Some(VorkspaceDialog {
+        self.project_settings.vorkspace_dialog = Some(VorkspaceDialog {
             editing: id,
             project: None,
             name,
@@ -109,18 +111,20 @@ impl Shell {
     }
 
     pub(super) fn close_vorkspace_dialog(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if self.vorkspace_dialog.take().is_some() {
+        if self.project_settings.vorkspace_dialog.take().is_some() {
             self.focus_workspace(window, cx);
             cx.notify();
         }
     }
 
     pub(crate) fn management_modal_focus(&self, cx: &App) -> Option<FocusHandle> {
-        self.background_dialog
+        self.project_settings
+            .background_dialog
             .as_ref()
             .map(|background| background.view.focus_handle(cx))
             .or_else(|| {
-                self.vorkspace_dialog
+                self.project_settings
+                    .vorkspace_dialog
                     .as_ref()
                     .map(|dialog| dialog.focus.clone())
             })
@@ -146,7 +150,7 @@ impl Shell {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Option<AnyElement> {
-        let dialog = self.vorkspace_dialog.as_ref()?;
+        let dialog = self.project_settings.vorkspace_dialog.as_ref()?;
         let editing = dialog.editing.clone();
         let def = self
             .workspace
@@ -266,11 +270,12 @@ impl Shell {
                     })
                     .on_click(cx.listener(move |this, _, window, cx| {
                         if this
+                            .project_settings
                             .vorkspace_dialog
                             .as_ref()
                             .is_some_and(|d| d.editing == id)
                         {
-                            if let Some(d) = this.vorkspace_dialog.as_mut() {
+                            if let Some(d) = this.project_settings.vorkspace_dialog.as_mut() {
                                 d.project = None;
                                 d.confirm_delete = false;
                             }
@@ -332,7 +337,7 @@ impl Shell {
                                 .child(self.project_label(path)),
                         )
                         .on_click(cx.listener(move |this, _, _, cx| {
-                            if let Some(d) = this.vorkspace_dialog.as_mut() {
+                            if let Some(d) = this.project_settings.vorkspace_dialog.as_mut() {
                                 d.project = Some(target.clone());
                                 d.confirm_delete = false;
                             }
@@ -636,7 +641,8 @@ impl Shell {
                                     if only {
                                         return;
                                     }
-                                    let Some(d) = this.vorkspace_dialog.as_mut() else {
+                                    let Some(d) = this.project_settings.vorkspace_dialog.as_mut()
+                                    else {
                                         return;
                                     };
                                     if d.project.is_some() || d.editing != delete_id {

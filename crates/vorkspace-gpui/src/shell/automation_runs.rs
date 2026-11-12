@@ -75,7 +75,7 @@ fn service_lock(service: &ServiceHandle) -> Result<std::sync::MutexGuard<'_, Ser
 
 impl Shell {
     pub(super) fn automation_work_in_progress(&self) -> bool {
-        let state = &self.automation_state;
+        let state = &self.pages.automation_state;
         state.polling
             || state.events_polling
             || !state.running.is_empty()
@@ -85,10 +85,10 @@ impl Shell {
     }
 
     pub(super) fn initialize_automations(&mut self, cx: &mut Context<Self>) {
-        if self.automation_state.opening || self.automation_state.service.is_some() {
+        if self.pages.automation_state.opening || self.pages.automation_state.service.is_some() {
             return;
         }
-        self.automation_state.opening = true;
+        self.pages.automation_state.opening = true;
         let core = self.app_core.clone().expect("registered workspace window");
         if let Some(service) = core.update(cx, |core, cx| core.request_automation_service(cx)) {
             self.automation_service_ready(Ok(service), cx);
@@ -100,12 +100,12 @@ impl Shell {
         result: Result<ServiceHandle, String>,
         cx: &mut Context<Self>,
     ) {
-        if self.automation_state.service.is_some() {
+        if self.pages.automation_state.service.is_some() {
             return;
         }
-        let requested = std::mem::take(&mut self.automation_state.opening);
+        let requested = std::mem::take(&mut self.pages.automation_state.opening);
         match result {
-            Ok(service) => self.automation_state.service = Some(service),
+            Ok(service) => self.pages.automation_state.service = Some(service),
             Err(error) => {
                 if requested {
                     self.error = Some(format!("Could not open automations: {error}"));
@@ -121,6 +121,7 @@ impl Shell {
                 }
                 this.poll_automations(cx);
                 if this
+                    .pages
                     .automation_state
                     .open_requested
                     .take()
@@ -128,8 +129,8 @@ impl Shell {
                 {
                     this.open_automations(window, cx);
                 } else if this.navigation_revision == 0
-                    && this.active_app_view.is_none()
-                    && this.settings.is_none()
+                    && this.pages.active_app_view.is_none()
+                    && this.pages.settings.is_none()
                 {
                     let saved = this.workspace.scope_focus.get(&this.tab_scope()).cloned();
                     if let Some(tab @ TitleTab::App(_)) = saved {
@@ -146,31 +147,37 @@ impl Shell {
             return;
         }
         // A rejected or deferred submission still needs a terminal receipt.
-        let sessions: Vec<_> = self.automation_state.running.keys().copied().collect();
+        let sessions: Vec<_> = self
+            .pages
+            .automation_state
+            .running
+            .keys()
+            .copied()
+            .collect();
         for id in sessions {
             self.automation_session_changed(id, cx);
         }
-        let Some(service) = self.automation_state.service.clone() else {
+        let Some(service) = self.pages.automation_state.service.clone() else {
             self.initialize_automations(cx);
             return;
         };
-        if self.automation_state.polling {
+        if self.pages.automation_state.polling {
             return;
         }
-        self.automation_state.polling = true;
+        self.pages.automation_state.polling = true;
         let work = cx
             .background_executor()
             .spawn(async move { service_lock(&service)?.poll(now()) });
         cx.spawn(async move |this, cx| {
             let result = work.await;
             let _ = this.update_in(cx, |this, window, cx| {
-                this.automation_state.polling = false;
+                this.pages.automation_state.polling = false;
                 match result {
                     Ok(runs) => {
                         for run in runs {
                             this.launch_automation(run, false, cx);
                         }
-                        if !cfg!(test) && this.inbox.is_none() {
+                        if !cfg!(test) && this.pages.inbox.is_none() {
                             this.ensure_background_inbox(window, cx);
                         }
                         this.drain_inbox_automation_events(cx);
@@ -190,18 +197,18 @@ impl Shell {
         if !self.holds_scheduler(cx) {
             return;
         }
-        if self.automation_state.events_polling {
+        if self.pages.automation_state.events_polling {
             return;
         }
         let items = core.read(cx).automation_events();
         if items.is_empty() {
             return;
         }
-        let Some(service) = self.automation_state.service.clone() else {
+        let Some(service) = self.pages.automation_state.service.clone() else {
             self.initialize_automations(cx);
             return;
         };
-        self.automation_state.events_polling = true;
+        self.pages.automation_state.events_polling = true;
         let attempted = items.clone();
         let flush = core.read(cx).flush_pending(cx);
         let work = cx.background_executor().spawn(async move {
@@ -213,7 +220,7 @@ impl Shell {
         cx.spawn(async move |this, cx| {
             let result = work.await;
             let _ = this.update(cx, |this, cx| {
-                this.automation_state.events_polling = false;
+                this.pages.automation_state.events_polling = false;
                 match result {
                     Ok((runs, retry)) => {
                         core.update(cx, |core, cx| {
@@ -241,16 +248,21 @@ impl Shell {
         cx: &mut Context<Self>,
     ) {
         if self
+            .pages
             .automation_state
             .running
             .values()
             .any(|run| run.run_id == due.run.id)
-            || !self.automation_state.pending.insert(due.run.id.clone())
+            || !self
+                .pages
+                .automation_state
+                .pending
+                .insert(due.run.id.clone())
         {
             return;
         }
-        let Some(service) = self.automation_state.service.clone() else {
-            self.automation_state.pending.remove(&due.run.id);
+        let Some(service) = self.pages.automation_state.service.clone() else {
+            self.pages.automation_state.pending.remove(&due.run.id);
             self.initialize_automations(cx);
             return;
         };
@@ -274,10 +286,10 @@ impl Shell {
                 Ok(None) => {
                     // Another process owns execution, or this exact run was
                     // already claimed. Its durable queue remains authoritative.
-                    this.automation_state.pending.remove(&id);
+                    this.pages.automation_state.pending.remove(&id);
                 }
                 Err(error) => {
-                    this.automation_state.pending.remove(&id);
+                    this.pages.automation_state.pending.remove(&id);
                     this.error = Some(format!("Could not claim automation run: {error}"));
                     cx.notify();
                 }
@@ -297,15 +309,15 @@ impl Shell {
         };
         match view.read(cx).managed_availability(cx) {
             ManagedAvailability::Available => {
-                self.automation_state.reserved.insert(candidate.id);
+                self.pages.automation_state.reserved.insert(candidate.id);
                 self.prepare_automation(launch, Some(candidate), cx);
             }
             ManagedAvailability::Pending => {
-                self.automation_state.reserved.insert(candidate.id);
+                self.pages.automation_state.reserved.insert(candidate.id);
                 let changes = cx.observe(&view, move |this, _, cx| {
                     this.resume_automation_reuse(candidate.id, cx);
                 });
-                self.automation_state.waiting_for_reuse.insert(
+                self.pages.automation_state.waiting_for_reuse.insert(
                     candidate.id,
                     WaitingForReuse {
                         launch,
@@ -333,8 +345,8 @@ impl Shell {
         let id = locked(&self.store)
             .ok()?
             .resolve_existing_session_id(original)?;
-        if self.automation_state.running.contains_key(&id)
-            || self.automation_state.reserved.contains(&id)
+        if self.pages.automation_state.running.contains_key(&id)
+            || self.pages.automation_state.reserved.contains(&id)
             || !self.session_available_here(id, cx)
         {
             return None;
@@ -355,7 +367,7 @@ impl Shell {
     }
 
     pub(super) fn resume_automation_reuse(&mut self, id: i64, cx: &mut Context<Self>) {
-        let Some(waiting) = self.automation_state.waiting_for_reuse.get(&id) else {
+        let Some(waiting) = self.pages.automation_state.waiting_for_reuse.get(&id) else {
             return;
         };
         let candidate = waiting.candidate;
@@ -367,11 +379,16 @@ impl Shell {
         if readiness == ManagedAvailability::Pending {
             return;
         }
-        let waiting = self.automation_state.waiting_for_reuse.remove(&id).unwrap();
+        let waiting = self
+            .pages
+            .automation_state
+            .waiting_for_reuse
+            .remove(&id)
+            .unwrap();
         if readiness == ManagedAvailability::Available {
             self.prepare_automation(waiting.launch, Some(candidate), cx);
         } else {
-            self.automation_state.reserved.remove(&id);
+            self.pages.automation_state.reserved.remove(&id);
             self.prepare_automation(waiting.launch, None, cx);
         }
     }
@@ -405,7 +422,7 @@ impl Shell {
             )
         });
         let store = self.store.clone();
-        let service = self.automation_state.service.clone();
+        let service = self.pages.automation_state.service.clone();
         let work = cx.background_executor().spawn(async move {
             let prepared = (|| {
                 let automation = &launch.due.automation;
@@ -462,7 +479,7 @@ impl Shell {
         cx: &mut Context<Self>,
     ) {
         if let Some(candidate) = reuse {
-            self.automation_state.reserved.remove(&candidate.id);
+            self.pages.automation_state.reserved.remove(&candidate.id);
         }
         let created = match prepared {
             Ok(created) => created,
@@ -554,7 +571,7 @@ impl Shell {
             self.submit_prepared_automation(launch, prepared, window, cx);
             return;
         }
-        let Some(service) = self.automation_state.service.clone() else {
+        let Some(service) = self.pages.automation_state.service.clone() else {
             self.automation_launch_failed(
                 launch,
                 "Automations became unavailable before submission".into(),
@@ -563,7 +580,7 @@ impl Shell {
             return;
         };
         if let Some(candidate) = reuse {
-            self.automation_state.reserved.insert(candidate.id);
+            self.pages.automation_state.reserved.insert(candidate.id);
         }
         let run_id = launch.due.run.id.clone();
         let work = cx.background_executor().spawn(async move {
@@ -576,7 +593,7 @@ impl Shell {
                     Ok(run) => run,
                     Err(error) => {
                         if let Some(candidate) = prepared.reuse {
-                            this.automation_state.reserved.remove(&candidate.id);
+                            this.pages.automation_state.reserved.remove(&candidate.id);
                         }
                         this.automation_launch_failed(launch, error, cx);
                         return;
@@ -600,7 +617,7 @@ impl Shell {
         let automation = &launch.due.automation;
         let checkout = requested_worktree(automation);
         if let Some(candidate) = prepared.reuse {
-            self.automation_state.reserved.remove(&candidate.id);
+            self.pages.automation_state.reserved.remove(&candidate.id);
             let current = self.automation_candidate(candidate, cx);
             if current.is_none_or(|view| {
                 let chat = view.read(cx);
@@ -647,8 +664,8 @@ impl Shell {
             view.update(cx, |view, _| view.summary.work_item = Some(linked));
         }
         let due = launch.due;
-        self.automation_state.pending.remove(&due.run.id);
-        self.automation_state.running.insert(
+        self.pages.automation_state.pending.remove(&due.run.id);
+        self.pages.automation_state.running.insert(
             id,
             Running {
                 run_id: due.run.id.clone(),
@@ -672,7 +689,7 @@ impl Shell {
         let prompt = due.run.prompt.unwrap_or(due.automation.prompt);
         view.update(cx, |view, cx| view.quick_submit(prompt, settings, cx));
         self.publish_prepared(&view, install.as_mut(), cx);
-        if let Some(run) = self.automation_state.running.get_mut(&id) {
+        if let Some(run) = self.pages.automation_state.running.get_mut(&id) {
             run.submitting = false;
         }
         self.automation_session_changed(id, cx);
@@ -683,7 +700,10 @@ impl Shell {
     }
 
     fn automation_launch_failed(&mut self, launch: Launch, error: String, cx: &mut Context<Self>) {
-        self.automation_state.pending.remove(&launch.due.run.id);
+        self.pages
+            .automation_state
+            .pending
+            .remove(&launch.due.run.id);
         if launch.reveal {
             self.error = Some(error.clone());
             cx.notify();
@@ -692,7 +712,7 @@ impl Shell {
     }
 
     pub(super) fn automation_session_changed(&mut self, id: i64, cx: &mut Context<Self>) {
-        let Some(run) = self.automation_state.running.get(&id) else {
+        let Some(run) = self.pages.automation_state.running.get(&id) else {
             return;
         };
         if run.submitting {
@@ -718,7 +738,7 @@ impl Shell {
         } else {
             "failed"
         };
-        let run = self.automation_state.running.remove(&id).unwrap();
+        let run = self.pages.automation_state.running.remove(&id).unwrap();
         self.update_automation_run(
             run.run_id,
             status,
@@ -736,12 +756,12 @@ impl Shell {
         error: Option<String>,
         cx: &mut Context<Self>,
     ) {
-        let Some(service) = self.automation_state.service.clone() else {
+        let Some(service) = self.pages.automation_state.service.clone() else {
             return;
         };
-        let previous = self.automation_state.writes.take();
+        let previous = self.pages.automation_state.writes.take();
         let status = status.to_string();
-        self.automation_state.writes = Some(cx.spawn(async move |this, cx| {
+        self.pages.automation_state.writes = Some(cx.spawn(async move |this, cx| {
             if let Some(previous) = previous {
                 previous.await;
             }
@@ -753,7 +773,7 @@ impl Shell {
                 if let Err(error) = result {
                     this.error = Some(format!("Could not save automation result: {error}"));
                 }
-                if let Some(view) = &this.automations {
+                if let Some(view) = &this.pages.automations {
                     view.update(cx, |view, cx| view.refresh(cx));
                 }
                 cx.notify();
@@ -770,8 +790,8 @@ impl Shell {
     ) {
         let cwd = cwd.to_string();
         let store = self.store.clone();
-        let previous = self.group_writes.take();
-        self.group_writes = Some(cx.spawn(async move |this, cx| {
+        let previous = self.sidebar.group_writes.take();
+        self.sidebar.group_writes = Some(cx.spawn(async move |this, cx| {
             if let Some(previous) = previous {
                 previous.await;
             }

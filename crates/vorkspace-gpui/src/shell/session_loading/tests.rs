@@ -179,14 +179,14 @@ fn restoring_large_history_materializes_only_visible_chats(cx: &mut TestAppConte
                 shell.tab_copy(oldest, cx).headline,
                 "Saved conversation 999"
             );
-            shell.query = "saved conversation 999".into();
+            shell.sidebar.query = "saved conversation 999".into();
             assert_eq!(shell.sidebar_session_ids(cx), [oldest]);
             assert_eq!(
                 shell.sessions.len(),
                 1,
                 "filtering old history must remain metadata-only"
             );
-            shell.query.clear();
+            shell.sidebar.query.clear();
             shell.run_session_menu(oldest, "pin", window, cx);
             assert!(shell.session_metadata(oldest, cx).summary.pinned);
             assert_eq!(

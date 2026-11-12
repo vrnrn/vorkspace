@@ -210,7 +210,8 @@ fn search_header_clears_navigation_and_keeps_its_query_across_rail_modes(cx: &mu
             w.activate_window();
             shell.open_app_search(w, cx);
             let input = shell
-                .app_search
+                .pages
+                .search
                 .as_ref()
                 .unwrap()
                 .view
@@ -301,7 +302,7 @@ fn hidden_workspace_panes_do_not_leave_a_resize_hitbox_over_global_surfaces(
     for surface in ["GitHub", "Notes", "Search", "Bot", "Settings"] {
         window
             .update(visual, |shell, window, cx| {
-                if shell.settings.is_some() {
+                if shell.pages.settings.is_some() {
                     shell.close_settings(window, cx);
                 }
                 shell.open(session, window, cx);
@@ -349,7 +350,7 @@ fn hidden_workspace_panes_do_not_leave_a_resize_hitbox_over_global_surfaces(
         visual.simulate_mouse_down(old_sash, MouseButton::Left, Default::default());
         window
             .update(visual, |shell, _, _| {
-                assert!(shell.resize.is_none(), "{surface}")
+                assert!(shell.sidebar.resize.is_none(), "{surface}")
             })
             .unwrap();
         let moved = old_sash + gpui::point(px(30.), px(0.));

@@ -1,3 +1,8 @@
+mod state;
+use state::{
+    AppPages, ExternalEditorState, PageTabs, PaneState, ProjectRailState, ProjectSettingsState,
+    ReviewState, SidebarPreviewState, SidebarState, TabStripState, TerminalDockState, WindowState,
+};
 mod accounts;
 mod app_commands;
 mod menus;
@@ -476,24 +481,13 @@ pub(crate) struct Shell {
     quick_open: Option<quick_open::Open>,
     image_lightbox: Option<(Entity<crate::image_lightbox::ImageLightbox>, Subscription)>,
     orchestrations: HashMap<i64, orchestration::Run>,
-    /// Each lead's last orchestration, whose agents hang under it in the sidebar.
-    orchestration_summaries: HashMap<i64, vorkspace_core::orchestration::Summary>,
-    /// Sessions an /operator thread started, by the session that started them.
-    started_by: HashMap<i64, i64>,
     /// The sidebar rails under orchestrators and /operator threads.
     usage_footer: Entity<UsageFooter>,
     /// Resource pressure indicator and its running-work dialog.
     resources: Entity<ResourceMonitor>,
     sidebar_frame: Entity<Chrome>,
     project_rail_frame: Entity<Chrome>,
-    project_rail_drag: Option<(Pixels, f32)>,
     sidebar_search: Entity<input::Input>,
-    sidebar_slide: Option<PaneSlide>,
-    sidebar_fraction: f32,
-    sidebar_content_width: f32,
-    /// useTrafficLightsVisible: fullscreen hides the native buttons, so the
-    /// title bar takes their room back.
-    fullscreen: bool,
     tabs_frame: Entity<Chrome>,
     store: Database,
     sessions: HashMap<i64, Entity<Conversation>>,
@@ -508,167 +502,56 @@ pub(crate) struct Shell {
     notification_state: notifications::State,
     quick: crate::composer::quick_composer::Controller,
     unseen_finished: HashSet<i64>,
-    live_agents: Entity<live_agents::LiveAgents>,
+    sidebar: SidebarState,
     archiving: HashSet<i64>,
-    groups: HashMap<String, Arc<session_groups::FolderIndex>>,
-    renaming: Option<session_groups::Renaming>,
-    link_dialog: Option<session_groups::LinkDialog>,
     deleting: HashSet<i64>,
     session_removal_epoch: u64,
-    group_writes: Option<gpui::Task<()>>,
-    selected_sessions: HashSet<i64>,
-    selection_anchor: Option<i64>,
-    context_selection: bool,
-    sidebar_target: Option<session_groups::RenameTarget>,
-    session_row_bounds: HashMap<i64, AnchorSlot>,
-    filter_anchor: AnchorSlot,
-    notes: Option<Entity<Notes>>,
-    codebase_tabs: HashMap<i64, Entity<crate::codebase::Page>>,
-    note_tabs: HashMap<i64, Entity<Notes>>,
-    item_tabs: HashMap<i64, Entity<crate::inbox::Inbox>>,
-    bot_document_tabs: HashMap<i64, Entity<crate::bots::BotDocumentPane>>,
-    bot_pane_views: HashMap<i64, Entity<app_panes::BotPaneView>>,
-    todos_page: Option<Entity<crate::todos::TodosPage>>,
+    page_tabs: PageTabs,
     /// The project sidebar's board; it follows the current project.
     project_todos: Option<Entity<crate::todos::TodoBoardView>>,
     /// Minion sessions' context and capability, shared with Bots.
     team_histories: crate::conversation::TeamHistories,
     bot_conversations: crate::bots::BotConversations,
-    inbox: Option<Entity<crate::inbox::Inbox>>,
-    connector_pages: HashMap<crate::workspace::Connector, Entity<crate::inbox::Inbox>>,
-    automations: Option<Entity<crate::automations::Automations>>,
-    active_app_view: Option<app_views::AppView>,
-    active_terminal_tab: Option<u64>,
-    /// Title-tab shells have exclusive ownership, separate from dock shells.
-    terminal_tabs: HashMap<u64, Entity<Terminal>>,
-    app_view_events: Vec<Subscription>,
-    automation_state: automation_runs::State,
-    settings: Option<Entity<crate::settings::SettingsView>>,
-    settings_events: Option<Subscription>,
-    app_search: Option<search::Open>,
-    parked_search: Option<search::Open>,
-    preparing_panes: bool,
-    saved_search: Option<(String, vorkspace_core::search::Scope)>,
+    pages: AppPages,
     order: Vec<i64>,
     pub(crate) workspace: Workspace,
-    external_editors: Option<Vec<vorkspace_core::external_editor::ExternalEditor>>,
-    external_editor_scan: u64,
+    external_editor: ExternalEditorState,
     deleting_projects: HashSet<String>,
     active_worktree_removals: usize,
     focus: FocusHandle,
     project_rail_toggle_focus: FocusHandle,
     sidebar_focus: FocusHandle,
-    query: String,
-    sidebar_hover: Option<SidebarNavigation>,
-    tab_hover: Option<i64>,
-    /// Tab animations: opening and closing title tabs, with each tab's last label.
-    title_tab_motion: vorkspace_ui::tab_motion::TabMotion<TitleTab, ()>,
-    /// Tab animations: the selected tab before the last switch, the one now
-    /// selected and when it changed, so one eases down as the other widens.
-    title_tab_selection: (
-        Option<TitleTab>,
-        Option<TitleTab>,
-        vorkspace_ui::clock::Instant,
-    ),
-    session_hover: Option<i64>,
-    session_preview: Option<SessionPreview>,
-    preview_close: Option<gpui::Task<()>>,
-    preview_open: Option<gpui::Task<()>>,
-    sidebar_last_scroll: Option<vorkspace_ui::clock::Instant>,
-    window_observed: bool,
-    shortcuts: Option<shortcuts::Shortcuts>,
-    window_active: bool,
-    window_glass: Option<bool>,
-    window_blur: Option<u32>,
-    quit_prompted: bool,
+    preview: SidebarPreviewState,
+    pub(crate) window: WindowState,
     pub(crate) menu: Option<ShellMenu>,
-    background_dialog: Option<project_settings::OpenBackground>,
-    /// Project settings: one project's appearance, background, Codebase
-    /// Memory and notifications, in the same dialog frame as a Bot's.
-    pub(super) vorkspace_dialog: Option<vorkspace_dialog::VorkspaceDialog>,
+    pub(super) project_settings: ProjectSettingsState,
     /// What every window shares; `None` only before the window joins it.
     app_core: Option<Entity<app_core::AppCore>>,
     preparing_sessions: Arc<std::sync::atomic::AtomicUsize>,
     vorkspace_baseline: Arc<Vec<crate::workspace::VorkspaceDef>>,
-    window_layout: u64,
     window_shared: Option<Arc<windows::WindowShared>>,
-    window_closing: bool,
-    native_window: Option<gpui::WindowHandle<Self>>,
-    native_title: String,
-    rail_sessions_expanded: bool,
-    rail_list: gpui::ListState,
-    rail_list_ids: std::rc::Rc<Vec<i64>>,
-    /// The rail's title search field is showing.
-    rail_search_open: bool,
-    vorkspace_anchor: AnchorSlot,
+    rail: ProjectRailState,
     backgrounds: HashMap<i64, Entity<crate::project_background::ProjectBackground>>,
-    /// Each project's working grid in the rail, by project path.
-    project_anchor: AnchorSlot,
-    sidebar_options_anchor: AnchorSlot,
     history: VisitHistory,
     /// User navigation invalidates pending requests that would otherwise
     /// focus a new session in a tab or project the user has already left.
     navigation_revision: u64,
-    pending_project_blanks: HashSet<String>,
     pending_project_creations: HashMap<String, usize>,
-    new_tab_task: Option<gpui::Task<()>>,
+    tabs: TabStripState,
     worktree_focus: HashMap<String, crate::git_tools::worktree_switcher::WorktreeFocus>,
     worktree_returns: HashMap<(String, String), i64>,
-    tab_drag: Option<TabDrag>,
-    /// Tabs sliding between slots: neighbours making room for a drag and,
-    /// after a drop, every tab gliding from where it was drawn into place.
-    tab_shifts: HashMap<TitleTab, TabShift>,
-    pane_ticks: HashMap<i64, PaneTick>,
-    skip_tab_click: bool,
     error: Option<String>,
-    tab_scroll: ScrollHandle,
-    tab_switcher_anchor: AnchorSlot,
-    tab_scroll_task: Option<gpui::Task<()>>,
-    resize: Option<(Pixels, f32)>,
     pub(crate) git: Entity<crate::git_status::ProjectGit>,
     pub(crate) right_panel: Option<Entity<RightPanel>>,
-    reviews: HashMap<i64, Entity<crate::git_tools::review::ReviewPane>>,
-    review_cache: crate::git_tools::review::ReviewCache,
-    /// A review sliding in or out: its session and pane.
-    review_slide: Option<(i64, PaneSlide, Entity<crate::git_tools::review::ReviewPane>)>,
-    /// A session review card's Review, opened beside its pane next frame.
-    pending_review: Option<(i64, crate::git_tools::review::ReviewTab)>,
+    review: ReviewState,
     pending_composer_focus: Option<i64>,
-    review_focused: bool,
-    review_drag: bool,
-    split_bounds: HashMap<i64, AnchorSlot>,
-    pane_bounds: AnchorSlot,
-    pane_viewport: AnchorSlot,
-    pane_scroll: ScrollHandle,
-    pane_scroll_focus: Option<(i64, i64, u32, u32)>,
-    pane_drag: Option<PaneDrag>,
-    pane_sash: Option<SashDrag>,
-    pane_motion: Option<PaneMotion>,
-    skip_session_click: bool,
-    /// Live terminals of each project's dock, in the dock's tab order.
-    terminals: HashMap<String, Vec<Entity<Terminal>>>,
-    /// A project's dock sliding open (toward 1) or shut (toward 0).
-    dock_slide: Option<(String, PaneSlide)>,
-    dock_resize: Option<(f32, f32)>,
+    panes: PaneState,
+    dock: TerminalDockState,
     /// A resize bouncing off the limit it was dragged into.
     resize_settle: Option<(ResizeTarget, ResizeSettle)>,
     /// The drag is pressing past its limit, so it has already bounced.
     resize_pinned: bool,
-    dock_hover: Option<usize>,
-    /// Tab animations for the dock's terminals, with each tab's last title.
-    dock_tab_motion: vorkspace_ui::tab_motion::TabMotion<gpui::EntityId, SharedString>,
-    dock_drag: Option<terminal_dock::DockTabDrag>,
-    /// The right panel's drawn width this frame, 0 while it is hidden.
-    /// Classic: the corner tab opening out and the one folding away.
-    dock_shifts: HashMap<gpui::EntityId, TabShift>,
-    dock_skip_click: bool,
-    dock_tab_scroll: ScrollHandle,
-    move_terminal_anchor: AnchorSlot,
-    /// The sidebar collapsed itself to make room; it returns with the room.
-    viewport_width: f32,
-    viewport_height: f32,
     observations: Vec<Subscription>,
-    pub(crate) render_passes: usize,
 }
 impl Shell {
     fn open_image(
@@ -784,7 +667,7 @@ impl Shell {
         sidebar_search.update(cx, |input, _| input.set_font_size(12.));
         let sidebar_search_events =
             cx.subscribe(&sidebar_search, |this, search, _: &input::Changed, cx| {
-                this.query = search.read(cx).content.to_lowercase();
+                this.sidebar.query = search.read(cx).content.to_lowercase();
                 this.notify_sidebar(cx);
                 cx.notify();
             });
@@ -813,185 +696,294 @@ impl Shell {
         let notification_state = notifications::State::new(&workspace, github_activity, cx);
         let owner = cx.weak_entity();
         let live_agents = cx.new(|cx| live_agents::LiveAgents::new(owner, cx));
+
+        // Evaluate fields in their original order before assembling the groups,
+        // preserving both construction effects and cleanup if construction unwinds.
+        let init_orchestrations = HashMap::new();
+        let init_orchestration_summaries = sidebar_metadata.orchestrations.clone();
+        let init_started_by = sidebar_metadata.started_by.clone();
+        let init_usage_footer = cx.new(|cx| UsageFooter::new(active_kind, cx));
+        let init_resources = resources;
+        let init_sidebar_frame = sidebar_frame;
+        let init_project_rail_frame = project_rail_frame;
+        let init_sidebar_search = sidebar_search;
+        let init_sidebar_fraction = if workspace.sidebar_visible { 1. } else { 0. };
+        let init_sidebar_content_width = workspace.right_panel_width;
+        let init_tabs_frame = tabs_frame;
+        let init_store = store;
+        let init_sessions = HashMap::new();
+        let init_directory = directory;
+        let init_visible_chats = HashSet::new();
+        let init_history_recency = HashMap::new();
+        let init_session_marks = HashMap::new();
+        let init_tab_marks = HashMap::new();
+        let init_busy_sessions = HashSet::new();
+        let init_notification_state = notification_state;
+        let init_quick = Default::default();
+        let init_unseen_finished = HashSet::new();
+        let init_live_agents = live_agents;
+        let init_archiving = HashSet::new();
+        let init_groups = sidebar_metadata
+            .groups
+            .iter()
+            .map(|(project, groups)| {
+                (
+                    project.clone(),
+                    Arc::new(session_groups::FolderIndex::new(groups.clone())),
+                )
+            })
+            .collect();
+        let init_deleting = HashSet::new();
+        let init_selected_sessions = HashSet::new();
+        let init_session_row_bounds = HashMap::new();
+        let init_filter_anchor = AnchorSlot::default();
+        let init_codebase_tabs = HashMap::new();
+        let init_note_tabs = HashMap::new();
+        let init_item_tabs = HashMap::new();
+        let init_bot_document_tabs = HashMap::new();
+        let init_bot_pane_views = HashMap::new();
+        let init_team_histories = Default::default();
+        let init_bot_conversations = Default::default();
+        let init_connector_pages = HashMap::new();
+        let init_terminal_tabs = HashMap::new();
+        let init_app_view_events = Vec::new();
+        let init_automation_state = Default::default();
+        let init_order = Vec::new();
+        let init_workspace = workspace;
+        let init_deleting_projects = HashSet::new();
+        let init_focus = cx.focus_handle();
+        let init_project_rail_toggle_focus = cx.focus_handle().tab_stop(true);
+        let init_sidebar_focus = cx.focus_handle();
+        let init_query = String::new();
+        let init_title_tab_motion = Default::default();
+        let init_title_tab_selection = (None, None, vorkspace_ui::clock::Instant::now());
+        let init_preparing_sessions = Default::default();
+        let init_vorkspace_baseline = Arc::default();
+        let init_window_layout =
+            window_layout.unwrap_or_else(|| app_core.update(cx, |core, _| core.allocate_window()));
+        let init_window_shared = window_shared;
+        let init_native_title = String::new();
+        let init_rail_list = gpui::ListState::new(0, gpui::ListAlignment::Top, px(96.));
+        let init_rail_list_ids = Default::default();
+        let init_vorkspace_anchor = AnchorSlot::default();
+        let init_backgrounds = HashMap::new();
+        let init_project_anchor = AnchorSlot::default();
+        let init_sidebar_options_anchor = AnchorSlot::default();
+        let init_history = VisitHistory::default();
+        let init_pending_project_blanks = HashSet::new();
+        let init_pending_project_creations = HashMap::new();
+        let init_worktree_focus = worktree_focus;
+        let init_worktree_returns = HashMap::new();
+        let init_tab_shifts = HashMap::new();
+        let init_pane_ticks = HashMap::new();
+        let init_tab_scroll = ScrollHandle::new();
+        let init_tab_switcher_anchor = AnchorSlot::default();
+        let init_git = git;
+        let init_reviews = HashMap::new();
+        let init_review_cache = Default::default();
+        let init_split_bounds = HashMap::new();
+        let init_pane_bounds = AnchorSlot::default();
+        let init_pane_viewport = AnchorSlot::default();
+        let init_pane_scroll = ScrollHandle::new();
+        let init_terminals = HashMap::new();
+        let init_dock_tab_motion = Default::default();
+        let init_dock_shifts = HashMap::new();
+        let init_dock_tab_scroll = ScrollHandle::new();
+        let init_move_terminal_anchor = AnchorSlot::default();
+        let init_observations = vec![
+            resource_observation,
+            resource_stops,
+            sidebar_search_events,
+            git_head,
+        ];
+
         let mut this = Self {
             bots: None,
             vox: None,
             quick_open: None,
             image_lightbox: None,
-            orchestrations: HashMap::new(),
-            orchestration_summaries: sidebar_metadata.orchestrations.clone(),
-            started_by: sidebar_metadata.started_by.clone(),
-            usage_footer: cx.new(|cx| UsageFooter::new(active_kind, cx)),
-            resources,
-            sidebar_frame,
-            project_rail_frame,
-            project_rail_drag: None,
-            sidebar_search,
-            sidebar_slide: None,
-            sidebar_fraction: if workspace.sidebar_visible { 1. } else { 0. },
-            sidebar_content_width: workspace.right_panel_width,
-            fullscreen: false,
-            tabs_frame,
-            store,
-            sessions: HashMap::new(),
-            directory,
-            visible_chats: HashSet::new(),
-            history_recency: HashMap::new(),
+            orchestrations: init_orchestrations,
+            usage_footer: init_usage_footer,
+            resources: init_resources,
+            sidebar_frame: init_sidebar_frame,
+            project_rail_frame: init_project_rail_frame,
+            sidebar_search: init_sidebar_search,
+            tabs_frame: init_tabs_frame,
+            store: init_store,
+            sessions: init_sessions,
+            directory: init_directory,
+            visible_chats: init_visible_chats,
+            history_recency: init_history_recency,
             history_clock: 0,
-            session_marks: HashMap::new(),
-            tab_marks: HashMap::new(),
-            busy_sessions: HashSet::new(),
-            notification_state,
-            quick: Default::default(),
-            unseen_finished: HashSet::new(),
-            live_agents,
-            archiving: HashSet::new(),
-            groups: sidebar_metadata
-                .groups
-                .iter()
-                .map(|(project, groups)| {
-                    (
-                        project.clone(),
-                        Arc::new(session_groups::FolderIndex::new(groups.clone())),
-                    )
-                })
-                .collect(),
-            renaming: None,
-            link_dialog: None,
-            deleting: HashSet::new(),
+            session_marks: init_session_marks,
+            tab_marks: init_tab_marks,
+            busy_sessions: init_busy_sessions,
+            notification_state: init_notification_state,
+            quick: init_quick,
+            unseen_finished: init_unseen_finished,
+            sidebar: SidebarState {
+                orchestration_summaries: init_orchestration_summaries,
+                started_by: init_started_by,
+                slide: None,
+                fraction: init_sidebar_fraction,
+                content_width: init_sidebar_content_width,
+                live_agents: init_live_agents,
+                groups: init_groups,
+                renaming: None,
+                link_dialog: None,
+                group_writes: None,
+                selected_sessions: init_selected_sessions,
+                selection_anchor: None,
+                context_selection: false,
+                target: None,
+                session_row_bounds: init_session_row_bounds,
+                filter_anchor: init_filter_anchor,
+                query: init_query,
+                hover: None,
+                project_anchor: init_project_anchor,
+                options_anchor: init_sidebar_options_anchor,
+                resize: None,
+                skip_session_click: false,
+            },
+            archiving: init_archiving,
+            deleting: init_deleting,
             session_removal_epoch: 0,
-            group_writes: None,
-            selected_sessions: HashSet::new(),
-            selection_anchor: None,
-            context_selection: false,
-            sidebar_target: None,
-            session_row_bounds: HashMap::new(),
-            filter_anchor: AnchorSlot::default(),
-            notes: None,
-            codebase_tabs: HashMap::new(),
-            note_tabs: HashMap::new(),
-            item_tabs: HashMap::new(),
-            bot_document_tabs: HashMap::new(),
-            bot_pane_views: HashMap::new(),
-            todos_page: None,
+            page_tabs: PageTabs {
+                notes: None,
+                codebase_tabs: init_codebase_tabs,
+                note_tabs: init_note_tabs,
+                item_tabs: init_item_tabs,
+                bot_document_tabs: init_bot_document_tabs,
+                bot_pane_views: init_bot_pane_views,
+                todos_page: None,
+            },
             project_todos: None,
-            team_histories: Default::default(),
-            bot_conversations: Default::default(),
-            inbox: None,
-            connector_pages: HashMap::new(),
-            automations: None,
-            active_app_view: None,
-            active_terminal_tab: None,
-            terminal_tabs: HashMap::new(),
-            app_view_events: Vec::new(),
-            automation_state: Default::default(),
-            settings: None,
-            settings_events: None,
-            app_search: None,
-            parked_search: None,
-            preparing_panes: false,
-            saved_search: None,
-            order: Vec::new(),
-            workspace,
-            external_editors: None,
-            external_editor_scan: 0,
-            deleting_projects: HashSet::new(),
+            team_histories: init_team_histories,
+            bot_conversations: init_bot_conversations,
+            pages: AppPages {
+                inbox: None,
+                connector_pages: init_connector_pages,
+                automations: None,
+                active_app_view: None,
+                active_terminal_tab: None,
+                terminal_tabs: init_terminal_tabs,
+                view_events: init_app_view_events,
+                automation_state: init_automation_state,
+                settings: None,
+                settings_events: None,
+                search: None,
+                parked_search: None,
+                saved_search: None,
+            },
+            order: init_order,
+            workspace: init_workspace,
+            external_editor: ExternalEditorState {
+                editors: None,
+                scan: 0,
+            },
+            deleting_projects: init_deleting_projects,
             active_worktree_removals: 0,
-            focus: cx.focus_handle(),
-            project_rail_toggle_focus: cx.focus_handle().tab_stop(true),
-            sidebar_focus: cx.focus_handle(),
-            query: String::new(),
-            sidebar_hover: None,
-            tab_hover: None,
-            title_tab_motion: Default::default(),
-            title_tab_selection: (None, None, vorkspace_ui::clock::Instant::now()),
-            session_hover: None,
-            session_preview: None,
-            preview_close: None,
-            preview_open: None,
-            sidebar_last_scroll: None,
-            window_observed: false,
-            shortcuts: None,
-            window_active: false,
-            window_glass: None,
-            window_blur: None,
-            quit_prompted: false,
+            focus: init_focus,
+            project_rail_toggle_focus: init_project_rail_toggle_focus,
+            sidebar_focus: init_sidebar_focus,
+            preview: SidebarPreviewState {
+                session_hover: None,
+                session_preview: None,
+                close: None,
+                open: None,
+                last_scroll: None,
+            },
+            window: WindowState {
+                fullscreen: false,
+                observed: false,
+                shortcuts: None,
+                active: false,
+                glass: None,
+                blur: None,
+                quit_prompted: false,
+                layout: init_window_layout,
+                closing: false,
+                native_window: None,
+                native_title: init_native_title,
+                viewport_width: 1200.,
+                viewport_height: 800.,
+                render_passes: 0,
+            },
             menu: None,
-            background_dialog: None,
-            vorkspace_dialog: None,
+            project_settings: ProjectSettingsState {
+                background_dialog: None,
+                vorkspace_dialog: None,
+            },
             app_core: None,
-            preparing_sessions: Default::default(),
-            vorkspace_baseline: Arc::default(),
-            window_layout: window_layout
-                .unwrap_or_else(|| app_core.update(cx, |core, _| core.allocate_window())),
-            window_shared,
-            window_closing: false,
-            native_window: None,
-            native_title: String::new(),
-            rail_sessions_expanded: false,
-            rail_list: gpui::ListState::new(0, gpui::ListAlignment::Top, px(96.)),
-            rail_list_ids: Default::default(),
-            rail_search_open: false,
-            vorkspace_anchor: AnchorSlot::default(),
-            backgrounds: HashMap::new(),
-
-            project_anchor: AnchorSlot::default(),
-            sidebar_options_anchor: AnchorSlot::default(),
-            history: VisitHistory::default(),
+            preparing_sessions: init_preparing_sessions,
+            vorkspace_baseline: init_vorkspace_baseline,
+            window_shared: init_window_shared,
+            rail: ProjectRailState {
+                drag: None,
+                sessions_expanded: false,
+                list: init_rail_list,
+                list_ids: init_rail_list_ids,
+                search_open: false,
+                vorkspace_anchor: init_vorkspace_anchor,
+            },
+            backgrounds: init_backgrounds,
+            history: init_history,
             navigation_revision: 0,
-            pending_project_blanks: HashSet::new(),
-            pending_project_creations: HashMap::new(),
-            new_tab_task: None,
-            worktree_focus,
-            worktree_returns: HashMap::new(),
-            tab_drag: None,
-            tab_shifts: HashMap::new(),
-            pane_ticks: HashMap::new(),
-            skip_tab_click: false,
+            pending_project_creations: init_pending_project_creations,
+            tabs: TabStripState {
+                hover: None,
+                motion: init_title_tab_motion,
+                selection: init_title_tab_selection,
+                pending_project_blanks: init_pending_project_blanks,
+                new_tab_task: None,
+                drag: None,
+                shifts: init_tab_shifts,
+                pane_ticks: init_pane_ticks,
+                skip_tab_click: false,
+                scroll: init_tab_scroll,
+                switcher_anchor: init_tab_switcher_anchor,
+                scroll_task: None,
+            },
+            worktree_focus: init_worktree_focus,
+            worktree_returns: init_worktree_returns,
             error: None,
-            tab_scroll: ScrollHandle::new(),
-            tab_switcher_anchor: AnchorSlot::default(),
-            tab_scroll_task: None,
-            resize: None,
-            git,
+            git: init_git,
             right_panel: None,
-            reviews: HashMap::new(),
-            review_cache: Default::default(),
-            review_slide: None,
-            pending_review: None,
+            review: ReviewState {
+                reviews: init_reviews,
+                cache: init_review_cache,
+                slide: None,
+                pending_review: None,
+                focused: false,
+                drag: false,
+            },
             pending_composer_focus: None,
-            review_focused: false,
-            review_drag: false,
-            split_bounds: HashMap::new(),
-            pane_bounds: AnchorSlot::default(),
-            pane_viewport: AnchorSlot::default(),
-            pane_scroll: ScrollHandle::new(),
-            pane_scroll_focus: None,
-            pane_drag: None,
-            pane_sash: None,
-            pane_motion: None,
-            skip_session_click: false,
-            terminals: HashMap::new(),
-            dock_slide: None,
-            dock_resize: None,
+            panes: PaneState {
+                preparing_panes: false,
+                split_bounds: init_split_bounds,
+                bounds: init_pane_bounds,
+                viewport: init_pane_viewport,
+                scroll: init_pane_scroll,
+                scroll_focus: None,
+                drag: None,
+                sash: None,
+                motion: None,
+            },
+            dock: TerminalDockState {
+                terminals: init_terminals,
+                slide: None,
+                resize: None,
+                hover: None,
+                tab_motion: init_dock_tab_motion,
+                drag: None,
+                shifts: init_dock_shifts,
+                skip_click: false,
+                tab_scroll: init_dock_tab_scroll,
+                move_terminal_anchor: init_move_terminal_anchor,
+            },
             resize_settle: None,
             resize_pinned: false,
-            dock_hover: None,
-            dock_tab_motion: Default::default(),
-            dock_drag: None,
-            dock_shifts: HashMap::new(),
-            dock_skip_click: false,
-            dock_tab_scroll: ScrollHandle::new(),
-            move_terminal_anchor: AnchorSlot::default(),
-            viewport_width: 1200.,
-            viewport_height: 800.,
-            observations: vec![
-                resource_observation,
-                resource_stops,
-                sidebar_search_events,
-                git_head,
-            ],
-            render_passes: 0,
+            observations: init_observations,
         };
         this.scan_external_editors(cx);
         this.adopt_app_core(app_core, cx);
@@ -1178,7 +1170,7 @@ impl Shell {
         let shown: HashSet<i64> = self
             .workspace
             .active_tab()
-            .filter(|_| self.settings.is_none())
+            .filter(|_| self.pages.settings.is_none())
             .map(|tab| {
                 self.workspace
                     .layout(tab)
@@ -1402,7 +1394,8 @@ impl Shell {
             &view,
             move |this, view, _: &crate::conversation::SessionActivityChanged, cx| {
                 let label = view.read(cx).activity.clone();
-                this.live_agents
+                this.sidebar
+                    .live_agents
                     .update(cx, |activity, cx| activity.set_activity(id, label, cx));
             },
         ));
@@ -1415,13 +1408,14 @@ impl Shell {
             move |this, _, event: &crate::conversation::OpenSessionChanges, cx| {
                 let tab = event.0.clone();
                 // The card's pane takes focus, so its review opens beside it.
-                this.pending_review = Some((id, tab));
+                this.review.pending_review = Some((id, tab));
                 cx.notify();
             },
         ));
         self.observations
             .push(cx.observe(&view, move |this, _, cx| {
                 if this
+                    .preview
                     .session_preview
                     .as_ref()
                     .is_some_and(|preview| preview.id == id)
@@ -1466,8 +1460,8 @@ impl Shell {
         let busy = session.responding();
         let focused = !self.app_view_open()
             && !self.bot_active(cx)
-            && self.settings.is_none()
-            && self.app_search.is_none()
+            && self.pages.settings.is_none()
+            && self.pages.search.is_none()
             && self.workspace.active == Some(id);
         if busy {
             self.busy_sessions.insert(id);
@@ -1501,7 +1495,7 @@ impl Shell {
         let cwd = session.summary.cwd.clone();
         // A working session's grid takes its project's colour.
         let color = vorkspace_core::project_appearance::project_color(&cwd);
-        self.live_agents.update(cx, |activity, _| {
+        self.sidebar.live_agents.update(cx, |activity, _| {
             activity.record(id, busy, self.unseen_finished.contains(&id));
         });
         self.session_marks[&id].update(cx, |mark, cx| {
@@ -1654,7 +1648,7 @@ impl Shell {
             .iter()
             .position(|tab| Some(tab) == self.active_title_tab(cx).as_ref())
         {
-            self.tab_scroll.scroll_to_item(ix);
+            self.tabs.scroll.scroll_to_item(ix);
         }
     }
     /// Sidebar.tsx's `gitRoot`: the active session's worktree or folder.
@@ -1700,15 +1694,17 @@ impl Shell {
     }
     /// The active tab's review pane, created from its saved state.
     fn unsaved_files(&self, cx: &App) -> bool {
-        self.reviews
+        self.review
+            .reviews
             .values()
             .any(|pane| pane.read(cx).unsaved_files(cx))
     }
 
     fn prepare_notes_close(&self, cx: &mut Context<Self>) -> bool {
-        self.notes
+        self.page_tabs
+            .notes
             .iter()
-            .chain(self.note_tabs.values())
+            .chain(self.page_tabs.note_tabs.values())
             .all(|note| note.update(cx, |note, cx| note.prepare_close(cx)))
     }
 
@@ -1741,10 +1737,10 @@ impl Shell {
             crate::quit(cx);
             return;
         }
-        if self.quit_prompted {
+        if self.window.quit_prompted {
             return;
         }
-        self.quit_prompted = true;
+        self.window.quit_prompted = true;
         let answer = window.prompt(
             gpui::PromptLevel::Warning,
             "Quit with unsaved edits?",
@@ -1755,7 +1751,7 @@ impl Shell {
         cx.spawn_in(window, async move |this, cx| {
             let answer = answer.await;
             let _ = this.update(cx, |this, cx| {
-                this.quit_prompted = false;
+                this.window.quit_prompted = false;
                 if matches!(answer, Ok(0)) {
                     crate::quit(cx);
                 } else {
@@ -1770,10 +1766,10 @@ impl Shell {
             crate::restart(cx);
             return;
         }
-        if self.quit_prompted {
+        if self.window.quit_prompted {
             return;
         }
-        self.quit_prompted = true;
+        self.window.quit_prompted = true;
         let answer = window.prompt(
             gpui::PromptLevel::Warning,
             "Restart with unsaved edits?",
@@ -1784,7 +1780,7 @@ impl Shell {
         cx.spawn_in(window, async move |this, cx| {
             let answer = answer.await;
             let _ = this.update(cx, |this, cx| {
-                this.quit_prompted = false;
+                this.window.quit_prompted = false;
                 if matches!(answer, Ok(0)) {
                     crate::restart(cx);
                 }
@@ -1808,7 +1804,7 @@ impl Shell {
         Ok(())
     }
     fn chat_hidden_off(&mut self, id: i64, cx: &mut Context<Self>) {
-        if let Some(review) = self.reviews.get(&id) {
+        if let Some(review) = self.review.reviews.get(&id) {
             review.update(cx, |r, cx| {
                 if r.state.chat_hidden {
                     r.state.chat_hidden = false;
@@ -1885,14 +1881,14 @@ impl Shell {
         {
             return;
         }
-        if let Some(search) = &self.app_search {
+        if let Some(search) = &self.pages.search {
             window.focus(&search.view.focus_handle(cx), cx);
             return;
         }
         if let Some(view) = self
             .workspace
             .active
-            .and_then(|id| self.codebase_tabs.get(&id))
+            .and_then(|id| self.page_tabs.codebase_tabs.get(&id))
         {
             window.focus(&view.focus_handle(cx), cx);
             return;
@@ -1915,7 +1911,7 @@ impl Shell {
         if let Some(view) = self
             .workspace
             .active
-            .and_then(|id| self.bot_document_tabs.get(&id))
+            .and_then(|id| self.page_tabs.bot_document_tabs.get(&id))
         {
             window.focus(&view.focus_handle(cx), cx);
             return;
@@ -2068,7 +2064,7 @@ impl Shell {
         self.record_worktree_session(id, cx);
         self.remember_title_tab(TitleTab::Workspace(self.workspace.tab_of(id).unwrap()));
         self.reveal_active_tab(cx);
-        self.review_focused = self
+        self.review.focused = self
             .workspace
             .reviews
             .get(&id)
@@ -2127,7 +2123,7 @@ impl Shell {
             }
             return;
         }
-        if let Some(settings) = &self.settings {
+        if let Some(settings) = &self.pages.settings {
             window.focus(&settings.focus_handle(cx), cx);
             return;
         }
@@ -2135,7 +2131,7 @@ impl Shell {
         if let Some(view) = self
             .workspace
             .active
-            .and_then(|id| self.codebase_tabs.get(&id))
+            .and_then(|id| self.page_tabs.codebase_tabs.get(&id))
         {
             window.focus(&view.focus_handle(cx), cx);
             return;
@@ -2143,7 +2139,7 @@ impl Shell {
         if self.focus_app_view(window, cx) {
             return;
         }
-        if self.review_focused
+        if self.review.focused
             && let Some(review) = self.active_review(cx)
         {
             review.update(cx, |r, cx| r.focus_active(window, cx));
@@ -2165,11 +2161,11 @@ impl Shell {
             return;
         }
         let to = if visible { 1. } else { 0. };
-        self.sidebar_slide = Some(match self.sidebar_slide.take() {
+        self.sidebar.slide = Some(match self.sidebar.slide.take() {
             Some(slide) => slide.retarget(to, vorkspace_ui::clock::Instant::now()),
             None => PaneSlide::new(1. - to, to, self.workspace.right_panel_width),
         });
-        self.resize = None;
+        self.sidebar.resize = None;
         self.workspace.sidebar_visible = visible;
         self.sync_right_panel(cx);
     }
@@ -2221,7 +2217,7 @@ impl Shell {
         // live detail editor; a user's click on the project leaves the Bot.
         if !explicit
             && path == self.workspace.project
-            && self.settings.is_none()
+            && self.pages.settings.is_none()
             && let Some(bot) = self.workspace_bot_context()
             && self
                 .bots
@@ -2233,9 +2229,9 @@ impl Shell {
         {
             return;
         }
-        self.selected_sessions.clear();
-        self.selection_anchor = None;
-        self.sidebar_target = None;
+        self.sidebar.selected_sessions.clear();
+        self.sidebar.selection_anchor = None;
+        self.sidebar.target = None;
         self.navigation_revision += 1;
         self.leave_app_views(cx);
         self.leave_app_search(cx);
@@ -2281,7 +2277,7 @@ impl Shell {
         if self.workspace.project.is_empty()
             || self.workspace.active.is_some()
             || self.bot_active(cx)
-            || self.active_terminal_tab.is_some()
+            || self.pages.active_terminal_tab.is_some()
         {
             return;
         }
@@ -2342,7 +2338,8 @@ impl Shell {
     }
 
     fn project_picker_target(&self) -> String {
-        self.vorkspace_dialog
+        self.project_settings
+            .vorkspace_dialog
             .as_ref()
             .map(|d| d.editing.clone())
             .unwrap_or_else(|| self.workspace.active_vorkspace.clone())
@@ -2405,7 +2402,7 @@ impl Shell {
             })
         };
         let blank_key = format!("{cwd}\0{}", focus.as_ref().map_or("", |f| f.path.as_str()));
-        if only_if_empty && !self.pending_project_blanks.insert(blank_key.clone()) {
+        if only_if_empty && !self.tabs.pending_project_blanks.insert(blank_key.clone()) {
             return;
         }
         let creation_key = vorkspace_core::files::path_key(&cwd);
@@ -2463,8 +2460,8 @@ impl Shell {
                 Ok::<_, String>((summary, settings, install))
             }
         });
-        let previous = self.new_tab_task.take();
-        self.new_tab_task = Some(cx.spawn(async move |this, cx| {
+        let previous = self.tabs.new_tab_task.take();
+        self.tabs.new_tab_task = Some(cx.spawn(async move |this, cx| {
             let result = work.await;
             if let Some(previous) = previous {
                 previous.await;
@@ -2472,7 +2469,7 @@ impl Shell {
             let _ = this.update_in(cx, |this, window, cx| {
                 this.finish_project_creation(&creation_key);
                 if only_if_empty {
-                    this.pending_project_blanks.remove(&blank_key);
+                    this.tabs.pending_project_blanks.remove(&blank_key);
                 }
                 match result {
                     Ok((summary, settings, mut install)) => {
@@ -2492,7 +2489,7 @@ impl Shell {
                                     || this.workspace.active.is_some()
                                     || this.bot_active(cx)
                                     || this.app_view_open()
-                                    || this.settings.is_some()
+                                    || this.pages.settings.is_some()
                             } else {
                                 this.navigation_revision != navigation_revision
                             }
@@ -2614,7 +2611,7 @@ impl Render for Shell {
                 == Some(id)
             && let Some(view) = self.sessions.get(&id)
         {
-            self.review_focused = false;
+            self.review.focused = false;
             if view.read(cx).user_read_only() {
                 window.focus(&self.focus, cx);
             } else {
@@ -2624,15 +2621,15 @@ impl Render for Shell {
         if let Some(m) = &self.bots {
             m.update(cx, |m, _| m.bind_window(window));
         }
-        self.render_passes += 1;
-        if let Some((id, tab)) = self.pending_review.take()
+        self.window.render_passes += 1;
+        if let Some((id, tab)) = self.review.pending_review.take()
             && self.workspace.tab_of(id).is_some()
         {
             self.focus_pane(id, window, cx);
             self.open_review(tab, window, cx);
         }
         // Native fullscreen transitions resize the window, which redraws it.
-        self.fullscreen = window.is_fullscreen();
+        self.window.fullscreen = window.is_fullscreen();
         let p = &self.workspace.preferences;
         let system_light = matches!(
             cx.window_appearance(),
@@ -2643,17 +2640,17 @@ impl Render for Shell {
         }
         let glass = window_glass(p, system_light, true);
         let blur = if glass { p.sidebar_blur.min(100) } else { 0 };
-        if self.window_glass != Some(glass) || self.window_blur != Some(blur) {
-            self.window_glass = Some(glass);
-            self.window_blur = Some(blur);
+        if self.window.glass != Some(glass) || self.window.blur != Some(blur) {
+            self.window.glass = Some(glass);
+            self.window.blur = Some(blur);
             vorkspace_macos::window_appearance::apply(window, glass, blur);
         }
         self.sync_settings(cx);
-        self.sidebar_fraction = match &self.sidebar_slide {
+        self.sidebar.fraction = match &self.sidebar.slide {
             Some(slide) => {
                 let (fraction, done) = slide.at(vorkspace_ui::clock::Instant::now());
                 if done {
-                    self.sidebar_slide = None;
+                    self.sidebar.slide = None;
                 } else {
                     window.request_animation_frame();
                 }
@@ -2667,16 +2664,16 @@ impl Render for Shell {
                 }
             }
         };
-        if self.settings.is_some() {
-            self.sidebar_fraction = 0.;
+        if self.pages.settings.is_some() {
+            self.sidebar.fraction = 0.;
         }
         let room = (window.viewport_size().width.as_f32() - self.classic_rail_width()).max(0.);
         let width = self
             .workspace
             .right_panel_width
             .min((room - 252.).max(room * 0.31));
-        if self.sidebar_content_width != width {
-            self.sidebar_content_width = width;
+        if self.sidebar.content_width != width {
+            self.sidebar.content_width = width;
             self.invalidate_chrome(cx);
         }
         let sidebar_width = self.docked_sidebar_width();
@@ -2684,15 +2681,15 @@ impl Render for Shell {
             .workspace
             .active_vorkspace()
             .map_or("vorkspace", |def| def.name.as_str());
-        if self.native_title != name {
-            self.native_title = name.to_owned();
+        if self.window.native_title != name {
+            self.window.native_title = name.to_owned();
             window.set_window_title(name);
         }
-        if !self.window_observed {
-            self.window_observed = true;
-            self.native_window = window.window_handle().downcast();
+        if !self.window.observed {
+            self.window.observed = true;
+            self.window.native_window = window.window_handle().downcast();
             crate::menu_bar::remember(window, cx);
-            self.shortcuts = Some(shortcuts::install(cx.weak_entity(), window, cx));
+            self.window.shortcuts = Some(shortcuts::install(cx.weak_entity(), window, cx));
             self.observations
                 .push(cx.on_focus_lost(window, |this, window, cx| {
                     // Cached editors and previews can outlive their rendered pane.
@@ -2703,12 +2700,12 @@ impl Render for Shell {
                         .unwrap_or_else(|| this.focus.clone());
                     window.focus(&target, cx);
                 }));
-            self.window_active = window.is_window_active();
+            self.window.active = window.is_window_active();
             self.observations
                 .push(cx.observe_window_activation(window, |this, window, cx| {
                     cx.set_reduce_motion(vorkspace_macos::accessibility::reduce_motion());
-                    this.window_active = window.is_window_active();
-                    if this.window_active {
+                    this.window.active = window.is_window_active();
+                    if this.window.active {
                         crate::menu_bar::remember(window, cx);
                         let _ = this.save_window_state(None, false, cx);
                         for id in &this.visible_chats {
@@ -2739,25 +2736,25 @@ impl Render for Shell {
                 .push(cx.observe_window_bounds(window, |this, window, cx| {
                     this.close_preview(cx);
                     let size = window.viewport_size();
-                    if let Some(mut bounds) = this.pane_viewport.get() {
+                    if let Some(mut bounds) = this.panes.viewport.get() {
                         bounds.size.width = px((bounds.size.width.as_f32() + size.width.as_f32()
-                            - this.viewport_width)
+                            - this.window.viewport_width)
                             .max(0.));
                         bounds.size.height = px((bounds.size.height.as_f32()
                             + size.height.as_f32()
-                            - this.viewport_height)
+                            - this.window.viewport_height)
                             .max(0.));
-                        this.pane_viewport.set(Some(bounds));
+                        this.panes.viewport.set(Some(bounds));
                     }
-                    this.viewport_width = size.width.as_f32();
-                    this.viewport_height = size.height.as_f32();
+                    this.window.viewport_width = size.width.as_f32();
+                    this.window.viewport_height = size.height.as_f32();
                     cx.notify();
                 }));
         }
-        self.viewport_width = window.viewport_size().width.as_f32();
-        self.viewport_height = window.viewport_size().height.as_f32();
+        self.window.viewport_width = window.viewport_size().width.as_f32();
+        self.window.viewport_height = window.viewport_size().height.as_f32();
         self.ensure_right_panel(window, cx);
-        let poll_git = self.window_active && !self.bot_active(cx);
+        let poll_git = self.window.active && !self.bot_active(cx);
         self.git.update(cx, |git, cx| {
             git.set_polling(poll_git && git.available(), cx)
         });
@@ -2806,12 +2803,17 @@ impl Render for Shell {
             .text_color(content(1.))
             .font_family(vorkspace_ui::fonts::UI)
             .capture_any_mouse_down(cx.listener(|this, event: &MouseDownEvent, _, cx| {
-                if this.session_preview.as_ref().is_some_and(|preview| {
-                    !preview
-                        .surface
-                        .get()
-                        .is_some_and(|bounds| bounds.contains(&event.position))
-                }) {
+                if this
+                    .preview
+                    .session_preview
+                    .as_ref()
+                    .is_some_and(|preview| {
+                        !preview
+                            .surface
+                            .get()
+                            .is_some_and(|bounds| bounds.contains(&event.position))
+                    })
+                {
                     this.close_preview(cx);
                 }
             }))
@@ -2889,7 +2891,7 @@ impl Render for Shell {
             .on_action(cx.listener(|this, _: &NewClaude, _, cx| this.create(Kind::Claude, cx)))
             .on_action(cx.listener(|this, _: &OpenProject, _, cx| this.open_project(cx)))
             .on_action(cx.listener(|this, _: &CloseTab, window, cx| {
-                if this.settings.is_some() {
+                if this.pages.settings.is_some() {
                     this.close_settings(window, cx);
                     return;
                 }
@@ -2899,7 +2901,7 @@ impl Render for Shell {
                     return;
                 }
                 // A focused review closes its tab first, as a focused file pane does.
-                if this.review_focused
+                if this.review.focused
                     && let Some(review) = this.active_review(cx)
                 {
                     review.update(cx, |r, cx| r.close_active(cx));
@@ -2959,23 +2961,23 @@ impl Render for Shell {
                         this.close_quick_open(window, cx);
                         return;
                     }
-                    if this.app_search.is_some() {
+                    if this.pages.search.is_some() {
                         this.close_app_search(window, cx);
                         return;
                     }
-                    if this.link_dialog.is_some() {
+                    if this.sidebar.link_dialog.is_some() {
                         this.close_link_dialog(window, cx);
                         return;
                     }
-                    if this.background_dialog.is_some() {
+                    if this.project_settings.background_dialog.is_some() {
                         this.close_background_dialog(window, cx);
                         return;
                     }
-                    if this.vorkspace_dialog.is_some() {
+                    if this.project_settings.vorkspace_dialog.is_some() {
                         this.close_vorkspace_dialog(window, cx);
                         return;
                     }
-                    if let Some(settings) = this.settings.clone() {
+                    if let Some(settings) = this.pages.settings.clone() {
                         if !settings.update(cx, |s, cx| s.dismiss_transient(window, cx)) {
                             this.close_settings(window, cx);
                         }
@@ -2990,11 +2992,11 @@ impl Render for Shell {
                         this.close_app_view(window, cx);
                         return;
                     }
-                    if this.session_preview.is_some() {
+                    if this.preview.session_preview.is_some() {
                         this.close_preview(cx);
                         return;
                     }
-                    if this.rail_search_open {
+                    if this.rail.search_open {
                         this.close_rail_search(window, cx);
                         return;
                     }
@@ -3018,9 +3020,9 @@ impl Render for Shell {
                         view.update(cx, |v, cx| v.stop_if_busy(cx));
                     }
                     this.close_menu(cx);
-                    this.tab_drag = None;
+                    this.tabs.drag = None;
                     this.cancel_pane_drag(cx);
-                    this.pane_sash = None;
+                    this.panes.sash = None;
                     this.invalidate_chrome(cx);
                     cx.notify();
                 }),
@@ -3048,7 +3050,7 @@ impl Render for Shell {
                 }),
             )
             .on_action(cx.listener(|this, _: &SearchFiles, window, cx| {
-                if this.app_view_open() || this.settings.is_some() || this.bot_active(cx) {
+                if this.app_view_open() || this.pages.settings.is_some() || this.bot_active(cx) {
                     return;
                 }
                 this.close_app_search(window, cx);
@@ -3097,7 +3099,7 @@ impl Render for Shell {
                 this.drag_sash(event, cx);
                 this.drag_dock(event, cx);
                 this.drag_review(event, cx);
-                if let Some((start, width)) = this.project_rail_drag {
+                if let Some((start, width)) = this.rail.drag {
                     if event.pressed_button == Some(MouseButton::Left) {
                         let width = width + (event.position.x - start).as_f32();
                         this.drag_resize(ResizeTarget::ProjectRail, width, cx);
@@ -3106,7 +3108,7 @@ impl Render for Shell {
                         this.release_resizes(cx);
                     }
                 }
-                if let Some((start, width)) = this.resize {
+                if let Some((start, width)) = this.sidebar.resize {
                     if event.pressed_button == Some(MouseButton::Left) {
                         let delta = (event.position.x - start).as_f32();
                         let width = width + delta;
@@ -3126,7 +3128,7 @@ impl Render for Shell {
                         m.update(cx, |m, cx| m.finish_reorder(cx));
                     }
                     this.release_resizes(cx);
-                    if std::mem::take(&mut this.review_drag)
+                    if std::mem::take(&mut this.review.drag)
                         && let Some(review) = this.active_review(cx)
                     {
                         review.update(cx, |_, cx| {
@@ -3176,7 +3178,7 @@ impl Render for Shell {
             .when(management_open, |d| {
                 d.key_context("VorkspaceModal").on_action(cx.listener(
                     |this, _: &vorkspace_ui::actions::DismissMenu, window, cx| {
-                        if this.background_dialog.is_some() {
+                        if this.project_settings.background_dialog.is_some() {
                             this.close_background_dialog(window, cx);
                         } else {
                             this.close_vorkspace_dialog(window, cx);
@@ -3297,9 +3299,13 @@ mod app_menu_tests {
             let state = window
                 .read_with(visual, |shell, cx| {
                     (
-                        shell.active_app_view,
-                        shell.settings.as_ref().map(|view| view.read(cx).section),
-                        shell.app_search.is_some(),
+                        shell.pages.active_app_view,
+                        shell
+                            .pages
+                            .settings
+                            .as_ref()
+                            .map(|view| view.read(cx).section),
+                        shell.pages.search.is_some(),
                     )
                 })
                 .unwrap();
@@ -3358,7 +3364,7 @@ mod app_menu_tests {
         workspace
             .update(cx, |shell, _, _| {
                 assert_eq!(
-                    shell.active_app_view,
+                    shell.pages.active_app_view,
                     Some(crate::workspace::AppView::Connector(
                         crate::workspace::Connector::Github
                     ))

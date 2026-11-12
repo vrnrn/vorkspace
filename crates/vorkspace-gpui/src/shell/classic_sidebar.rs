@@ -93,11 +93,11 @@ impl Shell {
                             }),
                     )
                     .child(icon("chevron-down", 12.).text_color(content(0.45)))
-                    .child(self.project_anchor.probe())
+                    .child(self.sidebar.project_anchor.probe())
                     .on_click(cx.listener(|this, _, window, cx| {
                         this.open_menu(
                             MenuTarget::Header,
-                            Anchor::Slot(this.project_anchor.clone()),
+                            Anchor::Slot(this.sidebar.project_anchor.clone()),
                             window,
                             cx,
                         );
@@ -116,7 +116,7 @@ impl Shell {
                                 path: this.workspace.project.clone(),
                                 rail: false,
                             },
-                            Anchor::Slot(this.project_anchor.clone()),
+                            Anchor::Slot(this.sidebar.project_anchor.clone()),
                             window,
                             cx,
                         );
@@ -130,7 +130,7 @@ impl Shell {
         let tab = self.workspace.sidebar_tab();
         let tabs = SidebarTab::normalize(&self.workspace.sidebar_tab_order);
         let todos_enabled = self.workspace.preferences.todos;
-        let compact = self.sidebar_content_width < 200.;
+        let compact = self.sidebar.content_width < 200.;
         let mut body = div()
             .id("classic-workspace-sidebar")
             .debug_selector(|| "sidebar-content".into())
@@ -281,7 +281,7 @@ impl Shell {
                         } else {
                             this.open_menu(
                                 MenuTarget::Header,
-                                Anchor::Slot(this.project_anchor.clone()),
+                                Anchor::Slot(this.sidebar.project_anchor.clone()),
                                 window,
                                 cx,
                             );
@@ -342,7 +342,7 @@ impl Shell {
     }
 
     pub(super) fn classic_session_preview(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
-        let preview = self.session_preview.as_ref()?;
+        let preview = self.preview.session_preview.as_ref()?;
         let id = preview.id;
         Some(
             // Sessions are listed in the rail at the window's left edge.
@@ -360,6 +360,7 @@ impl Shell {
                         .overflow_y_scroll()
                         .on_hover(cx.listener(move |this, hovered, window, cx| {
                             if this
+                                .preview
                                 .session_preview
                                 .as_ref()
                                 .is_none_or(|preview| preview.id != id)
@@ -367,7 +368,7 @@ impl Shell {
                                 return;
                             }
                             if *hovered {
-                                this.preview_close = None;
+                                this.preview.close = None;
                             } else {
                                 this.schedule_preview_close(window, cx);
                             }

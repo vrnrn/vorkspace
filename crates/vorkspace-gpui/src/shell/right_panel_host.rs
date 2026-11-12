@@ -4,7 +4,8 @@ use super::*;
 impl Shell {
     pub(super) fn sync_right_panel(&mut self, cx: &mut Context<Self>) {
         let tab = self.classic_tool_tab();
-        let shown = self.workspace.sidebar_visible && self.settings.is_none() && tab.is_some();
+        let shown =
+            self.workspace.sidebar_visible && self.pages.settings.is_none() && tab.is_some();
         if let Some(panel) = &self.right_panel {
             panel.update(cx, |panel, cx| {
                 if let Some(tab) = tab {

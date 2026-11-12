@@ -72,13 +72,15 @@ fn eased_shift(
 
 impl Shell {
     fn live_terminals(&self) -> Vec<Entity<Terminal>> {
-        self.terminals
+        self.dock
+            .terminals
             .get(&self.workspace.project)
             .cloned()
             .unwrap_or_default()
     }
     fn dock_terminal_index(&self, id: EntityId) -> Option<usize> {
-        self.terminals
+        self.dock
+            .terminals
             .get(&self.workspace.project)?
             .iter()
             .position(|t| t.entity_id() == id)
@@ -87,6 +89,7 @@ impl Shell {
     pub(super) fn terminal_tab_menu(&self, id: EntityId) -> Vec<MenuItem> {
         let live = self.dock_terminal_index(id).is_some();
         let multiple = self
+            .dock
             .terminals
             .get(&self.workspace.project)
             .is_some_and(|t| t.len() > 1);
@@ -184,7 +187,7 @@ impl Shell {
         let current = self.workspace.project == project;
         let had_focus = current && self.dock_focused(window, cx).is_some();
         let (Some(live), Some(dock)) = (
-            self.terminals.get_mut(project),
+            self.dock.terminals.get_mut(project),
             self.workspace.docks.get_mut(project),
         ) else {
             return;
@@ -213,8 +216,8 @@ impl Shell {
             dock.open = false;
         }
         if current {
-            self.dock_drag = None;
-            self.dock_shifts.clear();
+            self.dock.drag = None;
+            self.dock.shifts.clear();
             if empty {
                 self.slide_dock(false);
                 if had_focus {
@@ -235,8 +238,8 @@ impl Shell {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        self.dock_skip_click = false;
-        self.dock_drag = None;
+        self.dock.skip_click = false;
+        self.dock.drag = None;
         let Some(ix) = self.dock_terminal_index(id) else {
             return;
         };
@@ -247,12 +250,12 @@ impl Shell {
             return;
         }
         let bounds: Vec<_> = (0..count)
-            .filter_map(|ix| self.dock_tab_scroll.bounds_for_item(ix))
+            .filter_map(|ix| self.dock.tab_scroll.bounds_for_item(ix))
             .collect();
         if bounds.len() != count {
             return;
         }
-        self.dock_drag = Some(DockTabDrag {
+        self.dock.drag = Some(DockTabDrag {
             from: ix,
             to: ix,
             origin: event.position.x,
@@ -264,15 +267,16 @@ impl Shell {
     }
     pub(super) fn move_dock_drag(&mut self, event: &MouseMoveEvent, cx: &mut Context<Self>) {
         let live = self
+            .dock
             .terminals
             .get(&self.workspace.project)
             .map(Vec::as_slice)
             .unwrap_or_default();
-        let Some(drag) = self.dock_drag.as_mut() else {
+        let Some(drag) = self.dock.drag.as_mut() else {
             return;
         };
         if event.pressed_button != Some(MouseButton::Left) || !drag.matches(live) {
-            self.dock_drag = None;
+            self.dock.drag = None;
             cx.notify();
             return;
         }
@@ -281,7 +285,7 @@ impl Shell {
             return;
         }
         drag.active = true;
-        self.dock_skip_click = true;
+        self.dock.skip_click = true;
         let start = drag.bounds[drag.from].left();
         drag.offset = delta.clamp(
             drag.bounds[0].left() - start,
@@ -302,7 +306,7 @@ impl Shell {
         cx.notify();
     }
     pub(super) fn finish_dock_drag(&mut self, cx: &mut Context<Self>) {
-        let Some(drag) = self.dock_drag.take() else {
+        let Some(drag) = self.dock.drag.take() else {
             return;
         };
         let live = self.live_terminals();
@@ -318,7 +322,7 @@ impl Shell {
             .enumerate()
             .map(|(ix, t)| {
                 let id = t.entity_id();
-                let shift = self.dock_shifts.get(&id).map_or(0., |s| s.at(now).0);
+                let shift = self.dock.shifts.get(&id).map_or(0., |s| s.at(now).0);
                 let shift = if ix == drag.from {
                     drag.offset.as_f32()
                 } else {
@@ -330,14 +334,14 @@ impl Shell {
                 )
             })
             .collect();
-        if let Some(live) = self.terminals.get_mut(&project) {
+        if let Some(live) = self.dock.terminals.get_mut(&project) {
             let moved = live.remove(drag.from);
             live.insert(drag.to, moved);
         }
         if let Some(dock) = self.workspace.docks.get_mut(&project) {
             dock.reorder(drag.from, drag.to);
         }
-        self.dock_shifts.clear();
+        self.dock.shifts.clear();
         for (ix, terminal) in self.live_terminals().iter().enumerate() {
             let id = terminal.entity_id();
             let (Some((_, left)), Some(slot)) =
@@ -347,7 +351,7 @@ impl Shell {
             };
             let from = left - slot.left().as_f32();
             if from.abs() > 0.5 {
-                self.dock_shifts.insert(
+                self.dock.shifts.insert(
                     id,
                     TabShift {
                         from,
@@ -361,7 +365,7 @@ impl Shell {
         cx.notify();
     }
     fn dock_tab_shift(&self, ix: usize) -> Pixels {
-        let Some(d) = self.dock_drag.as_ref().filter(|d| d.active) else {
+        let Some(d) = self.dock.drag.as_ref().filter(|d| d.active) else {
             return px(0.);
         };
         if ix == d.from {
@@ -384,11 +388,12 @@ impl Shell {
     ) -> AnyElement {
         let live = self.live_terminals();
         if self
-            .dock_drag
+            .dock
+            .drag
             .as_ref()
             .is_some_and(|drag| !drag.matches(&live))
         {
-            self.dock_drag = None;
+            self.dock.drag = None;
         }
         let hide = match dock.side {
             DockSide::Bottom => "chevron-down",
@@ -402,7 +407,7 @@ impl Shell {
             DockSide::Left => "panel-left",
             DockSide::Right => "panel-right",
         };
-        let dragged = self.dock_drag.as_ref().filter(|d| d.active).map(|d| d.from);
+        let dragged = self.dock.drag.as_ref().filter(|d| d.active).map(|d| d.from);
         let mut moving = false;
         let shifts: Vec<f32> = live
             .iter()
@@ -410,7 +415,7 @@ impl Shell {
             .map(|(ix, terminal)| {
                 let target = self.dock_tab_shift(ix).as_f32();
                 let (value, active) = eased_shift(
-                    &mut self.dock_shifts,
+                    &mut self.dock.shifts,
                     terminal.entity_id(),
                     target,
                     dragged == Some(ix),
@@ -425,12 +430,13 @@ impl Shell {
             .map(|t| (t.entity_id(), SharedString::from(t.read(cx).title.clone())))
             .collect();
         let (slots, opening) =
-            self.dock_tab_motion
+            self.dock
+                .tab_motion
                 .sync(keyed, animate, vorkspace_ui::clock::Instant::now());
         if moving || opening {
             window.request_animation_frame();
         }
-        let move_anchor = self.move_terminal_anchor.clone();
+        let move_anchor = self.dock.move_terminal_anchor.clone();
         div()
             .h(px(36.))
             .flex_shrink_0()
@@ -444,7 +450,7 @@ impl Shell {
                     .id("terminal-tabs")
                     .role(Role::TabList)
                     .aria_label("Terminals")
-                    .track_scroll(&self.dock_tab_scroll)
+                    .track_scroll(&self.dock.tab_scroll)
                     .flex_1()
                     .min_w_0()
                     .h_full()
@@ -467,7 +473,7 @@ impl Shell {
                                     SharedString::from(format!("{} — {}", t.title, t.cwd));
                                 let active = ix == dock.active;
                                 let held = dragged == Some(ix);
-                                let hovered = self.dock_hover == Some(ix) && dragged.is_none();
+                                let hovered = self.dock.hover == Some(ix) && dragged.is_none();
                                 div()
                                     .id(("terminal-tab", ix))
                                     .debug_selector(move || format!("terminal-tab-{ix}"))
@@ -483,13 +489,13 @@ impl Shell {
                                     .on_hover(cx.listener(move |this, hovering: &bool, _, cx| {
                                         let next = if *hovering {
                                             Some(ix)
-                                        } else if this.dock_hover == Some(ix) {
+                                        } else if this.dock.hover == Some(ix) {
                                             None
                                         } else {
-                                            this.dock_hover
+                                            this.dock.hover
                                         };
-                                        if next != this.dock_hover {
-                                            this.dock_hover = next;
+                                        if next != this.dock.hover {
+                                            this.dock.hover = next;
                                             cx.notify();
                                         }
                                     }))
@@ -567,7 +573,7 @@ impl Shell {
                                                     .child(label.clone()),
                                             )
                                             .on_click(cx.listener(move |this, _, window, cx| {
-                                                if std::mem::take(&mut this.dock_skip_click) {
+                                                if std::mem::take(&mut this.dock.skip_click) {
                                                     return;
                                                 }
                                                 if let Some(ix) = this.dock_terminal_index(id) {
@@ -699,6 +705,7 @@ impl Shell {
                             .on_click(cx.listener(move |this, _, window, cx| {
                                 // ExplorerMenu hangs from the button's bottom-left corner.
                                 let at = this
+                                    .dock
                                     .move_terminal_anchor
                                     .get()
                                     .map(|b| point(b.left(), b.bottom() + px(4.)))
@@ -765,10 +772,11 @@ impl Shell {
             return;
         };
         let wanted = dock.terminals.clone();
-        let have = self.terminals.get(project).map_or(0, Vec::len);
+        let have = self.dock.terminals.get(project).map_or(0, Vec::len);
         for cwd in wanted.into_iter().skip(have) {
             let terminal = self.spawn_terminal(cwd, cx);
-            self.terminals
+            self.dock
+                .terminals
                 .entry(project.to_owned())
                 .or_default()
                 .push(terminal);
@@ -776,7 +784,8 @@ impl Shell {
     }
     /// The focused terminal of the current project's dock.
     pub(super) fn dock_focused(&self, window: &Window, cx: &App) -> Option<usize> {
-        self.terminals
+        self.dock
+            .terminals
             .get(&self.workspace.project)?
             .iter()
             .position(|t| t.focus_handle(cx).contains_focused(window, cx))
@@ -784,7 +793,11 @@ impl Shell {
     pub(super) fn focus_terminal(&self, window: &mut Window, cx: &mut Context<Self>) {
         let project = &self.workspace.project;
         if let Some(dock) = self.workspace.docks.get(project)
-            && let Some(terminal) = self.terminals.get(project).and_then(|t| t.get(dock.active))
+            && let Some(terminal) = self
+                .dock
+                .terminals
+                .get(project)
+                .and_then(|t| t.get(dock.active))
         {
             let focus = terminal.focus_handle(cx);
             window.focus(&focus, cx);
@@ -796,9 +809,9 @@ impl Shell {
             return;
         };
         let to = if open { 1. } else { 0. };
-        self.dock_slide = Some((
+        self.dock.slide = Some((
             project.clone(),
-            match self.dock_slide.take() {
+            match self.dock.slide.take() {
                 Some((p, slide)) if p == project => {
                     slide.retarget(to, vorkspace_ui::clock::Instant::now())
                 }
@@ -821,9 +834,13 @@ impl Shell {
         let dock = self.workspace.docks.entry(project.clone()).or_default();
         dock.size = dock.side.clamp(dock.size, viewport);
         let added = dock.add(cwd.clone());
-        self.dock_tab_scroll.scroll_to_item(added);
+        self.dock.tab_scroll.scroll_to_item(added);
         let terminal = self.spawn_terminal(cwd, cx);
-        self.terminals.entry(project).or_default().push(terminal);
+        self.dock
+            .terminals
+            .entry(project)
+            .or_default()
+            .push(terminal);
         if !was_open {
             self.slide_dock(true);
         }
@@ -865,7 +882,7 @@ impl Shell {
             let active = ix.min(dock.terminals.len().saturating_sub(1));
             if dock.active != active {
                 dock.active = active;
-                self.dock_tab_scroll.scroll_to_item(active);
+                self.dock.tab_scroll.scroll_to_item(active);
                 self.persist(cx);
                 cx.notify();
             }
@@ -880,6 +897,7 @@ impl Shell {
         cx: &mut Context<Self>,
     ) {
         if let Some(id) = self
+            .dock
             .terminals
             .get(&self.workspace.project)
             .and_then(|t| t.get(ix))
@@ -894,15 +912,15 @@ impl Shell {
             dock.set_side(side);
             dock.size = side.clamp(dock.size, viewport);
         }
-        self.dock_slide = None;
+        self.dock.slide = None;
         self.persist(cx);
         cx.notify();
     }
     pub(super) fn viewport(&self) -> (f32, f32) {
-        (self.viewport_width, self.viewport_height)
+        (self.window.viewport_width, self.window.viewport_height)
     }
     pub(super) fn drag_dock(&mut self, event: &MouseMoveEvent, cx: &mut Context<Self>) {
-        let Some((start, size)) = self.dock_resize else {
+        let Some((start, size)) = self.dock.resize else {
             return;
         };
         if event.pressed_button != Some(MouseButton::Left) {
@@ -936,17 +954,19 @@ impl Shell {
         cx: &mut Context<Self>,
     ) -> AnyElement {
         let project = self.workspace.project.clone();
-        let workspace_visible = self.settings.is_none() && self.workspace.active_tab().is_some();
+        let workspace_visible =
+            self.pages.settings.is_none() && self.workspace.active_tab().is_some();
         let dock = self.workspace.docks.get(&project).cloned();
         let progress = match self
-            .dock_slide
+            .dock
+            .slide
             .as_ref()
             .filter(|(p, _)| dock.is_some() && *p == project)
         {
             Some((_, slide)) => {
                 let (t, done) = slide.at(vorkspace_ui::clock::Instant::now());
                 if done {
-                    self.dock_slide = None;
+                    self.dock.slide = None;
                     None
                 } else {
                     window.request_animation_frame();
@@ -962,7 +982,7 @@ impl Shell {
         if active.is_some() {
             self.ensure_terminals(&project, cx);
         }
-        for (path, live) in &self.terminals {
+        for (path, live) in &self.dock.terminals {
             // The active project's hidden grids still feed the running-terminal chip.
             let monitor = *path == project && workspace_visible;
             for (index, terminal) in live.iter().enumerate() {
@@ -998,7 +1018,8 @@ impl Shell {
             .child(self.dock_header(&dock, window, cx))
             .child(
                 div().flex_1().min_h_0().min_w_0().children(
-                    self.terminals
+                    self.dock
+                        .terminals
                         .get(&project)
                         .and_then(|t| t.get(dock.active))
                         .cloned(),
@@ -1011,7 +1032,7 @@ impl Shell {
             .role(Role::Splitter)
             .aria_label("Resize terminal")
             .absolute()
-            .child(resize_border(!vertical, self.dock_resize.is_some()))
+            .child(resize_border(!vertical, self.dock.resize.is_some()))
             .map(|d| match dock.side {
                 DockSide::Bottom => d.bottom(px(track - 3.5)).left_0().right_0().h(px(6.)),
                 DockSide::Top => d.top(px(track - 3.5)).left_0().right_0().h(px(6.)),
@@ -1041,7 +1062,7 @@ impl Shell {
                     } else {
                         event.position.x.as_f32()
                     };
-                    this.dock_resize = Some((at, size));
+                    this.dock.resize = Some((at, size));
                 }),
             );
         let frame = div()

@@ -227,13 +227,13 @@ fn two_windows_prepare_one_backing_conversation_even_if_the_first_closes(cx: &mu
 fn one_window_fires_scheduled_work_and_hands_it_on_when_closed(cx: &mut TestAppContext) {
     let (a, b, _, _dir) = two_windows(cx);
     let service = a
-        .read_with(cx, |shell, _| shell.automation_state.service.clone())
+        .read_with(cx, |shell, _| shell.pages.automation_state.service.clone())
         .unwrap()
         .unwrap();
     b.read_with(cx, |shell, _| {
         assert!(Arc::ptr_eq(
             &service,
-            shell.automation_state.service.as_ref().unwrap()
+            shell.pages.automation_state.service.as_ref().unwrap()
         ));
     })
     .unwrap();
@@ -585,11 +585,17 @@ fn committed_folder_moves_are_applied_to_the_latest_groups_and_shared(cx: &mut T
         window
             .update(cx, |shell, _, _| {
                 assert_eq!(
-                    shell.groups[&project].folder_of(first).unwrap().name,
+                    shell.sidebar.groups[&project]
+                        .folder_of(first)
+                        .unwrap()
+                        .name,
                     "First"
                 );
                 assert_eq!(
-                    shell.groups[&project].folder_of(second).unwrap().name,
+                    shell.sidebar.groups[&project]
+                        .folder_of(second)
+                        .unwrap()
+                        .name,
                     "Second"
                 );
             })
@@ -696,7 +702,7 @@ fn closing_a_deleted_vorkspace_background_returns_to_manage(cx: &mut TestAppCont
         .unwrap();
     a.update(cx, |shell, window, cx| {
         shell.open_vorkspace_background(deleted.clone(), window, cx);
-        assert!(shell.background_dialog.is_some());
+        assert!(shell.project_settings.background_dialog.is_some());
     })
     .unwrap();
     b.update(cx, |shell, _, cx| {
@@ -706,9 +712,14 @@ fn closing_a_deleted_vorkspace_background_returns_to_manage(cx: &mut TestAppCont
     .unwrap();
     a.update(cx, |shell, window, cx| {
         shell.close_background_dialog(window, cx);
-        assert!(shell.background_dialog.is_none());
+        assert!(shell.project_settings.background_dialog.is_none());
         assert_eq!(
-            shell.vorkspace_dialog.as_ref().unwrap().editing,
+            shell
+                .project_settings
+                .vorkspace_dialog
+                .as_ref()
+                .unwrap()
+                .editing,
             shell.workspace.active_vorkspace
         );
     })
@@ -795,7 +806,11 @@ fn shared_vorkspace_changes_reconcile_other_windows_project_and_dialog(cx: &mut 
         shell.open_vorkspace_dialog(Some(side_id.clone()), window, cx);
         assert_eq!(shell.workspace.project, second_project);
         assert_eq!(
-            shell.vorkspace_dialog.as_ref().map(|d| d.editing.as_str()),
+            shell
+                .project_settings
+                .vorkspace_dialog
+                .as_ref()
+                .map(|d| d.editing.as_str()),
             Some(side_id.as_str())
         );
     })
@@ -812,7 +827,7 @@ fn shared_vorkspace_changes_reconcile_other_windows_project_and_dialog(cx: &mut 
     cx.run_until_parked();
     b.update(cx, |shell, _, cx| {
         assert_ne!(shell.workspace.project, second_project);
-        let dialog = shell.vorkspace_dialog.as_ref().unwrap();
+        let dialog = shell.project_settings.vorkspace_dialog.as_ref().unwrap();
         let active = shell.workspace.active_vorkspace().unwrap();
         assert_eq!(dialog.editing, active.id);
         assert_eq!(dialog.name.read(cx).content.as_ref(), active.name);

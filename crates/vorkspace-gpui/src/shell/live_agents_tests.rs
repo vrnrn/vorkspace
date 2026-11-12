@@ -21,6 +21,7 @@ fn snapshot(window: WindowHandle<Shell>, cx: &mut TestAppContext) -> Vec<(i64, S
     window
         .update(cx, |shell, _, cx| {
             shell
+                .sidebar
                 .live_agents
                 .read(cx)
                 .agents
@@ -101,7 +102,7 @@ fn compact_activity_is_one_animated_control_for_working_sessions_and_expands(
     assert!(bounds(visual, format!("live-agent-{a}")).is_none());
     assert!(bounds(visual, format!("live-agent-{b}")).is_none());
     let activity = window
-        .update(visual, |shell, _, _| shell.live_agents.clone())
+        .update(visual, |shell, _, _| shell.sidebar.live_agents.clone())
         .unwrap();
     assert_eq!(
         activity.read_with(visual, |card, _| card.working_count()),
@@ -318,7 +319,7 @@ fn native_activity_capture() {
                     }
                     .into();
                     shell.workspace.project_rail_open = !compact;
-                    shell.live_agents.update(cx, |activity, cx| {
+                    shell.sidebar.live_agents.update(cx, |activity, cx| {
                         if activity.expanded != expanded {
                             activity.toggle_expanded(cx);
                         }
@@ -331,7 +332,7 @@ fn native_activity_capture() {
             if name == "bottom" {
                 window
                     .update(&mut cx, |shell, _, cx| {
-                        shell.live_agents.update(cx, |activity, cx| {
+                        shell.sidebar.live_agents.update(cx, |activity, cx| {
                             activity.scroll.scroll_to_end();
                             cx.notify();
                         })
@@ -409,7 +410,7 @@ fn tool_notifications_update_only_the_receipt_preserving_focus_draft_and_run_clo
     let focus = visual.update(|w, cx| w.focused(cx));
     let (snapshots, started) = window
         .update(visual, |shell, _, cx| {
-            let activity = shell.live_agents.read(cx);
+            let activity = shell.sidebar.live_agents.read(cx);
             (activity.snapshots, activity.runs[&a].started)
         })
         .unwrap();
@@ -425,7 +426,7 @@ fn tool_notifications_update_only_the_receipt_preserving_focus_draft_and_run_clo
         window
             .update(visual, |shell, _, cx| {
                 assert_eq!(shell.sessions[&a].read(cx).activity.as_deref(), label);
-                let activity = shell.live_agents.read(cx);
+                let activity = shell.sidebar.live_agents.read(cx);
                 assert_eq!(activity.activity_label(&activity.agents[0]), label);
                 assert_eq!(
                     activity.snapshots, snapshots,
@@ -457,7 +458,7 @@ fn tool_notifications_update_only_the_receipt_preserving_focus_draft_and_run_clo
     visual.run_until_parked();
     window
         .update(visual, |shell, _, cx| {
-            let activity = shell.live_agents.read(cx);
+            let activity = shell.sidebar.live_agents.read(cx);
             assert_eq!(
                 activity.activity_label(&activity.agents[0]),
                 Some("Run current command")

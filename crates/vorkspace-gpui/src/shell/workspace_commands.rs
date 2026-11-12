@@ -81,7 +81,7 @@ impl Shell {
                 json!({"kind":"botDocument","bot":bot,"document":document,"title":self.pane_title(id,cx)})
             }
             AppPane::Terminal { id: terminal, cwd } => {
-                json!({"kind":"terminal","terminalId":terminal,"cwd":cwd,"running":self.terminal_tabs.get(terminal).and_then(|view| view.read(cx).foreground_process()),"title":self.pane_title(id,cx)})
+                json!({"kind":"terminal","terminalId":terminal,"cwd":cwd,"running":self.pages.terminal_tabs.get(terminal).and_then(|view| view.read(cx).foreground_process()),"title":self.pane_title(id,cx)})
             }
             AppPane::Codebase => {
                 json!({"kind":"codebase","root":pane.worktree,"title":self.pane_title(id,cx)})
@@ -144,7 +144,7 @@ impl Shell {
                 &self.workspace.project,
             ) == path_key(project)
             {
-                self.inbox.as_ref().map(|owner| {
+                self.pages.inbox.as_ref().map(|owner| {
                     let (items, truncated) = owner.read(cx).items_for_project(project, 200);
                     (items.into_iter().map(|item| json!({"itemKey":item.key(),"provider":item.provider,"title":item.title,"reference":item.reference()})).collect::<Vec<_>>(), truncated, true)
                 }).unwrap_or_default()
@@ -223,6 +223,7 @@ impl Shell {
                 let running_process =
                     match self.workspace.app_panes.get(&id).map(|pane| &pane.content) {
                         Some(AppPane::Terminal { id: terminal, .. }) => self
+                            .pages
                             .terminal_tabs
                             .get(terminal)
                             .and_then(|view| view.read(cx).foreground_process()),
@@ -296,7 +297,7 @@ impl Shell {
                     .unwrap_or(self.visible_tabs(cx).len());
                 self.workspace.detach(id, self.workspace.tabs.len());
                 self.reorder_title_tab(&TitleTab::Workspace(id), to, cx);
-                self.pane_motion = None;
+                self.panes.motion = None;
                 self.fit_active_pane_width();
                 self.open(id, window, cx);
                 Ok(json!({"paneId":id,"tabId":self.workspace.tab_of(id),"detached":true}))
@@ -361,7 +362,8 @@ impl Shell {
                 let span = if sash.dir == SplitDir::Right {
                     self.pane_available_width() * sash.group.w
                 } else {
-                    self.pane_bounds
+                    self.panes
+                        .bounds
                         .get()
                         .map_or(600., |bounds| bounds.size.height.as_f32())
                         * sash.group.h
@@ -505,7 +507,7 @@ impl Shell {
             "item" => {
                 let key = workspace_text(input, "itemKey", 1024)?;
                 self.ensure_background_inbox(window, cx);
-                let item = self.inbox.as_ref().and_then(|owner| owner.read(cx).item_by_key_for_project(&key, project))
+                let item = self.pages.inbox.as_ref().and_then(|owner| owner.read(cx).item_by_key_for_project(&key, project))
                     .or_else(|| self.workspace.app_panes.values().find_map(|pane| {
                         match &pane.content {
                             AppPane::ConnectorItem(item) if item.key() == key
@@ -832,8 +834,8 @@ mod tests {
                         .is_err()
                 );
 
-                let previous_width = shell.viewport_width;
-                shell.viewport_width = MIN_CHAT_WIDTH * 2.;
+                let previous_width = shell.window.viewport_width;
+                shell.window.viewport_width = MIN_CHAT_WIDTH * 2.;
                 assert_eq!(
                     shell
                         .app_workspace_action(
@@ -849,7 +851,7 @@ mod tests {
                 );
                 assert_eq!(shell.workspace.layout(source_tab), source_layout);
                 assert_eq!(shell.workspace.tab_of(target), Some(target_tab));
-                shell.viewport_width = previous_width;
+                shell.window.viewport_width = previous_width;
 
                 let moved = shell
                     .app_workspace_action(

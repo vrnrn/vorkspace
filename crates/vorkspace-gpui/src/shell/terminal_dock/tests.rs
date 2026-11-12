@@ -61,7 +61,7 @@ fn dock_drop_discards_positions_from_a_changed_tab_order(cx: &mut TestAppContext
             let order = original.iter().map(Entity::entity_id).collect();
             shell.new_terminal(w, cx);
             let live = shell.live_terminals();
-            shell.dock_drag = Some(DockTabDrag {
+            shell.dock.drag = Some(DockTabDrag {
                 from: 0,
                 to: 1,
                 origin: px(0.),
@@ -72,7 +72,7 @@ fn dock_drop_discards_positions_from_a_changed_tab_order(cx: &mut TestAppContext
             });
             shell.finish_dock_drag(cx);
             assert_eq!(shell.live_terminals(), live);
-            assert!(shell.dock_drag.is_none());
+            assert!(shell.dock.drag.is_none());
         })
         .unwrap();
 }

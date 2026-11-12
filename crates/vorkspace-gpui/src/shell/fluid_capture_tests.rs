@@ -523,7 +523,7 @@ fn fluid_capture() {
                         shell.workspace.add_project_to_vorkspace(&side, project);
                         shell.open_menu(
                             MenuTarget::Vorkspace,
-                            Anchor::Slot(shell.vorkspace_anchor.clone()),
+                            Anchor::Slot(shell.rail.vorkspace_anchor.clone()),
                             window,
                             cx,
                         )
@@ -587,7 +587,7 @@ fn fluid_capture() {
                     }
                     "automation-editor" => {
                         shell.open_automations(window, cx);
-                        if let Some(view) = shell.automations.clone() {
+                        if let Some(view) = shell.pages.automations.clone() {
                             view.update(cx, |view, cx| view.begin_first_template(cx));
                         }
                     }
@@ -605,13 +605,13 @@ fn fluid_capture() {
                     "compact-rail" => shell.toggle_project_rail(cx),
                     "session-filter" => shell.open_menu(
                         MenuTarget::SessionFilter,
-                        Anchor::Slot(shell.filter_anchor.clone()),
+                        Anchor::Slot(shell.sidebar.filter_anchor.clone()),
                         window,
                         cx,
                     ),
                     "project-picker" => shell.open_menu(
                         MenuTarget::Header,
-                        Anchor::Slot(shell.project_anchor.clone()),
+                        Anchor::Slot(shell.sidebar.project_anchor.clone()),
                         window,
                         cx,
                     ),
@@ -644,7 +644,7 @@ fn fluid_capture() {
                 // The board loads its items first.
                 window
                     .update(&mut cx, |shell, _, cx| {
-                        if let Some(page) = shell.todos_page.clone() {
+                        if let Some(page) = shell.page_tabs.todos_page.clone() {
                             let board = page.read(cx).board_for_capture();
                             board.update(cx, |board, cx| board.open_first_details(cx));
                         }

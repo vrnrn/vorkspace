@@ -5,16 +5,16 @@ impl Shell {
     /// Finds installed editors off the main thread; the first lookup
     /// may read the login shell's PATH.
     pub(super) fn scan_external_editors(&mut self, cx: &mut Context<Self>) {
-        self.external_editor_scan = self.external_editor_scan.wrapping_add(1);
-        let generation = self.external_editor_scan;
+        self.external_editor.scan = self.external_editor.scan.wrapping_add(1);
+        let generation = self.external_editor.scan;
         let work = cx
             .background_executor()
             .spawn(async { external_editor::installed() });
         cx.spawn(async move |this, cx| {
             let editors = work.await;
             let _ = this.update(cx, |this, cx| {
-                if this.external_editor_scan == generation {
-                    this.external_editors = Some(editors);
+                if this.external_editor.scan == generation {
+                    this.external_editor.editors = Some(editors);
                     cx.notify();
                 }
             });
@@ -26,7 +26,7 @@ impl Shell {
         let none =
             |label: &str| vec![MenuAction::new("external-editor:none", label).disabled(true)];
 
-        match &self.external_editors {
+        match &self.external_editor.editors {
             None => item.disabled(true).submenu(none("Looking for editors…")),
             Some(editors) if editors.is_empty() => item.submenu(none("No supported editors found")),
             Some(editors) => item.submenu(

@@ -142,14 +142,14 @@ impl Shell {
     pub(super) fn trim_session_histories(&self, cx: &mut Context<Self>) {
         const INACTIVE_COUNT: usize = 8;
         const INACTIVE_BYTES: usize = 32 * 1024 * 1024;
-        let preview = self.session_preview.as_ref().map(|p| p.id);
+        let preview = self.preview.session_preview.as_ref().map(|p| p.id);
         let mut inactive: Vec<_> = self
             .sessions
             .iter()
             .filter(|&(&id, _)| {
                 !self.visible_chats.contains(&id)
                     && preview != Some(id)
-                    && !self.automation_state.reserved.contains(&id)
+                    && !self.pages.automation_state.reserved.contains(&id)
             })
             .filter_map(|(&id, view)| {
                 let chat = view.read(cx);

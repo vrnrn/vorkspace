@@ -276,6 +276,7 @@ impl Shell {
                     && (within(&pane.project, path) || within(&pane.worktree, path))
             })
             || self
+                .dock
                 .terminals
                 .iter()
                 .any(|(cwd, terminals)| !terminals.is_empty() && within(cwd, path))
@@ -351,6 +352,7 @@ impl Shell {
                 && (within(&pane.project, path) || within(&pane.worktree, path))
                 && (self.workspace.tab_of(id).is_some()
                     || self
+                        .review
                         .reviews
                         .get(&id)
                         .is_some_and(|review| review.read(cx).unsaved_files(cx)))
@@ -359,7 +361,7 @@ impl Shell {
                 "Save your edits and close this project's file panes before deleting it.".into(),
             );
         }
-        let Some(service) = &self.automation_state.service else {
+        let Some(service) = &self.pages.automation_state.service else {
             return Err(
                 "Automations are not ready; project ownership cannot be checked yet.".into(),
             );
@@ -376,7 +378,7 @@ impl Shell {
         }
         drop(service);
         if self
-            .terminals
+            .dock.terminals
             .iter()
             .any(|(p, terms)| within(p, path) && !terms.is_empty())
             || self
@@ -485,7 +487,7 @@ impl Shell {
                 && self.session_metadata(row.summary.id, cx).busy
         });
         let terminals = self
-            .terminals
+            .dock.terminals
             .iter()
             .any(|(p, terms)| within(p, path) && !terms.is_empty())
             || self
@@ -619,14 +621,14 @@ impl Shell {
         self.deleting_projects.insert(key.clone());
         admissions.lock().unwrap().insert(key.clone());
         self.deleting.extend(ids.iter().copied());
-        let previous = self.group_writes.take();
+        let previous = self.sidebar.group_writes.take();
         let store = self.store.clone();
         let lease = ProjectDeleteLease {
             store: store.clone(),
             path: path.clone(),
             admissions,
         };
-        self.group_writes = Some(cx.spawn(async move |this, cx| {
+        self.sidebar.group_writes = Some(cx.spawn(async move |this, cx| {
             if let Some(previous) = previous { previous.await; }
             let worker_path = path.clone(); let worker_ids = ids.clone(); let worker_store = store.clone();
             let work = cx.background_executor().spawn(async move {

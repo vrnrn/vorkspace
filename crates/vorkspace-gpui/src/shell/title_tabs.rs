@@ -145,7 +145,7 @@ impl Shell {
                     }),
                 )
                 .on_click(cx.listener(move |this, _, window, cx| {
-                    if std::mem::take(&mut this.skip_tab_click) {
+                    if std::mem::take(&mut this.tabs.skip_tab_click) {
                         return;
                     }
                     this.open_title_tab(&tab, window, cx);
@@ -161,29 +161,26 @@ impl Shell {
         }
         let previous = TitleTab::Workspace(from);
         let next = TitleTab::Workspace(to);
-        self.title_tab_motion.replace_key(&previous, next.clone());
-        for selected in [
-            &mut self.title_tab_selection.0,
-            &mut self.title_tab_selection.1,
-        ] {
+        self.tabs.motion.replace_key(&previous, next.clone());
+        for selected in [&mut self.tabs.selection.0, &mut self.tabs.selection.1] {
             if selected.as_ref() == Some(&previous) {
                 *selected = Some(next.clone());
             }
         }
-        let shift = self.tab_shifts.remove(&previous);
-        self.tab_shifts.remove(&next);
+        let shift = self.tabs.shifts.remove(&previous);
+        self.tabs.shifts.remove(&next);
         if let Some(shift) = shift {
-            self.tab_shifts.insert(next, shift);
+            self.tabs.shifts.insert(next, shift);
         }
-        self.pane_ticks.remove(&from);
-        self.pane_ticks.remove(&to);
-        if self.tab_hover == Some(from) {
-            self.tab_hover = Some(to);
+        self.tabs.pane_ticks.remove(&from);
+        self.tabs.pane_ticks.remove(&to);
+        if self.tabs.hover == Some(from) {
+            self.tabs.hover = Some(to);
         }
     }
 
     pub(crate) fn click_bot_tab(&mut self, id: &str, window: &mut Window, cx: &mut Context<Self>) {
-        if std::mem::take(&mut self.skip_tab_click) {
+        if std::mem::take(&mut self.tabs.skip_tab_click) {
             return;
         }
         self.open_title_tab(&self.bot_tab(id.into()), window, cx);
@@ -317,9 +314,10 @@ impl Shell {
     /// pane instead of borrowing the currently selected tab's preview focus.
     pub(super) fn tab_review_focused(&self, tab: i64, cx: &App) -> bool {
         if self.active_title_tab(cx) == Some(TitleTab::Workspace(tab)) {
-            self.review_focused
+            self.review.focused
         } else {
-            self.pane_ticks
+            self.tabs
+                .pane_ticks
                 .get(&tab)
                 .is_some_and(|tick| tick.shown == (self.workspace.tab_focus(tab), true))
         }
@@ -344,14 +342,14 @@ impl Shell {
             return;
         }
         self.navigation_revision += 1;
-        self.selected_sessions.clear();
-        self.selection_anchor = None;
-        self.sidebar_target = None;
-        self.context_selection = false;
+        self.sidebar.selected_sessions.clear();
+        self.sidebar.selection_anchor = None;
+        self.sidebar.target = None;
+        self.sidebar.context_selection = false;
         self.leave_app_views(cx);
         self.leave_app_search(cx);
         self.close_preview(cx);
-        self.review_focused = false;
+        self.review.focused = false;
         self.admit_app_pane(crate::workspace::AppPane::Bot(id));
         self.update_chat_visibility(cx);
         self.reveal_active_tab(cx);
@@ -387,7 +385,7 @@ impl Shell {
                     && self.workspace.active == Some(focus)
                     && let Some(review) = self.active_review(cx)
                 {
-                    self.review_focused = true;
+                    self.review.focused = true;
                     review.update(cx, |r, cx| r.focus_active(window, cx));
                 }
             }
@@ -516,21 +514,21 @@ impl Shell {
         };
         self.navigation_revision += 1;
         self.close_menu(cx);
-        self.tab_drag = None;
-        self.tab_shifts.clear();
-        self.tab_hover = None;
-        self.tab_scroll_task = None;
+        self.tabs.drag = None;
+        self.tabs.shifts.clear();
+        self.tabs.hover = None;
+        self.tabs.scroll_task = None;
         self.cancel_pane_drag(cx);
         let session_active = self.workspace.active;
         for tab in &closing {
             if let TitleTab::Terminal { id, .. } = tab {
-                if self.active_terminal_tab.as_ref() == Some(id) {
+                if self.pages.active_terminal_tab.as_ref() == Some(id) {
                     self.leave_app_views(cx);
                 }
-                self.terminal_tabs.remove(id);
+                self.pages.terminal_tabs.remove(id);
             }
             if let TitleTab::App(view) = tab
-                && self.active_app_view == Some(*view)
+                && self.pages.active_app_view == Some(*view)
             {
                 self.leave_app_views(cx);
             }
@@ -557,9 +555,9 @@ impl Shell {
                 bots.update(cx, |m, cx| m.close(cx));
             }
             self.workspace.active = None;
-            self.review_focused = false;
-            self.review_slide = None;
-            self.pane_motion = None;
+            self.review.focused = false;
+            self.review.slide = None;
+            self.panes.motion = None;
             if let Some(tab) = next {
                 self.open_title_tab(&tab, window, cx);
             } else {

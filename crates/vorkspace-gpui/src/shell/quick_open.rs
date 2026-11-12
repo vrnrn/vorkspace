@@ -136,7 +136,7 @@ mod tests {
         window
             .update(visual, |shell, w, cx| {
                 assert!(shell.quick_open.is_some());
-                assert!(shell.app_search.is_none());
+                assert!(shell.pages.search.is_none());
                 assert_eq!(
                     shell.sessions[&active].read(cx).input.read(cx).content,
                     "keep this draft"
@@ -150,7 +150,7 @@ mod tests {
         visual.run_until_parked();
         window
             .update(visual, |shell, w, cx| {
-                assert!(shell.app_search.is_some());
+                assert!(shell.pages.search.is_some());
                 assert!(shell.quick_open.is_none());
                 shell.close_app_search(w, cx);
             })

@@ -53,7 +53,7 @@ impl Shell {
         cx: &App,
     ) -> Option<MenuItem> {
         if self.one_folder_project(ids, project, cx) {
-            let groups = self.groups.get(project);
+            let groups = self.sidebar.groups.get(project);
             let mut choices = vec![MenuAction::new("folder-new", "New folder…")];
             if let Some(groups) = groups {
                 choices.extend(groups.saved().folders.iter().map(|folder| {

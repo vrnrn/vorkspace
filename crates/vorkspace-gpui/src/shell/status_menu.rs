@@ -25,7 +25,7 @@ impl Shell {
                 vorkspace_ui::traffic_lights::show(window);
                 self.open_notes(window, cx);
                 if self.workspace.preferences.notes
-                    && let Some(notes) = &self.notes
+                    && let Some(notes) = &self.page_tabs.notes
                 {
                     notes.update(cx, |notes, cx| match action {
                         Action::NewMeeting => notes.new_recording_note(window, cx),
@@ -57,8 +57,8 @@ mod tests {
         cx.update(|cx| cx.dispatch_action(&crate::background_helper::NewMeeting));
         cx.run_until_parked();
         main.update(cx, |shell, _, cx| {
-            assert_eq!(shell.active_app_view, Some(app_views::AppView::Notes));
-            assert!(shell.notes.is_some());
+            assert_eq!(shell.pages.active_app_view, Some(app_views::AppView::Notes));
+            assert!(shell.page_tabs.notes.is_some());
             assert!(!crate::meetings::capture::active(cx));
         })
         .unwrap();

@@ -508,7 +508,7 @@ impl Shell {
             core.start_reminders(cx);
         });
         let release = core.downgrade();
-        let window = self.window_layout;
+        let window = self.window.layout;
         cx.on_release(move |_, cx| {
             let _ = release.update(cx, |core, _| {
                 core.keep_visible_agents(window, HashSet::new());
@@ -604,7 +604,7 @@ impl Shell {
             self.sync_git(cx);
         }
         self.sync_inbox_scope(cx);
-        if let Some(dialog) = self.vorkspace_dialog.as_mut() {
+        if let Some(dialog) = self.project_settings.vorkspace_dialog.as_mut() {
             let retargeted = !self
                 .workspace
                 .vorkspaces
@@ -712,9 +712,9 @@ impl Shell {
         if let Some(core) = &self.app_core {
             core.update(cx, |core, _| {
                 if badge == 0 {
-                    core.dock_badges.remove(&self.window_layout);
+                    core.dock_badges.remove(&self.window.layout);
                 } else {
-                    core.dock_badges.insert(self.window_layout, badge);
+                    core.dock_badges.insert(self.window.layout, badge);
                 }
                 crate::notifications::platform::set_dock_badge(core.dock_badges.values().sum());
             });

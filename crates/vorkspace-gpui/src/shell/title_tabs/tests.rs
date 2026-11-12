@@ -109,7 +109,7 @@ fn command_w_closes_workspace_pages_and_restores_conversation(cx: &mut TestAppCo
             .update(cx, |shell, w, cx| {
                 let strip = shell.workspace.title_order.clone();
                 shell.open_title_tab(&page, w, cx);
-                if let Some(search) = &shell.app_search {
+                if let Some(search) = &shell.pages.search {
                     search
                         .view
                         .read(cx)
@@ -144,7 +144,7 @@ fn command_w_closes_workspace_pages_and_restores_conversation(cx: &mut TestAppCo
                 assert_eq!(chat.input.read(cx).content, "unsent conversation draft");
                 assert!(chat.input.focus_handle(cx).is_focused(w), "{page:?}");
                 if page == TitleTab::Search {
-                    assert_eq!(shell.saved_search.as_ref().unwrap().0, "saved search");
+                    assert_eq!(shell.pages.saved_search.as_ref().unwrap().0, "saved search");
                 }
             })
             .unwrap();
@@ -176,7 +176,7 @@ fn search_opened_from_a_connector_returns_to_that_connector(cx: &mut TestAppCont
             assert_eq!(shell.active_title_tab(cx), Some(connector.clone()));
             assert_eq!(shell.workspace.active, connector.session());
             assert!(
-                shell.connector_pages[&Connector::Github]
+                shell.pages.connector_pages[&Connector::Github]
                     .focus_handle(cx)
                     .is_focused(w)
             );

@@ -166,8 +166,8 @@ fn delete_confirmation_cancels_and_uses_selection_snapshot(cx: &mut TestAppConte
     let (window, a, b) = setup(cx);
     window
         .update(cx, |shell, w, cx| {
-            shell.selected_sessions.clear();
-            shell.selected_sessions.insert(a);
+            shell.sidebar.selected_sessions.clear();
+            shell.sidebar.selected_sessions.insert(a);
             shell.delete_sidebar_selection(w, cx);
         })
         .unwrap();
@@ -179,8 +179,8 @@ fn delete_confirmation_cancels_and_uses_selection_snapshot(cx: &mut TestAppConte
         .update(cx, |shell, w, cx| {
             assert!(shell.has_session(a, cx));
             shell.delete_sidebar_selection(w, cx);
-            shell.selected_sessions.clear();
-            shell.selected_sessions.insert(b);
+            shell.sidebar.selected_sessions.clear();
+            shell.sidebar.selected_sessions.insert(b);
         })
         .unwrap();
     cx.run_until_parked();
@@ -301,7 +301,7 @@ fn menu_delete_confirms_multiple_sessions(cx: &mut TestAppContext) {
     let (window, a, b) = setup(cx);
     window
         .update(cx, |shell, w, cx| {
-            shell.selected_sessions.extend([a, b]);
+            shell.sidebar.selected_sessions.extend([a, b]);
             shell.run_session_menu(a, "delete", w, cx);
         })
         .unwrap();
@@ -346,7 +346,7 @@ fn session_actions_are_enabled_and_bulk_selection_shapes_the_menu(cx: &mut TestA
                 w,
                 cx,
             );
-            assert_eq!(shell.selected_sessions.len(), 2);
+            assert_eq!(shell.sidebar.selected_sessions.len(), 2);
             let actions: Vec<_> = shell
                 .session_menu_items(a, cx)
                 .into_iter()
@@ -381,6 +381,7 @@ fn session_rename_accepts_enter_and_escape_cancels(cx: &mut TestAppContext) {
         .update(cx, |shell, w, cx| {
             shell.run_menu(MenuTarget::Session(a), "rename", None, w, cx);
             shell
+                .sidebar
                 .renaming
                 .as_ref()
                 .unwrap()
@@ -401,6 +402,7 @@ fn session_rename_accepts_enter_and_escape_cancels(cx: &mut TestAppContext) {
             );
             shell.run_menu(MenuTarget::Session(a), "rename", None, w, cx);
             shell
+                .sidebar
                 .renaming
                 .as_ref()
                 .unwrap()
@@ -413,7 +415,7 @@ fn session_rename_accepts_enter_and_escape_cancels(cx: &mut TestAppContext) {
     cx.run_until_parked();
     window
         .update(cx, |shell, _, cx| {
-            assert!(shell.renaming.is_none());
+            assert!(shell.sidebar.renaming.is_none());
             assert_eq!(shell.sessions[&a].read(cx).summary.title, "First name");
         })
         .unwrap();
@@ -426,14 +428,16 @@ fn links_and_reminders_validate_persist_and_clear_when_due_session_opens(cx: &mu
         .update(cx, |shell, w, cx| {
             shell.run_menu(MenuTarget::Session(a), "link-work-item", None, w, cx);
             shell
+                .sidebar
                 .link_dialog
                 .as_ref()
                 .unwrap()
                 .input
                 .update(cx, |i, cx| i.set_text("invalid".into(), cx));
             shell.save_link(true, w, cx);
-            assert!(shell.link_dialog.as_ref().unwrap().error.is_some());
+            assert!(shell.sidebar.link_dialog.as_ref().unwrap().error.is_some());
             shell
+                .sidebar
                 .link_dialog
                 .as_ref()
                 .unwrap()
@@ -465,7 +469,7 @@ fn links_and_reminders_validate_persist_and_clear_when_due_session_opens(cx: &mu
                 42
             );
             drop(store);
-            assert!(shell.link_dialog.is_none());
+            assert!(shell.sidebar.link_dialog.is_none());
             shell.run_menu(MenuTarget::Session(a), "reminder:cancel", None, w, cx);
             let due_at = vorkspace_core::time::now_ms().saturating_sub(1);
             shell.edit_reminder(

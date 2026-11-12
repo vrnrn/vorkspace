@@ -109,7 +109,7 @@ fn assert_titlebar(
     window
         .update(visual, |shell, w, _| {
             assert!((w.ui_scale() - scale).abs() < f32::EPSILON);
-            assert_eq!(shell.fullscreen, fullscreen);
+            assert_eq!(shell.window.fullscreen, fullscreen);
             // In addition to the divider's layout, inspect painted borders: a
             // full-height rail border must not reappear through native controls.
             if native {
@@ -398,7 +398,7 @@ fn titlebar_zoom_paths_restore_and_keep_real_controls_live(cx: &mut TestAppConte
                 let before = shell.workspace.preferences.clone();
                 let mut after = before.clone();
                 after.ui_scale = percent;
-                shell.settings.as_ref().unwrap().update(cx, |_, cx| {
+                shell.pages.settings.as_ref().unwrap().update(cx, |_, cx| {
                     cx.emit(crate::settings::SettingsEvent::Changed {
                         before: Box::new(before),
                         after: Box::new(after),

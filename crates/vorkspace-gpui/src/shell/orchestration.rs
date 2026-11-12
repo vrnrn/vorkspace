@@ -267,12 +267,12 @@ impl Shell {
                 })
                 .collect(),
         };
-        if self.orchestration_summaries.get(&lead) != Some(&summary) {
+        if self.sidebar.orchestration_summaries.get(&lead) != Some(&summary) {
             let saved = summary.clone();
             self.write_session_group("save orchestration progress", cx, move |store| {
                 store.save_orchestration_summary(lead, &saved)
             });
-            self.orchestration_summaries.insert(lead, summary);
+            self.sidebar.orchestration_summaries.insert(lead, summary);
             self.invalidate_chrome(cx);
         }
         let Some(run) = self.orchestrations.get_mut(&lead) else {

@@ -6,7 +6,8 @@ const REVIEW_SIDE_BY_SIDE_MIN_WIDTH: f32 = 500.;
 
 impl Shell {
     fn review_is_compact(&self, id: i64) -> bool {
-        self.split_bounds
+        self.panes
+            .split_bounds
             .get(&id)
             .and_then(AnchorSlot::get)
             .map_or_else(|| self.pane_available_width(), |b| b.size.width.as_f32())
@@ -14,7 +15,8 @@ impl Shell {
     }
 
     pub(super) fn review_covers_chat(&self, id: i64, cx: &App) -> bool {
-        self.reviews
+        self.review
+            .reviews
             .get(&id)
             .map(|review| &review.read(cx).state)
             .or_else(|| {
@@ -26,7 +28,7 @@ impl Shell {
             .is_some_and(|state| {
                 state.chat_hidden
                     || (self.workspace.active == Some(id)
-                        && self.review_focused
+                        && self.review.focused
                         && self.review_is_compact(id))
             })
     }
@@ -44,7 +46,7 @@ impl Shell {
         cx: &mut Context<Self>,
     ) -> AnyElement {
         let title = self.pane_title(id, cx);
-        let focused = self.workspace.active == Some(id) && !self.review_focused;
+        let focused = self.workspace.active == Some(id) && !self.review.focused;
         div()
             .id(("split-chat-header", id as usize))
             .debug_selector(move || format!("split-header-{id}"))
@@ -62,10 +64,10 @@ impl Shell {
             .on_mouse_down(
                 MouseButton::Left,
                 cx.listener(move |this, event: &MouseDownEvent, window, cx| {
-                    this.review_focused = false;
+                    this.review.focused = false;
                     this.focus_pane(id, window, cx);
-                    this.tab_drag = None;
-                    this.pane_drag = Some(PaneDrag {
+                    this.tabs.drag = None;
+                    this.panes.drag = Some(PaneDrag {
                         source: DragSource::Pane(id),
                         start: event.position,
                         position: event.position,
@@ -137,8 +139,8 @@ impl Shell {
                         cx.stop_propagation();
                         if in_split {
                             this.close_pane(id, window, cx);
-                        } else if let Some(review) = this.reviews.get(&id).cloned() {
-                            this.review_focused = true;
+                        } else if let Some(review) = this.review.reviews.get(&id).cloned() {
+                            this.review.focused = true;
                             review.update(cx, |r, cx| {
                                 r.state.chat_hidden = true;
                                 r.focus_active(window, cx);
@@ -152,7 +154,7 @@ impl Shell {
     pub(super) fn split_width(&self) -> f32 {
         self.workspace
             .active
-            .and_then(|id| self.split_bounds.get(&id))
+            .and_then(|id| self.panes.split_bounds.get(&id))
             .and_then(AnchorSlot::get)
             .map_or(800., |b| b.size.width.as_f32())
     }
@@ -167,17 +169,17 @@ impl Shell {
         };
         let tab = self.workspace.tab_of(id).unwrap_or(id);
         let layout = self.workspace.layout(tab);
-        if layout.is_split() || self.pane_motion.as_ref().is_some_and(|m| m.tab == tab) {
+        if layout.is_split() || self.panes.motion.as_ref().is_some_and(|m| m.tab == tab) {
             return self.scrollable_pane_tree(tab, layout, window, cx);
         }
-        self.pane_scroll_focus = None;
+        self.panes.scroll_focus = None;
         self.set_app_pane_width(id, self.pane_available_width(), cx);
         let hint = self.drop_hint(id);
         div()
             .size_full()
             .relative()
-            .child(self.pane_viewport.layout_probe())
-            .child(self.pane_bounds.layout_probe())
+            .child(self.panes.viewport.layout_probe())
+            .child(self.panes.bounds.layout_probe())
             .child(self.session_surface(id, None, window, cx))
             .children(hint)
             .into_any_element()
@@ -191,7 +193,7 @@ impl Shell {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> AnyElement {
-        let (view_width, view_height) = self.pane_viewport.get().map_or((800., 600.), |b| {
+        let (view_width, view_height) = self.panes.viewport.get().map_or((800., 600.), |b| {
             (b.size.width.as_f32(), b.size.height.as_f32())
         });
         let view_width = view_width.max(1.);
@@ -211,10 +213,10 @@ impl Shell {
         let overflow_y = height > view_height + 0.5;
         let active = self.workspace.active.unwrap_or(tab);
         let signature = (tab, active, view_width.to_bits(), view_height.to_bits());
-        if self.pane_scroll_focus != Some(signature) {
+        if self.panes.scroll_focus != Some(signature) {
             if let Some(pane) = layout.leaves().iter().find(|p| p.id == active) {
-                let mut x = self.pane_scroll.offset().x.as_f32();
-                let mut y = self.pane_scroll.offset().y.as_f32();
+                let mut x = self.panes.scroll.offset().x.as_f32();
+                let mut y = self.panes.scroll.offset().y.as_f32();
                 let left = pane.rect.x * width;
                 let right = left + pane.rect.w * width;
                 let top = pane.rect.y * height;
@@ -229,12 +231,12 @@ impl Shell {
                 } else if bottom + y > view_height {
                     y = view_height - bottom;
                 }
-                self.pane_scroll.set_offset(gpui::point(
+                self.panes.scroll.set_offset(gpui::point(
                     px(x.clamp((view_width - width).min(0.), 0.)),
                     px(y.clamp((view_height - height).min(0.), 0.)),
                 ));
             }
-            self.pane_scroll_focus = Some(signature);
+            self.panes.scroll_focus = Some(signature);
         }
         let tree = self.pane_tree(tab, layout.leaves(), window, cx);
         let mut buttons = Vec::new();
@@ -301,13 +303,13 @@ impl Shell {
                     .flex_1()
                     .min_h_0()
                     .min_w_0()
-                    .child(self.pane_viewport.layout_probe())
+                    .child(self.panes.viewport.layout_probe())
                     .child(
                         div()
                             .id("pane-scroll-area")
                             .size_full()
                             .overflow_scroll()
-                            .track_scroll(&self.pane_scroll)
+                            .track_scroll(&self.panes.scroll)
                             .child(div().w(px(width)).h(px(height)).flex_shrink_0().child(tree)),
                     ),
             )
@@ -320,8 +322,8 @@ impl Shell {
         limit: (f32, f32),
         cx: &mut Context<Self>,
     ) {
-        let offset = self.pane_scroll.offset();
-        self.pane_scroll.set_offset(gpui::point(
+        let offset = self.panes.scroll.offset();
+        self.panes.scroll.set_offset(gpui::point(
             px((offset.x.as_f32() + delta.0).clamp(limit.0.min(0.), 0.)),
             px((offset.y.as_f32() + delta.1).clamp(limit.1.min(0.), 0.)),
         ));
@@ -360,14 +362,14 @@ impl Shell {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> AnyElement {
-        let size = self.pane_bounds.get().map_or((800., 600.), |b| {
+        let size = self.panes.bounds.get().map_or((800., 600.), |b| {
             (b.size.width.as_f32(), b.size.height.as_f32())
         });
-        let motion = match self.pane_motion.as_ref().filter(|m| m.tab == tab) {
+        let motion = match self.panes.motion.as_ref().filter(|m| m.tab == tab) {
             Some(motion) => {
                 let (t, done) = motion.slide.at(vorkspace_ui::clock::Instant::now());
                 if done {
-                    self.pane_motion = None;
+                    self.panes.motion = None;
                     None
                 } else {
                     window.request_animation_frame();
@@ -375,16 +377,17 @@ impl Shell {
                 }
             }
             None => {
-                self.pane_motion = None;
+                self.panes.motion = None;
                 None
             }
         };
         let dragging = self
-            .pane_drag
+            .panes
+            .drag
             .as_ref()
             .filter(|d| d.active && !matches!(d.source, DragSource::Review(_)))
             .map(|d| d.source.session());
-        let (header, leaving) = match (motion, self.pane_motion.as_ref()) {
+        let (header, leaving) = match (motion, self.panes.motion.as_ref()) {
             (Some(_), Some(m)) => (m.header, m.leaving.clone()),
             _ => (None, Vec::new()),
         };
@@ -424,7 +427,7 @@ impl Shell {
         let mut panes = Vec::with_capacity(leaves.len() + leaving.len());
         for leaf in &leaves {
             let id = leaf.id;
-            let (rect, entering) = match (motion, self.pane_motion.as_ref()) {
+            let (rect, entering) = match (motion, self.panes.motion.as_ref()) {
                 (Some(t), Some(m)) => (
                     m.from
                         .get(&id)
@@ -504,7 +507,7 @@ impl Shell {
             .id("pane-tree")
             .size_full()
             .relative()
-            .child(self.pane_bounds.layout_probe())
+            .child(self.panes.bounds.layout_probe())
             .children(panes)
             .children(sashes.into_iter().map(|sash| {
                 let row = sash.dir == SplitDir::Right;
@@ -535,7 +538,8 @@ impl Shell {
                     })
                     .child(resize_border(
                         row,
-                        self.pane_sash
+                        self.panes
+                            .sash
                             .as_ref()
                             .is_some_and(|drag| drag.path == sash.path && drag.index == sash.index),
                     ))
@@ -543,7 +547,7 @@ impl Shell {
                         MouseButton::Left,
                         cx.listener(move |this, _, _, cx| {
                             cx.stop_propagation();
-                            this.pane_sash = Some(SashDrag {
+                            this.panes.sash = Some(SashDrag {
                                 tab,
                                 path: sash.path.clone(),
                                 index: sash.index,
@@ -557,7 +561,7 @@ impl Shell {
     }
     /// PaneDropHint: half the pane washed toward the edge it will take.
     pub(super) fn drop_hint(&self, id: i64) -> Option<AnyElement> {
-        let drag = self.pane_drag.as_ref().filter(|d| d.active)?;
+        let drag = self.panes.drag.as_ref().filter(|d| d.active)?;
         let (target, edge) = drag.over?;
         if target != id {
             return None;
@@ -673,7 +677,8 @@ impl Shell {
         let chat = self.sessions.get(&id).cloned();
         let now = vorkspace_ui::clock::Instant::now();
         let sliding = self
-            .review_slide
+            .review
+            .slide
             .as_ref()
             .filter(|(sid, _, _)| *sid == id)
             .map(|(_, slide, review)| {
@@ -685,7 +690,7 @@ impl Shell {
         // and change the layout again on the following redraw.
         let sliding = match sliding {
             Some((_, done, _, _)) if done || compact => {
-                self.review_slide = None;
+                self.review.slide = None;
                 None
             }
             sliding => sliding,
@@ -710,9 +715,9 @@ impl Shell {
                 .into_any_element();
         };
         let state = review.read(cx).state.clone();
-        let bounds = self.split_bounds.entry(id).or_default().clone();
+        let bounds = self.panes.split_bounds.entry(id).or_default().clone();
         if compact && !state.chat_hidden {
-            let show_review = self.workspace.active == Some(id) && self.review_focused;
+            let show_review = self.workspace.active == Some(id) && self.review.focused;
             review.update(cx, |r, cx| {
                 r.set_visible(show_review, cx);
                 r.set_deferred(false, cx);
@@ -748,7 +753,7 @@ impl Shell {
                             .child(label)
                             .on_click(cx.listener(move |this, _, window, cx| {
                                 this.focus_pane(id, window, cx);
-                                this.review_focused = to_review;
+                                this.review.focused = to_review;
                                 if to_review && let Some(review) = this.review_for(id, cx) {
                                     review.update(cx, |r, cx| r.focus_active(window, cx));
                                 } else {
@@ -812,17 +817,20 @@ impl Shell {
         let full_width = bounds
             .get()
             .map_or(600., |b| b.size.width.as_f32() * state.ratio);
-        let dragging = self.review_drag && self.workspace.active == Some(id);
+        let dragging = self.review.drag && self.workspace.active == Some(id);
         let moving = self
-            .pane_drag
+            .panes
+            .drag
             .as_ref()
             .is_some_and(|d| d.active && d.source == DragSource::Review(id));
         let moving_chat = self
-            .pane_drag
+            .panes
+            .drag
             .as_ref()
             .is_some_and(|d| d.active && d.source == DragSource::Pane(id));
         let sliding_now = self
-            .review_slide
+            .review
+            .slide
             .as_ref()
             .is_some_and(|(sid, _, _)| *sid == id);
         div()
@@ -842,8 +850,8 @@ impl Shell {
                         .on_mouse_down(
                             MouseButton::Left,
                             cx.listener(|this, _, _, cx| {
-                                if this.review_focused {
-                                    this.review_focused = false;
+                                if this.review.focused {
+                                    this.review.focused = false;
                                     cx.notify();
                                 }
                             }),
@@ -868,8 +876,8 @@ impl Shell {
                     .on_mouse_down(
                         MouseButton::Left,
                         cx.listener(|this, _, _, cx| {
-                            if !this.review_focused {
-                                this.review_focused = true;
+                            if !this.review.focused {
+                                this.review.focused = true;
                                 cx.notify();
                             }
                         }),
@@ -918,7 +926,7 @@ impl Shell {
                             MouseButton::Left,
                             cx.listener(move |this, _, window, cx| {
                                 this.focus_pane(id, window, cx);
-                                this.review_drag = true;
+                                this.review.drag = true;
                                 cx.stop_propagation();
                                 cx.notify();
                             }),

@@ -347,7 +347,9 @@ fn compact_footer_keeps_click_keyboard_focus_and_live_popover_anchor(cx: &mut Te
     activate(visual, "tab");
     activate(visual, "enter");
     window
-        .update(visual, |shell, _, _| assert!(shell.settings.is_some()))
+        .update(visual, |shell, _, _| {
+            assert!(shell.pages.settings.is_some())
+        })
         .unwrap();
 }
 

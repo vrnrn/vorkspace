@@ -92,17 +92,17 @@ impl Shell {
         durable: bool,
         cx: &mut Context<Self>,
     ) -> Result<(), String> {
-        if self.window_closing {
+        if self.window.closing {
             return Ok(());
         }
         let core = self.app_core.clone().expect("registered workspace window");
         let workspace = next.as_mut().unwrap_or(&mut self.workspace);
         let (shared, preferences_reconciled) = core.update(cx, |core, cx| {
             core.record_layout(
-                self.window_layout,
+                self.window.layout,
                 self.window_shared.as_deref(),
                 workspace,
-                self.window_active,
+                self.window.active,
                 durable,
                 cx,
             )
@@ -127,7 +127,7 @@ impl Shell {
             .layouts
             .entries
             .iter()
-            .find(|entry| entry.id == self.window_layout)
+            .find(|entry| entry.id == self.window.layout)
             .expect("persisted window layout")
             .workspace
             .to_string()
@@ -138,7 +138,7 @@ impl Shell {
             let shell = cx.weak_entity();
             core.update(cx, |core, cx| {
                 core.release_scheduler(&shell);
-                core.close_layout(self.window_layout, cx);
+                core.close_layout(self.window.layout, cx);
             });
         }
     }
