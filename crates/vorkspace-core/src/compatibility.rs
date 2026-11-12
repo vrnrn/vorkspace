@@ -211,55 +211,6 @@ fn field(value: &mut Value, identity: &str, current: &str) {
         }
     }
 }
-fn fields(key: &str, value: &mut Value) {
-    if key == "bot-roster" {
-        field(
-            value,
-            "9b9e74c140f4ffe20089b4929a5609a790039039534159550ce45964efe895f2",
-            "bots",
-        );
-        return;
-    }
-    if key != "workspace" {
-        return;
-    }
-    if let Some(preferences) = value.get_mut("preferences") {
-        field(
-            preferences,
-            "9b9e74c140f4ffe20089b4929a5609a790039039534159550ce45964efe895f2",
-            "bots",
-        );
-        field(
-            preferences,
-            "edb2c8646842d71551d5076f0dd5b31512986fc05b9c2835f0e7a49bd8511964",
-            "rail_bots_pinned",
-        );
-        field(
-            preferences,
-            "0fb0ed88a6e8fc8a36af76d9c17f68219b348f29b2d9f83d81e99f96cf631b7d",
-            "bot_menu_bar_icon",
-        );
-    }
-    if let Some(tabs) = value.get_mut("title_order").and_then(Value::as_array_mut) {
-        for tab in tabs {
-            field(
-                tab,
-                "6f00156cec078cc0c6c207117b68104f4e0e06cf67a3eebc6398b2c7f5248f45",
-                "Bot",
-            );
-        }
-    }
-    if let Some(scopes) = value.get_mut("scope_focus").and_then(Value::as_object_mut) {
-        for tab in scopes.values_mut() {
-            field(
-                tab,
-                "6f00156cec078cc0c6c207117b68104f4e0e06cf67a3eebc6398b2c7f5248f45",
-                "Bot",
-            );
-        }
-    }
-}
-
 /// Only known app-owned metadata is interpreted; nested tool payloads and text
 /// remain opaque, including when ordinary edits save the block again.
 pub(crate) fn block(value: &mut Value) {
@@ -402,28 +353,6 @@ pub(crate) fn application_block(block: &Value) -> bool {
             .iter()
             .any(|(name, value)| value == true && key(name) == "vorkspace")
     })
-}
-
-pub(crate) fn settings(
-    values: BTreeMap<String, String>,
-) -> Result<BTreeMap<String, String>, String> {
-    let mut result = BTreeMap::new();
-    for (old, mut value) in &values {
-        let canonical = key(old);
-        if old != &canonical && values.contains_key(&canonical) {
-            continue;
-        }
-        let upgraded;
-        if matches!(canonical.as_str(), "workspace" | "bot-roster") {
-            let mut json: Value =
-                serde_json::from_str(value).map_err(|e| format!("Cannot read {canonical}: {e}"))?;
-            fields(&canonical, &mut json);
-            upgraded = json.to_string();
-            value = &upgraded;
-        }
-        result.insert(canonical, value.clone());
-    }
-    Ok(result)
 }
 
 /// Historical shell receipts can name the earlier executable, but cannot make

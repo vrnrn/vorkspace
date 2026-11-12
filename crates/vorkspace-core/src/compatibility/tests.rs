@@ -34,64 +34,9 @@ fn normalizes_keys_without_changing_ids_text_or_unknown_metadata() {
         "vorkspace:bot-channels"
     );
     assert_eq!(key("another:bot-channels"), "another:bot-channels");
-    let mut roster = json!({"opaque":old});
-    roster[earlier_roster_field()] = json!([{"id":"saved-id","name":old}]);
-    let mut tab = json!({});
-    tab[earlier_title_field()] = json!({"id":"saved-id","project":old});
-    let mut preferences = json!({});
-    preferences[earlier_roster_field()] = json!(false);
-    preferences[format!("rail_{}_pinned", earlier_roster_field())] = json!(true);
-    preferences[format!("{}_menu_bar_icon", earlier_title_field().to_lowercase())] = json!(false);
-    let upgraded = settings(BTreeMap::from([
-            ("bot-roster".into(), roster.to_string()),
-            (
-                "workspace".into(),
-                json!({"title_order":[tab], "desktop_workspace_snapshot":roster.clone(), "preferences":preferences})
-                    .to_string(),
-            ),
-            (format!("{old}.preference"), "earlier".into()),
-            ("vorkspace.preference".into(), "current".into()),
-        ]))
-        .unwrap();
-    let roster: Value = serde_json::from_str(&upgraded["bot-roster"]).unwrap();
-    assert_eq!(roster["bots"][0]["name"], old);
-    assert_eq!(roster["opaque"], old);
-    let workspace: Value = serde_json::from_str(&upgraded["workspace"]).unwrap();
-    assert_eq!(workspace["title_order"][0]["Bot"]["id"], "saved-id");
-    assert_eq!(upgraded["vorkspace.preference"], "current");
-    assert_eq!(workspace["preferences"]["bots"], false);
-    assert_eq!(workspace["preferences"]["rail_bots_pinned"], true);
-    assert_eq!(workspace["preferences"]["bot_menu_bar_icon"], false);
-    assert!(workspace["desktop_workspace_snapshot"]
-        .get(earlier_roster_field())
-        .is_some());
     let mut block = json!({"role":"user","text":old});
     block[earlier_prefix()] = json!(true);
     assert!(application_block(&block));
-}
-#[test]
-fn roster_survives_read_modify_save_and_reopen() {
-    let dir = tempfile::tempdir().unwrap();
-    let path = dir.path().join("vorkspace.db");
-    drop(crate::store::Store::open_vorkspace(&path).unwrap());
-    let mut roster = json!({});
-    roster[earlier_roster_field()] = json!([{"id":"stable-bot","name":"Before"}]);
-    let sidecar = path.with_file_name("vorkspace.db.gpui.json");
-    std::fs::write(
-        &sidecar,
-        json!({"bot-roster":roster.to_string()}).to_string(),
-    )
-    .unwrap();
-    let store = crate::store::Store::open_vorkspace(&path).unwrap();
-    let mut roster = crate::bot::Roster::load(&store).unwrap();
-    assert_eq!(roster.bots.len(), 1);
-    roster.get_mut("stable-bot").unwrap().name = "After".into();
-    roster.save(&store).unwrap();
-    drop(store);
-    let reopened = crate::store::Store::open_vorkspace(&path).unwrap();
-    let roster = crate::bot::Roster::load(&reopened).unwrap();
-    assert_eq!(roster.get("stable-bot").unwrap().name, "After");
-    assert_eq!(roster.bots.len(), 1);
 }
 #[test]
 fn malformed_roster_stops_open_without_rewriting_the_sidecar() {

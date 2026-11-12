@@ -88,9 +88,16 @@ impl Sidecar {
             if stamp != Stamp::read(&file)? {
                 continue;
             }
-            let values = crate::compatibility::settings(
-                serde_json::from_str(&raw).map_err(|error| error.to_string())?,
-            )?;
+            let mut values: BTreeMap<String, String> =
+                serde_json::from_str(&raw).map_err(|error| error.to_string())?;
+            // A malformed workspace or roster stops the read, so nothing saves over it.
+            for key in ["workspace", "bot-roster"] {
+                if let Some(value) = values.get_mut(key) {
+                    let json: serde_json::Value = serde_json::from_str(value)
+                        .map_err(|e| format!("Cannot read {key}: {e}"))?;
+                    *value = json.to_string();
+                }
+            }
             self.replace(Some(stamp), values);
             return Ok(());
         }
