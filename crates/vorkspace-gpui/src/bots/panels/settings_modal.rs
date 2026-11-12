@@ -415,6 +415,91 @@ impl Bots {
             .as_ref()
             .is_some_and(|draft| draft.bot.id == bot.id);
         let narrow = window.viewport_size().width < px(780.);
+        let name = self.general_name_field(bot, creating, cx);
+        let add = bot.id.clone();
+        let (model, provider, mode, model_options) = self.general_model_values(cx);
+        let access_icon = match mode {
+            AccessMode::FullAccess => "shield-alert",
+            AccessMode::Auto => "sparkles",
+            AccessMode::AutoAcceptEdits => "pencil-edit",
+            _ => "square-lock",
+        };
+        let identity = self.general_identity(bot, name, delete_anchor, window, cx);
+        let compaction_anchor = AnchorSlot::default();
+        let compaction_target = bot.id.clone();
+        let compaction_label = compaction_label(bot.compaction_mode);
+        let model_controls = card()
+            .id("bot-model-settings")
+            .debug_selector(|| "bot-model-settings".into())
+            .flex_1()
+            .min_w_0()
+            .child(self.general_model_row(model, provider, cx))
+            .children(
+                model_options
+                    .into_iter()
+                    .filter_map(|item| Self::general_model_option(item, cx)),
+            )
+            .child(Self::general_compaction_row(
+                compaction_anchor,
+                compaction_target,
+                compaction_label,
+                cx,
+            ))
+            .child(self.general_access_row(mode, access_icon, cx));
+        div()
+            .id("bot-general-settings")
+            .debug_selector(|| "bot-general-settings".into())
+            .flex_1()
+            .min_h_0()
+            .overflow_y_scroll()
+            .when(narrow, |d| d.px_4())
+            .when(!narrow, |d| d.px_8())
+            .pt_6()
+            .pb_6()
+            .child(
+                div()
+                    .text_size(px(14.))
+                    .font_weight(FontWeight::MEDIUM)
+                    .child("General"),
+            )
+            .child(
+                div()
+                    .id("bot-settings-header")
+                    .debug_selector(|| "bot-settings-header".into())
+                    .mt_4()
+                    .flex()
+                    .gap_6()
+                    .when(narrow, |d| d.flex_col())
+                    .when(!narrow, |d| d.items_center())
+                    .child(identity)
+                    .child(model_controls),
+            )
+            .child(heading(
+                "Projects",
+                Some("It can see every session, note and folder in these."),
+            ))
+            .child(self.general_project_card(bot, add, cx))
+            .child(heading("Sessions it starts", None))
+            .child(card().child(switch_setting(
+                "Show sessions in sidebar",
+                "Sessions it starts appear in the Sessions list for its projects.",
+                self.switch(
+                    "bot-show-started",
+                    "Show sessions in sidebar",
+                    bot.show_started_sessions_in_sidebar,
+                    |m, on| m.show_started_sessions_in_sidebar = on,
+                    cx,
+                ),
+            )))
+            .into_any_element()
+    }
+
+    fn general_name_field(
+        &mut self,
+        bot: &Bot,
+        creating: bool,
+        cx: &mut Context<Self>,
+    ) -> Entity<crate::input::Input> {
         let name = self.field("bot-name", "Bot name", bot.name.clone(), false, cx);
         name.update(cx, |f, cx| {
             f.set_font_size(15.);
@@ -429,8 +514,11 @@ impl Bots {
                 cx,
             );
         });
-        let look = bot.id.clone();
-        let add = bot.id.clone();
+
+        name
+    }
+
+    fn general_model_values(&self, cx: &App) -> (SharedString, String, AccessMode, Vec<MenuItem>) {
         let chat = self.chat();
         let (model, provider, mode, model_options) = if let Some(draft) = &self.creation {
             let model = draft
@@ -467,30 +555,38 @@ impl Bots {
                     .unwrap_or_default(),
             )
         };
-        let access_icon = match mode {
-            AccessMode::FullAccess => "shield-alert",
-            AccessMode::Auto => "sparkles",
-            AccessMode::AutoAcceptEdits => "pencil-edit",
-            _ => "square-lock",
-        };
-        let plain = |id, label: SharedString| {
-            div()
-                .id(id)
-                .role(Role::Button)
-                .aria_label(label.clone())
-                .h(px(28.))
-                .px_1p5()
-                .mx(px(-6.))
-                .rounded(px(radius::CONTROL))
-                .flex()
-                .items_center()
-                .gap_2()
-                .text_size(px(12.))
-                .text_color(content(0.85))
-                .hover(|s| s.bg(vorkspace_ui::fluid::hover(0.06)))
-                .child(label)
-        };
-        let identity = div()
+
+        (model, provider, mode, model_options)
+    }
+
+    fn general_plain_control(id: SharedString, label: SharedString) -> gpui::Stateful<Div> {
+        div()
+            .id(id)
+            .role(Role::Button)
+            .aria_label(label.clone())
+            .h(px(28.))
+            .px_1p5()
+            .mx(px(-6.))
+            .rounded(px(radius::CONTROL))
+            .flex()
+            .items_center()
+            .gap_2()
+            .text_size(px(12.))
+            .text_color(content(0.85))
+            .hover(|s| s.bg(vorkspace_ui::fluid::hover(0.06)))
+            .child(label)
+    }
+
+    fn general_identity(
+        &self,
+        bot: &Bot,
+        name: Entity<crate::input::Input>,
+        delete_anchor: AnchorSlot,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Div {
+        let look = bot.id.clone();
+        div()
             .flex()
             .flex_col()
             .items_center()
@@ -555,293 +651,266 @@ impl Bots {
                     .font_weight(FontWeight::MEDIUM)
                     .hover(|s| s.bg(vorkspace_ui::fluid::hover(0.05)))
                     .child(name),
-            );
-        let compaction_anchor = AnchorSlot::default();
-        let compaction_target = bot.id.clone();
-        let compaction_label = compaction_label(bot.compaction_mode);
-        let model_controls = card()
-            .id("bot-model-settings")
-            .debug_selector(|| "bot-model-settings".into())
-            .flex_1()
-            .min_w_0()
-            .child(setting(
-                "Model",
+            )
+    }
+
+    fn general_access_row(
+        &self,
+        mode: AccessMode,
+        access_icon: &'static str,
+        cx: &Context<Self>,
+    ) -> Div {
+        setting(
+            "Permissions",
+            None,
+            div()
+                .id("bot-settings-access")
+                .role(Role::Button)
+                .map(vorkspace_ui::theme::tab_reachable)
+                .aria_label(format!("Permissions, {}", mode.label()))
+                .h(px(28.))
+                .max_w(px(208.))
+                .px_1p5()
+                .mx(px(-6.))
+                .rounded(px(radius::CONTROL))
+                .flex()
+                .items_center()
+                .gap_2()
+                .text_size(px(12.))
+                .text_color(content(0.85))
+                .hover(|s| s.bg(vorkspace_ui::fluid::hover(0.06)))
+                .child(self.access_anchor.probe())
+                .child(
+                    icon(access_icon, 14.).when(mode == AccessMode::FullAccess, |i| {
+                        i.text_color(vorkspace_ui::theme::warning())
+                    }),
+                )
+                .child(mode.label())
+                .child(icon("chevron-down", 12.))
+                .on_click(cx.listener(|this, _, w, cx| this.open_access_picker(w, cx)))
+                .into_any_element(),
+        )
+        .border_t_1()
+        .border_color(content(0.04))
+    }
+
+    fn general_compaction_row(
+        compaction_anchor: AnchorSlot,
+        compaction_target: String,
+        compaction_label: &'static str,
+        cx: &Context<Self>,
+    ) -> Div {
+        setting(
+            "Context compaction",
+            None,
+            Self::general_plain_control("bot-settings-compaction".into(), compaction_label.into())
+                .debug_selector(|| "bot-settings-compaction".into())
+                .aria_label(format!("Context compaction, {compaction_label}"))
+                .child(compaction_anchor.probe())
+                .child(icon("chevron-down", 12.))
+                .on_click(cx.listener(move |this, _, w, cx| {
+                    this.open_compaction_picker(
+                        &compaction_target,
+                        compaction_anchor.clone(),
+                        w,
+                        cx,
+                    );
+                }))
+                .into_any_element(),
+        )
+        .border_t_1()
+        .border_color(content(0.04))
+    }
+
+    fn general_model_row(&self, model: SharedString, provider: String, cx: &Context<Self>) -> Div {
+        setting(
+            "Model",
+            None,
+            div()
+                .id("bot-settings-model")
+                .role(Role::Button)
+                .map(vorkspace_ui::theme::tab_reachable)
+                .aria_label(format!("Choose model, {model}"))
+                .h(px(28.))
+                .px_1p5()
+                .mx(px(-6.))
+                .rounded(px(radius::CONTROL))
+                .flex()
+                .items_center()
+                .gap_2()
+                .text_size(px(12.))
+                .text_color(content(0.85))
+                .hover(|s| s.bg(vorkspace_ui::fluid::hover(0.06)))
+                .child(self.model_anchor.probe())
+                .child(provider_icon(&provider, 14.))
+                .child(div().min_w_0().truncate().child(model))
+                .on_click(cx.listener(|this, _, w, cx| this.open_model_picker(w, cx)))
+                .into_any_element(),
+        )
+    }
+
+    fn general_model_option(item: MenuItem, cx: &Context<Self>) -> Option<Div> {
+        let MenuItem::Action(option) = item else {
+            return None;
+        };
+        let label = option.label.clone();
+        let value = option
+            .value
+            .clone()
+            .unwrap_or_else(|| if option.checked { "On" } else { "Off" }.into());
+        let anchor = AnchorSlot::default();
+        let probe = anchor.probe();
+        Some(
+            setting(
+                &label,
                 None,
+                Self::general_plain_control(
+                    SharedString::from(format!("bot-option-{}", option.id)),
+                    value,
+                )
+                .child(probe)
+                .on_click(cx.listener(move |this, _, w, cx| {
+                    if option.submenu.is_empty() {
+                        if this.creating() {
+                            this.choose_creation_option(&option.id, cx);
+                        } else if let Some(chat) = this.chat()
+                            && let Err(e) =
+                                chat.update(cx, |v, cx| v.bot_pick_model_option(&option.id, cx))
+                        {
+                            this.error = Some(e);
+                        }
+                        this.changed(cx);
+                    } else {
+                        this.open_model_option(
+                            option.label.clone(),
+                            option.submenu.clone(),
+                            anchor.clone(),
+                            w,
+                            cx,
+                        );
+                    }
+                }))
+                .into_any_element(),
+            )
+            .border_t_1()
+            .border_color(content(0.04)),
+        )
+    }
+
+    fn general_project_row(
+        bot: &Bot,
+        project: &str,
+        ix: usize,
+        cx: &Context<Self>,
+    ) -> gpui::Stateful<Div> {
+        let remove = project.to_owned();
+        let owner = bot.id.clone();
+        let label = crate::workspace::project_name(project);
+        let pretty = std::env::var("HOME")
+            .ok()
+            .and_then(|home| project.strip_prefix(&home).map(|rest| format!("~{rest}")))
+            .unwrap_or_else(|| project.to_owned());
+        let group: SharedString = format!("bot-project-{ix}").into();
+        div()
+            .id(("bot-project", ix))
+            .group(group.clone())
+            .min_h(px(48.))
+            .flex()
+            .items_center()
+            .gap_3()
+            .px_3()
+            .py_2()
+            .when(ix > 0, |d| d.border_t_1().border_color(content(0.04)))
+            .child(
                 div()
-                    .id("bot-settings-model")
-                    .role(Role::Button)
-                    .map(vorkspace_ui::theme::tab_reachable)
-                    .aria_label(format!("Choose model, {model}"))
-                    .h(px(28.))
-                    .px_1p5()
-                    .mx(px(-6.))
-                    .rounded(px(radius::CONTROL))
+                    .size(px(32.))
+                    .flex_shrink_0()
+                    .rounded(px(radius::CONTAINER))
+                    .bg(content(0.05))
                     .flex()
                     .items_center()
-                    .gap_2()
-                    .text_size(px(12.))
-                    .text_color(content(0.85))
-                    .hover(|s| s.bg(vorkspace_ui::fluid::hover(0.06)))
-                    .child(self.model_anchor.probe())
-                    .child(provider_icon(&provider, 14.))
-                    .child(div().min_w_0().truncate().child(model))
-                    .on_click(cx.listener(|this, _, w, cx| this.open_model_picker(w, cx)))
-                    .into_any_element(),
-            ))
-            .children(model_options.into_iter().filter_map(|item| {
-                let MenuItem::Action(option) = item else {
-                    return None;
-                };
-                let label = option.label.clone();
-                let value = option
-                    .value
-                    .clone()
-                    .unwrap_or_else(|| if option.checked { "On" } else { "Off" }.into());
-                let anchor = AnchorSlot::default();
-                let probe = anchor.probe();
-                Some(
-                    setting(
-                        &label,
-                        None,
-                        plain(
-                            SharedString::from(format!("bot-option-{}", option.id)),
-                            value,
-                        )
-                        .child(probe)
-                        .on_click(cx.listener(move |this, _, w, cx| {
-                            if option.submenu.is_empty() {
-                                if this.creating() {
-                                    this.choose_creation_option(&option.id, cx);
-                                } else if let Some(chat) = this.chat()
-                                    && let Err(e) = chat
-                                        .update(cx, |v, cx| v.bot_pick_model_option(&option.id, cx))
-                                {
-                                    this.error = Some(e);
-                                }
-                                this.changed(cx);
-                            } else {
-                                this.open_model_option(
-                                    option.label.clone(),
-                                    option.submenu.clone(),
-                                    anchor.clone(),
-                                    w,
-                                    cx,
-                                );
-                            }
-                        }))
-                        .into_any_element(),
-                    )
-                    .border_t_1()
-                    .border_color(content(0.04)),
-                )
-            }))
-            .child(
-                setting(
-                    "Context compaction",
-                    None,
-                    plain("bot-settings-compaction".into(), compaction_label.into())
-                        .debug_selector(|| "bot-settings-compaction".into())
-                        .aria_label(format!("Context compaction, {compaction_label}"))
-                        .child(compaction_anchor.probe())
-                        .child(icon("chevron-down", 12.))
-                        .on_click(cx.listener(move |this, _, w, cx| {
-                            this.open_compaction_picker(
-                                &compaction_target,
-                                compaction_anchor.clone(),
-                                w,
-                                cx,
-                            );
-                        }))
-                        .into_any_element(),
-                )
-                .border_t_1()
-                .border_color(content(0.04)),
-            )
-            .child(
-                setting(
-                    "Permissions",
-                    None,
-                    div()
-                        .id("bot-settings-access")
-                        .role(Role::Button)
-                        .map(vorkspace_ui::theme::tab_reachable)
-                        .aria_label(format!("Permissions, {}", mode.label()))
-                        .h(px(28.))
-                        .max_w(px(208.))
-                        .px_1p5()
-                        .mx(px(-6.))
-                        .rounded(px(radius::CONTROL))
-                        .flex()
-                        .items_center()
-                        .gap_2()
-                        .text_size(px(12.))
-                        .text_color(content(0.85))
-                        .hover(|s| s.bg(vorkspace_ui::fluid::hover(0.06)))
-                        .child(self.access_anchor.probe())
-                        .child(
-                            icon(access_icon, 14.).when(mode == AccessMode::FullAccess, |i| {
-                                i.text_color(vorkspace_ui::theme::warning())
-                            }),
-                        )
-                        .child(mode.label())
-                        .child(icon("chevron-down", 12.))
-                        .on_click(cx.listener(|this, _, w, cx| this.open_access_picker(w, cx)))
-                        .into_any_element(),
-                )
-                .border_t_1()
-                .border_color(content(0.04)),
-            );
-        div()
-            .id("bot-general-settings")
-            .debug_selector(|| "bot-general-settings".into())
-            .flex_1()
-            .min_h_0()
-            .overflow_y_scroll()
-            .when(narrow, |d| d.px_4())
-            .when(!narrow, |d| d.px_8())
-            .pt_6()
-            .pb_6()
-            .child(
-                div()
-                    .text_size(px(14.))
-                    .font_weight(FontWeight::MEDIUM)
-                    .child("General"),
+                    .justify_center()
+                    .child(crate::project_mark::project_icon(project, 16.)),
             )
             .child(
                 div()
-                    .id("bot-settings-header")
-                    .debug_selector(|| "bot-settings-header".into())
-                    .mt_4()
-                    .flex()
-                    .gap_6()
-                    .when(narrow, |d| d.flex_col())
-                    .when(!narrow, |d| d.items_center())
-                    .child(identity)
-                    .child(model_controls),
-            )
-            .child(heading(
-                "Projects",
-                Some("It can see every session, note and folder in these."),
-            ))
-            .child(
-                card()
-                    .children(bot.projects.iter().enumerate().map(|(ix, project)| {
-                        let remove = project.clone();
-                        let owner = bot.id.clone();
-                        let label = crate::workspace::project_name(project);
-                        let pretty = std::env::var("HOME")
-                            .ok()
-                            .and_then(|home| {
-                                project.strip_prefix(&home).map(|rest| format!("~{rest}"))
-                            })
-                            .unwrap_or_else(|| project.clone());
-                        let group: SharedString = format!("bot-project-{ix}").into();
-                        div()
-                            .id(("bot-project", ix))
-                            .group(group.clone())
-                            .min_h(px(48.))
-                            .flex()
-                            .items_center()
-                            .gap_3()
-                            .px_3()
-                            .py_2()
-                            .when(ix > 0, |d| d.border_t_1().border_color(content(0.04)))
-                            .child(
-                                div()
-                                    .size(px(32.))
-                                    .flex_shrink_0()
-                                    .rounded(px(radius::CONTAINER))
-                                    .bg(content(0.05))
-                                    .flex()
-                                    .items_center()
-                                    .justify_center()
-                                    .child(crate::project_mark::project_icon(project, 16.)),
-                            )
-                            .child(
-                                div()
-                                    .flex_1()
-                                    .min_w_0()
-                                    .child(
-                                        div()
-                                            .text_size(px(13.))
-                                            .line_height(px(20.))
-                                            .text_color(content(0.9))
-                                            .truncate()
-                                            .child(label),
-                                    )
-                                    .child(
-                                        div()
-                                            .text_size(px(11.))
-                                            .line_height(px(16.))
-                                            .text_color(content(0.4))
-                                            .truncate()
-                                            .child(pretty),
-                                    ),
-                            )
-                            .child(
-                                icon_button("bot-remove-project", "Remove project", "close")
-                                    .opacity(0.)
-                                    .group_hover(group, |s| s.opacity(1.))
-                                    .on_click(cx.listener(move |this, _, _, cx| {
-                                        this.edit_settings_bot(
-                                            &owner,
-                                            |bot| bot.projects.retain(|path| path != &remove),
-                                            cx,
-                                        );
-                                    })),
-                            )
-                    }))
+                    .flex_1()
+                    .min_w_0()
                     .child(
                         div()
-                            .id("bot-add-project")
-                            .role(Role::Button)
-                            .aria_label("Add project")
-                            .h(px(44.))
-                            .px_3()
-                            .flex()
-                            .items_center()
-                            .gap_3()
                             .text_size(px(13.))
-                            .text_color(content(0.55))
-                            .hover(|s| {
-                                s.bg(vorkspace_ui::fluid::hover(0.04))
-                                    .text_color(content(1.))
-                            })
-                            .when(!bot.projects.is_empty(), |d| {
-                                d.border_t_1().border_color(content(0.04))
-                            })
-                            .child(self.projects_anchor.probe())
-                            .child(
-                                div()
-                                    .size(px(32.))
-                                    .rounded(px(radius::CONTAINER))
-                                    .border_1()
-                                    .border_color(content(0.15))
-                                    .flex()
-                                    .items_center()
-                                    .justify_center()
-                                    .child(icon("plus", 14.)),
-                            )
-                            .child("Add project")
-                            .on_click(
-                                cx.listener(move |this, _, w, cx| this.pick_project(&add, w, cx)),
-                            ),
+                            .line_height(px(20.))
+                            .text_color(content(0.9))
+                            .truncate()
+                            .child(label),
+                    )
+                    .child(
+                        div()
+                            .text_size(px(11.))
+                            .line_height(px(16.))
+                            .text_color(content(0.4))
+                            .truncate()
+                            .child(pretty),
                     ),
             )
-            .child(heading("Sessions it starts", None))
-            .child(card().child(switch_setting(
-                "Show sessions in sidebar",
-                "Sessions it starts appear in the Sessions list for its projects.",
-                self.switch(
-                    "bot-show-started",
-                    "Show sessions in sidebar",
-                    bot.show_started_sessions_in_sidebar,
-                    |m, on| m.show_started_sessions_in_sidebar = on,
-                    cx,
-                ),
-            )))
-            .into_any_element()
+            .child(
+                icon_button("bot-remove-project", "Remove project", "close")
+                    .opacity(0.)
+                    .group_hover(group, |s| s.opacity(1.))
+                    .on_click(cx.listener(move |this, _, _, cx| {
+                        this.edit_settings_bot(
+                            &owner,
+                            |bot| bot.projects.retain(|path| path != &remove),
+                            cx,
+                        );
+                    })),
+            )
     }
+
+    fn general_project_card(&self, bot: &Bot, add: String, cx: &Context<Self>) -> Div {
+        card()
+            .children(
+                bot.projects
+                    .iter()
+                    .enumerate()
+                    .map(|(ix, project)| Self::general_project_row(bot, project, ix, cx)),
+            )
+            .child(
+                div()
+                    .id("bot-add-project")
+                    .role(Role::Button)
+                    .aria_label("Add project")
+                    .h(px(44.))
+                    .px_3()
+                    .flex()
+                    .items_center()
+                    .gap_3()
+                    .text_size(px(13.))
+                    .text_color(content(0.55))
+                    .hover(|s| {
+                        s.bg(vorkspace_ui::fluid::hover(0.04))
+                            .text_color(content(1.))
+                    })
+                    .when(!bot.projects.is_empty(), |d| {
+                        d.border_t_1().border_color(content(0.04))
+                    })
+                    .child(self.projects_anchor.probe())
+                    .child(
+                        div()
+                            .size(px(32.))
+                            .rounded(px(radius::CONTAINER))
+                            .border_1()
+                            .border_color(content(0.15))
+                            .flex()
+                            .items_center()
+                            .justify_center()
+                            .child(icon("plus", 14.)),
+                    )
+                    .child("Add project")
+                    .on_click(cx.listener(move |this, _, w, cx| this.pick_project(&add, w, cx))),
+            )
+    }
+
     pub(super) fn switch(
         &self,
         id: &'static str,
