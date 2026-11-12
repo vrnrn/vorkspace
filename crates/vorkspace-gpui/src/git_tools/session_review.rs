@@ -440,7 +440,7 @@ impl Render for SessionReview {
                         .text_size(px(12.))
                         .child(file.relative.clone()),
                 )
-                .child(counts(file.additions, file.deletions, 8.).into_any_element())
+                .child(counts(file.additions, file.deletions, 8.))
                 .on_click(cx.listener(move |this, _, _, cx| {
                     this.open(&turn_id, Some(path.clone()), cx);
                 }))
