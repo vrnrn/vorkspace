@@ -162,541 +162,15 @@ impl Shell {
         let width = 720f32.min(size.width.as_f32() - 24.);
         let height = 560f32.min(size.height.as_f32() - 32.);
         let weak = cx.weak_entity();
-        let only = self.workspace.vorkspaces.len() <= 1;
         let look = self.vorkspace_look(&def, &dialog.icon_letters, cx);
         let open_project = dialog.project.clone();
-        let project_page = open_project.as_ref().map(|path| {
-            div()
-                .flex()
-                .flex_col()
-                .child(
-                    div()
-                        .flex()
-                        .items_center()
-                        .gap_2()
-                        .mb_1()
-                        .child(self.project_mark(path, 18.))
-                        .child(
-                            div()
-                                .text_size(px(15.))
-                                .font_weight(FontWeight::SEMIBOLD)
-                                .child(self.project_label(path)),
-                        ),
-                )
-                .child(
-                    div()
-                        .text_size(px(12.))
-                        .text_color(content(0.45))
-                        .child(crate::panel_kit::home_relative(std::path::Path::new(path))),
-                )
-                .child(
-                    div()
-                        .mt_5()
-                        .mb_2()
-                        .text_size(px(12.))
-                        .font_weight(FontWeight::MEDIUM)
-                        .text_color(content(0.55))
-                        .child("Codebase"),
-                )
-                .child(self.project_codebase_section(path, cx))
-                .child(
-                    div()
-                        .mt_5()
-                        .mb_2()
-                        .text_size(px(12.))
-                        .font_weight(FontWeight::MEDIUM)
-                        .text_color(content(0.55))
-                        .child("Notifications"),
-                )
-                .child(self.project_notifications_section(path, cx))
-                .into_any_element()
-        });
-        let nav_state = window.use_keyed_state("vorkspace-dialog-navigation", cx, |_, _| {
-            (
-                gpui::ScrollHandle::new(),
-                std::cell::RefCell::<Option<FocusHandle>>::default(),
-            )
-        });
-        let focused = window.focused(cx);
-        let (scroll, previous_focus) = nav_state.read(cx);
-        let focus_changed = previous_focus.replace(focused.clone()) != focused;
-        let scroll = scroll.clone();
-        let nav_focus = |key: SharedString, ix, window: &mut Window, cx: &mut App| {
-            let handle = window
-                .use_keyed_state(key, cx, |_, cx| cx.focus_handle().tab_stop(true))
-                .read(cx)
-                .clone();
-            if focus_changed && focused.as_ref() == Some(&handle) {
-                scroll.scroll_to_item(ix);
-            }
-            handle
-        };
-        let mut nav: Vec<AnyElement> = Vec::new();
-        for v in self.workspace.vorkspaces.iter() {
-            let id = v.id.clone();
-            let current = v.id == editing;
-            let selected = current && open_project.is_none();
-            let focus = nav_focus(format!("vorkspace-nav-{id}").into(), nav.len(), window, cx);
-            nav.push(
-                div()
-                    .id(SharedString::from(format!("vorkspace-row-{}", v.id)))
-                    .debug_selector({
-                        let id = v.id.clone();
-                        move || format!("vorkspace-row-{id}")
-                    })
-                    .role(Role::Tab)
-                    .aria_selected(selected)
-                    .aria_label(v.name.clone())
-                    .map(vorkspace_ui::theme::tab_reachable)
-                    .track_focus(&focus)
-                    .h(px(34.))
-                    .flex_shrink_0()
-                    .px(px(8.))
-                    .flex()
-                    .items_center()
-                    .gap_2()
-                    .rounded(px(radius::CONTROL))
-                    .text_size(px(13.))
-                    .text_color(content(if selected { 1. } else { 0.7 }))
-                    .cursor_pointer()
-                    .when(selected, |d| d.bg(content(0.08)))
-                    .when(!selected, |d| {
-                        d.hover(|s| s.bg(vorkspace_ui::fluid::hover(0.05)))
-                    })
-                    .child(vorkspace_mark(v, 18.))
-                    .child(div().flex_1().min_w_0().truncate().child(v.name.clone()))
-                    .when(v.id == self.workspace.active_vorkspace, |d| {
-                        d.child(icon("check-2", 12.).text_color(content(0.45)))
-                    })
-                    .on_click(cx.listener(move |this, _, window, cx| {
-                        if this
-                            .project_settings
-                            .vorkspace_dialog
-                            .as_ref()
-                            .is_some_and(|d| d.editing == id)
-                        {
-                            if let Some(d) = this.project_settings.vorkspace_dialog.as_mut() {
-                                d.project = None;
-                                d.confirm_delete = false;
-                            }
-                            cx.notify();
-                        } else {
-                            this.open_vorkspace_dialog(Some(id.clone()), window, cx);
-                        }
-                    }))
-                    .into_any_element(),
-            );
-            if !current {
-                continue;
-            }
-            // Each of the vorkspace's projects has its own settings tab.
-            for path in v
-                .projects
-                .iter()
-                .filter(|p| self.workspace.is_project_available(p))
-            {
-                let selected = open_project.as_deref() == Some(path.as_str());
-                let target = path.clone();
-                let key = path_key(path);
-                let focus = nav_focus(
-                    format!("vorkspace-nav-project-{}-{key}", v.id).into(),
-                    nav.len(),
-                    window,
-                    cx,
-                );
-                nav.push(
-                    div()
-                        .id(SharedString::from(format!("vorkspace-project-tab-{key}")))
-                        .debug_selector(move || format!("vorkspace-project-tab-{key}"))
-                        .role(Role::Tab)
-                        .aria_selected(selected)
-                        .aria_label(format!("{} settings", self.project_label(path)))
-                        .map(vorkspace_ui::theme::tab_reachable)
-                        .track_focus(&focus)
-                        .h(px(30.))
-                        .flex_shrink_0()
-                        .pl(px(20.))
-                        .pr(px(8.))
-                        .flex()
-                        .items_center()
-                        .gap_2()
-                        .rounded(px(radius::CONTROL))
-                        .text_size(px(12.5))
-                        .text_color(content(if selected { 1. } else { 0.65 }))
-                        .cursor_pointer()
-                        .when(selected, |d| d.bg(content(0.08)))
-                        .when(!selected, |d| {
-                            d.hover(|s| s.bg(vorkspace_ui::fluid::hover(0.05)))
-                        })
-                        .child(self.project_mark(path, 14.))
-                        .child(
-                            div()
-                                .flex_1()
-                                .min_w_0()
-                                .truncate()
-                                .child(self.project_label(path)),
-                        )
-                        .on_click(cx.listener(move |this, _, _, cx| {
-                            if let Some(d) = this.project_settings.vorkspace_dialog.as_mut() {
-                                d.project = Some(target.clone());
-                                d.confirm_delete = false;
-                            }
-                            cx.notify();
-                        }))
-                        .into_any_element(),
-                );
-            }
-        }
-        let section = |label: &'static str| {
-            div()
-                .mt_5()
-                .mb_2()
-                .text_size(px(12.))
-                .font_weight(FontWeight::MEDIUM)
-                .text_color(content(0.55))
-                .child(label)
-        };
-        let projects = def
-            .projects
-            .clone()
-            .into_iter()
-            .filter(|p| self.workspace.is_project_available(p))
-            .map(|path| {
-                let remove = path.clone();
-                let editing = editing.clone();
-                let key = path_key(&path);
-                div()
-                    .id(SharedString::from(format!("vorkspace-project-{key}")))
-                    .h(px(40.))
-                    .px_2()
-                    .flex()
-                    .items_center()
-                    .gap_2()
-                    .rounded(px(radius::CONTROL))
-                    .hover(|s| s.bg(vorkspace_ui::fluid::hover(0.04)))
-                    .child(self.project_mark(&path, 16.))
-                    .child(
-                        div()
-                            .flex_1()
-                            .min_w_0()
-                            .flex()
-                            .flex_col()
-                            .child(
-                                div()
-                                    .truncate()
-                                    .text_size(px(13.))
-                                    .child(self.project_label(&path)),
-                            )
-                            .child(
-                                div()
-                                    .truncate()
-                                    .text_size(px(11.))
-                                    .text_color(content(0.45))
-                                    .child(crate::panel_kit::home_relative(std::path::Path::new(
-                                        &path,
-                                    ))),
-                            ),
-                    )
-                    .child(
-                        icon_button(
-                            "vorkspace-remove-project",
-                            "Remove from this vorkspace",
-                            "close",
-                        )
-                        .aria_label(format!(
-                            "Remove {} from this vorkspace",
-                            self.project_label(&path)
-                        ))
-                        .on_click(cx.listener(
-                            move |this, _, window, cx| {
-                                this.workspace
-                                    .remove_project_from_vorkspace(&editing, &remove);
-                                if editing == this.workspace.active_vorkspace
-                                    && path_key(&remove) == path_key(&this.workspace.project)
-                                {
-                                    let landing = this.workspace.vorkspace_landing(&editing);
-                                    this.open_project_from_user(landing, window, cx);
-                                } else {
-                                    this.persist(cx);
-                                    cx.notify();
-                                }
-                            },
-                        )),
-                    )
-            });
-        // Folders already known elsewhere can join with one click.
-        let addable: Vec<String> = self
-            .workspace
-            .projects
-            .iter()
-            .filter(|p| {
-                self.workspace.is_project_available(p)
-                    && !def.projects.iter().any(|q| path_key(q) == path_key(p))
-            })
-            .cloned()
-            .collect();
-        let chip = |id: SharedString, label: String, lead: AnyElement| {
-            let debug_id = id.clone();
-            div()
-                .id(id)
-                .debug_selector(move || debug_id.to_string())
-                .role(Role::Button)
-                .aria_label(format!("Add {label}"))
-                .map(vorkspace_ui::theme::tab_reachable)
-                .h(px(28.))
-                .px_2()
-                .flex()
-                .items_center()
-                .gap_1p5()
-                .rounded_full()
-                .border_1()
-                .border_color(content(0.12))
-                .text_size(px(12.))
-                .text_color(content(0.75))
-                .cursor_pointer()
-                .hover(|s| {
-                    s.bg(vorkspace_ui::fluid::hover(0.06))
-                        .text_color(content(1.))
-                })
-                .child(icon("plus", 12.))
-                .child(lead)
-                .child(label)
-        };
-        let add_projects = addable.into_iter().map(|path| {
-            let editing = editing.clone();
-            let add = path.clone();
-            chip(
-                SharedString::from(format!("vorkspace-add-project-{}", path_key(&path))),
-                self.project_label(&path),
-                self.project_mark(&path, 14.),
-            )
-            .on_click(cx.listener(move |this, _, window, cx| {
-                let first = editing == this.workspace.active_vorkspace
-                    && (this.workspace.project.is_empty()
-                        || !this
-                            .workspace
-                            .vorkspace_projects()
-                            .iter()
-                            .any(|p| path_key(p) == path_key(&this.workspace.project)));
-                this.workspace.add_project_to_vorkspace(&editing, &add);
-                if first {
-                    this.open_project_from_user(add.clone(), window, cx);
-                } else {
-                    this.persist(cx);
-                    cx.notify();
-                }
-            }))
-        });
-        let bots = self.vorkspace_bots(cx);
-        let (members, others): (Vec<_>, Vec<_>) =
-            bots.into_iter().partition(|b| def.bots.contains(&b.id));
-        let no_bots = members.is_empty() && others.is_empty();
-        let member_rows = members.into_iter().map(|bot| {
-            let editing = editing.clone();
-            let id = bot.id.clone();
-            div()
-                .id(SharedString::from(format!("vorkspace-bot-{}", bot.id)))
-                .h(px(36.))
-                .px_2()
-                .flex()
-                .items_center()
-                .gap_2()
-                .rounded(px(radius::CONTROL))
-                .hover(|s| s.bg(vorkspace_ui::fluid::hover(0.04)))
-                .child(crate::avatar::bot_avatar(&bot, "idle", 18., true))
-                .child(
-                    div()
-                        .flex_1()
-                        .min_w_0()
-                        .truncate()
-                        .text_size(px(13.))
-                        .child(bot.label()),
-                )
-                .child(
-                    icon_button(
-                        "vorkspace-remove-bot",
-                        "Remove from this vorkspace",
-                        "close",
-                    )
-                    .aria_label(format!("Remove {} from this vorkspace", bot.label()))
-                    .on_click(cx.listener(move |this, _, window, cx| {
-                        this.set_bot_membership(&id, &editing, false, cx);
-                        this.reconcile_after_bot_move(window, cx);
-                    })),
-                )
-        });
-        let add_bots = others.into_iter().map(|bot| {
-            let editing = editing.clone();
-            let id = bot.id.clone();
-            chip(
-                SharedString::from(format!("vorkspace-add-bot-{}", bot.id)),
-                bot.label(),
-                crate::avatar::bot_avatar(&bot, "idle", 14., true),
-            )
-            .on_click(cx.listener(move |this, _, window, cx| {
-                this.set_bot_membership(&id, &editing, true, cx);
-                this.reconcile_after_bot_move(window, cx);
-            }))
-        });
-        let confirm = dialog.confirm_delete;
-        let delete_id = editing.clone();
-        let switch_id = editing.clone();
-        let is_active = editing == self.workspace.active_vorkspace;
-        let body = div()
-            .id("vorkspace-dialog-body")
-            .flex_1()
-            .min_w_0()
-            .h_full()
-            .flex()
-            .flex_col()
-            .child(
-                div()
-                    .id("vorkspace-dialog-scroll")
-                    .flex_1()
-                    .min_h_0()
-                    .overflow_y_scroll()
-                    .px_5()
-                    .pt_4()
-                    .pb_4()
-                    .children(project_page)
-                    .when(open_project.is_none(), |d| {
-                        d.child(section("Name").mt_0())
-                    .child(crate::controls::page::field_frame().child(dialog.name.clone()))
-                    .child(section("Look"))
-                    .child(look)
-                    .child(section("Folders"))
-                    .child(
-                        div()
-                            .text_size(px(12.))
-                            .text_color(content(0.5))
-                            .mb_2()
-                            .child(
-                                "A folder can be in several vorkspaces; its sessions show in each.",
-                            ),
-                    )
-                    .children(projects)
-                    .child(
-                        div()
-                            .mt_2()
-                            .flex()
-                            .flex_wrap()
-                            .gap_2()
-                            .child(
-                                chip(
-                                    "vorkspace-add-folder".into(),
-                                    "Add folder…".into(),
-                                    div().into_any_element(),
-                                )
-                                .debug_selector(|| "vorkspace-add-folder".into())
-                                .on_click(cx.listener(|this, _, _, cx| this.open_project(cx))),
-                            )
-                            .children(add_projects),
-                    )
-                    .child(section("Bots"))
-                    .child(
-                        div()
-                            .text_size(px(12.))
-                            .text_color(content(0.5))
-                            .mb_2()
-                            .child(if no_bots {
-                                "A Bot created while this vorkspace is open belongs to it."
-                            } else {
-                                "A Bot belongs to one vorkspace; adding one here moves it."
-                            }),
-                    )
-                    .children(member_rows)
-                    .child(div().mt_2().flex().flex_wrap().gap_2().children(add_bots))
-                    }),
-            )
-            .child(
-                div()
-                    .flex_shrink_0()
-                    .px_5()
-                    .py_3()
-                    .border_t_1()
-                    .border_color(content(0.06))
-                    .flex()
-                    .items_center()
-                    .gap_2()
-                    .when(open_project.is_none(), |d| {
-                        d.child(
-                            crate::controls::page::secondary(
-                                "vorkspace-delete",
-                                if confirm {
-                                    "Confirm delete"
-                                } else {
-                                    "Delete vorkspace"
-                                },
-                                true,
-                                only,
-                            )
-                            .debug_selector(|| "vorkspace-delete".into())
-                            .child(if confirm {
-                                "Confirm delete"
-                            } else {
-                                "Delete vorkspace"
-                            })
-                            .on_click(cx.listener(
-                                move |this, _, window, cx| {
-                                    if only {
-                                        return;
-                                    }
-                                    let Some(d) = this.project_settings.vorkspace_dialog.as_mut()
-                                    else {
-                                        return;
-                                    };
-                                    if d.project.is_some() || d.editing != delete_id {
-                                        return;
-                                    }
-                                    if !d.confirm_delete {
-                                        d.confirm_delete = true;
-                                        cx.notify();
-                                        return;
-                                    }
-                                    let was_active = delete_id == this.workspace.active_vorkspace;
-                                    if this.workspace.delete_vorkspace(&delete_id) {
-                                        if was_active {
-                                            let landing = this.workspace.vorkspace_landing(
-                                                &this.workspace.active_vorkspace.clone(),
-                                            );
-                                            this.open_project_from_user(landing, window, cx);
-                                        }
-                                        let next = this.workspace.active_vorkspace.clone();
-                                        this.configure_vorkspace_bots(cx);
-                                        this.persist(cx);
-                                        this.open_vorkspace_dialog(Some(next), window, cx);
-                                    }
-                                },
-                            )),
-                        )
-                    })
-                    .child(div().flex_1())
-                    .when(open_project.is_none() && !is_active, |d| {
-                        d.child(
-                            crate::controls::page::secondary(
-                                "vorkspace-switch-here",
-                                "Switch to this vorkspace",
-                                false,
-                                false,
-                            )
-                            .child("Switch to it")
-                            .on_click(cx.listener(
-                                move |this, _, window, cx| {
-                                    this.switch_vorkspace(&switch_id, window, cx);
-                                    this.open_vorkspace_dialog(Some(switch_id.clone()), window, cx);
-                                },
-                            )),
-                        )
-                    })
-                    .child(
-                        crate::controls::page::primary("vorkspace-done", "Done", false)
-                            .debug_selector(|| "vorkspace-done".into())
-                            .child("Done")
-                            .on_click(cx.listener(|this, _, window, cx| {
-                                this.close_vorkspace_dialog(window, cx)
-                            })),
-                    ),
-            );
+
+        let project_page = open_project
+            .as_ref()
+            .map(|path| self.vorkspace_project_page(path, cx));
+        let (nav, scroll) =
+            self.vorkspace_dialog_navigation(&editing, open_project.as_deref(), window, cx);
+        let body = self.vorkspace_dialog_body(dialog, &def, look, project_page, cx);
         Some(
             div()
                 .absolute()
@@ -750,62 +224,7 @@ impl Shell {
                             ))
                             .size_full()
                             .flex()
-                            .child(
-                                div()
-                                    .w(px(200.))
-                                    .flex_shrink_0()
-                                    .h_full()
-                                    .border_r_1()
-                                    .border_color(content(0.04))
-                                    .p_2()
-                                    .flex()
-                                    .flex_col()
-                                    .gap_px()
-                                    .child(
-                                        div()
-                                            .px_2()
-                                            .pt_1()
-                                            .pb_2()
-                                            .text_size(px(12.))
-                                            .text_color(content(0.5))
-                                            .child("Vorkspaces"),
-                                    )
-                                    .child(
-                                        div()
-                                            .id("vorkspace-dialog-nav")
-                                            .debug_selector(|| "vorkspace-dialog-nav".into())
-                                            .role(Role::TabList)
-                                            .aria_label("Vorkspaces")
-                                            .flex_1()
-                                            .min_h_0()
-                                            .overflow_y_scroll()
-                                            .track_scroll(&scroll)
-                                            .flex()
-                                            .flex_col()
-                                            .gap_px()
-                                            .children(nav),
-                                    )
-                                    .child(
-                                        crate::controls::page::action(
-                                            "vorkspace-new",
-                                            "New vorkspace",
-                                            true,
-                                        )
-                                        .debug_selector(|| "vorkspace-new".into())
-                                        .child(icon("plus", 12.))
-                                        .child("New vorkspace")
-                                        .on_click(
-                                            cx.listener(|this, _, window, cx| {
-                                                let n = this.workspace.vorkspaces.len() + 1;
-                                                let id = this
-                                                    .workspace
-                                                    .create_vorkspace(&format!("Vorkspace {n}"));
-                                                this.persist(cx);
-                                                this.open_vorkspace_dialog(Some(id), window, cx);
-                                            }),
-                                        ),
-                                    ),
-                            )
+                            .child(self.vorkspace_navigation_frame(nav, scroll, cx))
                             .child(body),
                     ),
                 )
@@ -813,6 +232,700 @@ impl Shell {
         )
     }
 
+    fn vorkspace_dialog_section(label: &'static str) -> gpui::Div {
+        div()
+            .mt_5()
+            .mb_2()
+            .text_size(px(12.))
+            .font_weight(FontWeight::MEDIUM)
+            .text_color(content(0.55))
+            .child(label)
+    }
+
+    fn vorkspace_dialog_chip(
+        id: SharedString,
+        label: String,
+        lead: AnyElement,
+    ) -> gpui::Stateful<gpui::Div> {
+        let debug_id = id.clone();
+        div()
+            .id(id)
+            .debug_selector(move || debug_id.to_string())
+            .role(Role::Button)
+            .aria_label(format!("Add {label}"))
+            .map(vorkspace_ui::theme::tab_reachable)
+            .h(px(28.))
+            .px_2()
+            .flex()
+            .items_center()
+            .gap_1p5()
+            .rounded_full()
+            .border_1()
+            .border_color(content(0.12))
+            .text_size(px(12.))
+            .text_color(content(0.75))
+            .cursor_pointer()
+            .hover(|s| {
+                s.bg(vorkspace_ui::fluid::hover(0.06))
+                    .text_color(content(1.))
+            })
+            .child(icon("plus", 12.))
+            .child(lead)
+            .child(label)
+    }
+
+    fn vorkspace_project_page(&self, path: &str, cx: &mut Context<Self>) -> AnyElement {
+        div()
+            .flex()
+            .flex_col()
+            .child(
+                div()
+                    .flex()
+                    .items_center()
+                    .gap_2()
+                    .mb_1()
+                    .child(self.project_mark(path, 18.))
+                    .child(
+                        div()
+                            .text_size(px(15.))
+                            .font_weight(FontWeight::SEMIBOLD)
+                            .child(self.project_label(path)),
+                    ),
+            )
+            .child(
+                div()
+                    .text_size(px(12.))
+                    .text_color(content(0.45))
+                    .child(crate::panel_kit::home_relative(std::path::Path::new(path))),
+            )
+            .child(
+                div()
+                    .mt_5()
+                    .mb_2()
+                    .text_size(px(12.))
+                    .font_weight(FontWeight::MEDIUM)
+                    .text_color(content(0.55))
+                    .child("Codebase"),
+            )
+            .child(self.project_codebase_section(path, cx))
+            .child(
+                div()
+                    .mt_5()
+                    .mb_2()
+                    .text_size(px(12.))
+                    .font_weight(FontWeight::MEDIUM)
+                    .text_color(content(0.55))
+                    .child("Notifications"),
+            )
+            .child(self.project_notifications_section(path, cx))
+            .into_any_element()
+    }
+
+    fn vorkspace_navigation_row(
+        &self,
+        v: &crate::workspace::VorkspaceDef,
+        selected: bool,
+        focus: FocusHandle,
+        id: String,
+        cx: &Context<Self>,
+    ) -> AnyElement {
+        div()
+            .id(SharedString::from(format!("vorkspace-row-{}", v.id)))
+            .debug_selector({
+                let id = v.id.clone();
+                move || format!("vorkspace-row-{id}")
+            })
+            .role(Role::Tab)
+            .aria_selected(selected)
+            .aria_label(v.name.clone())
+            .map(vorkspace_ui::theme::tab_reachable)
+            .track_focus(&focus)
+            .h(px(34.))
+            .flex_shrink_0()
+            .px(px(8.))
+            .flex()
+            .items_center()
+            .gap_2()
+            .rounded(px(radius::CONTROL))
+            .text_size(px(13.))
+            .text_color(content(if selected { 1. } else { 0.7 }))
+            .cursor_pointer()
+            .when(selected, |d| d.bg(content(0.08)))
+            .when(!selected, |d| {
+                d.hover(|s| s.bg(vorkspace_ui::fluid::hover(0.05)))
+            })
+            .child(vorkspace_mark(v, 18.))
+            .child(div().flex_1().min_w_0().truncate().child(v.name.clone()))
+            .when(v.id == self.workspace.active_vorkspace, |d| {
+                d.child(icon("check-2", 12.).text_color(content(0.45)))
+            })
+            .on_click(cx.listener(move |this, _, window, cx| {
+                if this
+                    .project_settings
+                    .vorkspace_dialog
+                    .as_ref()
+                    .is_some_and(|d| d.editing == id)
+                {
+                    if let Some(d) = this.project_settings.vorkspace_dialog.as_mut() {
+                        d.project = None;
+                        d.confirm_delete = false;
+                    }
+                    cx.notify();
+                } else {
+                    this.open_vorkspace_dialog(Some(id.clone()), window, cx);
+                }
+            }))
+            .into_any_element()
+    }
+
+    fn vorkspace_project_tab(
+        &self,
+        path: &str,
+        key: String,
+        selected: bool,
+        focus: FocusHandle,
+        cx: &Context<Self>,
+    ) -> AnyElement {
+        let target = path.to_owned();
+        div()
+            .id(SharedString::from(format!("vorkspace-project-tab-{key}")))
+            .debug_selector(move || format!("vorkspace-project-tab-{key}"))
+            .role(Role::Tab)
+            .aria_selected(selected)
+            .aria_label(format!("{} settings", self.project_label(path)))
+            .map(vorkspace_ui::theme::tab_reachable)
+            .track_focus(&focus)
+            .h(px(30.))
+            .flex_shrink_0()
+            .pl(px(20.))
+            .pr(px(8.))
+            .flex()
+            .items_center()
+            .gap_2()
+            .rounded(px(radius::CONTROL))
+            .text_size(px(12.5))
+            .text_color(content(if selected { 1. } else { 0.65 }))
+            .cursor_pointer()
+            .when(selected, |d| d.bg(content(0.08)))
+            .when(!selected, |d| {
+                d.hover(|s| s.bg(vorkspace_ui::fluid::hover(0.05)))
+            })
+            .child(self.project_mark(path, 14.))
+            .child(
+                div()
+                    .flex_1()
+                    .min_w_0()
+                    .truncate()
+                    .child(self.project_label(path)),
+            )
+            .on_click(cx.listener(move |this, _, _, cx| {
+                if let Some(d) = this.project_settings.vorkspace_dialog.as_mut() {
+                    d.project = Some(target.clone());
+                    d.confirm_delete = false;
+                }
+                cx.notify();
+            }))
+            .into_any_element()
+    }
+
+    fn vorkspace_dialog_navigation(
+        &self,
+        editing: &str,
+        open_project: Option<&str>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> (Vec<AnyElement>, gpui::ScrollHandle) {
+        let nav_state = window.use_keyed_state("vorkspace-dialog-navigation", cx, |_, _| {
+            (
+                gpui::ScrollHandle::new(),
+                std::cell::RefCell::<Option<FocusHandle>>::default(),
+            )
+        });
+        let focused = window.focused(cx);
+        let (scroll, previous_focus) = nav_state.read(cx);
+        let focus_changed = previous_focus.replace(focused.clone()) != focused;
+        let scroll = scroll.clone();
+        let nav_focus = |key: SharedString, ix, window: &mut Window, cx: &mut App| {
+            let handle = window
+                .use_keyed_state(key, cx, |_, cx| cx.focus_handle().tab_stop(true))
+                .read(cx)
+                .clone();
+            if focus_changed && focused.as_ref() == Some(&handle) {
+                scroll.scroll_to_item(ix);
+            }
+            handle
+        };
+        let mut nav: Vec<AnyElement> = Vec::new();
+        for v in self.workspace.vorkspaces.iter() {
+            let id = v.id.clone();
+            let current = v.id == editing;
+            let selected = current && open_project.is_none();
+            let focus = nav_focus(format!("vorkspace-nav-{id}").into(), nav.len(), window, cx);
+            nav.push(self.vorkspace_navigation_row(v, selected, focus, id, cx));
+            if !current {
+                continue;
+            }
+            // Each of the vorkspace's projects has its own settings tab.
+            for path in v
+                .projects
+                .iter()
+                .filter(|p| self.workspace.is_project_available(p))
+            {
+                let selected = open_project == Some(path.as_str());
+                let key = path_key(path);
+                let focus = nav_focus(
+                    format!("vorkspace-nav-project-{}-{key}", v.id).into(),
+                    nav.len(),
+                    window,
+                    cx,
+                );
+                nav.push(self.vorkspace_project_tab(path, key, selected, focus, cx));
+            }
+        }
+
+        (nav, scroll)
+    }
+
+    fn vorkspace_project_row(
+        &self,
+        path: String,
+        editing: String,
+        cx: &Context<Self>,
+    ) -> gpui::Stateful<gpui::Div> {
+        let remove = path.clone();
+
+        let key = path_key(&path);
+        div()
+            .id(SharedString::from(format!("vorkspace-project-{key}")))
+            .h(px(40.))
+            .px_2()
+            .flex()
+            .items_center()
+            .gap_2()
+            .rounded(px(radius::CONTROL))
+            .hover(|s| s.bg(vorkspace_ui::fluid::hover(0.04)))
+            .child(self.project_mark(&path, 16.))
+            .child(
+                div()
+                    .flex_1()
+                    .min_w_0()
+                    .flex()
+                    .flex_col()
+                    .child(
+                        div()
+                            .truncate()
+                            .text_size(px(13.))
+                            .child(self.project_label(&path)),
+                    )
+                    .child(
+                        div()
+                            .truncate()
+                            .text_size(px(11.))
+                            .text_color(content(0.45))
+                            .child(crate::panel_kit::home_relative(std::path::Path::new(&path))),
+                    ),
+            )
+            .child(
+                icon_button(
+                    "vorkspace-remove-project",
+                    "Remove from this vorkspace",
+                    "close",
+                )
+                .aria_label(format!(
+                    "Remove {} from this vorkspace",
+                    self.project_label(&path)
+                ))
+                .on_click(cx.listener(move |this, _, window, cx| {
+                    this.workspace
+                        .remove_project_from_vorkspace(&editing, &remove);
+                    if editing == this.workspace.active_vorkspace
+                        && path_key(&remove) == path_key(&this.workspace.project)
+                    {
+                        let landing = this.workspace.vorkspace_landing(&editing);
+                        this.open_project_from_user(landing, window, cx);
+                    } else {
+                        this.persist(cx);
+                        cx.notify();
+                    }
+                })),
+            )
+    }
+
+    fn vorkspace_add_project(
+        &self,
+        path: String,
+        editing: String,
+        cx: &Context<Self>,
+    ) -> gpui::Stateful<gpui::Div> {
+        let add = path.clone();
+        Self::vorkspace_dialog_chip(
+            SharedString::from(format!("vorkspace-add-project-{}", path_key(&path))),
+            self.project_label(&path),
+            self.project_mark(&path, 14.),
+        )
+        .on_click(cx.listener(move |this, _, window, cx| {
+            let first = editing == this.workspace.active_vorkspace
+                && (this.workspace.project.is_empty()
+                    || !this
+                        .workspace
+                        .vorkspace_projects()
+                        .iter()
+                        .any(|p| path_key(p) == path_key(&this.workspace.project)));
+            this.workspace.add_project_to_vorkspace(&editing, &add);
+            if first {
+                this.open_project_from_user(add.clone(), window, cx);
+            } else {
+                this.persist(cx);
+                cx.notify();
+            }
+        }))
+    }
+
+    fn vorkspace_folder_fields(
+        &self,
+        d: gpui::Stateful<gpui::Div>,
+        def: &crate::workspace::VorkspaceDef,
+        cx: &Context<Self>,
+    ) -> gpui::Stateful<gpui::Div> {
+        let editing = def.id.clone();
+        let projects = def
+            .projects
+            .clone()
+            .into_iter()
+            .filter(|p| self.workspace.is_project_available(p))
+            .map(|path| self.vorkspace_project_row(path, editing.clone(), cx));
+        // Folders already known elsewhere can join with one click.
+        let addable: Vec<String> = self
+            .workspace
+            .projects
+            .iter()
+            .filter(|p| {
+                self.workspace.is_project_available(p)
+                    && !def.projects.iter().any(|q| path_key(q) == path_key(p))
+            })
+            .cloned()
+            .collect();
+        let add_projects = addable
+            .into_iter()
+            .map(|path| self.vorkspace_add_project(path, editing.clone(), cx));
+
+        d.child(Self::vorkspace_dialog_section("Folders"))
+            .child(
+                div()
+                    .text_size(px(12.))
+                    .text_color(content(0.5))
+                    .mb_2()
+                    .child("A folder can be in several vorkspaces; its sessions show in each."),
+            )
+            .children(projects)
+            .child(
+                div()
+                    .mt_2()
+                    .flex()
+                    .flex_wrap()
+                    .gap_2()
+                    .child(
+                        Self::vorkspace_dialog_chip(
+                            "vorkspace-add-folder".into(),
+                            "Add folder…".into(),
+                            div().into_any_element(),
+                        )
+                        .debug_selector(|| "vorkspace-add-folder".into())
+                        .on_click(cx.listener(|this, _, _, cx| this.open_project(cx))),
+                    )
+                    .children(add_projects),
+            )
+    }
+
+    fn vorkspace_member_row(
+        &self,
+        bot: vorkspace_core::bot::Bot,
+        editing: String,
+        cx: &Context<Self>,
+    ) -> gpui::Stateful<gpui::Div> {
+        let id = bot.id.clone();
+        div()
+            .id(SharedString::from(format!("vorkspace-bot-{}", bot.id)))
+            .h(px(36.))
+            .px_2()
+            .flex()
+            .items_center()
+            .gap_2()
+            .rounded(px(radius::CONTROL))
+            .hover(|s| s.bg(vorkspace_ui::fluid::hover(0.04)))
+            .child(crate::avatar::bot_avatar(&bot, "idle", 18., true))
+            .child(
+                div()
+                    .flex_1()
+                    .min_w_0()
+                    .truncate()
+                    .text_size(px(13.))
+                    .child(bot.label()),
+            )
+            .child(
+                icon_button(
+                    "vorkspace-remove-bot",
+                    "Remove from this vorkspace",
+                    "close",
+                )
+                .aria_label(format!("Remove {} from this vorkspace", bot.label()))
+                .on_click(cx.listener(move |this, _, window, cx| {
+                    this.set_bot_membership(&id, &editing, false, cx);
+                    this.reconcile_after_bot_move(window, cx);
+                })),
+            )
+    }
+
+    fn vorkspace_add_bot(
+        &self,
+        bot: vorkspace_core::bot::Bot,
+        editing: String,
+        cx: &Context<Self>,
+    ) -> gpui::Stateful<gpui::Div> {
+        let id = bot.id.clone();
+        Self::vorkspace_dialog_chip(
+            SharedString::from(format!("vorkspace-add-bot-{}", bot.id)),
+            bot.label(),
+            crate::avatar::bot_avatar(&bot, "idle", 14., true),
+        )
+        .on_click(cx.listener(move |this, _, window, cx| {
+            this.set_bot_membership(&id, &editing, true, cx);
+            this.reconcile_after_bot_move(window, cx);
+        }))
+    }
+
+    fn vorkspace_bot_fields(
+        &self,
+        d: gpui::Stateful<gpui::Div>,
+        editing: &str,
+        members: Vec<vorkspace_core::bot::Bot>,
+        others: Vec<vorkspace_core::bot::Bot>,
+        cx: &Context<Self>,
+    ) -> gpui::Stateful<gpui::Div> {
+        let editing = editing.to_owned();
+        let no_bots = members.is_empty() && others.is_empty();
+        let member_rows = members
+            .into_iter()
+            .map(|bot| self.vorkspace_member_row(bot, editing.clone(), cx));
+        let add_bots = others
+            .into_iter()
+            .map(|bot| self.vorkspace_add_bot(bot, editing.clone(), cx));
+
+        d.child(Self::vorkspace_dialog_section("Bots"))
+            .child(
+                div()
+                    .text_size(px(12.))
+                    .text_color(content(0.5))
+                    .mb_2()
+                    .child(if no_bots {
+                        "A Bot created while this vorkspace is open belongs to it."
+                    } else {
+                        "A Bot belongs to one vorkspace; adding one here moves it."
+                    }),
+            )
+            .children(member_rows)
+            .child(div().mt_2().flex().flex_wrap().gap_2().children(add_bots))
+    }
+
+    fn vorkspace_delete_button(
+        &self,
+        dialog: &VorkspaceDialog,
+        cx: &Context<Self>,
+    ) -> gpui::Stateful<gpui::Div> {
+        let confirm = dialog.confirm_delete;
+        let only = self.workspace.vorkspaces.len() <= 1;
+        let delete_id = dialog.editing.clone();
+        crate::controls::page::secondary(
+            "vorkspace-delete",
+            if confirm {
+                "Confirm delete"
+            } else {
+                "Delete vorkspace"
+            },
+            true,
+            only,
+        )
+        .debug_selector(|| "vorkspace-delete".into())
+        .child(if confirm {
+            "Confirm delete"
+        } else {
+            "Delete vorkspace"
+        })
+        .on_click(cx.listener(move |this, _, window, cx| {
+            if only {
+                return;
+            }
+            let Some(d) = this.project_settings.vorkspace_dialog.as_mut() else {
+                return;
+            };
+            if d.project.is_some() || d.editing != delete_id {
+                return;
+            }
+            if !d.confirm_delete {
+                d.confirm_delete = true;
+                cx.notify();
+                return;
+            }
+            let was_active = delete_id == this.workspace.active_vorkspace;
+            if this.workspace.delete_vorkspace(&delete_id) {
+                if was_active {
+                    let landing = this
+                        .workspace
+                        .vorkspace_landing(&this.workspace.active_vorkspace.clone());
+                    this.open_project_from_user(landing, window, cx);
+                }
+                let next = this.workspace.active_vorkspace.clone();
+                this.configure_vorkspace_bots(cx);
+                this.persist(cx);
+                this.open_vorkspace_dialog(Some(next), window, cx);
+            }
+        }))
+    }
+
+    fn vorkspace_switch_button(
+        &self,
+        dialog: &VorkspaceDialog,
+        cx: &Context<Self>,
+    ) -> gpui::Stateful<gpui::Div> {
+        let switch_id = dialog.editing.clone();
+        crate::controls::page::secondary(
+            "vorkspace-switch-here",
+            "Switch to this vorkspace",
+            false,
+            false,
+        )
+        .child("Switch to it")
+        .on_click(cx.listener(move |this, _, window, cx| {
+            this.switch_vorkspace(&switch_id, window, cx);
+            this.open_vorkspace_dialog(Some(switch_id.clone()), window, cx);
+        }))
+    }
+
+    fn vorkspace_dialog_footer(&self, dialog: &VorkspaceDialog, cx: &Context<Self>) -> gpui::Div {
+        let open_project = &dialog.project;
+        let is_active = dialog.editing == self.workspace.active_vorkspace;
+        div()
+            .flex_shrink_0()
+            .px_5()
+            .py_3()
+            .border_t_1()
+            .border_color(content(0.06))
+            .flex()
+            .items_center()
+            .gap_2()
+            .when(open_project.is_none(), |d| {
+                d.child(self.vorkspace_delete_button(dialog, cx))
+            })
+            .child(div().flex_1())
+            .when(open_project.is_none() && !is_active, |d| {
+                d.child(self.vorkspace_switch_button(dialog, cx))
+            })
+            .child(
+                crate::controls::page::primary("vorkspace-done", "Done", false)
+                    .debug_selector(|| "vorkspace-done".into())
+                    .child("Done")
+                    .on_click(
+                        cx.listener(|this, _, window, cx| this.close_vorkspace_dialog(window, cx)),
+                    ),
+            )
+    }
+
+    fn vorkspace_dialog_body(
+        &self,
+        dialog: &VorkspaceDialog,
+        def: &crate::workspace::VorkspaceDef,
+        look: AnyElement,
+        project_page: Option<AnyElement>,
+        cx: &Context<Self>,
+    ) -> gpui::Stateful<gpui::Div> {
+        let open_project = &dialog.project;
+        let bots = self.vorkspace_bots(cx);
+        let (members, others): (Vec<_>, Vec<_>) =
+            bots.into_iter().partition(|b| def.bots.contains(&b.id));
+        div()
+            .id("vorkspace-dialog-body")
+            .flex_1()
+            .min_w_0()
+            .h_full()
+            .flex()
+            .flex_col()
+            .child(
+                div()
+                    .id("vorkspace-dialog-scroll")
+                    .flex_1()
+                    .min_h_0()
+                    .overflow_y_scroll()
+                    .px_5()
+                    .pt_4()
+                    .pb_4()
+                    .children(project_page)
+                    .when(open_project.is_none(), |d| {
+                        d.child(Self::vorkspace_dialog_section("Name").mt_0())
+                            .child(crate::controls::page::field_frame().child(dialog.name.clone()))
+                            .child(Self::vorkspace_dialog_section("Look"))
+                            .child(look)
+                            .map(|d| self.vorkspace_folder_fields(d, def, cx))
+                            .map(|d| {
+                                self.vorkspace_bot_fields(d, &dialog.editing, members, others, cx)
+                            })
+                    }),
+            )
+            .child(self.vorkspace_dialog_footer(dialog, cx))
+    }
+
+    fn vorkspace_navigation_frame(
+        &self,
+        nav: Vec<AnyElement>,
+        scroll: gpui::ScrollHandle,
+        cx: &Context<Self>,
+    ) -> gpui::Div {
+        div()
+            .w(px(200.))
+            .flex_shrink_0()
+            .h_full()
+            .border_r_1()
+            .border_color(content(0.04))
+            .p_2()
+            .flex()
+            .flex_col()
+            .gap_px()
+            .child(
+                div()
+                    .px_2()
+                    .pt_1()
+                    .pb_2()
+                    .text_size(px(12.))
+                    .text_color(content(0.5))
+                    .child("Vorkspaces"),
+            )
+            .child(
+                div()
+                    .id("vorkspace-dialog-nav")
+                    .debug_selector(|| "vorkspace-dialog-nav".into())
+                    .role(Role::TabList)
+                    .aria_label("Vorkspaces")
+                    .flex_1()
+                    .min_h_0()
+                    .overflow_y_scroll()
+                    .track_scroll(&scroll)
+                    .flex()
+                    .flex_col()
+                    .gap_px()
+                    .children(nav),
+            )
+            .child(
+                crate::controls::page::action("vorkspace-new", "New vorkspace", true)
+                    .debug_selector(|| "vorkspace-new".into())
+                    .child(icon("plus", 12.))
+                    .child("New vorkspace")
+                    .on_click(cx.listener(|this, _, window, cx| {
+                        let n = this.workspace.vorkspaces.len() + 1;
+                        let id = this.workspace.create_vorkspace(&format!("Vorkspace {n}"));
+                        this.persist(cx);
+                        this.open_vorkspace_dialog(Some(id), window, cx);
+                    })),
+            )
+    }
     /// The vorkspace's mark and the chat background its sessions show.
     fn vorkspace_look(
         &self,
