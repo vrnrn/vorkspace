@@ -402,145 +402,9 @@ impl Conversation {
             self.branch.clone()
         };
         if compact {
-            let open = self.menu.as_ref().is_some_and(|open| {
-                !matches!(open.kind, ComposerMenu::Add | ComposerMenu::Account)
-            }) || self.git_picker.is_some()
-                || self.bot_ui.models.is_some();
-            return div()
-                .debug_selector(|| "composer-toolbar".into())
-                .w_full()
-                .min_w_0()
-                .flex()
-                .items_center()
-                .gap(px(2.))
-                .pt_1()
-                .pl_1()
-                .pr_1p5()
-                .child(self.add_button(true, cx))
-                .child(
-                    div()
-                        .ml_auto()
-                        .min_w_0()
-                        .flex()
-                        .items_center()
-                        .gap_1()
-                        .child(
-                            quiet_control("composer-session-settings", open)
-                                .debug_selector(|| "composer-session-settings".into())
-                                .flex_shrink(1.)
-                                .aria_label(if bot {
-                                    "Bot settings"
-                                } else {
-                                    "Session settings"
-                                })
-                                .aria_expanded(open)
-                                .track_focus(&self.compact_focus)
-                                .tab_index(0)
-                                .child(self.compact_anchor.probe())
-                                // Existing open menus follow the same visible anchor through a resize.
-                                .child(self.model_anchor.probe())
-                                .child(self.access_anchor.probe())
-                                .child(self.workspace_anchor.probe())
-                                .child(self.branch_anchor.probe())
-                                .children(
-                                    self.bot_ui
-                                        .setting_anchors
-                                        .iter()
-                                        .map(|anchor| anchor.probe()),
-                                )
-                                .child(icon("settings", 14.))
-                                .child(div().min_w_0().truncate().child(if bot {
-                                    "Bot settings"
-                                } else {
-                                    "Session settings"
-                                }))
-                                .on_click(cx.listener(|this, _, window, cx| {
-                                    this.toggle_menu(ComposerMenu::CompactSettings, window, cx)
-                                }))
-                                .on_key_down(cx.listener(
-                                    |this, event: &gpui::KeyDownEvent, window, cx| {
-                                        if matches!(event.keystroke.key.as_str(), "enter" | "space")
-                                        {
-                                            this.toggle_menu(
-                                                ComposerMenu::CompactSettings,
-                                                window,
-                                                cx,
-                                            );
-                                            cx.stop_propagation();
-                                        }
-                                    },
-                                )),
-                        )
-                        .children(self.context_meter(true, cx)),
-                )
-                .into_any_element();
+            return self.compact_toolbar(bot, cx);
         }
-        let model_open = self.menu_is(ComposerMenu::Model)
-            || self.menu_is(ComposerMenu::CompactSettings)
-            || self.menu_is(ComposerMenu::Recent)
-            || self.bot_ui.models.is_some();
-        let model = quiet_control("composer-model", model_open)
-            .debug_selector(|| "composer-model".into())
-            .min_w_0()
-            .max_w(px(220.))
-            .flex_shrink(1.)
-            .aria_label(format!(
-                "{}, {}{}",
-                kind.label(),
-                self.model_label(),
-                trigger_effort
-                    .as_ref()
-                    .map(|effort| format!(", effort {effort}"))
-                    .unwrap_or_default()
-            ))
-            .child(self.model_anchor.probe())
-            .child(self.compact_anchor.probe())
-            .track_focus(&self.compact_focus)
-            .tab_index(0)
-            .on_key_down(cx.listener(|this, event: &gpui::KeyDownEvent, window, cx| {
-                if matches!(event.keystroke.key.as_str(), "enter" | "space") {
-                    if this.menu_is(ComposerMenu::CompactSettings) {
-                        this.close_menu(window, cx);
-                    } else {
-                        this.toggle_menu(ComposerMenu::Model, window, cx);
-                    }
-                    cx.stop_propagation();
-                }
-            }))
-            .aria_expanded(model_open)
-            .on_click(cx.listener(|this, _, window, cx| {
-                if this.menu_is(ComposerMenu::CompactSettings) {
-                    this.close_menu(window, cx);
-                } else {
-                    this.toggle_menu(ComposerMenu::Model, window, cx);
-                }
-            }))
-            .on_mouse_down(
-                MouseButton::Right,
-                cx.listener(|this, _, window, cx| {
-                    cx.stop_propagation();
-                    this.open_recent_models(window, cx)
-                }),
-            )
-            .child(provider_icon(&self.summary.provider, 14.))
-            .child(
-                div()
-                    .debug_selector(|| "composer-model-label".into())
-                    .min_w_0()
-                    .truncate()
-                    .child(self.model_label()),
-            )
-            .when_some(trigger_effort, |d, effort| {
-                d.child(
-                    div()
-                        .debug_selector(|| "composer-model-effort".into())
-                        .min_w_0()
-                        .flex_shrink(1.)
-                        .truncate()
-                        .text_color(content(0.5))
-                        .child(effort),
-                )
-            });
+        let model = self.model_control(kind, trigger_effort, cx);
         let access_open = self.menu_is(ComposerMenu::Access);
         let access = quiet_control("composer-access", access_open)
             .debug_selector(|| "composer-access".into())
@@ -678,6 +542,151 @@ impl Conversation {
                     .children(self.context_meter(false, cx)),
             )
             .into_any_element()
+    }
+
+    fn compact_toolbar(&self, bot: bool, cx: &mut Context<Self>) -> AnyElement {
+        let open =
+            self.menu.as_ref().is_some_and(|open| {
+                !matches!(open.kind, ComposerMenu::Add | ComposerMenu::Account)
+            }) || self.git_picker.is_some()
+                || self.bot_ui.models.is_some();
+        div()
+            .debug_selector(|| "composer-toolbar".into())
+            .w_full()
+            .min_w_0()
+            .flex()
+            .items_center()
+            .gap(px(2.))
+            .pt_1()
+            .pl_1()
+            .pr_1p5()
+            .child(self.add_button(true, cx))
+            .child(
+                div()
+                    .ml_auto()
+                    .min_w_0()
+                    .flex()
+                    .items_center()
+                    .gap_1()
+                    .child(
+                        quiet_control("composer-session-settings", open)
+                            .debug_selector(|| "composer-session-settings".into())
+                            .flex_shrink(1.)
+                            .aria_label(if bot {
+                                "Bot settings"
+                            } else {
+                                "Session settings"
+                            })
+                            .aria_expanded(open)
+                            .track_focus(&self.compact_focus)
+                            .tab_index(0)
+                            .child(self.compact_anchor.probe())
+                            // Existing open menus follow the same visible anchor through a resize.
+                            .child(self.model_anchor.probe())
+                            .child(self.access_anchor.probe())
+                            .child(self.workspace_anchor.probe())
+                            .child(self.branch_anchor.probe())
+                            .children(
+                                self.bot_ui
+                                    .setting_anchors
+                                    .iter()
+                                    .map(|anchor| anchor.probe()),
+                            )
+                            .child(icon("settings", 14.))
+                            .child(div().min_w_0().truncate().child(if bot {
+                                "Bot settings"
+                            } else {
+                                "Session settings"
+                            }))
+                            .on_click(cx.listener(|this, _, window, cx| {
+                                this.toggle_menu(ComposerMenu::CompactSettings, window, cx)
+                            }))
+                            .on_key_down(cx.listener(
+                                |this, event: &gpui::KeyDownEvent, window, cx| {
+                                    if matches!(event.keystroke.key.as_str(), "enter" | "space") {
+                                        this.toggle_menu(ComposerMenu::CompactSettings, window, cx);
+                                        cx.stop_propagation();
+                                    }
+                                },
+                            )),
+                    )
+                    .children(self.context_meter(true, cx)),
+            )
+            .into_any_element()
+    }
+
+    fn model_control(
+        &self,
+        kind: Kind,
+        trigger_effort: Option<SharedString>,
+        cx: &mut Context<Self>,
+    ) -> gpui::Stateful<gpui::Div> {
+        let model_open = self.menu_is(ComposerMenu::Model)
+            || self.menu_is(ComposerMenu::CompactSettings)
+            || self.menu_is(ComposerMenu::Recent)
+            || self.bot_ui.models.is_some();
+        quiet_control("composer-model", model_open)
+            .debug_selector(|| "composer-model".into())
+            .min_w_0()
+            .max_w(px(220.))
+            .flex_shrink(1.)
+            .aria_label(format!(
+                "{}, {}{}",
+                kind.label(),
+                self.model_label(),
+                trigger_effort
+                    .as_ref()
+                    .map(|effort| format!(", effort {effort}"))
+                    .unwrap_or_default()
+            ))
+            .child(self.model_anchor.probe())
+            .child(self.compact_anchor.probe())
+            .track_focus(&self.compact_focus)
+            .tab_index(0)
+            .on_key_down(cx.listener(|this, event: &gpui::KeyDownEvent, window, cx| {
+                if matches!(event.keystroke.key.as_str(), "enter" | "space") {
+                    if this.menu_is(ComposerMenu::CompactSettings) {
+                        this.close_menu(window, cx);
+                    } else {
+                        this.toggle_menu(ComposerMenu::Model, window, cx);
+                    }
+                    cx.stop_propagation();
+                }
+            }))
+            .aria_expanded(model_open)
+            .on_click(cx.listener(|this, _, window, cx| {
+                if this.menu_is(ComposerMenu::CompactSettings) {
+                    this.close_menu(window, cx);
+                } else {
+                    this.toggle_menu(ComposerMenu::Model, window, cx);
+                }
+            }))
+            .on_mouse_down(
+                MouseButton::Right,
+                cx.listener(|this, _, window, cx| {
+                    cx.stop_propagation();
+                    this.open_recent_models(window, cx)
+                }),
+            )
+            .child(provider_icon(&self.summary.provider, 14.))
+            .child(
+                div()
+                    .debug_selector(|| "composer-model-label".into())
+                    .min_w_0()
+                    .truncate()
+                    .child(self.model_label()),
+            )
+            .when_some(trigger_effort, |d, effort| {
+                d.child(
+                    div()
+                        .debug_selector(|| "composer-model-effort".into())
+                        .min_w_0()
+                        .flex_shrink(1.)
+                        .truncate()
+                        .text_color(content(0.5))
+                        .child(effort),
+                )
+            })
     }
 
     pub(super) fn context_meter(&self, force: bool, cx: &mut Context<Self>) -> Option<AnyElement> {
