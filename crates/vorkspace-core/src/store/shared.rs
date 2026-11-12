@@ -45,7 +45,6 @@ pub(super) struct Shared {
     card_revisions: RefCell<HashMap<i64, card::CardRevision>>,
     refreshed_cards: RefCell<HashMap<i64, HashMap<String, HistoryRevision>>>,
     queues: RefCell<HashMap<i64, String>>,
-    preferences: std::sync::Arc<crate::desktop_preferences::DesktopPreferences>,
     read_only: bool,
     #[cfg(any(test, feature = "test-support"))]
     setting_write_failure: RefCell<Option<(String, String)>>,
@@ -301,16 +300,12 @@ impl Store {
     /// Open the same sessions, notes and reminders as the desktop app. Only a
     /// brand-new file gets a schema; existing schema/data is not migrated.
     pub fn open_vorkspace(path: &Path) -> Result<Self, String> {
-        Self::open_shared(path, false, None)
+        Self::open_shared(path, false)
     }
     pub fn read_vorkspace(path: &Path) -> Result<Self, String> {
-        Self::open_shared(path, true, None)
+        Self::open_shared(path, true)
     }
-    fn open_shared(
-        path: &Path,
-        read_only: bool,
-        preferences: Option<std::sync::Arc<crate::desktop_preferences::DesktopPreferences>>,
-    ) -> Result<Self, String> {
+    fn open_shared(path: &Path, read_only: bool) -> Result<Self, String> {
         let memory = path == Path::new(":memory:");
         let exists = !memory && path.exists();
         if !read_only && !exists {
@@ -380,14 +375,6 @@ impl Store {
                 incremental: RefCell::new(HashMap::new()),
                 history_schema: std::cell::Cell::new(None),
                 queues: RefCell::new(HashMap::new()),
-                preferences: preferences.unwrap_or_else(|| {
-                    std::sync::Arc::new(
-                        path.parent()
-                            .filter(|_| !memory)
-                            .map(crate::desktop_preferences::DesktopPreferences::load)
-                            .unwrap_or_default(),
-                    )
-                }),
                 read_only,
                 #[cfg(any(test, feature = "test-support"))]
                 setting_write_failure: Default::default(),
@@ -402,17 +389,11 @@ impl Store {
         drop(query);
         Ok(store)
     }
-    /// A read-only snapshot of desktop preferences, shared by this store's
-    /// consumers. Reopening the store refreshes it without per-message WebKit I/O.
-    pub fn desktop_preferences(&self) -> &crate::desktop_preferences::DesktopPreferences {
-        &self.shared.preferences
-    }
-
     pub fn search_reader(&self) -> Result<Option<Self>, String> {
         if self.path == Path::new(":memory:") {
             return Ok(None);
         }
-        let reader = Self::open_shared(&self.path, true, Some(self.shared.preferences.clone()))?;
+        let reader = Self::open_shared(&self.path, true)?;
         #[cfg(any(test, feature = "test-support"))]
         let reader = Self {
             test_directory: self.test_directory.clone(),
@@ -1421,13 +1402,7 @@ impl Store {
     pub fn ui_state(&self) -> Result<Option<String>, String> {
         let saved = self.setting("workspace")?;
         let workspace = saved.as_deref().map(parse::<Value>).transpose()?;
-        let mut merged = workspace.clone().unwrap_or_else(|| json!({}));
-        self.desktop_preferences().apply_workspace(&mut merged);
-        if merged.as_object().is_some_and(|object| !object.is_empty()) {
-            Ok(Some(merged.to_string()))
-        } else {
-            Ok(workspace.map(|value| value.to_string()))
-        }
+        Ok(workspace.map(|value| value.to_string()))
     }
     pub fn reminders(&self) -> Result<Vec<Reminder>, String> {
         if !has_table(&self.conn, "session_reminders")? {

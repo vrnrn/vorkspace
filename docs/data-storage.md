@@ -12,7 +12,7 @@ npm run dev -- --vorkspace-db /absolute/path/to/store.db
 
 The default production location is `com.vorkspace.desktop/vorkspace.db` under macOS Application Support.
 
-The desktop schema remains readable without the former UI. Historical preferences are read from the matching WebKit store on macOS and normalized into current app keys. Canonical keys take precedence when both versions exist. Existing Vox enabled, silent, and microphone preferences participate in the same read-time reconciliation, preserving later native choices. Transcript text, arbitrary document JSON, paths, and provider IDs remain untouched. Saving uses the current metadata names and atomic sidecar replacement.
+The desktop schema remains readable without the former UI. Preferences, accounts, Bot identities, folders and Inbox choices come from the native settings sidecar; the former UI's WebKit storage and its tab snapshot are not read. Transcript text, arbitrary document JSON, paths, and provider IDs remain untouched. Saving uses atomic sidecar replacement.
 
 Bot memory and habit files use their existing owner directory in the selected data directory. New owners use `bots/`; earlier named or project-indexed owners stay where they are, including their provider homes. Older transcript tables remain the write authority for their sessions until an existing completed conversion or a populated current owner establishes the current identity. Empty placeholder directories and transcript roots do not hide saved owners. No files or rows are moved when reading these aliases.
 

@@ -7,9 +7,6 @@ fn earlier_prefix() -> String {
 fn earlier_roster_field() -> String {
     String::from_utf8(vec![109, 111, 110, 111, 115]).unwrap()
 }
-fn earlier_title_field() -> String {
-    String::from_utf8(vec![77, 111, 110, 111]).unwrap()
-}
 
 #[test]
 fn normalizes_keys_without_changing_ids_text_or_unknown_metadata() {
@@ -111,22 +108,4 @@ fn saved_file_and_provider_home_owners_are_read_and_edited_in_place() {
         std::fs::read_to_string(oldhomes.join("default/state_5.sqlite")).unwrap(),
         "private state"
     );
-}
-#[test]
-fn earlier_nonempty_collections_outlive_unfinished_empty_placeholders_only() {
-    let old = format!(
-        "{}:{}-roster",
-        earlier_prefix(),
-        earlier_title_field().to_lowercase()
-    );
-    let current = format!("{}:bot-roster", earlier_prefix());
-    let source = BTreeMap::from([(old, "[{\"id\":\"kept\"}]".into()), (current, "[]".into())]);
-    let aliases = desktop_preferences(source.clone());
-    assert_eq!(
-        serde_json::from_str::<Value>(&aliases["vorkspace:bot-roster"]).unwrap()[0]["id"],
-        "kept"
-    );
-    let mut finalized = source;
-    finalized.insert("vorkspace.botStorageMigration.v1".into(), "1".into());
-    assert_eq!(desktop_preferences(finalized)["vorkspace:bot-roster"], "[]");
 }

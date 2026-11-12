@@ -621,18 +621,6 @@ fn desktop_sidebar_recovers_only_hidden_launches_of_listed_callers_without_histo
 }
 
 #[test]
-fn search_connections_share_the_same_read_only_preference_snapshot() {
-    let directory = tempfile::tempdir().unwrap();
-    let store = Store::open_vorkspace(&directory.path().join("vorkspace.db")).unwrap();
-    let reader = store.search_reader().unwrap().unwrap();
-    assert!(std::ptr::eq(
-        store.desktop_preferences(),
-        reader.desktop_preferences()
-    ));
-    assert!(reader.create("codex", "/project").is_err());
-}
-
-#[test]
 fn original_desktop_schema_opens_without_schema_or_history_migration() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("vorkspace.db");

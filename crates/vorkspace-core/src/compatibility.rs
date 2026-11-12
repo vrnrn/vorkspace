@@ -4,10 +4,7 @@
 //! rewrites a transcript, or changes a provider session ID.
 use serde_json::Value;
 use sha2::{Digest, Sha256};
-use std::{
-    collections::BTreeMap,
-    path::{Path, PathBuf},
-};
+use std::path::{Path, PathBuf};
 
 fn fingerprint(name: &str) -> String {
     format!("{:x}", Sha256::digest(name.as_bytes()))
@@ -31,150 +28,14 @@ pub fn vorkspace_database() -> Option<PathBuf> {
 pub(crate) fn key(key: &str) -> String {
     let end = key.find(['.', ':', '-']).unwrap_or(key.len());
     let prefix = &key[..end];
-    let replacement = match fingerprint(prefix).as_str() {
-        "01b8c92e5e3a72e0400c920bd7376918189956e379ee280afa4bd4e653df1d9a" => "vorkspace",
-        "d7de34b17b4691aa77ab8c17afdd440b004bc87d5d9ab991a8296d032fadb867" => "bot",
-        "9b9e74c140f4ffe20089b4929a5609a790039039534159550ce45964efe895f2" => "bots",
-        _ => prefix,
-    };
-    let suffix = &key[end..];
-    if replacement == "vorkspace" {
-        return format!("{replacement}{}", desktop_feature_key(suffix));
-    }
-    format!("{replacement}{suffix}")
-}
-fn desktop_feature_key(suffix: &str) -> String {
-    let current = match fingerprint(suffix).as_str() {
-        "4a1d8d72a19645e07228635fbe24e93b7c59b1d45994b2381af4b480a2cef5d1" => Some(":bot-roster"),
-        "9409fc5805b3f7f6a068dfccfe901785cd57ca40510e21f9cc66150f895de923" => Some(":bot-handed"),
-        "6d6da5426e131be03170f2bc63abd977865cf84f77b3168973c657bcfe1279bc" => Some(":bots"),
-        "1c1c523b3ae0fd0136ab809e5bc8c7229baae14fe3c43d600f981743b15e3611" => Some(":bot-profiles"),
-        "a5a571611b45a9ef4ebc454edb9b45ab983067b56748d42325dd9e6398c502bf" => Some(":open-bot"),
-        "54192bdcda5a0a7d4cff841181dd4fa50432a7a70d8aff5bfff793f07f167245" => {
-            Some(":bot-declined-habits")
-        }
-        "4c8b8b6f1376d1c15ee7173384ac2e59905c9e947aa311c1e8e4dacc33dde30a" => {
-            Some(":bot-rotations")
-        }
-        "2e2939a4208ff3b97e6596dfdbbf9f3c1ffa00e39919da8104a5c977e845447d" => {
-            Some(":bot-intro-dismissed")
-        }
-        "a1420c2c8c7cd1b16994778243c5089c706344b9522959f7fc7ffd68f9f6c3f1" => Some(".inboxBots.v1"),
-        "530bf8cfe8044cf3ea2bf4fd2a1432ad52911c8355207a400ff534685521b42f" => {
-            Some(".railBotsPinned")
-        }
-        "3f600b35a79f3252c0d9c1c05c7cc97cab0f6f6368e45350a917cf8e6d99229e" => Some(".botsEnabled"),
-        "2b1c91a8f2105421e0aaef80649c463917f32dda9c92f5befaba75885f469a75" => {
-            Some(".botMenuBarIcon")
-        }
-        _ => None,
-    };
-    if let Some(current) = current {
-        return current.to_owned();
-    }
-    suffix.to_owned()
-}
-
-/// Read aliases stay derived; WebKit rows, opaque metadata and arbitrary text
-/// are never rewritten. Current feature identities outrank earlier aliases.
-pub(crate) fn desktop_preferences(values: BTreeMap<String, String>) -> BTreeMap<String, String> {
-    let finalized = values
-        .iter()
-        .any(|(name, value)| key(name) == "vorkspace.botStorageMigration.v1" && value == "1");
-    let mut earlier_collections = BTreeMap::new();
-    let mut chosen = BTreeMap::<String, (u8, String)>::new();
-    for (old, raw) in values {
-        let canonical = key(&old);
-        if !canonical.starts_with("vorkspace.") && !canonical.starts_with("vorkspace:") {
-            continue;
-        }
-        let end = old.find(['.', ':', '-']).unwrap_or(old.len());
-        let feature_current = old[end..] == desktop_feature_key(&old[end..]);
-        let priority = (feature_current as u8) * 2 + u8::from(old == canonical);
-        if !feature_current && !finalized {
-            if let Ok(value) = serde_json::from_str::<Value>(&raw) {
-                if value.as_array().is_some_and(|v| !v.is_empty())
-                    || value.as_object().is_some_and(|v| !v.is_empty())
-                {
-                    earlier_collections.insert(canonical.clone(), raw.clone());
-                }
-            }
-        }
-        if chosen
-            .get(&canonical)
-            .is_none_or(|(rank, _)| priority > *rank)
-        {
-            chosen.insert(canonical, (priority, raw));
-        }
-    }
-    for (key, (_, raw)) in &mut chosen {
-        let collection = matches!(
-            key.as_str(),
-            "vorkspace:bot-roster"
-                | "vorkspace:bot-declined-habits"
-                | "vorkspace:bot-handed"
-                | "vorkspace:bots"
-                | "vorkspace:bot-profiles"
-                | "vorkspace:bot-rotations"
-                | "vorkspace.inboxBots.v1"
-        );
-        if collection
-            && serde_json::from_str::<Value>(raw).ok().is_some_and(|v| {
-                v.as_array().is_some_and(Vec::is_empty)
-                    || v.as_object().is_some_and(serde_json::Map::is_empty)
-            })
-        {
-            if let Some(earlier) = earlier_collections.remove(key) {
-                *raw = earlier;
-            }
-        }
-    }
-    chosen
-        .into_iter()
-        .map(|(key, (_, raw))| {
-            let raw = desktop_value(&key, &raw).unwrap_or(raw);
-            (key, raw)
-        })
-        .collect()
-}
-fn desktop_value(key: &str, raw: &str) -> Option<String> {
-    if key == "vorkspace.settingsSection"
-        && fingerprint(raw) == "9b9e74c140f4ffe20089b4929a5609a790039039534159550ce45964efe895f2"
+    let replacement = if fingerprint(prefix)
+        == "01b8c92e5e3a72e0400c920bd7376918189956e379ee280afa4bd4e653df1d9a"
     {
-        return Some("bots".into());
-    }
-    if !matches!(
-        key,
-        "vorkspace:project-chat-backgrounds" | "vorkspace.keybindingOverrides"
-    ) {
-        return None;
-    }
-    let mut value: Value = serde_json::from_str(raw).ok()?;
-    if let Some(object) = value.as_object_mut() {
-        for old in object.keys().cloned().collect::<Vec<_>>() {
-            let next = if key == "vorkspace.keybindingOverrides"
-                && fingerprint(&old)
-                    == "cb20b3759dccefa7d8ea202f2dc10ea4275b26a9e80e24aee47019b7c993ea8a"
-            {
-                Some("App: Toggle Bot".to_owned())
-            } else if key == "vorkspace:project-chat-backgrounds" {
-                old.split_once(':')
-                    .filter(|(prefix, _)| {
-                        fingerprint(prefix)
-                            == "d7de34b17b4691aa77ab8c17afdd440b004bc87d5d9ab991a8296d032fadb867"
-                    })
-                    .map(|(_, id)| format!("bot:{id}"))
-            } else {
-                None
-            };
-            if let Some(next) = next {
-                if let Some(value) = object.remove(&old) {
-                    object.entry(next).or_insert(value);
-                }
-            }
-        }
-    }
-    Some(value.to_string())
+        "vorkspace"
+    } else {
+        prefix
+    };
+    format!("{replacement}{}", &key[end..])
 }
 
 /// Rename a known field at its owning schema level. Opaque metadata is retained.

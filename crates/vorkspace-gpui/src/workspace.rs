@@ -575,9 +575,7 @@ impl Workspace {
         let mut state = saved
             .and_then(|s| serde_json::from_str::<serde_json::Value>(s).ok())
             .and_then(|mut value| {
-                vorkspace_core::desktop_preferences::DesktopPreferences::restore_sidebar_preferences(
-                    &mut value,
-                );
+                restore_sidebar_preferences(&mut value);
                 if let Some(panes) = value.get_mut("app_panes").and_then(|v| v.as_object_mut()) {
                     panes.retain(|_, pane| {
                         serde_json::from_value::<AppPaneState>(pane.clone()).is_ok()
@@ -1494,6 +1492,73 @@ pub(crate) fn project_name(path: &str) -> String {
         .filter(|n| !n.is_empty())
         .map(|n| n.to_string_lossy().into_owned())
         .unwrap_or_else(|| path.into())
+}
+
+/// Normalize the saved rail and sidebar fields before decoding. A missing or
+/// invalid value takes its default; every other saved field is left alone.
+fn restore_sidebar_preferences(workspace: &mut serde_json::Value) {
+    let Some(target) = workspace.as_object_mut() else {
+        return;
+    };
+    for field in [
+        "project_rail_open",
+        "project_rail_width",
+        "sidebar_tabs",
+        "sidebar_tab_order",
+    ] {
+        let value = target.get(field).cloned().unwrap_or_default();
+        let value = match field {
+            "project_rail_open" => serde_json::json!(value.as_bool().unwrap_or(true)),
+            "project_rail_width" => serde_json::json!(
+                value
+                    .as_f64()
+                    .filter(|width| width.is_finite())
+                    .unwrap_or(200.)
+                    .clamp(180., 360.)
+                    .round()
+            ),
+            "sidebar_tabs" => sidebar_tabs(&value),
+            "sidebar_tab_order" => sidebar_tab_order(&value),
+            _ => unreachable!(),
+        };
+        target.insert(field.into(), value);
+    }
+}
+
+fn sidebar_tabs(value: &serde_json::Value) -> serde_json::Value {
+    serde_json::Value::Object(
+        value
+            .as_object()
+            .into_iter()
+            .flatten()
+            .filter_map(|(project, tab)| {
+                let tab = tab.as_str()?;
+                if project.is_empty()
+                    || project == "~"
+                    || !["sessions", "files", "changes", "graph"].contains(&tab)
+                {
+                    return None;
+                }
+                Some((project.clone(), serde_json::json!(tab)))
+            })
+            .collect(),
+    )
+}
+
+fn sidebar_tab_order(value: &serde_json::Value) -> serde_json::Value {
+    let mut tabs = Vec::new();
+    for tab in value
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(serde_json::Value::as_str)
+        .chain(["sessions", "files", "changes"])
+    {
+        if ["sessions", "files", "changes"].contains(&tab) && !tabs.contains(&tab) {
+            tabs.push(tab);
+        }
+    }
+    serde_json::json!(tabs)
 }
 
 #[cfg(test)]

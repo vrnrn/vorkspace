@@ -390,26 +390,7 @@ fn sidebar_tools_keep_per_project_selection_and_normalize_main_tab_order() {
     assert_eq!(state.sidebar_tab(), SidebarTab::Changes);
 }
 #[test]
-fn earlier_native_save_recovers_original_sidebar_from_retained_desktop_metadata() {
-    let saved = serde_json::json!({
-        "project":"/work",
-        "preferences":{"sounds":false},
-        "desktop_preferences_metadata":{
-            "vorkspace.projectRailOpen":"0",
-            "vorkspace.projectRailWidth":"246",
-            "vorkspace.projectSidebarTabs.v1":r#"{"/work":"files"}"#,
-            "vorkspace.sidebarTabOrder":r#"["changes","inbox","sessions"]"#
-        }
-    });
-    let state = Workspace::restore(Some(&saved.to_string()), &[], "/work");
-    assert!(!state.project_rail_open);
-    assert_eq!(state.project_rail_width, 246.);
-    assert_eq!(state.sidebar_tab(), SidebarTab::Files);
-    assert!(!state.preferences.sounds);
-    assert_eq!(
-        serde_json::to_value(state.desktop_preferences_metadata).unwrap(),
-        saved["desktop_preferences_metadata"]
-    );
+fn malformed_sidebar_fields_take_their_defaults() {
     let malformed = serde_json::json!({
         "project":"/work",
         "project_rail_open":"invalid",

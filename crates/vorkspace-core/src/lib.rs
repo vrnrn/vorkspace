@@ -9,7 +9,6 @@ pub mod checkpoint;
 pub mod codebase;
 pub mod context;
 mod database_backup;
-pub mod desktop_preferences;
 pub mod diff;
 pub mod external_editor;
 pub mod files;

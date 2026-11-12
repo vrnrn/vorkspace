@@ -13,7 +13,7 @@ impl Store {
             .as_ref()
             .map(|directory| directory.path().join("vorkspace.db"))
             .unwrap_or_else(|| path.to_owned());
-        let mut store = Self::open_shared(&path, false, Some(Default::default()))?;
+        let mut store = Self::open_shared(&path, false)?;
         store.test_directory = directory;
         Ok(store)
     }
@@ -37,15 +37,6 @@ impl Store {
             }
         }
         Ok(())
-    }
-
-    #[cfg(test)]
-    pub(crate) fn with_test_preferences(
-        mut self,
-        preferences: std::sync::Arc<crate::desktop_preferences::DesktopPreferences>,
-    ) -> Self {
-        self.shared.preferences = preferences;
-        self
     }
 }
 
