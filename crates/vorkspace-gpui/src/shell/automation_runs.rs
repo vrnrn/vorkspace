@@ -529,6 +529,10 @@ impl Shell {
         }
         let linked_result = verified.and_then(|_| {
             let store = locked(&self.store)?;
+            // A reused conversation keeps its link until submission accepts it.
+            if reuse.is_some() {
+                return store.persisted_session_id(id).map(Some);
+            }
             store
                 .link_automation_session(
                     id,
@@ -543,10 +547,6 @@ impl Shell {
         });
         let persisted = match linked_result {
             Ok(Some(persisted)) => persisted,
-            Ok(None) if reuse.is_some() => {
-                self.prepare_automation(launch, None, cx);
-                return;
-            }
             Ok(None) => {
                 self.automation_launch_failed(
                     launch,
@@ -639,6 +639,30 @@ impl Shell {
         if let Err(error) = verified {
             self.automation_launch_failed(launch, error, cx);
             return;
+        }
+        if prepared.reuse.is_some() {
+            let linked = automation_work_item(&launch.due.run);
+            let accepted = locked(&self.store).and_then(|store| {
+                store.link_automation_session(
+                    id,
+                    &automation.id,
+                    &automation.harness,
+                    &automation.cwd,
+                    checkout,
+                    linked.as_ref(),
+                )
+            });
+            match accepted {
+                Ok(true) => {}
+                Ok(false) => {
+                    self.prepare_automation(launch, None, cx);
+                    return;
+                }
+                Err(error) => {
+                    self.automation_launch_failed(launch, error, cx);
+                    return;
+                }
+            }
         }
         let PreparedRun {
             summary,
@@ -893,3 +917,6 @@ fn automation_work_item(
         "https://github.com/{repo}/{kind}/{number}"
     ))
 }
+
+#[cfg(test)]
+mod tests;
