@@ -114,7 +114,7 @@ fn cards_screenshot_two_starts_and_explicit_links_survive_stream_settle_patch_an
         match saved.role.as_str() {
             "tool" => {
                 let mut call: ToolCall = serde_json::from_str(&saved.text).unwrap();
-                // The desktop projection adds display metadata to the saved
+                // The block projection adds display metadata to the saved
                 // call while retaining its identity, arguments and output.
                 assert!(call.display.is_some());
                 call.display = None;
@@ -225,7 +225,7 @@ fn cards_reverse_order_replay_group_scope_and_invalid_identity(cx: &mut TestAppC
         assert_eq!(visible(view).len(), 1);
         assert_eq!(visible(view)[0].1["sessionId"], handle);
     });
-    // A numeric-looking desktop ID is still an external ID, not native 7.
+    // A numeric-looking string ID is still an external ID, not native 7.
     let view = fixture(cx, true);
     let desktop = json!("7");
     let handle = vorkspace_core::bot::work::session_handle(&desktop).unwrap();

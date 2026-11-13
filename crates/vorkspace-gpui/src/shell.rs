@@ -1925,7 +1925,7 @@ impl Shell {
         self.activate_session_with_reminder(id, occurrence, window, cx);
     }
     /// Opening a conversation that has no tab takes over a blank pane in the
-    /// active tab instead of adding a tab, as in the desktop app.
+    /// active tab instead of adding a tab.
     fn replace_blank_pane(&mut self, id: i64, cx: &mut Context<Self>) {
         if self.workspace.tab_of(id).is_some()
             || !self.session_metadata(id, cx).summary.has_messages

@@ -170,7 +170,7 @@ impl WorktreeSwitcher {
         })
         .detach();
         // Session membership is metadata, not a reason to load every agent's
-        // settings (which restores full desktop transcripts and turn receipts).
+        // settings (which restores full saved transcripts and turn receipts).
         // It must also never hold up the independent Git list.
         if !ids.is_empty() {
             let work = cx.background_executor().spawn(async move {

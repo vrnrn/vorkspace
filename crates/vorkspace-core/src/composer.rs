@@ -197,7 +197,7 @@ pub fn image_data(path: &Path) -> Result<String, String> {
     }
     Ok(base64::engine::general_purpose::STANDARD.encode(data))
 }
-/// Decode a saved desktop image attachment off the UI thread.
+/// Decode a saved image attachment off the UI thread.
 pub fn decode_image_data(data: &str) -> Result<Vec<u8>, String> {
     use base64::Engine;
     let data = data

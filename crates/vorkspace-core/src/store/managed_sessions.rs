@@ -1,4 +1,4 @@
-//! Desktop metadata for automation-created sessions.
+//! Session metadata for automation-created sessions.
 use super::{Session, Store};
 use crate::{
     agent::Settings,

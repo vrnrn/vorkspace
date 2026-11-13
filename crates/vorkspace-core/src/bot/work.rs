@@ -1,4 +1,4 @@
-//! Desktop work references belong to conversation blocks, not the Bot roster.
+//! Bot work references belong to conversation blocks, not the Bot roster.
 //! Keep projection separate from persistence so opening a Bot never rewrites it.
 use serde_json::{json, Value};
 use std::collections::{HashMap, HashSet};
@@ -111,7 +111,7 @@ fn action(block: &Value) -> Option<String> {
     .or(block["text"].as_str())?;
     command_action(command)
 }
-/// Recognize the app CLI itself, including the desktop shell wrapper.
+/// Recognize the app CLI itself, including the app shell wrapper.
 pub fn command_action(command: &str) -> Option<String> {
     let mut parts = words(command.trim())?;
     if parts.len() == 3

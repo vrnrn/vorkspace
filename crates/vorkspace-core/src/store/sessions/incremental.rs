@@ -565,7 +565,7 @@ impl Store {
             after_handoff = block["role"] == "handoff";
         }
         // merge() preserves original blocks; all mutation/removal owners use the
-        // full guarded path. Advancing the public desktop revision is atomic too.
+        // full guarded path. Advancing the public history revision is atomic too.
         self.shared_update_indexed_flags(id, &original, index.kind, &table)?;
         if !rows.is_empty() {
             self.shared_patch(id, &[("updated_at", json!(crate::time::now_ms()))])?;

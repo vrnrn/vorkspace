@@ -11,7 +11,7 @@ pub struct SessionPreviewData {
 impl Store {
     pub fn session_preview(&self, id: i64) -> Result<SessionPreviewData, String> {
         let result = {
-            // Old desktop schemas may not have worktree metadata. Read just
+            // Older session schemas may not have worktree metadata. Read just
             // these two scalar columns, never blocks_json/model_settings.
             let cwd = self.shared_field("worktree_cwd", "NULL");
             self.conn

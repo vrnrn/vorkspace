@@ -1,4 +1,4 @@
-//! Resolve the invocation and prepare desktop state before GPUI starts.
+//! Resolve the invocation and prepare startup state before GPUI starts.
 use crate::{
     fixtures,
     shell::{PreparedCore, WindowLayouts},

@@ -14,7 +14,7 @@ pub struct Folder {
     /// Index into the tab group palette; missing or 0 is the default wash.
     #[serde(default)]
     pub color_index: Option<usize>,
-    /// Desktop folder pickers allow a custom hex color in addition to a palette.
+    /// Folder pickers allow a custom hex color in addition to a palette.
     #[serde(default)]
     pub custom_color: Option<String>,
 }

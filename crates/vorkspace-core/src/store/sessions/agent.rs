@@ -14,8 +14,8 @@ impl Store {
         let Some(mut settings) = self.agent_preferences(id)? else {
             return Ok(None);
         };
-        // Desktop blocks are authoritative. Native-only legacy metadata remains
-        // available, but cannot override a saved desktop turn's identity/time.
+        // Saved blocks are authoritative. Older sidecar turn metadata remains
+        // available, but cannot override a saved turn's identity/time.
         for (turn, source) in self.shared_project_turns(id)? {
             merge_turn_info(settings.turns.entry(turn).or_default(), source);
         }

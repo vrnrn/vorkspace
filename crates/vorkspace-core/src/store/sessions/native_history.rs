@@ -52,7 +52,7 @@ impl Store {
             project_turn(&parse::<Value>(&sql(raw)?)?, 0, &mut projected)?;
             owners.extend(projected.into_values());
         }
-        // Older desktop settings can carry turn metadata keyed by projected
+        // Older settings can carry turn metadata keyed by projected
         // row. Merge those offsets only when they could affect this batch.
         let projected: HashSet<_> = owners
             .iter()
@@ -112,7 +112,7 @@ impl Store {
         let append = if let Some(kind) = self.shared_history_index_kind(&original)? {
             self.shared_append_indexed_blocks(id, &original, kind, &blocks)?
         } else {
-            // An older unnormalized desktop blob needs a one-time conversion.
+            // An unnormalized JSON history needs a one-time conversion.
             let mut previous = self.shared_blocks(id)?;
             previous.extend(blocks);
             self.shared_store_blocks(id, &previous)?;

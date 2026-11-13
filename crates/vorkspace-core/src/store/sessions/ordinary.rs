@@ -79,7 +79,7 @@ mod tests {
         let directory = tempfile::tempdir().unwrap();
         let path = directory.path().join("vorkspace.db");
         let mut store = Store::open_vorkspace(&path).unwrap();
-        // Frozen desktop storage contract, independent of the old UI source.
+        // Frozen storage contract for ordinary history rows.
         store
             .conn
             .execute_batch(include_str!("../../../tests/fixtures/ordinary-schema.sql"))
@@ -127,7 +127,7 @@ mod tests {
                 .unwrap(),
             "[]"
         );
-        // Another desktop writer changes history after the native snapshot.
+        // Another writer changes history after this store's snapshot.
         store.conn.execute("UPDATE ordinary_blocks SET block_json=json_set(block_json,'$.text','Desktop edit') WHERE block_id='saved'", []).unwrap();
         assert!(store
             .write_rows(session.id, start, &transcript.rows[start..])

@@ -174,7 +174,7 @@ fn parse<T: serde::de::DeserializeOwned>(raw: &str) -> Result<T, String> {
     HISTORY_READ_BYTES.with(|count| count.set(count.get() + raw.len()));
     serde_json::from_str(raw).map_err(|e| e.to_string())
 }
-/// Desktop app CLI requests name children `app-<caller>-<request>`.
+/// App CLI requests name children `app-<caller>-<request>`.
 /// Both parts can contain hyphens, so the longest existing caller wins.
 fn started_caller<'a>(id: &'a str, ids: &HashSet<String>) -> Option<&'a str> {
     let rest = id.strip_prefix("app-")?;
@@ -285,7 +285,7 @@ fn merge_turn_info(info: &mut crate::agent::TurnInfo, source: crate::agent::Turn
 }
 
 impl Store {
-    /// Open the same sessions, notes and reminders as the desktop app. Only a
+    /// Open the existing sessions, notes and reminders in place. Only a
     /// brand-new file gets a schema; existing schema/data is not migrated.
     pub fn open_vorkspace(path: &Path) -> Result<Self, String> {
         Self::open_shared(path, false)
@@ -388,7 +388,7 @@ impl Store {
         Ok(Some(reader))
     }
     /// Resolve only a persisted identity; unlike CLI handle parsing this never
-    /// treats a stale numeric-looking desktop ID as an existing session.
+    /// treats a stale numeric-looking string ID as an existing session.
     pub fn resolve_existing_session_id(&self, id: &str) -> Option<i64> {
         let exists = self
             .conn
@@ -604,7 +604,7 @@ impl Store {
         self.update_settings(|_| Ok(((), vec![(key.into(), value.into())])))
     }
     /// Publish related settings together, preserving their previous values if
-    /// any write fails. The desktop sidecar publishes one atomic root.
+    /// any write fails. The settings sidecar publishes one atomic root.
     pub fn save_settings(&self, values: &[(&str, &str)]) -> Result<(), String> {
         self.mark_attachment_activity();
 
@@ -751,7 +751,7 @@ impl Store {
             work_item: None,
         })
     }
-    /// Add native turn receipts to their original desktop prompt objects.
+    /// Add native turn receipts to their original saved prompt objects.
     /// Unknown rich fields and existing provenance are retained verbatim.
     pub(super) fn shared_save_turns(
         &self,
@@ -820,7 +820,7 @@ impl Store {
             }
             if let Some(at) = info.started_at {
                 // A native root prompt is written with its send time before
-                // its turn receipt arrives; the desktop schema calls it startedAt.
+                // its turn receipt arrives; the saved block calls it startedAt.
                 if block["id"]
                     .as_str()
                     .is_some_and(|id| id.starts_with("gpui-"))

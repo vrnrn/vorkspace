@@ -73,7 +73,7 @@ impl Store {
         } else if self.shared_ordinary_indexed(source)? {
             "SELECT EXISTS(SELECT 1 FROM ordinary_blocks WHERE session_id=?1 AND has_user=1 AND is_draft=1)".into()
         } else {
-            // A previous desktop can update the inline transcript without
+            // An earlier writer can update the inline transcript without
             // maintaining its summary flag. Inspect its actual draft field.
             "SELECT CASE WHEN json_type(blocks_json)='array' THEN EXISTS(
                 SELECT 1 FROM json_each(blocks_json)

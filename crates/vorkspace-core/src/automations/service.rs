@@ -371,7 +371,7 @@ fn apply_run_summary(automation: &mut Automation, run: &AutomationRun) {
     }
 }
 
-/// Opens automation definitions and history in the desktop session database.
+/// Opens automation definitions and history in the session database.
 pub struct Service {
     conn: Connection,
     execution_path: Option<std::path::PathBuf>,

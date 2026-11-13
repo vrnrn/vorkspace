@@ -21,7 +21,7 @@ fn homes_root(root: &Path) -> Result<PathBuf, String> {
             .ok_or_else(|| "Could not find your home directory".into());
     }
     // Development profiles and fixtures must never publish into the user's
-    // desktop Bot namespace, even when they contain copies of the same IDs.
+    // default data's Bot namespace, even when they contain copies of the same IDs.
     Ok(data.join("bot-workspaces"))
 }
 

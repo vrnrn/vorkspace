@@ -40,7 +40,7 @@ impl Store {
         }
         let original = self.persisted_session_id(id)?;
         // Owner discovery, boundaries, revision and projection must observe
-        // the same SQLite snapshot, including external desktop writers.
+        // the same SQLite snapshot, including external writers.
         let tx = sql(self.conn.unchecked_transaction())?;
         let result = self.shared_indexed_history_page_in_snapshot(&original, cursor, page_turns)?;
         sql(tx.commit())?;

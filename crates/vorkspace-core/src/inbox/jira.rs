@@ -566,7 +566,7 @@ fn issue_number(key: &str) -> i64 {
         .unwrap_or(0)
 }
 
-/// Jira sends `+0000` offsets, which WebKit's `Date.parse` rejects.
+/// Jira sends `+0000` offsets; rewrite them in the RFC 3339 `+00:00` form.
 fn normalize_jira_time(value: &str) -> String {
     let bytes = value.as_bytes();
     let len = bytes.len();

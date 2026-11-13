@@ -1,4 +1,4 @@
-//! Attachment manifests travel beside prompt text. The desktop representation
+//! Attachment manifests travel beside prompt text. The saved representation
 //! stays on the original user message and needs no database schema change.
 use super::{Row, Transcript};
 use std::path::{Path, PathBuf};

@@ -1,4 +1,4 @@
-//! The desktop Notes split view, backed by the same notes and image assets.
+//! The Notes split view, backed by the saved notes and image assets.
 use vorkspace_ui::radius;
 mod editor;
 mod recording;

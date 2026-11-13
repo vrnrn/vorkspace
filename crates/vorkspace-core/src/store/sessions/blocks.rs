@@ -256,7 +256,7 @@ fn update(block: &mut Value, new: bool, rows: &[&Row]) -> Result<(), String> {
             block["id"] = card["id"].clone();
         }
         if let Some(external) = block["botCard"]["sessionId"].as_str() {
-            // UI handles are a projection; never write one over the desktop UUID.
+            // UI handles are a projection; never write one over the saved UUID.
             card["sessionId"] = json!(external);
         }
         if let Some(object) = card.as_object_mut() {
@@ -355,7 +355,7 @@ fn update(block: &mut Value, new: bool, rows: &[&Row]) -> Result<(), String> {
                 .unwrap_or(&call.name));
             block["text"] = block["tool"]["title"].clone();
             // Native tool input remains available without removing rich
-            // previews, subagent activity or other desktop-only metadata.
+            // previews, subagent activity or other display-only metadata.
             if !block["tool"]["preview"].is_object() {
                 block["tool"]["preview"] = json!({});
             }
@@ -383,7 +383,7 @@ fn update(block: &mut Value, new: bool, rows: &[&Row]) -> Result<(), String> {
             });
         }
     } else {
-        // Plans and task lists keep their desktop role and associated metadata.
+        // Plans and task lists keep their saved role and associated metadata.
         if new {
             block["role"] = json!(match role {
                 "bot-system" => "user",
@@ -776,7 +776,7 @@ mod card_tests {
         assert_eq!(reloaded[0].first, row.first);
         assert_eq!(reloaded[0].sent_at, row.sent_at);
         // The workspace enables serde_json's insertion-order feature. Card IDs
-        // live on the outer desktop block and are restored into the card, so
+        // live on the outer saved block and are restored into the card, so
         // compare the payload rather than its object-key serialization order.
         assert_eq!(
             serde_json::from_str::<Value>(&reloaded[0].text).unwrap(),

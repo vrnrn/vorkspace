@@ -1,4 +1,4 @@
-//! The desktop idle policy spares every conversation currently on screen.
+//! The idle policy spares every conversation currently on screen.
 use super::*;
 
 impl Shell {

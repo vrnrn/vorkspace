@@ -1,4 +1,4 @@
-//! Desktop-compatible note persistence, deliberately separate from session handles.
+//! Note persistence, deliberately separate from session handles.
 mod read;
 
 use super::Store;

@@ -1,5 +1,5 @@
 //! Native workspace window layouts. Each record belongs to a window, and
-//! the last focused record also feeds the legacy single-window setting.
+//! the last focused record also feeds the single-window `workspace` setting.
 use super::*;
 use gpui::{WindowBounds, point, size};
 use serde::{Deserialize, Serialize};

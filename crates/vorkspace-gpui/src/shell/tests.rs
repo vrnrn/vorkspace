@@ -2813,7 +2813,7 @@ pub(super) fn window_with_scale(
         .unwrap();
     a.has_messages = true;
     // Seed recency explicitly: two creations may share a millisecond, and
-    // desktop UUID handles do not encode their insertion order.
+    // UUID session IDs do not encode their insertion order.
     let conn = rusqlite::Connection::open(store.database_path()).unwrap();
     for (session, time) in [(&mut a, 1_000), (&mut b, 2_000)] {
         session.updated_at = time;

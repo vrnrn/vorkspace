@@ -506,7 +506,7 @@ impl Protocol {
                 self.activities.claude_pending.remove(id);
                 if background && self.claude_result_seen {
                     // Claude may wake itself after a background result. The
-                    // desktop adapter leaves a 15s window for that follow-up.
+                    // adapter leaves a 15s window for that follow-up.
                     self.claude_resume_at = Some(Instant::now() + Duration::from_secs(15));
                 }
             }

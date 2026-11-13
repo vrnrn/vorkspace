@@ -1,4 +1,4 @@
-//! Notes share their identities, slugs and storage format with the desktop app.
+//! Notes keep their existing identities, slugs and storage format.
 use serde::{Deserialize, Serialize};
 
 pub const MAX_TITLE: usize = 200;
@@ -244,7 +244,7 @@ fn unwrap_markdown(text: &str) -> String {
         .to_owned()
 }
 
-/// The same prompt boundary as `injectNotePrompt` in the desktop composer.
+/// Prepend referenced notes to a prompt in the established note-reference format.
 pub(crate) fn inject_prompt(text: &str, notes: &[Note]) -> String {
     if notes.is_empty() {
         return text.into();

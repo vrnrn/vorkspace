@@ -617,7 +617,7 @@ impl ToolCall {
     }
 }
 
-/// Adapt desktop metadata and recognize legacy delegated-tool captions.
+/// Read saved block metadata and recognize legacy delegated-tool captions.
 pub(crate) fn from_block(block: &Value) -> Option<Panel> {
     if block["role"] == "tasks" {
         return TaskList::from_value(&block["taskList"]).map(Panel::Tasks);

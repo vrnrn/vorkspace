@@ -200,7 +200,7 @@ fn parse(text: Option<&str>) -> Result<Vec<Habit>, String> {
     Ok(values
         .into_iter()
         .filter_map(|mut value| {
-            // The desktop parser accepts each recent run independently. A bad
+            // The parser accepts each recent run independently. A bad
             // history item must not make the habit (and its controls) disappear.
             if let Some(items) = value.get_mut("runs") {
                 let runs: Vec<Run> = items

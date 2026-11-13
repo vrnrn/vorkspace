@@ -145,7 +145,7 @@ impl Protocol {
             events.push(Event::Tool(tool));
         }
         if e["type"] == "content_block_delta" && e["delta"]["type"] == "input_json_delta" {
-            // Like the desktop adapter, keep the last input that
+            // Keep the last input that
             // parses; a half-streamed object is not shown.
             if let Some((id, partial)) =
                 self.claude_tools.get_mut(&e["index"].as_u64().unwrap_or(0))

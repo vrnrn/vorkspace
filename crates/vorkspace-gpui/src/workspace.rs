@@ -245,7 +245,7 @@ pub(crate) struct Workspace {
     pub projects: Vec<String>,
     /// Explicit decisions keyed by normalized path; false prevents stale legacy re-import.
     pub project_archive: HashMap<String, bool>,
-    /// Explicit native removals suppress stale desktop project lists.
+    /// Explicit native removals suppress stale project lists.
     pub deleted_projects: HashSet<String>,
     pub project: String,
     /// Last focused open session in each project, independent of tab order.
@@ -253,13 +253,13 @@ pub(crate) struct Workspace {
     pub recent_files: HashMap<String, Vec<String>>,
     pub collapsed: HashSet<String>,
     pub sidebar_visible: bool,
-    /// Retained desktop preference; both current sidebars use right_panel_width.
+    /// Retained earlier preference; both current sidebars use right_panel_width.
     pub sidebar_width: f32,
     pub project_rail_open: bool,
     pub project_rail_width: f32,
-    /// Explicit native group choices override the retained desktop defaults.
+    /// Explicit native group choices override the default collapsed state.
     pub project_group_collapsed: HashMap<String, bool>,
-    /// None means the legacy source has not yet been available for migration.
+    /// None until the project rail is first changed; readers use the defaults.
     pub project_rail_state: Option<ProjectRailState>,
     pub sidebar_tabs: HashMap<String, SidebarTab>,
     pub sidebar_tab_order: Vec<SidebarTab>,

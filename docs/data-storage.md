@@ -12,7 +12,7 @@ npm run dev -- --vorkspace-db /absolute/path/to/store.db
 
 The default production location is `com.vorkspace.desktop/vorkspace.db` under macOS Application Support.
 
-The desktop schema remains readable without the former UI. Preferences, accounts, Bot identities, folders and Inbox choices come from the native settings sidecar; the former UI's WebKit storage and its tab snapshot are not read. Transcript text, arbitrary document JSON, paths, and provider IDs remain untouched. Saving uses atomic sidecar replacement.
+The session schema belongs to the app. Preferences, accounts, Bot identities, folders and Inbox choices come from the native settings sidecar. Transcript text, arbitrary document JSON, paths, and provider IDs remain untouched. Saving uses atomic sidecar replacement.
 
 Bot memory and habit files use their owner directory under `bots/` in the selected data directory. A project-indexed owner there stays where it is, and an empty placeholder directory does not hide it. Codex Bot homes live under `codex-bots/`. No files are moved when a Bot opens.
 

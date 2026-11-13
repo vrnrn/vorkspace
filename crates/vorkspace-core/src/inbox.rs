@@ -1,4 +1,4 @@
-//! Native Inbox services and the desktop app's existing credential formats.
+//! Native Inbox services and their existing credential formats.
 mod avatar;
 mod bounded;
 pub(crate) mod connectors;

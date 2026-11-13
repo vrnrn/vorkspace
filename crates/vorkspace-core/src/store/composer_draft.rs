@@ -1,4 +1,4 @@
-//! Unsent input stays in the desktop's revisioned draft table. Reading never
+//! Unsent input stays in the revisioned draft table. Reading never
 //! migrates a row or confuses composer input with a saved transcript draft.
 use super::*;
 use rusqlite::OptionalExtension;

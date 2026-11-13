@@ -48,7 +48,7 @@ pub(super) fn codex_turn_start(
 /// Native history previously rendered files as trailing local Markdown links,
 /// without retaining the attachment payload. Re-sending that text alone would
 /// silently drop images. Refuse ambiguous local-file tails until a manifest is
-/// available; rich desktop attachment lists are restored separately.
+/// available; rich attachment lists are restored separately.
 pub(super) fn untracked_attachment_tail(prompt: &str) -> bool {
     let Some(tail) = prompt.rsplit("\n\n").next() else {
         return false;

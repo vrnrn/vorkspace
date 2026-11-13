@@ -25,7 +25,7 @@ pub struct ToolCall {
     pub state: ToolState,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub panel: Option<tasks::Panel>,
-    /// Descriptive provider/desktop metadata, separate from actual arguments.
+    /// Descriptive provider/saved display metadata, separate from actual arguments.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub display: Option<serde_json::Value>,
 }
@@ -90,7 +90,7 @@ impl ToolCall {
     pub fn presentation_in(&self, cwd: Option<&str>) -> ToolPresentation {
         presentation::present(self, cwd)
     }
-    /// Show the provider's actual input rather than the desktop adapter envelope.
+    /// Show the provider's actual input rather than the saved display envelope.
     pub fn input_detail(&self) -> String {
         let Ok(value) = serde_json::from_str::<serde_json::Value>(&self.input) else {
             return self.input.clone();

@@ -1,5 +1,5 @@
-//! Read-only adaptation of original Block.btwThreads. Opening the side surface
-//! never rewrites source blocks, provider bindings, or the desktop schema.
+//! Read-only projection of saved Block.btwThreads. Opening the side surface
+//! never rewrites source blocks, provider bindings, or the session schema.
 use super::{sessions, Store};
 use crate::transcript::{Row, Transcript};
 use serde_json::Value;
@@ -186,7 +186,7 @@ fn provider(blocks: &[Value], owner: usize, thread: &Value, fallback: &str) -> O
                 .find_map(|block| block["handoff"]["from"].as_str())
         })
         .unwrap_or(fallback);
-    // This is a read-only history adapter. Availability belongs to execution
+    // This is a read-only history projection. Availability belongs to execution
     // admission, so retiring a provider must not hide its saved side threads.
     (!kind.is_empty()).then(|| kind.into())
 }

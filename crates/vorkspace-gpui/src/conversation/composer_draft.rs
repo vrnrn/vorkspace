@@ -1,4 +1,4 @@
-//! The desktop draft row remains authoritative across UI versions. Pending
+//! The saved draft row remains authoritative across UI versions. Pending
 //! input belongs to the view; a background flush compares its durable revision.
 use super::*;
 use serde_json::{Value, json};

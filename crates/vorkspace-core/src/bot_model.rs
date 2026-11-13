@@ -36,7 +36,7 @@ pub enum CompactionMode {
 pub struct Bot {
     pub id: String,
     pub session_id: Option<i64>,
-    /// Keep a missing desktop association visible instead of silently starting
+    /// Keep a missing session association visible instead of silently starting
     /// a replacement conversation when its saved UUID cannot be resolved.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub unavailable_session: Option<String>,
@@ -73,7 +73,7 @@ pub struct Bot {
     pub background: Option<Background>,
     pub launches: Vec<Launch>,
     pub documents: Vec<Document>,
-    /// References last projected from desktop blocks, to reconcile deletions.
+    /// References last projected from conversation blocks, to reconcile deletions.
     #[serde(default, rename = "desktopDocumentIds")]
     pub projected_document_ids: Vec<String>,
     #[serde(default, rename = "desktopLaunchIds")]
@@ -151,7 +151,7 @@ pub struct Launch {
     pub title: String,
     pub harness: String,
     pub model: Option<String>,
-    /// Compatibility field for saved launches from older desktop builds.
+    /// Compatibility field for launches saved by older builds.
     pub origin_turn: u64,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub origin: Option<LaunchOrigin>,

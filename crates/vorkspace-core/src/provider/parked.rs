@@ -238,7 +238,7 @@ pub(crate) fn configure(limit: usize) {
     }
 }
 
-/// The desktop registry applies one idle-child budget across every provider.
+/// One idle-child budget applies across every provider.
 /// Serialize eviction decisions, but never hold either pool while reaping.
 pub(super) fn enforce_idle_limit() {
     static EVICT: OnceLock<Mutex<()>> = OnceLock::new();
