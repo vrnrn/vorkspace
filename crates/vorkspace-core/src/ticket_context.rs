@@ -30,7 +30,7 @@ fn scheme(value: &str) -> bool {
     matches!(
         value.to_ascii_lowercase().as_str(),
         "vorkspace" | "vorkspace-dev"
-    ) || crate::compatibility::key(&value.to_ascii_lowercase()) == "vorkspace"
+    ) || crate::historical::key(&value.to_ascii_lowercase()) == "vorkspace"
 }
 fn links(text: &str) -> Result<Vec<String>, String> {
     let mut found = Vec::new();

@@ -124,7 +124,7 @@ pub fn command_action(command: &str) -> Option<String> {
     {
         parts = words(&parts[2])?;
     }
-    if !crate::compatibility::app_executable(
+    if !crate::historical::app_executable(
         parts
             .first()?
             .rsplit(['/', '\\'])

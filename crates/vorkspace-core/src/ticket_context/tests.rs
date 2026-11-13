@@ -79,7 +79,7 @@ fn references_round_trip_current_development_and_historical_identities() {
         );
         assert_eq!(parsed.url, target);
         let earlier = String::from_utf8(vec![109, 111, 110, 111, 99, 111, 100, 101]).unwrap();
-        assert_eq!(crate::compatibility::key(&earlier), "vorkspace");
+        assert_eq!(crate::historical::key(&earlier), "vorkspace");
         for scheme in ["vorkspace-dev".to_owned(), earlier] {
             let source = current.replacen("vorkspace:", &format!("{scheme}:"), 1);
             assert_eq!(parse(&source).unwrap(), parsed);

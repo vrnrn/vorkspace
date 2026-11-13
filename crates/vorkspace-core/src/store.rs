@@ -35,7 +35,7 @@ mod turn_history;
 pub use native_history::{NativeHistoryRequest, NativeHistoryResult};
 pub use turn_history::{recovery_text, RecoveredTurn, TurnHistory};
 pub(crate) mod todos;
-pub use crate::compatibility::vorkspace_database;
+pub use crate::data_location::vorkspace_database;
 pub use crate::session::native_model;
 use crate::transcript::{Row, Transcript};
 pub use edit::EditSnapshot;

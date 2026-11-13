@@ -18,17 +18,6 @@ fn normalizes_keys_without_changing_ids_text_or_unknown_metadata() {
     assert!(application_block(&block));
 }
 #[test]
-fn malformed_roster_stops_open_without_rewriting_the_sidecar() {
-    let dir = tempfile::tempdir().unwrap();
-    let path = dir.path().join("vorkspace.db");
-    drop(crate::store::Store::open_vorkspace(&path).unwrap());
-    let sidecar = path.with_file_name("vorkspace.db.gpui.json");
-    let raw = json!({"bot-roster":"{"}).to_string();
-    std::fs::write(&sidecar, &raw).unwrap();
-    assert!(crate::store::Store::open_vorkspace(&path).is_err());
-    assert_eq!(std::fs::read_to_string(sidecar).unwrap(), raw);
-}
-#[test]
 fn historical_command_receipts_remain_visible_but_echo_is_not_an_effect() {
     let name = earlier_prefix();
     assert_eq!(

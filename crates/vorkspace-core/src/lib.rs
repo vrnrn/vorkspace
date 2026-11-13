@@ -8,6 +8,7 @@ pub mod catalog;
 pub mod checkpoint;
 pub mod codebase;
 pub mod context;
+mod data_location;
 mod database_backup;
 pub mod diff;
 pub mod external_editor;
@@ -60,7 +61,7 @@ pub mod worktree_setup;
 
 pub mod voice;
 
-mod compatibility;
+mod historical;
 
 mod local_http;
 

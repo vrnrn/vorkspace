@@ -1992,3 +1992,15 @@ fn failed_sidecar_removal_reports_committed_deletion_and_can_finish_cleanup() {
         .unwrap()
         .is_none());
 }
+
+#[test]
+fn malformed_roster_stops_open_without_rewriting_the_sidecar() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("vorkspace.db");
+    drop(crate::store::Store::open_vorkspace(&path).unwrap());
+    let sidecar = path.with_file_name("vorkspace.db.gpui.json");
+    let raw = json!({"bot-roster":"{"}).to_string();
+    std::fs::write(&sidecar, &raw).unwrap();
+    assert!(crate::store::Store::open_vorkspace(&path).is_err());
+    assert_eq!(std::fs::read_to_string(sidecar).unwrap(), raw);
+}

@@ -1,18 +1,12 @@
-//! Read compatibility for persisted identities from earlier desktop versions.
-//! Fingerprints identify historical names without retaining retired branding in
-//! the source tree. Data stays at its existing path; opening never copies a DB,
-//! rewrites a transcript, or changes a provider session ID.
+//! Recognises the app's earlier name in historical content: persisted keys,
+//! application blocks and recorded shell commands. Fingerprints identify the
+//! earlier name without retaining retired branding in the source tree. Paths,
+//! IDs and user text are never rewritten.
 use serde_json::Value;
 use sha2::{Digest, Sha256};
-use std::path::PathBuf;
 
 fn fingerprint(name: &str) -> String {
     format!("{:x}", Sha256::digest(name.as_bytes()))
-}
-
-pub fn vorkspace_database() -> Option<PathBuf> {
-    let base = crate::shell_env::home()?.join("Library/Application Support");
-    Some(base.join("com.vorkspace.desktop/vorkspace.db"))
 }
 
 /// Normalize app-owned persisted identities only. Paths, IDs and user text stay exact.

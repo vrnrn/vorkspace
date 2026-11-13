@@ -123,7 +123,7 @@ impl Store {
         }
         let start = blocks::project(&blocks[..first])?.len();
         let mut prompt = block["text"].as_str().unwrap_or("").to_owned();
-        if crate::compatibility::application_block(block) {
+        if crate::historical::application_block(block) {
             prompt = format!("/operator {prompt}");
         }
         let attachments = block["attachments"]
