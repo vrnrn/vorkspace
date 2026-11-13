@@ -1,5 +1,5 @@
 //! Private composer attachment ownership and conservative cold-start collection.
-use super::Store;
+use super::{local_submissions::pid_alive, Store};
 use rusqlite::{params, Connection, Transaction, TransactionBehavior};
 use std::io::Write;
 use std::{
@@ -46,18 +46,6 @@ impl Store {
         self.mark_attachment_activity();
         let root = self.data_dir().ok_or("Attachment storage is unavailable")?;
         cache_attachment(root, name, bytes)
-    }
-}
-fn pid_alive(pid: u32) -> bool {
-    if pid == std::process::id() {
-        return true;
-    }
-    if pid == 0 || pid > i32::MAX as u32 {
-        return false;
-    }
-    unsafe {
-        libc::kill(pid as i32, 0) == 0
-            || std::io::Error::last_os_error().raw_os_error() == Some(libc::EPERM)
     }
 }
 fn cache_attachment(root: &Path, name: &str, bytes: &[u8]) -> Result<PathBuf, String> {
