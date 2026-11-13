@@ -126,7 +126,7 @@ impl Inbox {
                     .child(self.detail_item_actions(&item, is_pr, cx))
                     .when(is_pr, |d| d.child(self.detail_pull_request_tabs(&item, cx))),
             );
-        let body = match self.tab {
+        let body = match self.tabs.tab {
             Tab::Summary => self.summary_view(&item, window, cx),
             Tab::Code => self.diff_view(cx),
             Tab::Checks => self.checks_view(inset, cx),
@@ -313,10 +313,11 @@ impl Inbox {
                 .into_iter()
                 .filter(|(tab, _)| *tab != Tab::Checks || item.provider == "github")
                 .map(|(tab, label)| {
-                    page::tab(format!("inbox-tab-{label}"), label, self.tab == tab)
+                    page::tab(format!("inbox-tab-{label}"), label, self.tabs.tab == tab)
                         .child(label)
                         .when(tab == Tab::Checks, |d| {
                             let failed = self
+                                .tabs
                                 .checks
                                 .as_ref()
                                 .map(|checks| {

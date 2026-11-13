@@ -247,16 +247,19 @@ impl Inbox {
             .flex_1()
             .flex()
             .flex_col()
-            .when(self.extra_loading, |d| d.child(message("Loading changes…")))
-            .when_some(self.extra_error.clone(), |d, text| d.child(error(text)))
-            .when(self.diff.is_some(), |d| {
-                d.child(div().flex_1().min_h_0().child(self.diff_view.clone()))
+            .when(self.tabs.loading, |d| d.child(message("Loading changes…")))
+            .when_some(self.tabs.error.clone(), |d, text| d.child(error(text)))
+            .when(self.tabs.diff.is_some(), |d| {
+                d.child(div().flex_1().min_h_0().child(self.tabs.diff_view.clone()))
             })
-            .when(self.diff.as_ref().is_some_and(|diff| diff.truncated), |d| {
-                d.child(message(
-                    "This diff is truncated. Open the pull request to see all changes.",
-                ))
-            })
+            .when(
+                self.tabs.diff.as_ref().is_some_and(|diff| diff.truncated),
+                |d| {
+                    d.child(message(
+                        "This diff is truncated. Open the pull request to see all changes.",
+                    ))
+                },
+            )
             .into_any_element()
     }
 
@@ -266,9 +269,9 @@ impl Inbox {
             .max_w(px(page::DETAIL_MAX))
             .mx_auto()
             .p(inset)
-            .when(self.extra_loading, |d| d.child(message("Loading checks…")))
-            .when_some(self.extra_error.clone(), |d, text| d.child(error(text)))
-            .when_some(self.checks.as_ref(), |d, checks| {
+            .when(self.tabs.loading, |d| d.child(message("Loading checks…")))
+            .when_some(self.tabs.error.clone(), |d, text| d.child(error(text)))
+            .when_some(self.tabs.checks.as_ref(), |d, checks| {
                 let failed = checks
                     .checks
                     .iter()

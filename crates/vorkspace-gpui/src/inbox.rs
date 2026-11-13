@@ -175,6 +175,31 @@ impl SummaryTimeline {
     }
 }
 
+/// The open item's tabs, and the Code and Checks data each loads on demand.
+struct DetailTabs {
+    tab: Tab,
+    diff: Option<Diff>,
+    diff_view: Entity<DiffView>,
+    checks: Option<Checks>,
+    loading: bool,
+    error: Option<String>,
+    request: u64,
+}
+
+impl DetailTabs {
+    fn new(diff_view: Entity<DiffView>) -> Self {
+        Self {
+            tab: Tab::Summary,
+            diff: None,
+            diff_view,
+            checks: None,
+            loading: false,
+            error: None,
+            request: 0,
+        }
+    }
+}
+
 pub(crate) struct Inbox {
     /// The root retains the pane entities. Each pane owns its details and inputs.
     owner: Option<WeakEntity<Inbox>>,
@@ -206,21 +231,15 @@ pub(crate) struct Inbox {
     thread: Option<Thread>,
     document: Option<Entity<document::InboxDocument>>,
     comments: Vec<(model::Comment, Entity<document::InboxDocument>)>,
-    diff: Option<Diff>,
-    diff_view: Entity<DiffView>,
-    checks: Option<Checks>,
-    tab: Tab,
+    tabs: DetailTabs,
     loading: bool,
     detail_loading: bool,
-    extra_loading: bool,
     error: Option<String>,
     detail_target_error: Option<String>,
     detail_error: Option<String>,
-    extra_error: Option<String>,
     thread_error: Option<String>,
     expanded_comments: std::collections::HashSet<String>,
     detail_generation: u64,
-    extra_request: u64,
     filters_open: bool,
     filter_anchor: AnchorSlot,
     connect: ConnectForm,
@@ -329,7 +348,7 @@ impl Inbox {
                         .comment
                         .update(cx, |input, cx| input.set_text(request.text.clone(), cx));
                     view.update(cx, |view, cx| view.complete_comment(request, Ok(()), cx));
-                    this.tab = Tab::Summary;
+                    this.tabs.tab = Tab::Summary;
                     this.summary.scroll.scroll_to_end();
                     this.composer.focus_comment = true;
                     cx.notify();
@@ -370,21 +389,15 @@ impl Inbox {
             thread: None,
             document: None,
             comments: vec![],
-            diff: None,
-            diff_view,
-            checks: None,
-            tab: Tab::Summary,
+            tabs: DetailTabs::new(diff_view),
             loading,
             detail_loading: false,
-            extra_loading: false,
             error: None,
             detail_target_error: None,
             detail_error: None,
-            extra_error: None,
             thread_error: None,
             expanded_comments: Default::default(),
             detail_generation: 0,
-            extra_request: 0,
             filters_open: false,
             filter_anchor: AnchorSlot::default(),
             connect,
@@ -584,12 +597,12 @@ impl Inbox {
             self.thread = None;
             self.document = None;
             self.comments.clear();
-            self.diff = None;
-            self.checks = None;
+            self.tabs.diff = None;
+            self.tabs.checks = None;
             self.detail_generation += 1;
-            self.extra_request += 1;
+            self.tabs.request += 1;
             self.detail_loading = false;
-            self.extra_loading = false;
+            self.tabs.loading = false;
         }
         if self
             .connect
@@ -690,8 +703,8 @@ impl Inbox {
                     return;
                 }
                 page.load_detail(false, cx);
-                if page.tab == Tab::Checks && !page.extra_loading {
-                    page.checks = None;
+                if page.tabs.tab == Tab::Checks && !page.tabs.loading {
+                    page.tabs.checks = None;
                     page.set_tab(Tab::Checks, cx);
                 }
             });
@@ -1144,14 +1157,15 @@ impl Inbox {
         self.summary.activity_revision += 1;
         self.summary.rows = Default::default();
         self.composer.focus_comment = false;
-        self.tab = Tab::Summary;
-        self.diff = None;
-        self.extra_request += 1;
-        self.diff_view
+        self.tabs.tab = Tab::Summary;
+        self.tabs.diff = None;
+        self.tabs.request += 1;
+        self.tabs
+            .diff_view
             .update(cx, |view, cx| view.set_files(vec![], cx));
-        self.checks = None;
-        self.extra_loading = false;
-        self.extra_error = None;
+        self.tabs.checks = None;
+        self.tabs.loading = false;
+        self.tabs.error = None;
         self.details = None;
         self.thread = None;
         self.detail_target_error = None;
@@ -1241,8 +1255,8 @@ impl Inbox {
                             discussion.thread,
                             cx,
                         );
-                        if restored && this.tab != Tab::Summary {
-                            this.set_tab(this.tab, cx);
+                        if restored && this.tabs.tab != Tab::Summary {
+                            this.set_tab(this.tabs.tab, cx);
                         }
                     }
                     Err(error) => {
@@ -1332,23 +1346,23 @@ impl Inbox {
         cx.notify();
     }
     fn set_tab(&mut self, tab: Tab, cx: &mut Context<Self>) {
-        self.tab = tab;
-        self.extra_error = None;
+        self.tabs.tab = tab;
+        self.tabs.error = None;
         let Some(item) = self.item() else {
             return;
         };
         if self.detail_target_error.is_some()
             || tab == Tab::Summary
-            || (tab == Tab::Code && self.diff.is_some())
-            || (tab == Tab::Checks && self.checks.is_some())
+            || (tab == Tab::Code && self.tabs.diff.is_some())
+            || (tab == Tab::Checks && self.tabs.checks.is_some())
         {
-            self.extra_loading = false;
+            self.tabs.loading = false;
             cx.notify();
             return;
         }
-        self.extra_loading = true;
-        self.extra_request += 1;
-        let request = self.extra_request;
+        self.tabs.loading = true;
+        self.tabs.request += 1;
+        let request = self.tabs.request;
         let key = item.detail_key();
         let service = self.service.clone();
         let task = cx.background_executor().spawn(async move {
@@ -1365,16 +1379,16 @@ impl Inbox {
             let result = task.await;
             let _ = this.update(cx, |this, cx| {
                 if this.selected.as_ref() != Some(&key)
-                    || this.tab != tab
-                    || request != this.extra_request
+                    || this.tabs.tab != tab
+                    || request != this.tabs.request
                 {
                     return;
                 }
-                this.extra_loading = false;
+                this.tabs.loading = false;
                 match result {
                     Ok((diff, checks)) => {
                         if let Some((diff, files)) = diff {
-                            this.diff_view.update(cx, |view, cx| {
+                            this.tabs.diff_view.update(cx, |view, cx| {
                                 view.file_count = Some(diff.files.len());
                                 view.totals = Some((
                                     diff.additions.max(0).min(u32::MAX as i64) as u32,
@@ -1382,13 +1396,13 @@ impl Inbox {
                                 ));
                                 view.set_files(files, cx);
                             });
-                            this.diff = Some(diff);
+                            this.tabs.diff = Some(diff);
                         }
                         if let Some(checks) = checks {
-                            this.checks = Some(checks);
+                            this.tabs.checks = Some(checks);
                         }
                     }
-                    Err(error) => this.extra_error = Some(error),
+                    Err(error) => this.tabs.error = Some(error),
                 }
                 cx.notify();
             });
