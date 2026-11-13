@@ -637,7 +637,7 @@ impl Inbox {
                         .text_color(page::secondary_ink())
                         .on_click(cx.listener(move |this, _, window, cx| {
                             this.composer.reply = Some((reply_id.clone(), name.clone()));
-                            this.summary_scroll.scroll_to_end();
+                            this.summary.scroll.scroll_to_end();
                             window.focus(&this.composer.comment.focus_handle(cx), cx);
                             cx.notify();
                         })),
@@ -692,7 +692,7 @@ impl Inbox {
                                         if !this.expanded_comments.remove(&id) {
                                             this.expanded_comments.insert(id.clone());
                                         }
-                                        this.summary_scroll.remeasure();
+                                        this.summary.scroll.remeasure();
                                         cx.notify();
                                     },
                                 )),
@@ -759,8 +759,8 @@ impl Inbox {
     }
 
     pub(crate) fn rebuild_activity(&mut self) {
-        self.activity.clear();
-        self.activity_revision += 1;
+        self.summary.activity.clear();
+        self.summary.activity_revision += 1;
         let Some(thread) = &self.thread else {
             return;
         };
@@ -802,9 +802,9 @@ impl Inbox {
                     entry => groups.push(entry),
                 }
             }
-            self.activity = groups;
+            self.summary.activity = groups;
         } else {
-            self.activity = thread
+            self.summary.activity = thread
                 .comments
                 .iter()
                 .cloned()
@@ -812,7 +812,7 @@ impl Inbox {
                 .map(Activity::Comment)
                 .collect();
         }
-        self.summary_scroll.remeasure();
+        self.summary.scroll.remeasure();
     }
 
     pub(super) fn discussion_row(
@@ -822,7 +822,7 @@ impl Inbox {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> AnyElement {
-        let entry = self.activity[ix].clone();
+        let entry = self.summary.activity[ix].clone();
         let timeline = item.kind == "pr" && item.provider == "github";
         let width = self.summary_body_width(window);
         if !timeline {
@@ -830,7 +830,7 @@ impl Inbox {
                 unreachable!()
             };
             return div()
-                .pb(px(if ix + 1 == self.activity.len() {
+                .pb(px(if ix + 1 == self.summary.activity.len() {
                     0.
                 } else {
                     8.
@@ -839,7 +839,7 @@ impl Inbox {
                 .into_any_element();
         }
         let first = ix == 0;
-        let last = ix + 1 == self.activity.len();
+        let last = ix + 1 == self.summary.activity.len();
         let mut activity = Vec::new();
         match entry {
             Activity::Comment(comment) => {

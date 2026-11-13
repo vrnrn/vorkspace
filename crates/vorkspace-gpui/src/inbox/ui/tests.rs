@@ -372,8 +372,8 @@ fn connector_pages_keep_drafts_filters_scroll_and_pending_details_with_one_obser
                     .update(cx, |input, cx| input.set_text(draft.into(), cx));
                 page.composer.reply = Some((format!("{source}-thread"), source.into()));
                 page.state.filters.time = if source == "github" { "7d" } else { "30d" }.into();
-                page.summary_scroll = ListState::new(100, ListAlignment::Top, px(200.));
-                page.summary_scroll.scroll_to(gpui::ListOffset {
+                page.summary.scroll = ListState::new(100, ListAlignment::Top, px(200.));
+                page.summary.scroll.scroll_to(gpui::ListOffset {
                     item_ix: 12,
                     offset_in_item: px(4.),
                 });
@@ -457,7 +457,7 @@ fn connector_pages_keep_drafts_filters_scroll_and_pending_details_with_one_obser
                 assert_eq!(page.search.read(cx).content.as_ref(), source);
                 assert_eq!(page.composer.comment.read(cx).content.as_ref(), draft);
                 assert_eq!(page.state.filters.time, time);
-                assert_eq!(page.summary_scroll.logical_scroll_top().item_ix, 12);
+                assert_eq!(page.summary.scroll.logical_scroll_top().item_ix, 12);
                 assert_eq!(
                     page.composer.reply.as_ref().unwrap().0,
                     format!("{source}-thread")
@@ -542,8 +542,8 @@ fn item_pages_keep_pinned_identity_and_independent_view_state_across_snapshots(
                     .comment
                     .update(cx, |input, cx| input.set_text(draft.into(), cx));
                 page.composer.reply = Some((item.key(), draft.into()));
-                page.summary_scroll = ListState::new(100, ListAlignment::Top, px(200.));
-                page.summary_scroll.scroll_to(gpui::ListOffset {
+                page.summary.scroll = ListState::new(100, ListAlignment::Top, px(200.));
+                page.summary.scroll.scroll_to(gpui::ListOffset {
                     item_ix: if item.number == 41 { 12 } else { 24 },
                     offset_in_item: px(4.),
                 });
@@ -583,7 +583,7 @@ fn item_pages_keep_pinned_identity_and_independent_view_state_across_snapshots(
                 "First draft"
             );
             assert_eq!(page.composer.reply.as_ref().unwrap().0, first.key());
-            assert_eq!(page.summary_scroll.logical_scroll_top().item_ix, 12);
+            assert_eq!(page.summary.scroll.logical_scroll_top().item_ix, 12);
             page.finish_detail(
                 4,
                 second.key(),
@@ -601,7 +601,7 @@ fn item_pages_keep_pinned_identity_and_independent_view_state_across_snapshots(
                 page.composer.comment.read(cx).content.as_ref(),
                 "Second draft"
             );
-            assert_eq!(page.summary_scroll.logical_scroll_top().item_ix, 24);
+            assert_eq!(page.summary.scroll.logical_scroll_top().item_ix, 24);
         });
         section.update(cx, |page, _| {
             assert!(page.pinned_item().is_none());
@@ -1325,8 +1325,8 @@ fn long_discussion_materializes_only_viewport_comments_and_reply_focus_reaches_c
                     measured > 0 && measured < 10,
                     "only viewport/overscan cards should be laid out, got {measured}"
                 );
-                assert_eq!(inbox.summary_scroll.item_count(), 103);
-                inbox.summary_scroll.scroll_by(px(2500.));
+                assert_eq!(inbox.summary.scroll.item_count(), 103);
+                inbox.summary.scroll.scroll_by(px(2500.));
             })
         })
         .unwrap();
@@ -1334,10 +1334,10 @@ fn long_discussion_materializes_only_viewport_comments_and_reply_focus_reaches_c
     window
         .update(cx, |fixture, window, cx| {
             fixture.inbox.update(cx, |inbox, cx| {
-                assert!(inbox.summary_scroll.logical_scroll_top().item_ix > 3);
+                assert!(inbox.summary.scroll.logical_scroll_top().item_ix > 3);
                 inbox.composer.reply = Some(("thread-1".into(), "Reviewer".into()));
-                inbox.summary_scroll.remeasure_items(102..103);
-                inbox.summary_scroll.scroll_to_end();
+                inbox.summary.scroll.remeasure_items(102..103);
+                inbox.summary.scroll.scroll_to_end();
                 window.focus(&inbox.composer.comment.focus_handle(cx), cx);
             })
         })
@@ -1346,7 +1346,7 @@ fn long_discussion_materializes_only_viewport_comments_and_reply_focus_reaches_c
     window
         .update(cx, |fixture, window, cx| {
             fixture.inbox.update(cx, |inbox, cx| {
-                assert!(inbox.summary_scroll.logical_scroll_top().item_ix > 90);
+                assert!(inbox.summary.scroll.logical_scroll_top().item_ix > 90);
                 assert!(inbox.composer.comment.focus_handle(cx).is_focused(window));
                 inbox
                     .composer
@@ -1360,7 +1360,7 @@ fn long_discussion_materializes_only_viewport_comments_and_reply_focus_reaches_c
         .update(cx, |fixture, window, cx| {
             fixture.inbox.update(cx, |inbox, cx| {
                 assert!(inbox.composer.comment.focus_handle(cx).is_focused(window));
-                assert_eq!(inbox.summary_scroll.item_count(), 103);
+                assert_eq!(inbox.summary.scroll.item_count(), 103);
             })
         })
         .unwrap();
@@ -1371,7 +1371,7 @@ fn expanding_comment_invalidates_its_height_and_preserves_timeline_order(cx: &mu
     let (id, previous) = window
         .update(cx, |fixture, _, cx| {
             fixture.inbox.update(cx, |inbox, cx| {
-                let Activity::Comment(comment) = &inbox.activity[0] else {
+                let Activity::Comment(comment) = &inbox.summary.activity[0] else {
                     panic!()
                 };
                 let id = comment.id.clone();
@@ -1383,7 +1383,7 @@ fn expanding_comment_invalidates_its_height_and_preserves_timeline_order(cx: &mu
                     .1;
                 let previous = doc.read(cx).measured_rows();
                 inbox.expanded_comments.insert(id.clone());
-                inbox.summary_scroll.remeasure();
+                inbox.summary.scroll.remeasure();
                 (id, previous)
             })
         })
@@ -1399,11 +1399,11 @@ fn expanding_comment_invalidates_its_height_and_preserves_timeline_order(cx: &mu
                     .unwrap()
                     .1;
                 assert!(doc.read(cx).measured_rows() > previous);
-                let Activity::Comment(first) = &inbox.activity[0] else {
+                let Activity::Comment(first) = &inbox.summary.activity[0] else {
                     panic!()
                 };
                 assert_eq!(first.id, id);
-                assert_eq!(inbox.summary_scroll.logical_scroll_top().item_ix, 0);
+                assert_eq!(inbox.summary.scroll.logical_scroll_top().item_ix, 0);
             })
         })
         .unwrap();
@@ -1415,14 +1415,14 @@ fn arriving_comment_preserves_the_readers_item_and_offset(cx: &mut TestAppContex
         .update(cx, |fixture, _, cx| {
             fixture
                 .inbox
-                .update(cx, |inbox, _| inbox.summary_scroll.scroll_by(px(2500.)))
+                .update(cx, |inbox, _| inbox.summary.scroll.scroll_by(px(2500.)))
         })
         .unwrap();
     draw(window, cx);
     let before = window
         .update(cx, |fixture, _, cx| {
             fixture.inbox.update(cx, |inbox, cx| {
-                let before = inbox.summary_scroll.logical_scroll_top();
+                let before = inbox.summary.scroll.logical_scroll_top();
                 let comment = model::Comment {
                     id: "new-comment".into(),
                     body: "A new reply".into(),
@@ -1443,10 +1443,10 @@ fn arriving_comment_preserves_the_readers_item_and_offset(cx: &mut TestAppContex
     window
         .update(cx, |fixture, _, cx| {
             fixture.inbox.update(cx, |inbox, _| {
-                let after = inbox.summary_scroll.logical_scroll_top();
+                let after = inbox.summary.scroll.logical_scroll_top();
                 assert_eq!(after.item_ix, before.item_ix);
                 assert!((after.offset_in_item - before.offset_in_item).abs() < px(1.));
-                assert_eq!(inbox.summary_scroll.item_count(), 104);
+                assert_eq!(inbox.summary.scroll.item_count(), 104);
             })
         })
         .unwrap();

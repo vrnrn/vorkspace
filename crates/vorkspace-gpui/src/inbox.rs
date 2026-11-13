@@ -154,6 +154,27 @@ impl CommentComposer {
     }
 }
 
+/// The Summary tab's virtualized timeline of the open item's activity.
+struct SummaryTimeline {
+    scroll: ListState,
+    width: std::rc::Rc<std::cell::Cell<Pixels>>,
+    activity: Vec<ui::Activity>,
+    activity_revision: u64,
+    rows: std::cell::RefCell<ui::SummaryRows>,
+}
+
+impl SummaryTimeline {
+    fn new() -> Self {
+        Self {
+            scroll: ListState::new(0, ListAlignment::Top, px(200.)),
+            width: Default::default(),
+            activity: vec![],
+            activity_revision: 0,
+            rows: Default::default(),
+        }
+    }
+}
+
 pub(crate) struct Inbox {
     /// The root retains the pane entities. Each pane owns its details and inputs.
     owner: Option<WeakEntity<Inbox>>,
@@ -171,12 +192,8 @@ pub(crate) struct Inbox {
     focus: FocusHandle,
     search: Entity<Input>,
     composer: CommentComposer,
-    summary_scroll: ListState,
+    summary: SummaryTimeline,
     list_scroll: ScrollHandle,
-    summary_width: std::rc::Rc<std::cell::Cell<Pixels>>,
-    activity: Vec<ui::Activity>,
-    activity_revision: u64,
-    summary_rows: std::cell::RefCell<ui::SummaryRows>,
     selected: Option<String>,
     /// A detail-only page keeps its item identity when a list refresh omits it.
     /// The last available summary is retained until a matching item arrives.
@@ -295,8 +312,9 @@ impl Inbox {
             cx.subscribe(&search, |_, _, _: &input::Changed, cx| cx.notify()),
             cx.subscribe(&comment, |this, _, _: &input::Changed, cx| {
                 this.composer.revision = this.composer.revision.wrapping_add(1);
-                let count = this.summary_scroll.item_count();
-                this.summary_scroll
+                let count = this.summary.scroll.item_count();
+                this.summary
+                    .scroll
                     .remeasure_items(count.saturating_sub(1)..count);
                 cx.notify();
             }),
@@ -312,7 +330,7 @@ impl Inbox {
                         .update(cx, |input, cx| input.set_text(request.text.clone(), cx));
                     view.update(cx, |view, cx| view.complete_comment(request, Ok(()), cx));
                     this.tab = Tab::Summary;
-                    this.summary_scroll.scroll_to_end();
+                    this.summary.scroll.scroll_to_end();
                     this.composer.focus_comment = true;
                     cx.notify();
                 }
@@ -341,12 +359,8 @@ impl Inbox {
             focus: cx.focus_handle(),
             search,
             composer: CommentComposer::new(comment),
-            summary_scroll: ListState::new(0, ListAlignment::Top, px(200.)),
+            summary: SummaryTimeline::new(),
             list_scroll: ScrollHandle::new(),
-            summary_width: Default::default(),
-            activity: vec![],
-            activity_revision: 0,
-            summary_rows: Default::default(),
             selected: None,
             pinned_item: None,
             pane_width: None,
@@ -1125,10 +1139,10 @@ impl Inbox {
         self.selected = Some(key);
         self.start.destination_explicit = false;
         self.reset_destination();
-        self.summary_scroll = ListState::new(0, ListAlignment::Top, px(200.));
-        self.activity.clear();
-        self.activity_revision += 1;
-        self.summary_rows = Default::default();
+        self.summary.scroll = ListState::new(0, ListAlignment::Top, px(200.));
+        self.summary.activity.clear();
+        self.summary.activity_revision += 1;
+        self.summary.rows = Default::default();
         self.composer.focus_comment = false;
         self.tab = Tab::Summary;
         self.diff = None;
@@ -1314,7 +1328,7 @@ impl Inbox {
             }
             Err(error) => self.thread_error = Some(error),
         }
-        self.summary_scroll.remeasure();
+        self.summary.scroll.remeasure();
         cx.notify();
     }
     fn set_tab(&mut self, tab: Tab, cx: &mut Context<Self>) {

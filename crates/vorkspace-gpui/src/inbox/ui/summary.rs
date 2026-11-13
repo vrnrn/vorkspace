@@ -5,7 +5,7 @@ use vorkspace_ui::radius;
 impl Inbox {
     pub(super) fn summary_body_width(&self, window: &Window) -> Pixels {
         let inset = self.detail_inset(window);
-        (self.summary_width.get().min(px(page::DETAIL_MAX)) - inset - inset).max(px(1.))
+        (self.summary.width.get().min(px(page::DETAIL_MAX)) - inset - inset).max(px(1.))
     }
 
     pub(super) fn summary_view(
@@ -18,19 +18,19 @@ impl Inbox {
             !thread.comments.is_empty() || !thread.commits.is_empty() || thread.truncated
         });
         let count = 2 + if discussion {
-            1 + self.activity.len()
+            1 + self.summary.activity.len()
         } else {
             0
         };
-        let mut rows = self.summary_rows.borrow_mut();
+        let mut rows = self.summary.rows.borrow_mut();
         if rows.keys.is_empty()
-            || rows.revision != self.activity_revision
+            || rows.revision != self.summary.activity_revision
             || rows.discussion != discussion
         {
             let mut keys: Vec<SharedString> = vec!["intro".into()];
             if discussion {
                 keys.push("activity".into());
-                keys.extend(self.activity.iter().map(|activity| match activity {
+                keys.extend(self.summary.activity.iter().map(|activity| match activity {
                     Activity::Comment(comment) => format!("comment:{}", comment.id).into(),
                     Activity::Commits(commits) => format!("push:{}", commits[0].oid).into(),
                 }));
@@ -50,19 +50,19 @@ impl Inbox {
                 .zip(keys[prefix..].iter().rev())
                 .take_while(|(old, new)| old == new)
                 .count();
-            self.summary_scroll.splice_focusable(
+            self.summary.scroll.splice_focusable(
                 prefix..rows.keys.len() - suffix,
                 (prefix..keys.len() - suffix)
                     .map(|ix| (ix + 1 == count).then(|| self.composer.comment.focus_handle(cx))),
             );
             *rows = SummaryRows {
-                revision: self.activity_revision,
+                revision: self.summary.activity_revision,
                 discussion,
                 keys,
             };
         }
         drop(rows);
-        let width = self.summary_width.clone();
+        let width = self.summary.width.clone();
         let entity = cx.entity();
         let item = item.clone();
         div()
@@ -82,7 +82,7 @@ impl Inbox {
                 .size_full(),
             )
             .child(
-                list(self.summary_scroll.clone(), move |ix, window, cx| {
+                list(self.summary.scroll.clone(), move |ix, window, cx| {
                     entity.update(cx, |this, cx| {
                         this.summary_row(&item, ix, count, discussion, window, cx)
                     })
@@ -218,7 +218,11 @@ impl Inbox {
                 .into_any_element()
         } else if discussion && ix == 1 {
             div()
-                .pb(px(if self.activity.is_empty() { 16. } else { 12. }))
+                .pb(px(if self.summary.activity.is_empty() {
+                    16.
+                } else {
+                    12.
+                }))
                 .children(self.discussion_heading(item, window, cx))
                 .into_any_element()
         } else {
