@@ -51,6 +51,36 @@ struct PostedComment {
     reply: Option<(String, String)>,
 }
 
+/// The connect-a-provider dialog: which provider it is open for, its inputs and progress.
+struct ConnectForm {
+    provider: Option<String>,
+    url: Entity<Input>,
+    email: Entity<Input>,
+    token: Entity<Input>,
+    connecting: bool,
+    error: Option<String>,
+}
+
+impl ConnectForm {
+    fn new(placeholder: gpui::Hsla, cx: &mut App) -> Self {
+        let url = cx.new(|cx| Input::field("Instance URL", "https://", placeholder, cx));
+        let email = cx.new(|cx| Input::field("Email", "you@example.com", placeholder, cx));
+        let token = cx.new(|cx| {
+            let mut input = Input::field("API token", "Personal access token", placeholder, cx);
+            input.set_secret();
+            input
+        });
+        Self {
+            provider: None,
+            url,
+            email,
+            token,
+            connecting: false,
+            error: None,
+        }
+    }
+}
+
 pub(crate) struct Inbox {
     /// The root retains the pane entities. Each pane owns its details and inputs.
     owner: Option<WeakEntity<Inbox>>,
@@ -110,13 +140,8 @@ pub(crate) struct Inbox {
     extra_request: u64,
     filters_open: bool,
     filter_anchor: AnchorSlot,
-    connect_provider: Option<String>,
-    connect_url: Entity<Input>,
-    connect_email: Entity<Input>,
-    connect_token: Entity<Input>,
-    connecting: bool,
+    connect: ConnectForm,
     connection_revision: u64,
-    connect_error: Option<String>,
     start_project: PathBuf,
     bots: Vec<(String, String)>,
     start_bot: Option<String>,
@@ -208,13 +233,7 @@ impl Inbox {
         let placeholder = crate::controls::page::secondary_ink();
         let search = cx.new(|cx| Input::field("Filter items", "Filter items", placeholder, cx));
         let comment = cx.new(Input::inbox_comment);
-        let connect_url = cx.new(|cx| Input::field("Instance URL", "https://", placeholder, cx));
-        let connect_email = cx.new(|cx| Input::field("Email", "you@example.com", placeholder, cx));
-        let connect_token = cx.new(|cx| {
-            let mut input = Input::field("API token", "Personal access token", placeholder, cx);
-            input.set_secret();
-            input
-        });
+        let connect = ConnectForm::new(placeholder, cx);
         let diff_view = cx.new(DiffView::new);
         let subscriptions = vec![
             cx.subscribe(&search, |_, _, _: &input::Changed, cx| cx.notify()),
@@ -304,13 +323,8 @@ impl Inbox {
             extra_request: 0,
             filters_open: false,
             filter_anchor: AnchorSlot::default(),
-            connect_provider: None,
-            connect_url,
-            connect_email,
-            connect_token,
-            connecting: false,
+            connect,
             connection_revision,
-            connect_error: None,
             start_project: cwd,
             bots: vec![],
             start_bot: None,
@@ -523,12 +537,14 @@ impl Inbox {
             self.extra_loading = false;
         }
         if self
-            .connect_provider
+            .connect
+            .provider
             .as_deref()
             .is_some_and(|key| !self.state.connectors.enabled(key))
         {
-            self.connect_provider = None;
-            self.connect_token
+            self.connect.provider = None;
+            self.connect
+                .token
                 .update(cx, |input, cx| input.set_text(String::new(), cx));
         }
         self.save(cx);
@@ -1420,10 +1436,10 @@ impl Inbox {
         }
     }
     pub(crate) fn open_connection(&mut self, provider: String, cx: &mut Context<Self>) {
-        if self.connecting || !self.state.connectors.enabled(&provider) {
+        if self.connect.connecting || !self.state.connectors.enabled(&provider) {
             return;
         }
-        self.connect_error = None;
+        self.connect.error = None;
         let status = self
             .snapshot
             .connections
@@ -1439,38 +1455,42 @@ impl Inbox {
         } else {
             String::new()
         };
-        self.connect_url
+        self.connect
+            .url
             .update(cx, |input, cx| input.set_text(url, cx));
-        self.connect_email
+        self.connect
+            .email
             .update(cx, |input, cx| input.set_text(status.email, cx));
-        self.connect_token
+        self.connect
+            .token
             .update(cx, |input, cx| input.set_text(String::new(), cx));
-        self.connect_provider = Some(provider);
+        self.connect.provider = Some(provider);
         cx.notify();
     }
     fn dismiss_connection(&mut self, cx: &mut Context<Self>) {
-        if !self.connecting && self.connect_provider.take().is_some() {
-            self.connect_token
+        if !self.connect.connecting && self.connect.provider.take().is_some() {
+            self.connect
+                .token
                 .update(cx, |input, cx| input.set_text(String::new(), cx));
             cx.notify();
         }
     }
     fn connect(&mut self, disconnect: bool, cx: &mut Context<Self>) {
-        if self.connecting {
+        if self.connect.connecting {
             return;
         }
-        let Some(provider) = self.connect_provider.clone() else {
+        let Some(provider) = self.connect.provider.clone() else {
             return;
         };
-        let url = self.connect_url.read(cx).content.to_string();
-        let email = self.connect_email.read(cx).content.to_string();
+        let url = self.connect.url.read(cx).content.to_string();
+        let email = self.connect.email.read(cx).content.to_string();
         let token = if disconnect {
             String::new()
         } else {
-            self.connect_token.read(cx).content.to_string()
+            self.connect.token.read(cx).content.to_string()
         };
         if provider != "github" && !disconnect && token.trim().is_empty() {
-            self.connect_error = Some("Enter an API token".into());
+            self.connect.error = Some("Enter an API token".into());
             cx.notify();
             return;
         }
@@ -1478,12 +1498,12 @@ impl Inbox {
             .feed
             .update(cx, |feed, cx| feed.begin_connection(&provider, cx))
         {
-            self.connect_error = Some(error);
+            self.connect.error = Some(error);
             cx.notify();
             return;
         }
-        self.connecting = true;
-        self.connect_error = None;
+        self.connect.connecting = true;
+        self.connect.error = None;
         let service = self.service.clone();
         let source = provider.clone();
         let feed = self.feed.clone();
@@ -1496,25 +1516,25 @@ impl Inbox {
                 feed.finish_connection(&provider, result.as_ref().ok().cloned(), cx);
             });
             let _ = this.update(cx, |this, cx| {
-                this.connecting = false;
+                this.connect.connecting = false;
                 if !this.state.connectors.enabled(&provider) {
-                    this.connect_token.update(cx, |input, cx| input.set_text(String::new(), cx));
+                    this.connect.token.update(cx, |input, cx| input.set_text(String::new(), cx));
                     cx.notify();
                     return;
                 }
                 match result {
                     Ok(status) => {
-                        this.connect_token.update(cx, |input, cx| input.set_text(String::new(), cx));
+                        this.connect.token.update(cx, |input, cx| input.set_text(String::new(), cx));
                         if status.connected || disconnect {
-                            this.connect_provider = None;
+                            this.connect.provider = None;
                             if status.connected {
                                 this.change_source(provider, cx);
                             }
                         } else {
-                            this.connect_error = Some("GitHub is not connected. Run “gh auth login” in a terminal, then check again.".into());
+                            this.connect.error = Some("GitHub is not connected. Run “gh auth login” in a terminal, then check again.".into());
                         }
                     }
-                    Err(error) => this.connect_error = Some(error),
+                    Err(error) => this.connect.error = Some(error),
                 }
                 cx.notify();
             });

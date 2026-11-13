@@ -192,7 +192,7 @@ impl Inbox {
     pub(super) fn connection_dialog(&self, cx: &mut Context<Self>) -> AnyElement {
         let mut background = pane_fill();
         background.a = 0.9;
-        let provider = self.connect_provider.clone().unwrap_or_default();
+        let provider = self.connect.provider.clone().unwrap_or_default();
         let connected = self
             .snapshot
             .connections
@@ -253,7 +253,7 @@ impl Inbox {
                             page::field_frame()
                                 .border_1()
                                 .border_color(page::divider())
-                                .child(self.connect_url.clone()),
+                                .child(self.connect.url.clone()),
                         )
                     })
                     .when(provider == "jira", |d| {
@@ -261,7 +261,7 @@ impl Inbox {
                             page::field_frame()
                                 .border_1()
                                 .border_color(page::divider())
-                                .child(self.connect_email.clone()),
+                                .child(self.connect.email.clone()),
                         )
                     })
                     .when(provider != "github", |d| {
@@ -269,10 +269,10 @@ impl Inbox {
                             page::field_frame()
                                 .border_1()
                                 .border_color(page::divider())
-                                .child(self.connect_token.clone()),
+                                .child(self.connect.token.clone()),
                         )
                     })
-                    .when_some(self.connect_error.clone(), |d, text| d.child(error(text)))
+                    .when_some(self.connect.error.clone(), |d, text| d.child(error(text)))
                     .child(
                         div()
                             .flex()
@@ -285,7 +285,7 @@ impl Inbox {
                                         "inbox-disconnect",
                                         "Disconnect",
                                         true,
-                                        self.connecting,
+                                        self.connect.connecting,
                                     )
                                     .child("Disconnect")
                                     .on_click(cx.listener(|this, _, _, cx| this.connect(true, cx))),
@@ -300,16 +300,20 @@ impl Inbox {
                             })
                             .child(div().flex_1())
                             .child({
-                                let label = if self.connecting {
+                                let label = if self.connect.connecting {
                                     "Connecting…"
                                 } else if provider == "github" {
                                     "Check again"
                                 } else {
                                     "Connect"
                                 };
-                                page::primary("inbox-connect-submit", label, self.connecting)
-                                    .child(label)
-                                    .on_click(cx.listener(|this, _, _, cx| this.connect(false, cx)))
+                                page::primary(
+                                    "inbox-connect-submit",
+                                    label,
+                                    self.connect.connecting,
+                                )
+                                .child(label)
+                                .on_click(cx.listener(|this, _, _, cx| this.connect(false, cx)))
                             }),
                     ),
             )

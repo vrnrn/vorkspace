@@ -997,7 +997,7 @@ fn disabling_a_source_removes_controls_unread_and_selection_and_rejects_inflight
             assert!(inbox.connection_statuses().is_empty());
             for provider in ["github", "linear", "azuredevops"] {
                 inbox.open_connection(provider.into(), cx);
-                assert!(inbox.connect_provider.is_none());
+                assert!(inbox.connect.provider.is_none());
             }
         })
         .unwrap();

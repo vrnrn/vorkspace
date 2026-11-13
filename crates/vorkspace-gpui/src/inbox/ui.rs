@@ -641,8 +641,8 @@ impl gpui::Render for Inbox {
             .flex_col()
             .on_action(
                 cx.listener(|this, _: &vorkspace_ui::actions::DismissMenu, window, cx| {
-                    if this.connect_provider.is_some() {
-                        if !this.connecting {
+                    if this.connect.provider.is_some() {
+                        if !this.connect.connecting {
                             this.dismiss_connection(cx);
                             window.focus(&this.focus, cx);
                         }
@@ -741,7 +741,7 @@ impl gpui::Render for Inbox {
             .when(self.filters_open, |d| d.child(self.filters_menu(cx)))
             .when(self.project_picker, |d| d.child(self.project_menu(cx)))
             .when(self.action_menu, |d| d.child(self.action_menu_view(cx)))
-            .when(self.connect_provider.is_some(), |d| {
+            .when(self.connect.provider.is_some(), |d| {
                 d.child(self.connection_dialog(cx))
             })
             .when(self.confirm_action.is_some(), |d| {
