@@ -30,7 +30,7 @@ impl Inbox {
         let inset = self.detail_inset(window);
         let is_pr = item.kind == "pr";
         let empty = Details::default();
-        let details = self.details.as_ref().unwrap_or(&empty);
+        let details = self.detail.details.as_ref().unwrap_or(&empty);
         let mut related_sessions = self.sessions.matching(&item).peekable();
         let assignees = item
             .assignees
@@ -43,7 +43,8 @@ impl Inbox {
             })
             .collect::<Vec<_>>();
         let base_ref = if details.base_ref_name.is_empty() {
-            self.thread
+            self.detail
+                .thread
                 .as_ref()
                 .map(|t| t.base_ref_name.as_str())
                 .unwrap_or("")
@@ -51,7 +52,8 @@ impl Inbox {
             &details.base_ref_name
         };
         let head_ref = if details.head_ref_name.is_empty() {
-            self.thread
+            self.detail
+                .thread
                 .as_ref()
                 .map(|t| t.head_ref_name.as_str())
                 .unwrap_or("")
@@ -139,9 +141,10 @@ impl Inbox {
             .flex_col()
             .child(title)
             .when_some(
-                self.detail_target_error
+                self.detail
+                    .target_error
                     .as_ref()
-                    .or(self.detail_error.as_ref())
+                    .or(self.detail.error.as_ref())
                     .cloned(),
                 |d, text| {
                     d.child(
@@ -210,11 +213,11 @@ impl Inbox {
                     page::primary(
                         "inbox-send-agent",
                         "Send to chat",
-                        self.detail_loading || self.details.is_none(),
+                        self.detail.loading || self.detail.details.is_none(),
                     )
                     .child("Send to chat")
                     .on_click(cx.listener(|this, _, _, cx| {
-                        if !this.detail_loading && this.details.is_some() {
+                        if !this.detail.loading && this.detail.details.is_some() {
                             this.start(cx);
                         }
                     })),
@@ -556,12 +559,13 @@ impl Inbox {
             page::secondary_ink()
         };
         let document = self
+            .detail
             .comments
             .iter()
             .find(|(cached, _)| cached.id == comment.id)
             .map(|(_, document)| document.clone());
         let clamped = timeline
-            && !self.expanded_comments.contains(&comment.id)
+            && !self.detail.expanded_comments.contains(&comment.id)
             && (comment.body.len() > 1200 || comment.body.lines().count() > 12);
         let expandable =
             timeline && (comment.body.len() > 1200 || comment.body.lines().count() > 12);
@@ -690,8 +694,8 @@ impl Inbox {
                                 .text_color(page::secondary_ink())
                                 .on_click(cx.listener(
                                     move |this, _, _, cx| {
-                                        if !this.expanded_comments.remove(&id) {
-                                            this.expanded_comments.insert(id.clone());
+                                        if !this.detail.expanded_comments.remove(&id) {
+                                            this.detail.expanded_comments.insert(id.clone());
                                         }
                                         this.summary.scroll.remeasure();
                                         cx.notify();
@@ -762,7 +766,7 @@ impl Inbox {
     pub(crate) fn rebuild_activity(&mut self) {
         self.summary.activity.clear();
         self.summary.activity_revision += 1;
-        let Some(thread) = &self.thread else {
+        let Some(thread) = &self.detail.thread else {
             return;
         };
         let timeline = self
@@ -1019,7 +1023,7 @@ impl Inbox {
         _window: &mut Window,
         _cx: &mut Context<Self>,
     ) -> Option<AnyElement> {
-        let thread = self.thread.as_ref()?;
+        let thread = self.detail.thread.as_ref()?;
         if thread.comments.is_empty() && thread.commits.is_empty() && !thread.truncated {
             return None;
         }
@@ -1080,7 +1084,9 @@ impl Inbox {
                             ))
                         }),
                 )
-                .when_some(self.thread_error.clone(), |d, text| d.child(error(text)))
+                .when_some(self.detail.thread_error.clone(), |d, text| {
+                    d.child(error(text))
+                })
                 .into_any_element(),
         )
     }

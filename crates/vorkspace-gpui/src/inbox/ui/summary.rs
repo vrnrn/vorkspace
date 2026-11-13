@@ -14,7 +14,7 @@ impl Inbox {
         _: &mut Window,
         cx: &mut Context<Self>,
     ) -> AnyElement {
-        let discussion = self.thread.as_ref().is_some_and(|thread| {
+        let discussion = self.detail.thread.as_ref().is_some_and(|thread| {
             !thread.comments.is_empty() || !thread.commits.is_empty() || thread.truncated
         });
         let count = 2 + if discussion {
@@ -102,7 +102,7 @@ impl Inbox {
         cx: &mut Context<Self>,
     ) -> AnyElement {
         let can_post = !self.composer.posting
-            && self.detail_target_error.is_none()
+            && self.detail.target_error.is_none()
             && !self.composer.comment.read(cx).content.trim().is_empty();
         let body = if ix == 0 {
             div()
@@ -119,16 +119,17 @@ impl Inbox {
                             .children(item.labels.iter().map(|label| label_badge(label, false))),
                     )
                 })
-                .when(self.detail_loading && self.details.is_none(), |d| {
+                .when(self.detail.loading && self.detail.details.is_none(), |d| {
                     d.child(message("Loading description…"))
                 })
                 .when(
-                    self.details
+                    self.detail
+                        .details
                         .as_ref()
                         .is_some_and(|d| d.body.trim().is_empty()),
                     |d| d.child(page::meta().child("No description")),
                 )
-                .when_some(self.document.clone(), |d, document| {
+                .when_some(self.detail.document.clone(), |d, document| {
                     d.child(
                         div()
                             .w_full()
@@ -140,8 +141,10 @@ impl Inbox {
                             )),
                     )
                 })
-                .when(self.thread.is_none(), |d| {
-                    d.when_some(self.thread_error.clone(), |d, text| d.child(error(text)))
+                .when(self.detail.thread.is_none(), |d| {
+                    d.when_some(self.detail.thread_error.clone(), |d, text| {
+                        d.child(error(text))
+                    })
                 })
                 .into_any_element()
         } else if ix + 1 == count {

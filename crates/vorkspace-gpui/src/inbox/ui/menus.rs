@@ -452,7 +452,7 @@ impl Inbox {
     }
     pub(super) fn action_confirmation(&self, cx: &mut Context<Self>) -> AnyElement {
         let action_name = self.actions.confirm_action.clone().unwrap_or_default();
-        let details = self.details.clone().unwrap_or_default();
+        let details = self.detail.details.clone().unwrap_or_default();
         let source = if details.head_ref_name.is_empty() {
             "this branch".into()
         } else {

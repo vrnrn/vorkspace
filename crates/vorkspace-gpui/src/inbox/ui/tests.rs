@@ -56,13 +56,13 @@ fn fixture(cx: &mut TestAppContext) -> WindowHandle<Fixture> {
                 let store = Arc::new(Mutex::new(vorkspace_core::store::Store::test(std::path::Path::new(":memory:")).unwrap()));
                 let mut view = Inbox::new_for_test(store, vec![], PathBuf::from("/private/tmp/inbox-regression"), cx);
                 Rc::make_mut(&mut view.snapshot).items = vec![item.clone()]; view.selected = Some(item.key());
-                view.details = Some(Details { body: "Description".into(), ..Default::default() });
+                view.detail.details = Some(Details { body: "Description".into(), ..Default::default() });
                 let comments = (0..100).map(|ix| model::Comment {
                     id: format!("comment-{ix}"), body: (0..30).map(|line| format!("### Finding {line}\n\nReview **retry handling** in `src/main.rs` before returning.\n\n")).collect(),
                     created_at: format!("2026-10-22T08:{:02}:00Z", ix % 60), ..Default::default()
                 }).collect::<Vec<_>>();
-                view.comments = comments.iter().map(|comment| (comment.clone(), cx.new(|cx| document::InboxDocument::new(comment.body.clone(), PathBuf::from("/repo"), cx)))).collect();
-                view.thread = Some(Thread { comments, ..Default::default() });
+                view.detail.comments = comments.iter().map(|comment| (comment.clone(), cx.new(|cx| document::InboxDocument::new(comment.body.clone(), PathBuf::from("/repo"), cx)))).collect();
+                view.detail.thread = Some(Thread { comments, ..Default::default() });
                 view.rebuild_activity(); view
             });
             Fixture { inbox, item }
@@ -126,7 +126,7 @@ fn connector_detail_headers_start_at_the_pane_inset_at_every_zoom(cx: &mut TestA
                 inbox.state.source = provider.into();
                 inbox.selected = Some(item.detail_key());
                 Rc::make_mut(&mut inbox.snapshot).items = vec![item];
-                inbox.details = Some(Details::default());
+                inbox.detail.details = Some(Details::default());
                 inbox.narrow_detail = true;
                 cx.notify();
             })
@@ -169,7 +169,7 @@ fn narrow_navigation_preserves_the_open_item_and_comment_draft(cx: &mut TestAppC
             let key = item.key();
             Rc::make_mut(&mut inbox.snapshot).items = vec![item];
             inbox.selected = Some(key.clone());
-            inbox.details = Some(Details::default());
+            inbox.detail.details = Some(Details::default());
             inbox.narrow_detail = true;
             inbox
                 .composer
@@ -202,7 +202,7 @@ fn narrow_navigation_preserves_the_open_item_and_comment_draft(cx: &mut TestAppC
                 inbox.composer.comment.read(cx).content.as_ref(),
                 "Unsent comment"
             );
-            assert!(inbox.details.is_some());
+            assert!(inbox.detail.details.is_some());
         })
         .unwrap();
 }
@@ -294,7 +294,7 @@ fn a_narrow_connector_tile_uses_its_width_inside_a_wide_window(cx: &mut TestAppC
                         );
                         Rc::make_mut(&mut inbox.snapshot).items = vec![item];
                         inbox.selected = Some(key.clone());
-                        inbox.details = Some(Details::default());
+                        inbox.detail.details = Some(Details::default());
                         inbox
                     });
                     TiledFixture { inbox, width }
@@ -363,8 +363,8 @@ fn connector_pages_keep_drafts_filters_scroll_and_pending_details_with_one_obser
             page.update(cx, |page, cx| {
                 assert_eq!(page.state.source, source);
                 page.selected = Some(page.first_visible_key(cx).unwrap());
-                page.detail_generation = 5;
-                page.detail_loading = true;
+                page.detail.generation = 5;
+                page.detail.loading = true;
                 page.search
                     .update(cx, |input, cx| input.set_text(source.into(), cx));
                 page.composer
@@ -389,7 +389,7 @@ fn connector_pages_keep_drafts_filters_scroll_and_pending_details_with_one_obser
                 Err("stale".into()),
                 cx,
             );
-            assert!(page.detail_loading && page.detail_error.is_none());
+            assert!(page.detail.loading && page.detail.error.is_none());
             page.finish_detail(
                 5,
                 "jira:wrong-key".into(),
@@ -397,7 +397,7 @@ fn connector_pages_keep_drafts_filters_scroll_and_pending_details_with_one_obser
                 Err("wrong provider".into()),
                 cx,
             );
-            assert!(page.detail_loading);
+            assert!(page.detail.loading);
             page.finish_detail(
                 5,
                 page.selected.clone().unwrap(),
@@ -408,10 +408,10 @@ fn connector_pages_keep_drafts_filters_scroll_and_pending_details_with_one_obser
                 Ok(Thread::default()),
                 cx,
             );
-            assert_eq!(page.details.as_ref().unwrap().body, "GitHub detail");
+            assert_eq!(page.detail.details.as_ref().unwrap().body, "GitHub detail");
         });
         jira.update(cx, |page, _| {
-            assert!(page.details.is_none() && page.detail_loading)
+            assert!(page.detail.details.is_none() && page.detail.loading)
         });
     });
     let changes = std::rc::Rc::new(std::cell::Cell::new(0));
@@ -547,8 +547,8 @@ fn item_pages_keep_pinned_identity_and_independent_view_state_across_snapshots(
                     item_ix: if item.number == 41 { 12 } else { 24 },
                     offset_in_item: px(4.),
                 });
-                page.detail_generation = 4;
-                page.detail_loading = true;
+                page.detail.generation = 4;
+                page.detail.loading = true;
                 page.finish_detail(
                     4,
                     item.key(),
@@ -577,7 +577,7 @@ fn item_pages_keep_pinned_identity_and_independent_view_state_across_snapshots(
         first_page.update(cx, |page, cx| {
             assert_eq!(page.item().unwrap().key(), first.key());
             assert_eq!(page.pane_title(), "First issue");
-            assert_eq!(page.details.as_ref().unwrap().body, "First draft");
+            assert_eq!(page.detail.details.as_ref().unwrap().body, "First draft");
             assert_eq!(
                 page.composer.comment.read(cx).content.as_ref(),
                 "First draft"
@@ -591,12 +591,12 @@ fn item_pages_keep_pinned_identity_and_independent_view_state_across_snapshots(
                 Err("wrong item".into()),
                 cx,
             );
-            assert_eq!(page.details.as_ref().unwrap().body, "First draft");
+            assert_eq!(page.detail.details.as_ref().unwrap().body, "First draft");
         });
         second_page.update(cx, |page, cx| {
             assert_eq!(page.item().unwrap().key(), second.key());
             assert_eq!(page.pane_title(), "Second issue updated");
-            assert_eq!(page.details.as_ref().unwrap().body, "Second draft");
+            assert_eq!(page.detail.details.as_ref().unwrap().body, "Second draft");
             assert_eq!(
                 page.composer.comment.read(cx).content.as_ref(),
                 "Second draft"
@@ -722,7 +722,7 @@ fn item_tab_actions_keep_ordinary_selection_and_pinned_page_has_no_list(cx: &mut
         .update(cx, |root, _, cx| {
             Rc::make_mut(&mut root.snapshot).items = vec![first.clone(), second.clone()];
             root.selected = Some(first.key());
-            root.details = Some(Details::default());
+            root.detail.details = Some(Details::default());
             let opened = opened.clone();
             let subscription = cx.subscribe(&cx.entity(), move |_, _, event: &Event, _| {
                 if let Event::OpenTab(item) = event {
@@ -970,12 +970,12 @@ fn disabling_a_source_removes_controls_unread_and_selection_and_rejects_inflight
                 );
             }
             inbox.selected = Some(items[0].key());
-            inbox.details = Some(Details::default());
+            inbox.detail.details = Some(Details::default());
             let generation = inbox.stage_fixture_poll(cx);
             inbox.set_connector_enabled("github", false, cx).unwrap();
             assert_eq!(inbox.unread_count(), 2);
             assert_eq!(inbox.state.source, "gitlab");
-            assert!(inbox.selected.is_none() && inbox.details.is_none());
+            assert!(inbox.selected.is_none() && inbox.detail.details.is_none());
             assert!(!inbox.connection_statuses().contains_key("github"));
             assert_eq!(
                 inbox
@@ -1276,7 +1276,7 @@ fn saved_bot_destination_is_preselected_and_explicit_project_choice_wins(cx: &mu
             inbox.state.source = "jira".into();
             Rc::make_mut(&mut inbox.snapshot).items = vec![item.clone()];
             inbox.selected = Some(item.detail_key());
-            inbox.details = Some(Details {
+            inbox.detail.details = Some(Details {
                 body: "Ticket description".into(),
                 ..Default::default()
             });
@@ -1317,6 +1317,7 @@ fn long_discussion_materializes_only_viewport_comments_and_reply_focus_reaches_c
         .update(cx, |fixture, _, cx| {
             fixture.inbox.update(cx, |inbox, cx| {
                 let measured = inbox
+                    .detail
                     .comments
                     .iter()
                     .filter(|(_, doc)| doc.read(cx).measured_rows() > 0)
@@ -1376,13 +1377,14 @@ fn expanding_comment_invalidates_its_height_and_preserves_timeline_order(cx: &mu
                 };
                 let id = comment.id.clone();
                 let doc = &inbox
+                    .detail
                     .comments
                     .iter()
                     .find(|(comment, _)| comment.id == id)
                     .unwrap()
                     .1;
                 let previous = doc.read(cx).measured_rows();
-                inbox.expanded_comments.insert(id.clone());
+                inbox.detail.expanded_comments.insert(id.clone());
                 inbox.summary.scroll.remeasure();
                 (id, previous)
             })
@@ -1393,6 +1395,7 @@ fn expanding_comment_invalidates_its_height_and_preserves_timeline_order(cx: &mu
         .update(cx, |fixture, _, cx| {
             fixture.inbox.update(cx, |inbox, cx| {
                 let doc = &inbox
+                    .detail
                     .comments
                     .iter()
                     .find(|(comment, _)| comment.id == id)
@@ -1432,8 +1435,8 @@ fn arriving_comment_preserves_the_readers_item_and_offset(cx: &mut TestAppContex
                 let doc = cx.new(|cx| {
                     document::InboxDocument::new(comment.body.clone(), PathBuf::from("/repo"), cx)
                 });
-                inbox.comments.push((comment.clone(), doc));
-                inbox.thread.as_mut().unwrap().comments.push(comment);
+                inbox.detail.comments.push((comment.clone(), doc));
+                inbox.detail.thread.as_mut().unwrap().comments.push(comment);
                 inbox.rebuild_activity();
                 before
             })

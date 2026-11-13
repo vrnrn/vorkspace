@@ -200,6 +200,21 @@ impl DetailTabs {
     }
 }
 
+/// The open item's details and discussion, the load that fetches them and its errors.
+#[derive(Default)]
+struct ItemDetail {
+    details: Option<Details>,
+    thread: Option<Thread>,
+    document: Option<Entity<document::InboxDocument>>,
+    comments: Vec<(model::Comment, Entity<document::InboxDocument>)>,
+    loading: bool,
+    target_error: Option<String>,
+    error: Option<String>,
+    thread_error: Option<String>,
+    expanded_comments: std::collections::HashSet<String>,
+    generation: u64,
+}
+
 pub(crate) struct Inbox {
     /// The root retains the pane entities. Each pane owns its details and inputs.
     owner: Option<WeakEntity<Inbox>>,
@@ -227,19 +242,10 @@ pub(crate) struct Inbox {
     pane_width: Option<f32>,
     release_pending: bool,
     narrow_detail: bool,
-    details: Option<Details>,
-    thread: Option<Thread>,
-    document: Option<Entity<document::InboxDocument>>,
-    comments: Vec<(model::Comment, Entity<document::InboxDocument>)>,
+    detail: ItemDetail,
     tabs: DetailTabs,
     loading: bool,
-    detail_loading: bool,
     error: Option<String>,
-    detail_target_error: Option<String>,
-    detail_error: Option<String>,
-    thread_error: Option<String>,
-    expanded_comments: std::collections::HashSet<String>,
-    detail_generation: u64,
     filters_open: bool,
     filter_anchor: AnchorSlot,
     connect: ConnectForm,
@@ -385,19 +391,10 @@ impl Inbox {
             pane_width: None,
             release_pending: false,
             narrow_detail: false,
-            details: None,
-            thread: None,
-            document: None,
-            comments: vec![],
+            detail: ItemDetail::default(),
             tabs: DetailTabs::new(diff_view),
             loading,
-            detail_loading: false,
             error: None,
-            detail_target_error: None,
-            detail_error: None,
-            thread_error: None,
-            expanded_comments: Default::default(),
-            detail_generation: 0,
             filters_open: false,
             filter_anchor: AnchorSlot::default(),
             connect,
@@ -455,10 +452,10 @@ impl Inbox {
                 self.state.seen.mark(&item);
                 self.save(cx);
                 if self.pinned_item.is_some()
-                    && (self.details.is_none() || self.detail_target_error.is_some())
-                    && !self.detail_loading
+                    && (self.detail.details.is_none() || self.detail.target_error.is_some())
+                    && !self.detail.loading
                 {
-                    self.load_detail(self.details.is_none(), cx);
+                    self.load_detail(self.detail.details.is_none(), cx);
                 }
             } else if self.pinned_item.is_none()
                 && self.selected.is_none()
@@ -593,15 +590,15 @@ impl Inbox {
         if self.item().is_none() {
             self.selected = None;
             self.narrow_detail = false;
-            self.details = None;
-            self.thread = None;
-            self.document = None;
-            self.comments.clear();
+            self.detail.details = None;
+            self.detail.thread = None;
+            self.detail.document = None;
+            self.detail.comments.clear();
             self.tabs.diff = None;
             self.tabs.checks = None;
-            self.detail_generation += 1;
+            self.detail.generation += 1;
             self.tabs.request += 1;
-            self.detail_loading = false;
+            self.detail.loading = false;
             self.tabs.loading = false;
         }
         if self
@@ -668,9 +665,9 @@ impl Inbox {
             {
                 self.selected = None;
                 self.narrow_detail = false;
-                self.details = None;
-                self.document = None;
-                self.comments.clear();
+                self.detail.details = None;
+                self.detail.document = None;
+                self.detail.comments.clear();
             }
             if self.active
                 && let Some(item) = self.item()
@@ -696,7 +693,7 @@ impl Inbox {
             }
             page.update(cx, |page, cx| {
                 if page.selected.is_none()
-                    || page.detail_loading
+                    || page.detail.loading
                     || page.composer.posting
                     || page.actions.acting
                 {
@@ -1166,15 +1163,15 @@ impl Inbox {
         self.tabs.checks = None;
         self.tabs.loading = false;
         self.tabs.error = None;
-        self.details = None;
-        self.thread = None;
-        self.detail_target_error = None;
-        self.document = None;
-        self.comments.clear();
+        self.detail.details = None;
+        self.detail.thread = None;
+        self.detail.target_error = None;
+        self.detail.document = None;
+        self.detail.comments.clear();
         self.composer.reply = None;
         self.composer.post_error = None;
-        self.thread_error = None;
-        self.expanded_comments.clear();
+        self.detail.thread_error = None;
+        self.detail.expanded_comments.clear();
         self.actions.merge_action = "merge".into();
         self.actions.confirm_action = None;
         self.actions.error = None;
@@ -1210,9 +1207,9 @@ impl Inbox {
         self.state.source = source;
         self.selected = None;
         self.narrow_detail = false;
-        self.details = None;
-        self.document = None;
-        self.comments.clear();
+        self.detail.details = None;
+        self.detail.document = None;
+        self.detail.comments.clear();
         self.search
             .update(cx, |input, cx| input.set_text(String::new(), cx));
         if let Some(key) = self.first_visible_key(cx) {
@@ -1225,14 +1222,14 @@ impl Inbox {
         let Some(item) = self.item() else {
             return;
         };
-        self.detail_generation += 1;
-        let generation = self.detail_generation;
-        self.detail_loading = true;
-        self.detail_error = None;
-        self.thread_error = None;
+        self.detail.generation += 1;
+        let generation = self.detail.generation;
+        self.detail.loading = true;
+        self.detail.error = None;
+        self.detail.thread_error = None;
         if clear {
-            self.document = None;
-            self.comments.clear();
+            self.detail.document = None;
+            self.detail.comments.clear();
         }
         let key = item.detail_key();
         let service = self.service.clone();
@@ -1242,12 +1239,12 @@ impl Inbox {
         cx.spawn(async move |this, cx| {
             let result = task.await;
             let _ = this.update(cx, |this, cx| {
-                if this.detail_generation != generation || this.selected.as_ref() != Some(&key) {
+                if this.detail.generation != generation || this.selected.as_ref() != Some(&key) {
                     return;
                 }
                 match result {
                     Ok(discussion) => {
-                        let restored = this.detail_target_error.take().is_some();
+                        let restored = this.detail.target_error.take().is_some();
                         this.finish_detail(
                             generation,
                             key,
@@ -1260,11 +1257,11 @@ impl Inbox {
                         }
                     }
                     Err(error) => {
-                        this.detail_loading = false;
+                        this.detail.loading = false;
                         if this.composer.post_error.as_ref() == Some(&error) {
                             this.composer.post_error = None;
                         }
-                        this.detail_target_error = Some(error);
+                        this.detail.target_error = Some(error);
                         cx.notify();
                     }
                 }
@@ -1280,30 +1277,32 @@ impl Inbox {
         thread: Result<Thread, String>,
         cx: &mut Context<Self>,
     ) {
-        if self.detail_generation != generation || self.selected.as_ref() != Some(&key) {
+        if self.detail.generation != generation || self.selected.as_ref() != Some(&key) {
             return;
         }
-        self.detail_loading = false;
+        self.detail.loading = false;
         match details {
             Ok(details) => {
                 if self
+                    .detail
                     .details
                     .as_ref()
                     .is_none_or(|old| old.body != details.body)
                 {
-                    self.document = Some(cx.new(|cx| {
+                    self.detail.document = Some(cx.new(|cx| {
                         document::InboxDocument::new(details.body.clone(), self.document_cwd(), cx)
                     }));
                 }
-                self.details = Some(details);
+                self.detail.details = Some(details);
             }
-            Err(error) => self.detail_error = Some(error),
+            Err(error) => self.detail.error = Some(error),
         }
         match thread {
             Ok(thread) => {
                 let mut rows = vec![];
                 for comment in &thread.comments {
                     let document = self
+                        .detail
                         .comments
                         .iter()
                         .find(|(old, _)| old.id == comment.id && old.body == comment.body)
@@ -1320,6 +1319,7 @@ impl Inbox {
                     rows.push((comment.clone(), document));
                     for reply in &comment.replies {
                         let document = self
+                            .detail
                             .comments
                             .iter()
                             .find(|(old, _)| old.id == reply.id && old.body == reply.body)
@@ -1336,11 +1336,11 @@ impl Inbox {
                         rows.push((reply.clone(), document));
                     }
                 }
-                self.comments = rows;
-                self.thread = Some(thread);
+                self.detail.comments = rows;
+                self.detail.thread = Some(thread);
                 self.rebuild_activity();
             }
-            Err(error) => self.thread_error = Some(error),
+            Err(error) => self.detail.thread_error = Some(error),
         }
         self.summary.scroll.remeasure();
         cx.notify();
@@ -1351,7 +1351,7 @@ impl Inbox {
         let Some(item) = self.item() else {
             return;
         };
-        if self.detail_target_error.is_some()
+        if self.detail.target_error.is_some()
             || tab == Tab::Summary
             || (tab == Tab::Code && self.tabs.diff.is_some())
             || (tab == Tab::Checks && self.tabs.checks.is_some())
@@ -1416,7 +1416,7 @@ impl Inbox {
     }
 
     fn post_comment(&mut self, cx: &mut Context<Self>) {
-        if self.composer.posting || self.detail_target_error.is_some() {
+        if self.composer.posting || self.detail.target_error.is_some() {
             return;
         }
         let Some(item) = self.item() else {
@@ -1478,7 +1478,7 @@ impl Inbox {
                 }
                 self.refresh(cx);
             }
-            Err(error) if selected && self.detail_target_error.as_ref() != Some(&error) => {
+            Err(error) if selected && self.detail.target_error.as_ref() != Some(&error) => {
                 self.composer.post_error = Some(error)
             }
             Err(_) => {}
@@ -1497,8 +1497,14 @@ impl Inbox {
             if self.start.bot.is_none() {
                 item.project_path = self.start.project.to_string_lossy().into_owned();
             }
-            let body = self.details.as_ref().map(|d| d.body.as_str()).unwrap_or("");
+            let body = self
+                .detail
+                .details
+                .as_ref()
+                .map(|d| d.body.as_str())
+                .unwrap_or("");
             let discussion = self
+                .detail
                 .comments
                 .iter()
                 .map(|(c, _)| format!("{}: {}", c.author, c.body))

@@ -114,7 +114,7 @@ fn fixture(provider: &str, narrow_detail: bool, cx: &mut Context<Inbox>) -> Inbo
     inbox.selected = Some(key.clone());
     inbox.narrow_detail = narrow_detail;
     inbox.finish_detail(
-        inbox.detail_generation,
+        inbox.detail.generation,
         key,
         Ok(Details {
             author: "Taylor Chen".into(),
