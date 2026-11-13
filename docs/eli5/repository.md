@@ -20,6 +20,6 @@ Renaming a chat or editing a draft updates its entry in the list. The app checks
 
 Two windows looking at the same working folder share one check for file changes. Each window can still choose a different folder or worktree. A file change refreshes all the windows looking at that folder.
 
-The launch code picks the data folder and reads saved state before the first window opens. Quit and restart use the same shutdown code and give pending Bot saves time to finish.
+The launch code picks the data folder and reads saved state before the first window opens. Quit and restart use the same shutdown code and give pending Bot saves and reminder changes time to finish.
 
 Tests sit near the code they check. `docs` explains the app, and `docs/eli5` explains the same topics in simpler language. Temporary build output, personal data, and work logs are kept separate from the maintained source.

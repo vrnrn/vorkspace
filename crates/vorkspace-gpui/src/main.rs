@@ -111,7 +111,8 @@ fn request_exit(exit: Exit, cx: &mut App) {
 async fn finish_exit(exit: Exit, cx: &mut gpui::AsyncApp) {
     loop {
         let waiting = cx.update(|cx| {
-            let barriers = shell::bot_write_barriers(cx);
+            let mut barriers = shell::bot_write_barriers(cx);
+            barriers.extend(shell::reminder_write_barriers(cx));
             if barriers.is_empty() {
                 if matches!(exit, Exit::Restart)
                     && let Err(error) = vorkspace_macos::restart::relaunch_self()

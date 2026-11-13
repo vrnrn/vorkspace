@@ -854,3 +854,71 @@ fn shared_vorkspace_changes_reconcile_other_windows_project_and_dialog(cx: &mut 
     })
     .unwrap();
 }
+
+#[gpui::test]
+fn quitting_waits_for_an_accepted_reminder_edit(cx: &mut TestAppContext) {
+    quit_with_reminder_edit(cx, false);
+}
+
+#[gpui::test]
+fn a_failed_reminder_save_does_not_hold_quit(cx: &mut TestAppContext) {
+    quit_with_reminder_edit(cx, true);
+}
+
+fn quit_with_reminder_edit(cx: &mut TestAppContext, fail: bool) {
+    use std::future::Future as _;
+    let (a, _, id, dir) = two_windows(cx);
+    if fail {
+        rusqlite::Connection::open(dir.path().join("native.sqlite"))
+            .unwrap()
+            .execute_batch(
+                "CREATE TRIGGER reject_reminder BEFORE INSERT ON session_reminders \
+                 BEGIN SELECT RAISE(ABORT,'reminder rejected'); END;",
+            )
+            .unwrap();
+    }
+    let due_at = vorkspace_core::time::now_ms() + 3_600_000;
+    let store = a
+        .update(cx, |shell, _, cx| {
+            shell.edit_reminder(
+                ReminderEdit::Schedule {
+                    sessions: vec![id],
+                    due_at,
+                },
+                cx,
+            );
+            assert_eq!(shell.reminders(cx).len(), 1);
+            shell.store.clone()
+        })
+        .unwrap();
+    let durable = || locked(&store).unwrap().reminders().unwrap();
+    let mut app = cx.to_async();
+    let mut exit = Box::pin(crate::finish_exit(crate::Exit::Quit, &mut app));
+    let mut poll = || {
+        exit.as_mut()
+            .poll(&mut std::task::Context::from_waker(std::task::Waker::noop()))
+            .is_ready()
+    };
+    // Nothing has run since the edit was accepted, so quitting now must wait.
+    assert!(
+        !poll() || !durable().is_empty(),
+        "quit before the edit was saved"
+    );
+    cx.run_until_parked();
+    assert!(poll());
+    if fail {
+        // The edit is dropped with its error shown; it is not retried.
+        assert!(durable().is_empty());
+        a.update(cx, |shell, _, cx| {
+            assert!(
+                shell
+                    .reminder_error(cx)
+                    .is_some_and(|e| e.contains("rejected"))
+            );
+            assert!(shell.reminders(cx).is_empty());
+        })
+        .unwrap();
+    } else {
+        assert_eq!(durable()[0].session_id, id);
+    }
+}

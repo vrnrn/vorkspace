@@ -87,6 +87,8 @@ pub(super) struct ReminderSchedule {
     deadline: Option<gpui::Task<()>>,
     discovery: Option<gpui::Task<()>>,
     error: Option<String>,
+    /// Quit barriers; dropped once every accepted edit has been attempted.
+    drained: Vec<async_channel::Sender<()>>,
 }
 
 impl ReminderSchedule {
@@ -199,6 +201,16 @@ impl AppCore {
         self.refresh_reminders(cx);
     }
 
+    /// Quit waits for accepted edits, including failed ones, to be attempted.
+    pub(super) fn reminder_write_barrier(&mut self) -> Option<async_channel::Receiver<()>> {
+        if self.reminders.queue.is_empty() {
+            return None;
+        }
+        let (send, receive) = async_channel::bounded(1);
+        self.reminders.drained.push(send);
+        Some(receive)
+    }
+
     pub(in crate::shell) fn retry_reminders(&mut self, cx: &mut Context<Self>) {
         if self.reminders.error.take().is_some() {
             cx.emit(RemindersChanged { fired: Vec::new() });
@@ -278,6 +290,9 @@ impl AppCore {
                     cx.emit(RemindersChanged { fired });
                 }
                 let refresh_again = std::mem::take(&mut core.reminders.refresh_after_work);
+                if core.reminders.queue.is_empty() {
+                    core.reminders.drained.clear();
+                }
                 if !core.reminders.queue.is_empty() || refresh_again {
                     core.refresh_reminders(cx);
                 } else {

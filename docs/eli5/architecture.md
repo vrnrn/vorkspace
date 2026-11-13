@@ -12,7 +12,7 @@ The desktop app window is drawn by GPUI. Rust keeps track of conversations, file
 
 The app reads the saved workspace and Bot list once as it opens. Windows share the same conversation list, including names, draft markers, and working folders. Each window keeps its own tabs and selection. If a conversation is already open in another window, the app takes you to that window.
 
-All open windows share the same reminders and linked GitHub updates. Dismissing an update in one window clears it everywhere. Opening or snoozing an old reminder leaves any newer reminder you scheduled in place.
+All open windows share the same reminders and linked GitHub updates. Dismissing an update in one window clears it everywhere. Opening or snoozing an old reminder leaves any newer reminder you scheduled in place. Quitting waits for reminder changes you just made to save.
 
 Stopping an orchestration also stops its prepared workers from opening new conversations. Workers that already started keep the conversation and work they saved.
 

@@ -20,7 +20,7 @@ Startup prepares the saved window layouts, workspace definitions, and Bot roster
 
 AppCore merges shared preference edits against the settings each editor saw. It publishes the result once and applies the affected app-wide configuration, including menu, shortcut and helper settings. Picker choices enter through the same owner and settings writer. Each window applies its own interface scale and updates its open views.
 
-AppCore shares one reminder schedule and one linked GitHub feed across workspace windows. Reminder writes publish in order and target the saved occurrence by session and due time. A single deadline handles known reminders, with periodic reconciliation for changes written outside the app. macOS authorization and click callbacks wake their consumers directly. Each window owns the placement and focus of its notification controls.
+AppCore shares one reminder schedule and one linked GitHub feed across workspace windows. Reminder writes publish in order and target the saved occurrence by session and due time. Quit, including closing the last window, waits until every accepted reminder edit has been attempted; a failed save shows its error and does not hold quit. A single deadline handles known reminders, with periodic reconciliation for changes written outside the app. macOS authorization and click callbacks wake their consumers directly. Each window owns the placement and focus of its notification controls.
 
 Delegated sessions inherit explicit execution settings from their source. Orchestration workers stay private during preparation. The originating run must still own a starting assignment before the app publishes its conversation. A stopped or superseded run discards its private preparation.
 

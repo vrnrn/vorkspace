@@ -37,7 +37,7 @@ Turn updates carry an explicit outcome for completion, cancellation, or failure.
 
 In GPUI, `conversation` connects the session runtime to input and transcript views. `shell` owns window navigation and workspace surfaces, with its topics in `shell/`. `git_tools/` holds source control surfaces, `file_tools/` the explorer and editor pane, and `composer/` prompt entry. `terminal`, `settings`, and `bots` contain their native views. Rendering consumes core state; it does not create a second persistence authority.
 
-`launch` resolves the invocation, selects the data source, and prepares persisted state before GPUI creates its first window. The entry point owns the shared quit and restart sequence, including the Bot write barrier.
+`launch` resolves the invocation, selects the data source, and prepares persisted state before GPUI creates its first window. The entry point owns the shared quit and restart sequence, including the Bot and reminder write barriers.
 
 `shell/app_core/` owns shared window layouts, session leases, scheduled work and settings publication. The settings writer coalesces immutable window snapshots, encodes the multi-window setting and its focused-window compatibility projection on a worker, and commits the pair together. A synchronous durability barrier uses the same writer when a window or project transition requires the layout to be saved first. `notes/` separates editing and revision-checked saves from library and document rendering.
 

@@ -148,6 +148,17 @@ pub(crate) fn bot_write_barriers(cx: &mut App) -> Vec<async_channel::Receiver<()
         .collect()
 }
 
+pub(crate) fn reminder_write_barriers(cx: &mut App) -> Vec<async_channel::Receiver<()>> {
+    let cores = cx
+        .try_global::<Installed>()
+        .map(|installed| installed.0.values().cloned().collect::<Vec<_>>())
+        .unwrap_or_default();
+    cores
+        .into_iter()
+        .filter_map(|core| core.update(cx, |core, _| core.reminder_write_barrier()))
+        .collect()
+}
+
 fn store_key(store: &Database) -> usize {
     Arc::as_ptr(store) as *const () as usize
 }
