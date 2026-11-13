@@ -387,7 +387,7 @@ impl Btw {
             draft: String::new(),
             status: "draft".into(),
             error: None,
-            desktop: None,
+            original: None,
         });
         self.select(&id, cx);
     }
@@ -1349,7 +1349,7 @@ mod tests {
                         draft: "Unsent side draft".into(),
                         status: "error".into(),
                         error: Some("Saved failure".into()),
-                        desktop: None,
+                        original: None,
                     }];
                     view.active = Some("saved-side".into());
                     view.input.update(cx, |input, cx| {
@@ -1419,7 +1419,7 @@ mod tests {
             draft: String::new(),
             status: "draft".into(),
             error: None,
-            desktop: None,
+            original: None,
         };
         let prompt = Btw::prompt(&thread);
         assert!(prompt.contains("reference context only"));

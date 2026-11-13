@@ -41,7 +41,7 @@ mod tests {
     use std::path::Path;
 
     #[test]
-    fn desktop_preview_never_decodes_blocks_or_model_controls() {
+    fn session_preview_never_decodes_blocks_or_model_controls() {
         let store = Store::test(Path::new(":memory:")).unwrap();
         let session = store.create("codex", "/project").unwrap();
         let original = store.persisted_session_id(session.id).unwrap();

@@ -20,7 +20,7 @@ fn tool(block: &Value) -> ToolCall {
         .unwrap_or(meta);
     let presentation = presentation_metadata(presentation);
     let mut call = tool_fields(block);
-    call.panel = tasks::from_desktop(block);
+    call.panel = tasks::from_block(block);
     call.display = presentation.is_object().then_some(presentation);
     call
 }
@@ -59,7 +59,7 @@ fn tool_fields(block: &Value) -> ToolCall {
             }
             input.to_string()
         });
-    let output = tasks::desktop_detail(meta);
+    let output = tasks::block_detail(meta);
     ToolCall {
         id: block["taskList"]["nativeCallId"]
             .as_str()
@@ -148,7 +148,7 @@ fn project_content(block: &Value) -> Result<Vec<Row>, String> {
         };
         t.begin("interjection");
         t.append(&super::encode(&note)?);
-    } else if role == "tool" || (role == "tasks" && tasks::from_desktop(block).is_some()) {
+    } else if role == "tool" || (role == "tasks" && tasks::from_block(block).is_some()) {
         let mut call = tool(block);
         if role == "tasks" {
             call.name = "update_plan".into();
@@ -409,7 +409,7 @@ fn update(block: &mut Value, new: bool, rows: &[&Row]) -> Result<(), String> {
 /// Keep source order and metadata. The first stored occurrence of an ID owns
 /// updates to it, including in older data that contains duplicate step IDs.
 fn merge_agent(agent: &mut Value, run: &tasks::AgentRun) {
-    let Value::Object(mut fields) = tasks::desktop_agent(run) else {
+    let Value::Object(mut fields) = tasks::agent_block(run) else {
         unreachable!("a projected delegated run is an object");
     };
     let Some(Value::Array(incoming)) = fields.remove("steps") else {
@@ -586,7 +586,7 @@ mod notice_tests {
     }
 
     #[test]
-    fn errors_use_desktop_notices_and_retain_their_identity_after_reload() {
+    fn errors_use_notice_blocks_and_retain_their_identity_after_reload() {
         let source = json!({"id":"failure","role":"system","notice":"error","text":"Stopped","sentAt":123,"future":{"keep":true}});
         let mut rows = project(std::slice::from_ref(&source)).unwrap();
         assert_eq!(rows[0].role, "error");
@@ -675,7 +675,7 @@ mod panel_tests {
         assert_eq!(cleared[0]["taskList"]["items"], json!([]));
     }
     #[test]
-    fn child_steps_and_raw_native_input_roundtrip_without_erasing_desktop_metadata() {
+    fn child_steps_and_raw_native_input_roundtrip_without_erasing_stored_metadata() {
         let source = json!({"id":"block","role":"tool","text":"Review","tool":{"callId":"actual-call","kind":"agent","title":"Review","status":"in_progress","future":true},"agentRun":{"name":"Reviewer","steps":[{"id":"old-step","kind":"tool","text":"Read","preview":{"path":"keep.rs"},"future":9}],"unknownAgent":true}});
         let mut call = tool(&source);
         call.name = "Agent".into();
@@ -712,7 +712,7 @@ mod panel_tests {
 mod card_tests {
     use super::*;
     #[test]
-    fn rich_desktop_cards_project_without_rewriting_source_when_later_reply_changes() {
+    fn rich_saved_cards_project_without_rewriting_source_when_later_reply_changes() {
         let source = vec![
             json!({"id":"prompt","role":"user","text":"Write a report","future":"keep","noteCard":{"id":"note","slug":"read-me","title":"Reference","sourceCwd":"/repo","future":true},"artifactCards":[{"id":"report","kind":"document","title":"Report","summary":"Summary","future":7}],"botSpawnedSessions":[{"sessionId":"app-child","cwd":"/repo","title":"Review","harness":"codex","model":"gpt-6","future":8}]}),
             json!({"id":"reply","role":"assistant","text":"Written","future":{"keep":true}}),
@@ -789,7 +789,7 @@ mod card_tests {
 mod tool_presentation_tests {
     use super::*;
     #[test]
-    fn restored_desktop_read_preserves_path_line_and_rich_source() {
+    fn restored_read_preserves_path_line_and_rich_source() {
         let source = json!({"id":"read","role":"tool","text":"Read","tool":{"kind":"read","title":"Read","status":"completed","rawInput":{"file_path":"src/nested.rs","offset":18},"preview":{"kind":"read","path":"src/nested.rs","fileName":"nested.rs","startLine":18,"lines":[{"number":18,"text":"fn main() {}"}]},"future":true}});
         let projected = project(std::slice::from_ref(&source)).unwrap();
         let call: ToolCall = serde_json::from_str(&projected[0].text).unwrap();

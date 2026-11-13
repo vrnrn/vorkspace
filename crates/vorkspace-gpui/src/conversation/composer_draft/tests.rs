@@ -136,7 +136,7 @@ fn restoring_direct_submission_keeps_its_identity_until_acknowledged(cx: &mut Te
     );
 }
 #[gpui::test]
-fn desktop_draft_restores_text_selection_files_and_mcp_then_saves_to_same_row(
+fn saved_draft_restores_text_selection_files_and_mcp_then_saves_to_same_row(
     cx: &mut TestAppContext,
 ) {
     let directory = tempfile::tempdir().unwrap();

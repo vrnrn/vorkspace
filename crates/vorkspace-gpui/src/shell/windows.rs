@@ -24,12 +24,12 @@ pub(crate) struct WindowLayouts {
 
 impl WindowLayouts {
     pub(crate) fn load(store: &vorkspace_core::store::Store) -> Self {
-        Self::load_with_legacy(store, store.ui_state().ok().flatten().as_deref())
+        Self::load_with_single_window(store, store.ui_state().ok().flatten().as_deref())
     }
 
-    pub(crate) fn load_with_legacy(
+    pub(crate) fn load_with_single_window(
         store: &vorkspace_core::store::Store,
-        legacy: Option<&str>,
+        single_window: Option<&str>,
     ) -> Self {
         let mut layouts: Self = store
             .setting(WINDOW_STATE_KEY)
@@ -48,15 +48,15 @@ impl WindowLayouts {
             layouts.focused = layouts.entries.first().map(|entry| entry.id);
         }
         if !layouts.entries.is_empty()
-            && let Some(current) = legacy
+            && let Some(current) = single_window
         {
-            layouts.reconcile_legacy(current);
+            layouts.reconcile_single_window(current);
         }
         layouts
     }
 
-    fn reconcile_legacy(&mut self, raw: &str) {
-        let Ok(legacy) = serde_json::from_str::<Workspace>(raw) else {
+    fn reconcile_single_window(&mut self, raw: &str) {
+        let Ok(single_window) = serde_json::from_str::<Workspace>(raw) else {
             return;
         };
         if let Some(previous) = &self.shared {
@@ -65,14 +65,14 @@ impl WindowLayouts {
                 .iter()
                 .map(|path| vorkspace_core::files::path_key(path))
                 .collect::<HashSet<_>>();
-            self.imported_projects = legacy
+            self.imported_projects = single_window
                 .projects
                 .iter()
                 .filter(|path| !known.contains(&vorkspace_core::files::path_key(path)))
                 .cloned()
                 .collect();
         }
-        self.shared = Some(Arc::new(WindowShared::from_workspace(&legacy)));
+        self.shared = Some(Arc::new(WindowShared::from_workspace(&single_window)));
     }
 
     pub(super) fn record(&mut self, id: u64, workspace: String, focused: bool) -> bool {
@@ -111,7 +111,7 @@ impl WindowLayouts {
         self.entries.len() != len
     }
 
-    pub(super) fn legacy(&self) -> Option<&str> {
+    pub(super) fn single_window(&self) -> Option<&str> {
         self.entries
             .iter()
             .find(|entry| Some(entry.id) == self.focused)
@@ -119,12 +119,12 @@ impl WindowLayouts {
     }
 
     pub(super) fn settings_values(&self) -> [(&'static str, String); 2] {
-        let mut legacy = self
-            .legacy()
+        let mut single_window = self
+            .single_window()
             .and_then(|raw| serde_json::from_str::<Workspace>(raw).ok())
             .unwrap_or_default();
         if let Some(shared) = &self.shared {
-            shared.apply(&mut legacy);
+            shared.apply(&mut single_window);
         }
         [
             (
@@ -133,7 +133,7 @@ impl WindowLayouts {
             ),
             (
                 "workspace",
-                serde_json::to_string(&legacy).expect("serialize the focused workspace"),
+                serde_json::to_string(&single_window).expect("serialize the focused workspace"),
             ),
         ]
     }
@@ -596,11 +596,11 @@ mod tests {
 }
 
 #[cfg(test)]
-mod compatibility_tests {
+mod single_window_tests {
     use super::*;
 
     #[test]
-    fn desktop_import_refreshes_shared_defaults_without_replacing_local_layout() {
+    fn single_window_setting_refreshes_shared_defaults_without_replacing_local_layout() {
         let path = std::path::Path::new(":memory:");
         let store = vorkspace_core::store::Store::test(path).unwrap();
         let mut local = Workspace {

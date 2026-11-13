@@ -6,7 +6,7 @@ use std::collections::{HashMap, HashSet};
 pub fn session_handle(value: &Value) -> Option<i64> {
     value
         .as_i64()
-        .or_else(|| value.as_str().map(crate::session::desktop_session_handle))
+        .or_else(|| value.as_str().map(crate::session::session_handle))
 }
 
 pub(crate) fn document_cards(block: &Value) -> Vec<Value> {
@@ -250,13 +250,13 @@ impl super::Bot {
             .collect();
         let launch_ids: Vec<_> = launches.iter().map(|launch| launch.session_id).collect();
         let projected_documents: HashSet<_> = self
-            .desktop_document_ids
+            .projected_document_ids
             .iter()
             .chain(&document_ids)
             .map(String::as_str)
             .collect();
         let projected_launches: HashSet<_> = self
-            .desktop_launch_ids
+            .projected_launch_ids
             .iter()
             .chain(&launch_ids)
             .copied()
@@ -268,9 +268,9 @@ impl super::Bot {
             !projected_launches.contains(&launch.session_id)
         });
         let provenance_changed =
-            self.desktop_document_ids != document_ids || self.desktop_launch_ids != launch_ids;
-        self.desktop_document_ids = document_ids;
-        self.desktop_launch_ids = launch_ids;
+            self.projected_document_ids != document_ids || self.projected_launch_ids != launch_ids;
+        self.projected_document_ids = document_ids;
+        self.projected_launch_ids = launch_ids;
         documents_changed || launches_changed || provenance_changed
     }
 }
@@ -285,7 +285,7 @@ mod tests {
         json!({"role":"tool","text":command,"tool":{"status":"completed","detail":json!({"ok":true,"result":result}).to_string()}})
     }
     #[test]
-    fn desktop_receipts_recover_launches_and_accepted_followups_without_linking_listings() {
+    fn saved_receipts_recover_launches_and_accepted_followups_without_linking_listings() {
         let start = receipt("/bin/zsh -lc 'vorkspace app sessions.start'", {
             let mut v = details("app-child");
             v["id"] = json!("app-child");
@@ -319,7 +319,7 @@ mod tests {
         assert!(block_launches(&[send])[0].is_empty());
     }
     #[test]
-    fn reconcile_work_retains_native_documents_monitoring_and_desktop_removals() {
+    fn reconcile_work_retains_native_documents_monitoring_and_projected_removals() {
         let mut bot = super::super::Bot::default();
         let document = super::super::Document {
             id: "desktop".into(),

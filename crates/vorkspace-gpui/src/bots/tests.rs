@@ -1070,9 +1070,7 @@ fn bot_errors_use_cards_without_moving_content(cx: &mut TestAppContext) {
 }
 
 #[gpui::test]
-fn saved_desktop_bot_opens_in_actual_manager_without_replacing_its_conversation(
-    cx: &mut TestAppContext,
-) {
+fn saved_bot_opens_in_actual_manager_without_replacing_its_conversation(cx: &mut TestAppContext) {
     let db = Store::test(std::path::Path::new(":memory:")).unwrap();
     let session = db.create("codex", "/saved-project").unwrap();
     let original = db.persisted_session_id(session.id).unwrap();

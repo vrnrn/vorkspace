@@ -189,7 +189,7 @@ pub(super) fn encode<T: serde::Serialize>(value: &T) -> Result<String, String> {
     HISTORY_ENCODE_BYTES.with(|count| count.set(count.get() + encoded.len()));
     Ok(encoded)
 }
-pub(crate) use crate::session::desktop_session_handle as handle;
+pub(crate) use crate::session::session_handle as handle;
 pub(super) fn has_table(conn: &Connection, table: &str) -> Result<bool, String> {
     sql(conn.query_row(
         "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type='table' AND name=?1)",

@@ -43,7 +43,7 @@ fn native_peer_pages_bound_rows_text_and_skip_private_payloads() {
 }
 
 #[test]
-fn desktop_peer_pages_read_only_the_selected_blocks_and_preserve_their_owner() {
+fn peer_pages_read_only_the_selected_blocks_and_preserve_their_owner() {
     for indexed in [false, true] {
         let store = Store::test(Path::new(":memory:")).unwrap();
         let id = store.create("codex", "/project").unwrap().id;
@@ -114,7 +114,7 @@ fn desktop_peer_pages_read_only_the_selected_blocks_and_preserve_their_owner() {
 }
 
 #[test]
-fn desktop_peer_excerpt_preserves_public_plan_and_fallback_prose_projection() {
+fn peer_excerpt_preserves_public_plan_and_fallback_prose_projection() {
     let store = Store::test(Path::new(":memory:")).unwrap();
     let id = store.create("codex", "/project").unwrap().id;
     let source = store.persisted_session_id(id).unwrap();

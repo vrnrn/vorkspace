@@ -811,7 +811,7 @@ fn bot_turns_merge_follow_ups_keep_inline_work_and_queue_above_the_work(cx: &mut
 }
 
 #[gpui::test]
-fn desktop_work_metadata_renders_once_after_the_reply_and_never_as_prose(cx: &mut TestAppContext) {
+fn bot_work_metadata_renders_once_after_the_reply_and_never_as_prose(cx: &mut TestAppContext) {
     let view = cx.new(|_| {
         let mut view = TranscriptView::new();
         view.bot_mode("cat", 0xe86b5f, "BotCat");

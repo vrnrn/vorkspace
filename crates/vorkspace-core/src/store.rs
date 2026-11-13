@@ -40,7 +40,7 @@ pub use crate::session::native_model;
 use crate::transcript::{Row, Transcript};
 pub use edit::EditSnapshot;
 use rusqlite::{params, Connection};
-pub use side_threads::DesktopSideThread;
+pub use side_threads::SavedSideThread;
 use std::path::Path;
 
 pub use crate::session::Session;

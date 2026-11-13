@@ -74,10 +74,10 @@ pub struct Bot {
     pub launches: Vec<Launch>,
     pub documents: Vec<Document>,
     /// References last projected from desktop blocks, to reconcile deletions.
-    #[serde(default)]
-    pub desktop_document_ids: Vec<String>,
-    #[serde(default)]
-    pub desktop_launch_ids: Vec<i64>,
+    #[serde(default, rename = "desktopDocumentIds")]
+    pub projected_document_ids: Vec<String>,
+    #[serde(default, rename = "desktopLaunchIds")]
+    pub projected_launch_ids: Vec<i64>,
     pub outbox: Vec<Message>,
     pub pending_reports: Vec<String>,
     pub habit_sessions: Vec<i64>,
@@ -125,8 +125,8 @@ impl Default for Bot {
             background: None,
             launches: Vec::new(),
             documents: Vec::new(),
-            desktop_document_ids: Vec::new(),
-            desktop_launch_ids: Vec::new(),
+            projected_document_ids: Vec::new(),
+            projected_launch_ids: Vec::new(),
             outbox: Vec::new(),
             pending_reports: Vec::new(),
             habit_sessions: Vec::new(),

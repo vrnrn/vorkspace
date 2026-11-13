@@ -86,8 +86,8 @@ fn codex_path_titles_match_tauri_for_both_item_formats() {
             assert_eq!(run.display_name(), expected);
             assert_eq!(run.steps.len(), 1);
             // Desktop persistence carries the same label back to native.
-            let restored = crate::tool::tasks::from_desktop(&json!({
-                "role":"tool", "agentRun":crate::tool::tasks::desktop_agent(run)
+            let restored = crate::tool::tasks::from_block(&json!({
+                "role":"tool", "agentRun":crate::tool::tasks::agent_block(run)
             }))
             .unwrap();
             assert_eq!(Some(&restored), panel.as_deref());

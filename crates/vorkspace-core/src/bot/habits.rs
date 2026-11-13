@@ -265,7 +265,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn desktop_habit_optional_timestamps_and_partial_history_remain_editable() {
+    fn saved_habit_optional_timestamps_and_partial_history_remain_editable() {
         let text = r#"[{"id":"desktop","name":"Digest","instructions":"Check the news",
             "schedule":{"scheduleKind":"daily"},"fromCard":"suggestion-1",
             "runs":[{"at":100,"outcome":"posted","report":"**News**"},

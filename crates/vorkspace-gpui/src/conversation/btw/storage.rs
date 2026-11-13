@@ -28,8 +28,8 @@ pub(super) struct Thread {
     pub(super) draft: String,
     pub(super) status: String,
     pub(super) error: Option<String>,
-    #[serde(default)]
-    pub(super) desktop: Option<serde_json::Value>,
+    #[serde(default, rename = "desktop")]
+    pub(super) original: Option<serde_json::Value>,
 }
 
 impl Thread {
@@ -152,7 +152,7 @@ fn decode(value: &str) -> Result<Saved, String> {
 }
 
 fn import(store: &Store, session: i64) -> Result<Saved, String> {
-    let imported = store.desktop_side_threads(session)?;
+    let imported = store.saved_side_threads(session)?;
     let accounts = store.provider_accounts()?;
     let root = store.data_dir().map(std::path::Path::to_path_buf);
     let threads = imported
@@ -192,7 +192,7 @@ fn import(store: &Store, session: i64) -> Result<Saved, String> {
                 }
                 .into(),
                 error: thread.error,
-                desktop: Some(thread.original),
+                original: Some(thread.original),
             }
         })
         .collect();

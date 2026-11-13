@@ -228,7 +228,7 @@ fn a_queued_version_cannot_also_dispatch_as_an_initial_turn() {
     assert_eq!(draft.payload, successor);
 }
 #[test]
-fn desktop_input_roundtrips_in_its_existing_table_without_sidecar_copy() {
+fn saved_input_roundtrips_in_its_existing_table_without_sidecar_copy() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("desktop.db");
     let store = Store::open_vorkspace(&path).unwrap();

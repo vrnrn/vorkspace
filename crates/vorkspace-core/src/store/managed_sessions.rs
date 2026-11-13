@@ -265,7 +265,7 @@ mod tests {
     }
 
     #[test]
-    fn automation_metadata_uses_the_original_desktop_session_identity() {
+    fn automation_metadata_uses_the_original_session_identity() {
         let store = Store::test(Path::new(":memory:")).unwrap();
         let session = store.create("codex", "/project").unwrap();
         assert!(store

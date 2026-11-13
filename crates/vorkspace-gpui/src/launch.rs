@@ -251,10 +251,10 @@ pub(crate) fn prepare() -> Option<Startup> {
         );
         return None;
     }
-    Some(prepare_desktop(db, &database, options).unwrap_or_else(|error| fail(&error, 1)))
+    Some(prepare_startup(db, &database, options).unwrap_or_else(|error| fail(&error, 1)))
 }
 
-fn prepare_desktop(mut db: Store, database: &Path, options: Options) -> Result<Startup, String> {
+fn prepare_startup(mut db: Store, database: &Path, options: Options) -> Result<Startup, String> {
     db.start_attachment_cache()
         .map_err(|error| format!("Cannot prepare attachment storage: {error}"))?;
     db.recover_local_submissions()
@@ -269,7 +269,7 @@ fn prepare_desktop(mut db: Store, database: &Path, options: Options) -> Result<S
         eprintln!("Cannot read workspace settings: {error}");
         None
     });
-    let layouts = WindowLayouts::load_with_legacy(&db, saved.as_deref());
+    let layouts = WindowLayouts::load_with_single_window(&db, saved.as_deref());
     let core = PreparedCore::read(&db, layouts);
     let mut sessions = db.sessions()?;
     let explicit_cwd = options.cwd.is_some();

@@ -155,7 +155,7 @@ impl AgentStep {
             })
             .unwrap_or_else(|| call.name.clone());
         let detail = if call.output.is_empty() {
-            desktop_detail(&display)
+            block_detail(&display)
         } else {
             call.output.clone()
         };
@@ -226,7 +226,7 @@ impl AgentStep {
         let mut call = ToolCall::new(&self.id, &name);
         call.input = input;
         call.output = if self.detail.is_empty() {
-            desktop_detail(&display)
+            block_detail(&display)
         } else {
             self.detail.clone()
         };
@@ -342,7 +342,7 @@ impl AgentRun {
             return None;
         }
         crate::model_cache::cached_name(provider, id)
-            .or_else(|| desktop_model_name(id).map(str::to_owned))
+            .or_else(|| known_model_name(id).map(str::to_owned))
             .or_else(|| Some(id.into()))
     }
     pub(crate) fn upsert(&mut self, mut step: AgentStep) {
@@ -407,7 +407,7 @@ fn is_false(value: &bool) -> bool {
 }
 
 // Built-in labels for known model ids; live catalogs take precedence.
-fn desktop_model_name(id: &str) -> Option<&'static str> {
+fn known_model_name(id: &str) -> Option<&'static str> {
     Some(match id {
         "claude:sonnet-5" | "claude-sonnet-5" => "Claude Sonnet 5",
         "claude:opus-5" | "claude-opus-5" => "Claude Opus 5",
@@ -495,7 +495,7 @@ fn is_agent_tool(kind: Option<&str>, title: &str) -> bool {
 }
 
 /// Recover the same output sources for parent calls and mirrored child steps.
-pub(crate) fn desktop_detail(meta: &Value) -> String {
+pub(crate) fn block_detail(meta: &Value) -> String {
     if let Some(detail) = meta["detail"].as_str().filter(|value| !value.is_empty()) {
         return detail.into();
     }
@@ -517,7 +517,7 @@ pub(crate) fn desktop_detail(meta: &Value) -> String {
         .get("nativePresentation")
         .filter(|display| display.is_object())
     {
-        let detail = desktop_detail(display);
+        let detail = block_detail(display);
         if !detail.is_empty() {
             return detail;
         }
@@ -618,7 +618,7 @@ impl ToolCall {
 }
 
 /// Adapt desktop metadata and recognize legacy delegated-tool captions.
-pub(crate) fn from_desktop(block: &Value) -> Option<Panel> {
+pub(crate) fn from_block(block: &Value) -> Option<Panel> {
     if block["role"] == "tasks" {
         return TaskList::from_value(&block["taskList"]).map(Panel::Tasks);
     }
@@ -694,7 +694,7 @@ pub(crate) fn from_desktop(block: &Value) -> Option<Panel> {
                 display[key] = value.clone();
             }
         }
-        let detail = desktop_detail(step);
+        let detail = block_detail(step);
         let detail_omitted = detail.is_empty() && step["detailOmitted"] == true;
         // Source history already contains the full payload. Do not truncate a
         // stored result while projecting it into the native transcript.
@@ -725,7 +725,7 @@ pub(crate) fn from_desktop(block: &Value) -> Option<Panel> {
     Some(Panel::Agent(run))
 }
 
-pub(crate) fn desktop_agent(run: &AgentRun) -> Value {
+pub(crate) fn agent_block(run: &AgentRun) -> Value {
     serde_json::json!({
         "name":run.name.as_deref().filter(|name| !name.trim().is_empty()).unwrap_or_else(|| if run.brief.is_empty() { "Subagent" } else { &run.brief }),
         "model":run.model, "agentType":run.agent_type, "nativeIds":run.ids, "nativeBrief":run.brief,
@@ -759,7 +759,7 @@ mod tests {
             }]}
         });
         let original = block.clone();
-        let Some(Panel::Agent(run)) = from_desktop(&block) else {
+        let Some(Panel::Agent(run)) = from_block(&block) else {
             panic!()
         };
         assert_eq!(run.display_name(), "Explore Auth subagent");
@@ -768,13 +768,13 @@ mod tests {
         assert_eq!(block, original);
 
         block["agentRun"]["name"] = json!("Correctness review");
-        let Some(Panel::Agent(run)) = from_desktop(&block) else {
+        let Some(Panel::Agent(run)) = from_block(&block) else {
             panic!()
         };
         assert_eq!(run.display_name(), "Correctness review");
         block["agentRun"]["name"] = json!("Subagent");
         block["tool"]["nativeInput"] = json!("invalid input");
-        let Some(Panel::Agent(run)) = from_desktop(&block) else {
+        let Some(Panel::Agent(run)) = from_block(&block) else {
             panic!()
         };
         assert_eq!(run.display_name(), "Subagent");

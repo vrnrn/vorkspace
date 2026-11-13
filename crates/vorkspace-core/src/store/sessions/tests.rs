@@ -552,7 +552,7 @@ fn indexed_bot_saved_and_unsaved_search_results_share_global_row_indices() {
 }
 
 #[test]
-fn desktop_sidebar_recovers_only_hidden_launches_of_listed_callers_without_history_reads() {
+fn sidebar_recovers_only_hidden_launches_of_listed_callers_without_history_reads() {
     let directory = tempfile::tempdir().unwrap();
     let path = directory.path().join("vorkspace.db");
     let store = Store::open_vorkspace(&path).unwrap();
@@ -621,7 +621,7 @@ fn desktop_sidebar_recovers_only_hidden_launches_of_listed_callers_without_histo
 }
 
 #[test]
-fn original_desktop_schema_opens_without_schema_or_history_migration() {
+fn original_session_schema_opens_without_schema_or_history_migration() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("vorkspace.db");
     let schema = include_str!("../../../tests/fixtures/legacy-schema.sql");
@@ -649,7 +649,7 @@ fn original_desktop_schema_opens_without_schema_or_history_migration() {
 }
 
 #[test]
-fn indexed_bot_history_stays_in_its_desktop_tables_with_block_ids_intact() {
+fn indexed_bot_history_stays_in_its_bot_tables_with_block_ids_intact() {
     let store = Store::test(Path::new(":memory:")).unwrap();
     let (id, source) = saved(&store, json!([]));
     store
@@ -717,7 +717,7 @@ fn indexed_bot_history_stays_in_its_desktop_tables_with_block_ids_intact() {
 }
 
 #[test]
-fn desktop_open_uses_existing_records_and_does_not_rewrite_the_database() {
+fn open_uses_existing_records_and_does_not_rewrite_the_database() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("vorkspace.db");
     let store = Store::open_vorkspace(&path).unwrap();
@@ -751,7 +751,7 @@ fn saved(store: &Store, blocks: Value) -> (i64, String) {
 }
 
 #[test]
-fn desktop_model_and_effort_decode_and_round_trip_without_rewriting_the_title() {
+fn saved_model_and_effort_decode_and_round_trip_without_rewriting_the_title() {
     let store = Store::test(Path::new(":memory:")).unwrap();
     let (id, source) = saved(&store, json!([]));
     store.conn.execute(
@@ -782,7 +782,7 @@ fn desktop_model_and_effort_decode_and_round_trip_without_rewriting_the_title() 
 }
 
 #[test]
-fn writes_are_visible_in_desktop_tables_and_preserve_rich_history() {
+fn writes_are_visible_in_session_tables_and_preserve_rich_history() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("vorkspace.db");
     let mut store = Store::open_vorkspace(&path).unwrap();
@@ -852,7 +852,7 @@ fn writes_are_visible_in_desktop_tables_and_preserve_rich_history() {
 }
 
 #[test]
-fn concurrent_desktop_changes_are_never_overwritten() {
+fn concurrent_external_changes_are_never_overwritten() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("vorkspace.db");
     let mut store = Store::open_vorkspace(&path).unwrap();
@@ -1183,7 +1183,7 @@ fn edited_draft_identity_preserves_unknown_block_and_attachment_fields_on_reopen
 }
 
 #[test]
-fn drafts_queues_and_receipts_keep_desktop_metadata_and_do_not_replay() {
+fn drafts_queues_and_receipts_keep_stored_metadata_and_do_not_replay() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("vorkspace.db");
     let mut store = Store::open_vorkspace(&path).unwrap();
@@ -1405,7 +1405,7 @@ fn history_revision_ignores_object_key_order_and_source_whitespace() {
 }
 
 #[test]
-fn equivalent_desktop_json_can_be_saved_without_losing_rich_source_fields() {
+fn equivalent_history_json_can_be_saved_without_losing_rich_source_fields() {
     let mut store = Store::test(Path::new(":memory:")).unwrap();
     let (id, original) = saved(
         &store,
@@ -1474,7 +1474,7 @@ fn existing_side_questions_import_their_exact_source_bound_without_writes() {
         .conn
         .query_row("PRAGMA schema_version", [], |row| row.get(0))
         .unwrap();
-    let imported = store.desktop_side_threads(session).unwrap();
+    let imported = store.saved_side_threads(session).unwrap();
     assert_eq!(imported.len(), 1);
     let imported = &imported[0];
     assert_eq!(imported.id, "saved-side");
@@ -1517,7 +1517,7 @@ fn existing_side_questions_import_their_exact_source_bound_without_writes() {
 }
 
 #[test]
-fn desktop_turn_receipts_restore_exact_model_timing_metrics_and_projected_offsets() {
+fn saved_turn_receipts_restore_exact_model_timing_metrics_and_projected_offsets() {
     let store = Store::test(Path::new(":memory:")).unwrap();
     let source = json!([
         {"id":"hidden","role":"system","text":"","future":true},
@@ -1734,7 +1734,7 @@ fn indexed_bot_turn_receipts_restore_and_save_in_the_original_block_table() {
 }
 
 #[test]
-fn fresh_receipt_preserves_the_matching_desktop_model_id_spelling() {
+fn fresh_receipt_preserves_the_matching_saved_model_id_spelling() {
     let mut store = Store::test(Path::new(":memory:")).unwrap();
     let (id, original) = saved(&store, json!([]));
     store

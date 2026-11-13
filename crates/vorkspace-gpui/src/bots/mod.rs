@@ -137,7 +137,7 @@ pub(crate) enum OpenWorkspacePane {
 pub(crate) struct BotDocumentSource {
     pub bot: String,
     pub document: bot::Document,
-    pub desktop: bool,
+    pub projected: bool,
 }
 pub(crate) use notifications::{NotificationChanged, NotificationFinished};
 struct RunningHabit {
@@ -334,13 +334,16 @@ impl Bots {
     pub(crate) fn document_for_pane(&self, bot: &str, id: &str) -> Option<BotDocumentSource> {
         let actor = self.roster.get(bot)?;
         let listed = actor.documents.iter().find(|document| document.id == id)?;
-        let desktop = actor.desktop_document_ids.iter().any(|source| source == id);
+        let projected = actor
+            .projected_document_ids
+            .iter()
+            .any(|source| source == id);
         Some(BotDocumentSource {
             bot: bot.into(),
             // Resolve through this Bot's roster so a document ID alone never
             // grants access to another Bot's output.
             document: listed.clone(),
-            desktop,
+            projected,
         })
     }
     pub(crate) fn move_rail_drag(&mut self, event: &gpui::MouseMoveEvent, cx: &mut Context<Self>) {

@@ -36,7 +36,7 @@ pub fn new_id() -> String {
     format!("{:032x}", rand::random::<u128>())
 }
 
-pub(crate) fn desktop_session_handle(id: &str) -> i64 {
+pub(crate) fn session_handle(id: &str) -> i64 {
     let bytes = <sha2::Sha256 as sha2::Digest>::digest(id.as_bytes());
     (i64::from_le_bytes(bytes[..8].try_into().unwrap()) & ((1_i64 << 53) - 1)).max(1)
 }

@@ -416,7 +416,7 @@ mod tests {
         );
     }
     #[test]
-    fn desktop_work_uses_saved_block_references_and_note_bodies_without_mutation() {
+    fn bot_work_uses_saved_block_references_and_note_bodies_without_mutation() {
         use serde_json::json;
         for storage in ["json", "bot", "ordinary"] {
             let mut store = Store::test(Path::new(":memory:")).unwrap();

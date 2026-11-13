@@ -1028,7 +1028,7 @@ mod notification_tests {
     }
 
     #[test]
-    fn seen_keys_match_desktop_identity_rules() {
+    fn seen_keys_match_stored_identity_rules() {
         let mut github = item(12, "github");
         github.url = "https://GitHub.com/Acme/App/pull/12/".into();
         assert_eq!(github.key(), "github:acme/app:issue:12");

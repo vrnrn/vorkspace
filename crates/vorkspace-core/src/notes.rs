@@ -52,7 +52,7 @@ impl From<Note> for NoteSummary {
 pub fn numeric_id(id: &str) -> u64 {
     id.strip_prefix("gpui-note-")
         .and_then(|id| id.parse().ok())
-        .unwrap_or_else(|| crate::session::desktop_session_handle(id) as u64)
+        .unwrap_or_else(|| crate::session::session_handle(id) as u64)
 }
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]

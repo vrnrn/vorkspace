@@ -82,7 +82,7 @@ fn image_import_materializes_only_new_drafts_and_rejects_failed_or_deleted_notes
 }
 
 #[test]
-fn desktop_note_crud_keeps_source_tags_and_project_moves() {
+fn note_crud_keeps_source_tags_and_project_moves() {
     let store = store();
     let session = store.create("codex", "/project").unwrap();
     let mut request = input("saved-note", "  A title  ", "# Heading\r\n\r\nBody\rtext");
@@ -192,7 +192,7 @@ fn note_mentions_expand_in_reference_order_once_and_ignore_missing_slugs() {
 }
 
 #[test]
-fn desktop_note_reads_skip_unrelated_bodies_and_keep_legacy_columns_read_only() {
+fn note_reads_skip_unrelated_bodies_and_keep_legacy_columns_read_only() {
     let store = Store::test(Path::new(":memory:")).unwrap();
     let first = store
         .upsert_note(&input("first", "First", "Kept body"))

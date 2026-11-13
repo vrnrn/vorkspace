@@ -6,7 +6,7 @@ use serde_json::Value;
 use std::collections::{HashMap, HashSet};
 
 #[derive(Clone, Debug)]
-pub struct DesktopSideThread {
+pub struct SavedSideThread {
     pub id: String,
     pub source_turn: usize,
     pub snapshot: String,
@@ -192,7 +192,7 @@ fn provider(blocks: &[Value], owner: usize, thread: &Value, fallback: &str) -> O
 }
 
 impl Store {
-    pub fn desktop_side_threads(&self, id: i64) -> Result<Vec<DesktopSideThread>, String> {
+    pub fn saved_side_threads(&self, id: i64) -> Result<Vec<SavedSideThread>, String> {
         let blocks = self.shared_blocks(id)?;
         let session = self
             .sessions()?
@@ -263,7 +263,7 @@ impl Store {
                     text.rows[0].sent_at = message["createdAt"].as_u64();
                     rows.extend(text.rows);
                 }
-                imported.push(DesktopSideThread {
+                imported.push(SavedSideThread {
                     id: thread_id.into(),
                     source_turn,
                     snapshot,
@@ -343,7 +343,7 @@ mod tests {
                 rusqlite::params![blocks.to_string(), original],
             )
             .unwrap();
-        let imported = store.desktop_side_threads(session.id).unwrap();
+        let imported = store.saved_side_threads(session.id).unwrap();
         assert_eq!(imported.len(), threads.len());
         for thread in &imported {
             assert_eq!(thread.id, thread.provider);
@@ -359,7 +359,7 @@ mod tests {
 
         let reopened = Store::open_vorkspace(&path).unwrap();
         assert_eq!(
-            reopened.desktop_side_threads(session.id).unwrap().len(),
+            reopened.saved_side_threads(session.id).unwrap().len(),
             threads.len()
         );
         let after: String = reopened
