@@ -646,14 +646,14 @@ impl gpui::Render for Inbox {
                             this.dismiss_connection(cx);
                             window.focus(&this.focus, cx);
                         }
-                    } else if this.confirm_action.is_some() {
-                        if !this.acting {
-                            this.confirm_action = None;
+                    } else if this.actions.confirm_action.is_some() {
+                        if !this.actions.acting {
+                            this.actions.confirm_action = None;
                         }
-                    } else if this.filters_open || this.project_picker || this.action_menu {
+                    } else if this.filters_open || this.project_picker || this.actions.menu {
                         this.filters_open = false;
                         this.project_picker = false;
-                        this.action_menu = false;
+                        this.actions.menu = false;
                     } else if this.pinned_item.is_none()
                         && this.is_narrow(window)
                         && this.narrow_detail
@@ -740,11 +740,11 @@ impl gpui::Render for Inbox {
             .when_some(self.error.clone(), |d, text| d.child(error(text)))
             .when(self.filters_open, |d| d.child(self.filters_menu(cx)))
             .when(self.project_picker, |d| d.child(self.project_menu(cx)))
-            .when(self.action_menu, |d| d.child(self.action_menu_view(cx)))
+            .when(self.actions.menu, |d| d.child(self.action_menu_view(cx)))
             .when(self.connect.provider.is_some(), |d| {
                 d.child(self.connection_dialog(cx))
             })
-            .when(self.confirm_action.is_some(), |d| {
+            .when(self.actions.confirm_action.is_some(), |d| {
                 d.child(self.action_confirmation(cx))
             })
     }

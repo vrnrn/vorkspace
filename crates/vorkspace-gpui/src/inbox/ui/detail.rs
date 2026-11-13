@@ -403,7 +403,7 @@ impl Inbox {
 
     pub(super) fn pr_actions(&self, item: &Item, cx: &mut Context<Self>) -> AnyElement {
         let open = item.state.eq_ignore_ascii_case("open");
-        let selected = self.merge_action.clone();
+        let selected = self.actions.merge_action.clone();
         let merge_label = match selected.as_str() {
             "squash" => "Squash and merge",
             "rebase" => "Rebase and merge",
@@ -428,18 +428,18 @@ impl Inbox {
                         .rounded(px(radius::CONTROL))
                         .bg(content(1.))
                         .text_color(vorkspace_ui::fluid::on_ink())
-                        .child(self.action_anchor.probe())
+                        .child(self.actions.anchor.probe())
                         .child(
-                            page::primary("inbox-pr-merge", merge_label, self.acting)
+                            page::primary("inbox-pr-merge", merge_label, self.actions.acting)
                                 .min_w_0()
                                 .flex_shrink_1()
                                 .child(action_icon("git-merge", shell_fill()))
                                 .child(div().min_w_0().truncate().child(merge_label))
                                 .on_click(cx.listener(move |this, _, _, cx| {
-                                    if !this.acting {
-                                        this.confirm_action = Some(selected.clone());
-                                        this.action_error = None;
-                                        this.action_notice = None;
+                                    if !this.actions.acting {
+                                        this.actions.confirm_action = Some(selected.clone());
+                                        this.actions.error = None;
+                                        this.actions.notice = None;
                                         cx.notify();
                                     }
                                 })),
@@ -448,23 +448,23 @@ impl Inbox {
                             crate::controls::icon_button(
                                 "inbox-merge-options",
                                 "Merge options",
-                                !self.acting,
+                                !self.actions.acting,
                             )
                             .size(px(page::CONTROL_HEIGHT))
-                            .aria_disabled(self.acting)
+                            .aria_disabled(self.actions.acting)
                             .rounded_none()
                             .border_l_1()
                             .border_color(shell_fill().opacity(0.2))
-                            .when(!self.acting, |d| {
+                            .when(!self.actions.acting, |d| {
                                 d.cursor_pointer().hover(|s| {
                                     s.bg(vorkspace_ui::fluid::wash(shell_fill().opacity(0.1)))
                                 })
                             })
-                            .when(self.acting, |d| d.opacity(0.4))
+                            .when(self.actions.acting, |d| d.opacity(0.4))
                             .child(action_icon("chevron-down", shell_fill()))
                             .on_click(cx.listener(|this, _, _, cx| {
-                                if !this.acting {
-                                    this.action_menu = !this.action_menu;
+                                if !this.actions.acting {
+                                    this.actions.menu = !this.actions.menu;
                                     cx.notify();
                                 }
                             })),
@@ -499,23 +499,23 @@ impl Inbox {
                             "close" => "git-pull-request-closed",
                             _ => "git-pull-request",
                         },
-                        !self.acting,
+                        !self.actions.acting,
                     )
                     .relative()
-                    .child(self.pr_action_anchors[anchor_ix].probe())
+                    .child(self.actions.pr_action_anchors[anchor_ix].probe())
                     .border_1()
                     .border_color(page::divider())
                     .on_click(cx.listener(move |this, _, _, cx| {
-                        if !this.acting {
-                            this.confirm_action = Some(action_name.into());
-                            this.action_error = None;
-                            this.action_notice = None;
+                        if !this.actions.acting {
+                            this.actions.confirm_action = Some(action_name.into());
+                            this.actions.error = None;
+                            this.actions.notice = None;
                             cx.notify();
                         }
                     }))
                 }),
             )
-            .when_some(self.action_notice.clone(), |d, notice| {
+            .when_some(self.actions.notice.clone(), |d, notice| {
                 d.child(page::meta().child(notice))
             })
             .into_any_element()

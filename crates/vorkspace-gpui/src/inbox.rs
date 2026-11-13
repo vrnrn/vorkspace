@@ -81,6 +81,33 @@ impl ConnectForm {
     }
 }
 
+/// The open item's actions: the merge menu, the pending confirmation and its outcome.
+struct ItemActions {
+    menu: bool,
+    anchor: AnchorSlot,
+    pr_action_anchors: [AnchorSlot; 4],
+    error: Option<String>,
+    notice: Option<String>,
+    confirm_action: Option<String>,
+    merge_action: String,
+    acting: bool,
+}
+
+impl ItemActions {
+    fn new() -> Self {
+        Self {
+            menu: false,
+            anchor: AnchorSlot::default(),
+            pr_action_anchors: std::array::from_fn(|_| AnchorSlot::default()),
+            error: None,
+            notice: None,
+            confirm_action: None,
+            merge_action: "merge".into(),
+            acting: false,
+        }
+    }
+}
+
 pub(crate) struct Inbox {
     /// The root retains the pane entities. Each pane owns its details and inputs.
     owner: Option<WeakEntity<Inbox>>,
@@ -126,7 +153,6 @@ pub(crate) struct Inbox {
     detail_loading: bool,
     extra_loading: bool,
     posting: bool,
-    acting: bool,
     error: Option<String>,
     detail_target_error: Option<String>,
     detail_error: Option<String>,
@@ -134,7 +160,6 @@ pub(crate) struct Inbox {
     post_error: Option<String>,
     thread_error: Option<String>,
     expanded_comments: std::collections::HashSet<String>,
-    merge_action: String,
     reply: Option<(String, String)>,
     detail_generation: u64,
     extra_request: u64,
@@ -148,12 +173,7 @@ pub(crate) struct Inbox {
     destination_explicit: bool,
     project_picker: bool,
     project_anchor: AnchorSlot,
-    action_menu: bool,
-    action_anchor: AnchorSlot,
-    pr_action_anchors: [AnchorSlot; 4],
-    action_error: Option<String>,
-    action_notice: Option<String>,
-    confirm_action: Option<String>,
+    actions: ItemActions,
     resize_start: Option<(f32, f32)>,
     active: bool,
     _subscriptions: Vec<Subscription>,
@@ -309,7 +329,6 @@ impl Inbox {
             detail_loading: false,
             extra_loading: false,
             posting: false,
-            acting: false,
             error: None,
             detail_target_error: None,
             detail_error: None,
@@ -317,7 +336,6 @@ impl Inbox {
             post_error: None,
             thread_error: None,
             expanded_comments: Default::default(),
-            merge_action: "merge".into(),
             reply: None,
             detail_generation: 0,
             extra_request: 0,
@@ -331,12 +349,7 @@ impl Inbox {
             destination_explicit: false,
             project_picker: false,
             project_anchor: AnchorSlot::default(),
-            action_menu: false,
-            action_anchor: AnchorSlot::default(),
-            pr_action_anchors: std::array::from_fn(|_| AnchorSlot::default()),
-            action_error: None,
-            action_notice: None,
-            confirm_action: None,
+            actions: ItemActions::new(),
             resize_start: None,
             active: false,
             _subscriptions: subscriptions,
@@ -627,7 +640,11 @@ impl Inbox {
                 continue;
             }
             page.update(cx, |page, cx| {
-                if page.selected.is_none() || page.detail_loading || page.posting || page.acting {
+                if page.selected.is_none()
+                    || page.detail_loading
+                    || page.posting
+                    || page.actions.acting
+                {
                     return;
                 }
                 page.load_detail(false, cx);
@@ -870,14 +887,14 @@ impl Inbox {
         let busy = page.update(cx, |page, cx| {
             page.set_active(false, cx);
             page.release_pending = true;
-            page.posting || page.acting
+            page.posting || page.actions.acting
         });
         if !busy {
             self.pages.remove(&page_key);
         }
     }
     fn finish_pending_release(&mut self, cx: &mut Context<Self>) {
-        if !self.release_pending || self.posting || self.acting {
+        if !self.release_pending || self.posting || self.actions.acting {
             return;
         }
         let (Some(owner), Some(item)) = (self.owner.clone(), self.pinned_item.as_ref()) else {
@@ -1102,11 +1119,11 @@ impl Inbox {
         self.post_error = None;
         self.thread_error = None;
         self.expanded_comments.clear();
-        self.merge_action = "merge".into();
-        self.confirm_action = None;
-        self.action_error = None;
-        self.action_notice = None;
-        self.action_menu = false;
+        self.actions.merge_action = "merge".into();
+        self.actions.confirm_action = None;
+        self.actions.error = None;
+        self.actions.notice = None;
+        self.actions.menu = false;
         self.comment
             .update(cx, |input, cx| input.set_text(String::new(), cx));
         if let Some(item) = self.item() {
@@ -1542,14 +1559,14 @@ impl Inbox {
         cx.notify();
     }
     fn run_action(&mut self, cx: &mut Context<Self>) {
-        if self.acting {
+        if self.actions.acting {
             return;
         }
-        let (Some(item), Some(action)) = (self.item(), self.confirm_action.clone()) else {
+        let (Some(item), Some(action)) = (self.item(), self.actions.confirm_action.clone()) else {
             return;
         };
-        self.acting = true;
-        self.action_error = None;
+        self.actions.acting = true;
+        self.actions.error = None;
         let service = self.service.clone();
         let key = item.detail_key();
         let merging = matches!(action.as_str(), "merge" | "squash" | "rebase");
@@ -1559,7 +1576,7 @@ impl Inbox {
         cx.spawn(async move |this, cx| {
             let result = task.await;
             let _ = this.update(cx, |this, cx| {
-                this.acting = false;
+                this.actions.acting = false;
                 match result {
                     Ok(item) => {
                         this.record_self_activity(key.clone(), item.updated_ms(), cx);
@@ -1569,16 +1586,16 @@ impl Inbox {
                         let merged = item.state.eq_ignore_ascii_case("merged");
                         this.feed.update(cx, |feed, cx| feed.update_item(item, cx));
                         if this.selected.as_ref() == Some(&key) {
-                            this.action_notice = (merging && !merged)
+                            this.actions.notice = (merging && !merged)
                                 .then(|| "Merge queued or auto-merge enabled.".into());
-                            this.confirm_action = None;
+                            this.actions.confirm_action = None;
                             if !this.release_pending {
                                 this.load_detail(false, cx);
                             }
                         }
                         this.refresh(cx);
                     }
-                    Err(error) => this.action_error = Some(error),
+                    Err(error) => this.actions.error = Some(error),
                 }
                 cx.notify();
                 this.finish_pending_release(cx);

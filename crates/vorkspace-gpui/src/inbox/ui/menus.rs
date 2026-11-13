@@ -382,13 +382,13 @@ impl Inbox {
         let weak = cx.entity().downgrade();
         popover(
             "inbox-action-menu",
-            Anchor::Slot(self.action_anchor.clone()),
+            Anchor::Slot(self.actions.anchor.clone()),
         )
         .width(272.)
         .padding(4.)
         .on_dismiss(move |_, cx| {
             let _ = weak.update(cx, |this, cx| {
-                this.action_menu = false;
+                this.actions.menu = false;
                 cx.notify();
             });
         })
@@ -415,10 +415,10 @@ impl Inbox {
                 page::row(
                     format!("inbox-merge-{name}"),
                     label,
-                    self.merge_action == name,
+                    self.actions.merge_action == name,
                 )
                 .role(Role::MenuItemRadio)
-                .aria_toggled(if self.merge_action == name {
+                .aria_toggled(if self.actions.merge_action == name {
                     gpui::Toggled::True
                 } else {
                     gpui::Toggled::False
@@ -428,7 +428,7 @@ impl Inbox {
                 .items_start()
                 .gap(px(8.))
                 .child(div().mt(px(4.)).size(px(6.)).rounded_full().bg(
-                    if self.merge_action == name {
+                    if self.actions.merge_action == name {
                         accent_color()
                     } else {
                         content(0.2)
@@ -441,8 +441,8 @@ impl Inbox {
                         .child(page::meta().child(description)),
                 )
                 .on_click(cx.listener(move |this, _, _, cx| {
-                    this.merge_action = name.into();
-                    this.action_menu = false;
+                    this.actions.merge_action = name.into();
+                    this.actions.menu = false;
                     cx.notify();
                 }))
             }),
@@ -450,7 +450,7 @@ impl Inbox {
         .into_any_element()
     }
     pub(super) fn action_confirmation(&self, cx: &mut Context<Self>) -> AnyElement {
-        let action_name = self.confirm_action.clone().unwrap_or_default();
+        let action_name = self.actions.confirm_action.clone().unwrap_or_default();
         let details = self.details.clone().unwrap_or_default();
         let source = if details.head_ref_name.is_empty() {
             "this branch".into()
@@ -513,11 +513,11 @@ impl Inbox {
             ),
         };
         let anchor = match action_name.as_str() {
-            "ready" => self.pr_action_anchors[0].clone(),
-            "draft" => self.pr_action_anchors[1].clone(),
-            "close" => self.pr_action_anchors[2].clone(),
-            "reopen" => self.pr_action_anchors[3].clone(),
-            _ => self.action_anchor.clone(),
+            "ready" => self.actions.pr_action_anchors[0].clone(),
+            "draft" => self.actions.pr_action_anchors[1].clone(),
+            "close" => self.actions.pr_action_anchors[2].clone(),
+            "reopen" => self.actions.pr_action_anchors[3].clone(),
+            _ => self.actions.anchor.clone(),
         };
         let weak = cx.entity().downgrade();
         popover("inbox-pr-confirmation", Anchor::Slot(anchor))
@@ -526,9 +526,9 @@ impl Inbox {
             .padding(12.)
             .on_dismiss(move |_, cx| {
                 let _ = weak.update(cx, |this, cx| {
-                    if !this.acting {
-                        this.confirm_action = None;
-                        this.action_error = None;
+                    if !this.actions.acting {
+                        this.actions.confirm_action = None;
+                        this.actions.error = None;
                         cx.notify();
                     }
                 });
@@ -544,7 +544,7 @@ impl Inbox {
                     .child(page::label().font_weight(FontWeight::MEDIUM).child(title))
                     .child(page::meta().child(detail)),
             )
-            .when_some(self.action_error.clone(), |d, text| {
+            .when_some(self.actions.error.clone(), |d, text| {
                 d.child(
                     page::meta()
                         .mt(px(8.))
@@ -560,21 +560,26 @@ impl Inbox {
                     .justify_end()
                     .gap(px(8.))
                     .child(
-                        page::secondary("inbox-action-cancel", "Cancel", false, self.acting)
-                            .child("Cancel")
-                            .on_click(cx.listener(|this, _, _, cx| {
-                                if !this.acting {
-                                    this.confirm_action = None;
-                                    this.action_error = None;
-                                    cx.notify();
-                                }
-                            })),
+                        page::secondary(
+                            "inbox-action-cancel",
+                            "Cancel",
+                            false,
+                            self.actions.acting,
+                        )
+                        .child("Cancel")
+                        .on_click(cx.listener(|this, _, _, cx| {
+                            if !this.actions.acting {
+                                this.actions.confirm_action = None;
+                                this.actions.error = None;
+                                cx.notify();
+                            }
+                        })),
                     )
                     .child(
                         action_enabled(
                             "inbox-action-confirm",
-                            if self.acting { progress } else { label },
-                            !self.acting,
+                            if self.actions.acting { progress } else { label },
+                            !self.actions.acting,
                         )
                         .font_weight(FontWeight::MEDIUM)
                         .bg(if action_name == "close" {
